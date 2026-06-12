@@ -5,6 +5,7 @@ import (
 	stdsql "database/sql"
 	"errors"
 	"fmt"
+	"iter"
 	"reflect"
 
 	"github.com/aita/sqlkit/sql"
@@ -49,9 +50,9 @@ var errNoExecutor = errors.New(
 	"sqlkit: query is not bound to an executor; start the chain from a Database or Session (db.Select(), session.Insert(), ...)")
 
 // Rows is a pending query result. It is produced by All and RawSQL, and
-// materialized with Scan (typed destinations) or streamed with Records
-// (dynamic per-row access). Execution is deferred until either terminal, so
-// build and query errors surface there.
+// materialized with Scan, or streamed row by row with the package-level
+// Records function. Execution is deferred until either terminal, so build
+// and query errors surface there.
 type Rows struct {
 	ctx     context.Context
 	ex      Executor
@@ -110,32 +111,62 @@ func scanInto(rows *stdsql.Rows, dest any) error {
 	return nil
 }
 
-// Records runs the query and returns a streaming iterator over its rows as
-// dynamic Records, for when even the result shape is unknown:
+// Records runs the query and streams each row as an already-scanned T:
 //
-//	for record, err := range db.RawSQL(ctx, query).Records() {
+//	for user, err := range sqlkit.Records[User](db.RawSQL(ctx, query)) {
 //		if err != nil { return err }
 //		...
 //	}
 //
-// Rows are fetched on demand; breaking out of the loop stops reading and
-// releases the underlying result set. Each yielded Record is only valid for
-// that loop step — copy values out with Scan instead of retaining it. Like
-// Scan, each range over the iterator executes the query anew.
-func (r Rows) Records() RecordIterator {
-	return func(yield func(Record, error) bool) {
+// T may be a struct, a pointer to struct, or a scalar, with columns matched
+// to fields by the same rules as Rows.Scan. Rows are fetched on demand and
+// scanned one at a time — the result set is never materialized as a whole —
+// and breaking out of the loop releases it. It is a generic function rather
+// than a method on Rows because Go methods cannot have type parameters.
+// Like Scan, each range over the iterator executes the query anew.
+func Records[T any](r Rows) iter.Seq2[T, error] {
+	return func(yield func(T, error) bool) {
+		var zero T
 		if r.err != nil {
-			yield(Record{}, r.err)
+			yield(zero, r.err)
 			return
 		}
 		rows, err := r.ex.queryContext(r.ctx, r.sqlText, r.args...)
 		if err != nil {
-			yield(Record{}, err)
+			yield(zero, err)
 			return
 		}
-		err = iterateRecords(rows, func(record Record) bool { return yield(record, nil) })
+		defer rows.Close()
+
+		elemType := reflect.TypeFor[T]()
+		pointerElems := elemType.Kind() == reflect.Pointer
+		baseType := elemType
+		if pointerElems {
+			baseType = elemType.Elem()
+		}
+		scan, err := rowScanner(rows, baseType)
 		if err != nil {
-			yield(Record{}, err)
+			yield(zero, err)
+			return
+		}
+		for rows.Next() {
+			item := reflect.New(baseType)
+			if err := scan(item.Elem()); err != nil {
+				yield(zero, err)
+				return
+			}
+			var value T
+			if pointerElems {
+				value = item.Interface().(T)
+			} else {
+				value = item.Elem().Interface().(T)
+			}
+			if !yield(value, nil) {
+				return
+			}
+		}
+		if err := rows.Err(); err != nil {
+			yield(zero, err)
 		}
 	}
 }

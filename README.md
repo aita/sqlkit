@@ -28,7 +28,7 @@ err := db.Select().From(appdb.Users).
 
 | Package | Purpose |
 |---|---|
-| `sqlkit` | Typed query chains, `Database`, `Session`, result scanning, dynamic `Record` streaming (module root) |
+| `sqlkit` | Typed query chains, `Database`, `Session`, result scanning, streaming `Records[T]` iteration (module root) |
 | `sql` | SQL AST, dialects, compiler, and all statement generation |
 | `schema` | Database schema model shared by the tooling (tables, columns, foreign keys) |
 | `inspector` | PostgreSQL/MySQL `information_schema` introspection into the `schema` model |
@@ -286,19 +286,16 @@ var now time.Time
 err = db.RawSQL(ctx, sql.Select(sql.Raw("now()"))).Scan(&now)
 ```
 
-When even the result shape is unknown, `Records()` on the same pending
-result streams each row as a dynamic `Record`: rows are fetched on demand,
-and breaking out of the loop releases the rest of the result set. Each
-`Record` is a lightweight view over the current row of the underlying
-`sql.Rows` — values are scanned straight into your destination, with no
-per-record map or intermediate slice — so it is only valid within its loop
-step; copy values out with `Scan` instead of retaining it:
+To stream a large result instead of materializing it as a slice,
+`Records[T]` turns the same pending result into an iterator of
+already-scanned values. Rows are fetched and scanned one at a time —
+straight into `T`, with no intermediate map or slice per row — and breaking
+out of the loop releases the rest of the result set. `T` may be a struct, a
+pointer to struct, or a scalar, matched by the same rules as `Scan`:
 
 ```go
-for record, err := range db.RawSQL(ctx, query).Records() {
+for user, err := range sqlkit.Records[User](db.RawSQL(ctx, query)) {
     if err != nil { return err }
-    var row struct{ ID int64 `sqlkit:"id"` }
-    if err := record.Scan(&row); err != nil { return err }
     ...
 }
 ```
