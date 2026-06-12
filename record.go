@@ -3,7 +3,9 @@ package sqlkit
 import (
 	stdsql "database/sql"
 	"fmt"
+	"iter"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/aita/sqlkit/internal/names"
@@ -27,7 +29,7 @@ func newRecordColumns(columnNames []string) *recordColumns {
 }
 
 // Record is a lightweight, read-only view over the current row of the
-// underlying sql.Rows: it holds no row data itself, so iterating a RecordSet
+// underlying sql.Rows: it holds no row data itself, so iterating records
 // allocates nothing per record. Like sql.Rows, a Record is only valid until
 // the iteration advances or ends; copy values out with Scan before moving on
 // instead of retaining the Record. Scanning a record retained from an
@@ -45,15 +47,24 @@ type Record struct {
 	current *int
 }
 
+// Columns returns the column names of the result set, in query order.
+func (r Record) Columns() []string {
+	if r.columns == nil {
+		return nil
+	}
+	return slices.Clone(r.columns.names)
+}
+
 // Scan copies the current record into dest using `sqlkit` tags or exported
-// field names. Dest must be a non-nil pointer to a struct. Values go through
-// database/sql scanning straight into the fields, with no intermediate
-// per-record allocation. Scanning the same record again simply re-reads the
-// current row: sql.Rows.Scan re-converts the buffered row values, so this
-// needs no guard (database/sql only rejects a repeated Scan when the
-// previous one used *sql.RawBytes). Scanning a record from an earlier
-// iteration step, however, returns an error: the shared cursor has moved
-// on, and scanning would silently read a different row.
+// field names; columns without a matching field are ignored. Dest must be a
+// non-nil pointer to a struct. Values go through database/sql scanning
+// straight into the fields, with no intermediate per-record allocation.
+// Scanning the same record again simply re-reads the current row:
+// sql.Rows.Scan re-converts the buffered row values, so this needs no guard
+// (database/sql only rejects a repeated Scan when the previous one used
+// *sql.RawBytes). Scanning a record from an earlier iteration step, however,
+// returns an error: the shared cursor has moved on, and scanning would
+// silently read a different row.
 func (r Record) Scan(dest any) error {
 	value := reflect.ValueOf(dest)
 	if value.Kind() != reflect.Pointer || value.IsNil() {
@@ -74,6 +85,34 @@ func scanRecordInto(r Record, dest reflect.Value) error {
 	}
 	plan := recordScanPlan(dest.Type(), r.columns)
 	return r.rows.Scan(recordScanTargets(dest, plan, len(r.columns.names))...)
+}
+
+// RecordIterator is the range-over-func iterator shape returned by
+// Rows.Records. It yields each record with a nil error; if reading fails,
+// the final yield carries the error with a zero Record.
+type RecordIterator = iter.Seq2[Record, error]
+
+// iterateRecords streams the rows to yield as Records until exhaustion or
+// yield returns false, closing rows when iteration completes or stops.
+func iterateRecords(rows *stdsql.Rows, yield func(Record) bool) error {
+	defer rows.Close()
+
+	columnNames, err := rows.Columns()
+	if err != nil {
+		return fmt.Errorf("sqlkit: read columns: %w", err)
+	}
+	record := Record{rows: rows, columns: newRecordColumns(columnNames), current: new(int)}
+	for rows.Next() {
+		*record.current++
+		record.row = *record.current
+		if !yield(record) {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("sqlkit: read records: %w", err)
+	}
+	return nil
 }
 
 // fieldColumn pairs a struct field index with the column position it is

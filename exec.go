@@ -48,9 +48,10 @@ var ErrNoRows = stdsql.ErrNoRows
 var errNoExecutor = errors.New(
 	"sqlkit: query is not bound to an executor; start the chain from a Database or Session (db.Select(), session.Insert(), ...)")
 
-// Rows is a pending query result. It is produced by All and Query, and
-// materialized into a destination with Scan. Execution is deferred until
-// Scan, so build and query errors surface there.
+// Rows is a pending query result. It is produced by All and RawSQL, and
+// materialized with Scan (typed destinations) or streamed with Records
+// (dynamic per-row access). Execution is deferred until either terminal, so
+// build and query errors surface there.
 type Rows struct {
 	ctx     context.Context
 	ex      Executor
@@ -107,6 +108,36 @@ func scanInto(rows *stdsql.Rows, dest any) error {
 		return ErrNoRows
 	}
 	return nil
+}
+
+// Records runs the query and returns a streaming iterator over its rows as
+// dynamic Records, for when even the result shape is unknown:
+//
+//	for record, err := range db.RawSQL(ctx, query).Records() {
+//		if err != nil { return err }
+//		...
+//	}
+//
+// Rows are fetched on demand; breaking out of the loop stops reading and
+// releases the underlying result set. Each yielded Record is only valid for
+// that loop step — copy values out with Scan instead of retaining it. Like
+// Scan, each range over the iterator executes the query anew.
+func (r Rows) Records() RecordIterator {
+	return func(yield func(Record, error) bool) {
+		if r.err != nil {
+			yield(Record{}, r.err)
+			return
+		}
+		rows, err := r.ex.queryContext(r.ctx, r.sqlText, r.args...)
+		if err != nil {
+			yield(Record{}, err)
+			return
+		}
+		err = iterateRecords(rows, func(record Record) bool { return yield(record, nil) })
+		if err != nil {
+			yield(Record{}, err)
+		}
+	}
 }
 
 // runExec compiles and runs a statement, returning the database/sql result.
