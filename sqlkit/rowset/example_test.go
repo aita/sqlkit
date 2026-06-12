@@ -5,7 +5,7 @@ import "fmt"
 func ExampleRowSet_Scan_slice() {
 	type User struct {
 		ID    int    `sqlkit:"id"`
-		Email string `db:"email"`
+		Email string `sqlkit:"email"`
 	}
 
 	rows := newRowSet(

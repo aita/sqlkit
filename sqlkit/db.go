@@ -3,105 +3,170 @@ package sqlkit
 import (
 	"context"
 	stdsql "database/sql"
+	"errors"
 
 	"github.com/sqlkit-dev/sqlkit/sqlkit/rowset"
-	querysql "github.com/sqlkit-dev/sqlkit/sqlkit/sql"
+	"github.com/sqlkit-dev/sqlkit/sqlkit/sql"
 )
 
-// Database is the runtime handle used by generated sqlkit accessors.
+// Database is the entry point of sqlkit: it wraps a database/sql handle, runs
+// statements in auto-commit mode, and opens transactional sessions.
 type Database struct {
 	db      *stdsql.DB
-	dialect querysql.Dialect
+	dialect sql.Dialect
 }
 
-// Open opens a database/sql handle from a driver name and DSN string.
-func Open(driverName, dsn string) (*Database, error) {
+// DatabaseOption configures a Database.
+type DatabaseOption func(*Database)
+
+// WithDialect overrides the SQL dialect (PostgreSQL by default).
+func WithDialect(dialect sql.Dialect) DatabaseOption {
+	return func(d *Database) { d.dialect = dialect }
+}
+
+// Open opens a database/sql handle from a driver name and DSN string. The
+// dialect is inferred from the driver name (see DialectForDriver); pass
+// WithDialect to override.
+func Open(driverName, dsn string, opts ...DatabaseOption) (*Database, error) {
 	db, err := stdsql.Open(driverName, dsn)
 	if err != nil {
 		return nil, err
 	}
-	return WrapDB(db), nil
+	return WrapDB(db, append([]DatabaseOption{WithDialect(DialectForDriver(driverName))}, opts...)...), nil
 }
 
 // WrapDB creates a sqlkit database handle from an existing database/sql handle.
-func WrapDB(db *stdsql.DB) *Database { return &Database{db: db, dialect: querysql.PostgreSQLDialect{}} }
+func WrapDB(db *stdsql.DB, opts ...DatabaseOption) *Database {
+	d := &Database{db: db, dialect: sql.PostgreSQLDialect{}}
+	for _, opt := range opts {
+		opt(d)
+	}
+	return d
+}
 
 // SQL returns the wrapped database/sql handle.
 func (d *Database) SQL() *stdsql.DB { return d.db }
 
-// NewSession starts a context-bound unit of work backed by a transaction.
-func (d *Database) NewSession(ctx context.Context) (*Session, error) {
-	tx, err := d.db.BeginTx(ctx, nil)
+// Dialect returns the configured SQL dialect.
+func (d *Database) Dialect() sql.Dialect { return d.dialect }
+
+// Select starts a typed SELECT builder executed against this database. With
+// no arguments it selects every column of the From source.
+func (d *Database) Select(selections ...sql.Selection) SelectQuery {
+	q := Select(selections...)
+	q.ex = d
+	return q
+}
+
+// Insert starts an INSERT builder for a table, mirroring Select. Feed it
+// rows with Values, or a query with FromSelect.
+func (d *Database) Insert(table TableMeta) InsertQuery {
+	q := Insert(table)
+	q.ex = d
+	return q
+}
+
+// Update starts an UPDATE builder for a table, mirroring Select.
+func (d *Database) Update(table TableMeta) UpdateQuery {
+	q := Update(table)
+	q.ex = d
+	return q
+}
+
+// Delete starts a DELETE builder for a table, mirroring Select.
+func (d *Database) Delete(table TableMeta) DeleteQuery {
+	q := Delete(table)
+	q.ex = d
+	return q
+}
+
+// RawSQL prepares a hand-written SQL string (with args) or a built sql.Query
+// for execution against this database; materialize it with Scan.
+func (d *Database) RawSQL(ctx context.Context, query any, args ...any) Rows {
+	return newRawRows(ctx, d, query, args)
+}
+
+// NewSession creates a transaction-scoped session. No transaction is opened
+// yet — it begins lazily when the first statement runs through the session —
+// so creating one is free and there is no error to handle here.
+func (d *Database) NewSession(opts ...SessionOption) *Session {
+	options := sessionOptions{}
+	for _, opt := range opts {
+		opt(&options)
+	}
+	return &Session{db: d.db, txOpts: options.tx, dialect: d.dialect}
+}
+
+// WithSession runs fn inside a session and commits when fn returns nil; on
+// error or panic it rolls back and the error (or panic) propagates. Thanks to
+// lazy transaction begin, a callback that runs no statements costs nothing.
+//
+//	err := db.WithSession(func(s *sqlkit.Session) error {
+//		if _, err := s.Insert(Users).Values(u).Exec(ctx); err != nil {
+//			return err
+//		}
+//		_, err := s.Update(Posts).Set(...).Where(...).Exec(ctx)
+//		return err
+//	})
+func (d *Database) WithSession(fn func(s *Session) error, opts ...SessionOption) error {
+	session := d.NewSession(opts...)
+	defer func() {
+		if p := recover(); p != nil {
+			_ = session.Rollback()
+			panic(p)
+		}
+	}()
+	if err := fn(session); err != nil {
+		if rollbackErr := session.Rollback(); rollbackErr != nil {
+			return errors.Join(err, rollbackErr)
+		}
+		return err
+	}
+	return session.Commit()
+}
+
+// SessionOption configures a new session.
+type SessionOption func(*sessionOptions)
+
+type sessionOptions struct {
+	tx *stdsql.TxOptions
+}
+
+// WithTxOptions sets transaction options for the session.
+func WithTxOptions(options TxOptions) SessionOption {
+	return func(o *sessionOptions) { o.tx = options.ToSQL() }
+}
+
+// Exec compiles and runs a statement outside a session (auto-commit).
+func (d *Database) Exec(ctx context.Context, query sql.Query) (stdsql.Result, error) {
+	sqlText, args, err := query.ToSQL(d.dialect)
 	if err != nil {
 		return nil, err
 	}
-	return &Session{tx: tx, dialect: d.dialect}, nil
+	return d.db.ExecContext(ctx, sqlText, args...)
 }
 
-// Session represents a transactional unit of work for generated code.
-type Session struct {
-	tx      *stdsql.Tx
-	dialect querysql.Dialect
-	closed  bool
-}
-
-// Commit commits the unit of work.
-func (s *Session) Commit() error {
-	if s.closed {
-		return stdsql.ErrTxDone
-	}
-	s.closed = true
-	return s.tx.Commit()
-}
-
-// Rollback rolls back the unit of work.
-func (s *Session) Rollback() error {
-	if s.closed {
-		return stdsql.ErrTxDone
-	}
-	s.closed = true
-	return s.tx.Rollback()
-}
-
-// Close rolls back the unit of work if it has not already been committed.
-func (s *Session) Close() error {
-	if s.closed {
-		return nil
-	}
-	return s.Rollback()
-}
-
-// Exec compiles and runs a statement through the session's transaction using ctx.
-func (s *Session) Exec(ctx context.Context, query querysql.Query) (stdsql.Result, error) {
-	sqlText, args, err := query.ToSQL(s.dialect)
-	if err != nil {
-		return nil, err
-	}
-	return s.tx.ExecContext(ctx, sqlText, args...)
-}
-
-// Query compiles and prepares a query object that can be materialized using ctx.
-func (s *Session) Query(ctx context.Context, query querysql.Query) QueryObject {
-	return QueryObject{ctx: ctx, tx: s.tx, dialect: s.dialect, query: query}
-}
-
-// QueryObject is a pending session query that can be materialized as rows.
-type QueryObject struct {
-	ctx     context.Context
-	tx      *stdsql.Tx
-	dialect querysql.Dialect
-	query   querysql.Query
-}
-
-// All runs the query and returns all rows as a RowSet.
-func (q QueryObject) All() (rowset.RowSet, error) {
-	sqlText, args, err := q.query.ToSQL(q.dialect)
+// QueryRows compiles and runs a query outside a session, returning a dynamic
+// RowSet for when even the result shape is unknown. Prefer Select/Query and
+// Scan when a destination type is available.
+func (d *Database) QueryRows(ctx context.Context, query sql.Query) (rowset.RowSet, error) {
+	sqlText, args, err := query.ToSQL(d.dialect)
 	if err != nil {
 		return rowset.RowSet{}, err
 	}
-	rows, err := q.tx.QueryContext(q.ctx, sqlText, args...)
+	rows, err := d.db.QueryContext(ctx, sqlText, args...)
 	if err != nil {
 		return rowset.RowSet{}, err
 	}
 	return rowset.FromSQLRows(rows), nil
+}
+
+func (d *Database) sqlDialect() sql.Dialect { return d.dialect }
+
+func (d *Database) queryContext(ctx context.Context, query string, args ...any) (*stdsql.Rows, error) {
+	return d.db.QueryContext(ctx, query, args...)
+}
+
+func (d *Database) execContext(ctx context.Context, query string, args ...any) (stdsql.Result, error) {
+	return d.db.ExecContext(ctx, query, args...)
 }
