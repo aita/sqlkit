@@ -248,6 +248,53 @@ func TestOneRejectsSliceDestination(t *testing.T) {
 	}
 }
 
+func TestPageAppliesLimitAndOffset(t *testing.T) {
+	var gotSQL string
+	fake := &sqltest.Fake{
+		QueryFunc: func(sqlText string, args []any) (sqltest.Result, error) {
+			gotSQL = sqlText
+			return sqltest.Result{
+				Columns: []string{"id", "email", "name"},
+				Rows:    [][]driver.Value{{int64(3), "c@example.com", "Carol"}},
+			}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var users []MyUserDTO
+	if err := db.Select().From(Users).Page(context.Background(), 20, 40).Scan(&users); err != nil {
+		t.Fatalf("Page().Scan() error = %v", err)
+	}
+	if len(users) != 1 || users[0].Identifier != 3 {
+		t.Fatalf("users = %#v", users)
+	}
+	if !strings.Contains(gotSQL, "LIMIT 20 OFFSET 40") {
+		t.Fatalf("sql = %q, want LIMIT 20 OFFSET 40 pushed into the query", gotSQL)
+	}
+}
+
+func TestUnionPageAppliesLimitAndOffset(t *testing.T) {
+	var gotSQL string
+	fake := &sqltest.Fake{
+		QueryFunc: func(sqlText string, args []any) (sqltest.Result, error) {
+			gotSQL = sqlText
+			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}}}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var ids []int64
+	err := db.Select(Users.ID).From(Users).
+		Union(sqlkit.Select(Users.ID).From(Users)).
+		Page(context.Background(), 10, 30).Scan(&ids)
+	if err != nil {
+		t.Fatalf("Page().Scan() error = %v", err)
+	}
+	if !strings.Contains(gotSQL, "LIMIT 10 OFFSET 30") {
+		t.Fatalf("sql = %q, want LIMIT 10 OFFSET 30", gotSQL)
+	}
+}
+
 func TestAllScanScalarSlice(t *testing.T) {
 	fake := &sqltest.Fake{
 		QueryFunc: func(string, []any) (sqltest.Result, error) {

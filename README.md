@@ -311,6 +311,13 @@ var user User
 err := db.Select().From(Users).Where(Users.ID.Eq(1)).One(ctx).Scan(&user)
 ```
 
+`Page` fetches a LIMIT/OFFSET window in one call:
+
+```go
+var users []User
+err := db.Select().From(Users).OrderBy(Users.ID.Asc()).Page(ctx, 20, 40).Scan(&users)
+```
+
 ## Dialects
 
 PostgreSQL is the default and the most exercised dialect. The compiler is

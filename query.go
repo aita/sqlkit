@@ -136,6 +136,15 @@ func (q SelectQuery) One(ctx context.Context) Rows {
 	return rows
 }
 
+// Page is All over a LIMIT/OFFSET window: it pushes LIMIT limit OFFSET
+// offset into the query and prepares it for execution, for paginated
+// fetches without spelling out the clauses:
+//
+//	db.Select().From(Users).OrderBy(Users.ID.Asc()).Page(ctx, 20, 40).Scan(&users)
+func (q SelectQuery) Page(ctx context.Context, limit, offset int) Rows {
+	return newRows(ctx, q.ex, q.query.Limit(limit).Offset(offset))
+}
+
 // Count runs SELECT COUNT(*) over this query (as a subquery, so joins,
 // grouping, and predicates apply) and returns the number of matching rows.
 func (q SelectQuery) Count(ctx context.Context) (int64, error) {
@@ -229,6 +238,12 @@ func (q UnionQuery) One(ctx context.Context) Rows {
 	rows := newRows(ctx, q.ex, q.query.Limit(2))
 	rows.exactlyOne = true
 	return rows
+}
+
+// Page is All over a LIMIT/OFFSET window of the combined result; see
+// SelectQuery.Page.
+func (q UnionQuery) Page(ctx context.Context, limit, offset int) Rows {
+	return newRows(ctx, q.ex, q.query.Limit(limit).Offset(offset))
 }
 
 func allColumnsOf(source sql.Source) []sql.Selection {
