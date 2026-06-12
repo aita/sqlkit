@@ -1,6 +1,6 @@
 package sqlkit
 
-import querysql "github.com/sqlkit-dev/sqlkit/sqlkit/sql"
+import querysql "github.com/aita/sqlkit/sql"
 
 // Dialect captures SQL syntax details that vary by database engine.
 type Dialect = querysql.Dialect

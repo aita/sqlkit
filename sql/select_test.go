@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	. "github.com/sqlkit-dev/sqlkit/sqlkit/sql"
+	. "github.com/aita/sqlkit/sql"
 )
 
 var (

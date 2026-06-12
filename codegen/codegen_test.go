@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sqlkit-dev/sqlkit/schema"
+	"github.com/aita/sqlkit/schema"
 )
 
 var update = flag.Bool("update", false, "rewrite golden files")

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	. "github.com/sqlkit-dev/sqlkit/sqlkit/sql"
+	. "github.com/aita/sqlkit/sql"
 )
 
 func assertMySQL(t *testing.T, query Query, wantSQL string, wantArgs []any) {

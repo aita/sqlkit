@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sqlkit-dev/sqlkit/internal/names"
-	"github.com/sqlkit-dev/sqlkit/sqlkit/sql"
+	"github.com/aita/sqlkit/internal/names"
+	"github.com/aita/sqlkit/sql"
 )
 
 // resolveQuery turns a raw SQL string (with args) or a built sql.Query into

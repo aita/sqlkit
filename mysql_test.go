@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sqlkit-dev/sqlkit/internal/sqltest"
-	"github.com/sqlkit-dev/sqlkit/sqlkit"
+	"github.com/aita/sqlkit"
+	"github.com/aita/sqlkit/internal/sqltest"
 )
 
 func TestMySQLDialectEndToEnd(t *testing.T) {

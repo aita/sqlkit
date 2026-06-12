@@ -8,7 +8,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/sqlkit-dev/sqlkit/schema"
+	"github.com/aita/sqlkit/schema"
 )
 
 // Querier is the subset of *sql.DB used by the inspector.

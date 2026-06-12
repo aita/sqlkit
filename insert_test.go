@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sqlkit-dev/sqlkit/internal/sqltest"
-	"github.com/sqlkit-dev/sqlkit/sqlkit"
-	"github.com/sqlkit-dev/sqlkit/sqlkit/sql"
+	"github.com/aita/sqlkit"
+	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/sql"
 )
 
 // Field-to-column mapping edge cases for Insert(...).Values.

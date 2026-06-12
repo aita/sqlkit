@@ -6,8 +6,8 @@ package main
 import (
 	"fmt"
 
-	"github.com/sqlkit-dev/sqlkit/sqlkit"
-	"github.com/sqlkit-dev/sqlkit/sqlkit/sql"
+	"github.com/aita/sqlkit"
+	"github.com/aita/sqlkit/sql"
 )
 
 // User is the row struct for the "users" table.

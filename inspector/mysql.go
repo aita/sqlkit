@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/sqlkit-dev/sqlkit/schema"
+	"github.com/aita/sqlkit/schema"
 )
 
 const mysqlColumnsQuery = `

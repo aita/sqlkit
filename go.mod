@@ -1,4 +1,4 @@
-module github.com/sqlkit-dev/sqlkit
+module github.com/aita/sqlkit
 
 go 1.25.0
 

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sqlkit-dev/sqlkit/internal/sqltest"
-	"github.com/sqlkit-dev/sqlkit/sqlkit"
+	"github.com/aita/sqlkit"
+	"github.com/aita/sqlkit/internal/sqltest"
 )
 
 // The fixtures below mirror what sqlkitgen generates: a typed table binding
