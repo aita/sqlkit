@@ -31,26 +31,88 @@ err := db.Select().From(appdb.Users).
 | `sqlkit` | Typed query chains, `Database`, `Session`, result scanning |
 | `sqlkit/sql` | SQL AST, dialects, compiler, and all statement generation |
 | `sqlkit/rowset` | Dynamic, streaming result mapping (escape hatch) |
-| `cmd/sqlkitgen` | PostgreSQL schema → Go code generator |
+| `schema` | Database schema model shared by the tooling (tables, columns, foreign keys) |
+| `inspector` | PostgreSQL/MySQL `information_schema` introspection into the `schema` model |
+| `codegen` | `schema` → Go code generator (library: customizable types, layout, DTOs, relations) |
+| `cmd/sqlkitgen` | CLI wrapper around `inspector` + `codegen` |
 
 ## Generating table bindings
 
+`sqlkitgen` introspects a live **PostgreSQL or MySQL** schema and generates
+typed bindings:
+
 ```sh
+# PostgreSQL
 go run github.com/sqlkit-dev/sqlkit/cmd/sqlkitgen \
   -dsn "$DATABASE_URL" -schema public -package appdb -out appdb/tables.go
+
+# MySQL, one file per table, with row DTOs in their own files
+go run github.com/sqlkit-dev/sqlkit/cmd/sqlkitgen \
+  -driver mysql -dsn 'user:pass@tcp(localhost:3306)/app' \
+  -package appdb -out appdb -file-per-table -dto -dto-separate-file
 ```
 
-For each table the generator emits a typed binding — and nothing else. Row
-types are not generated: you define the structs you want to scan into and
-insert from, and fields map by name.
+By default the generator emits a typed binding per table — and nothing else.
+Row types are not generated unless you ask for them (`-dto`): you can define
+the structs you scan into and insert from, and fields map by name.
+
+The binding is metadata, not an ORM: it exposes `Column[T]` fields (`Users.ID`
+is a `sqlkit.Column[int64]`, ...) and the table identity, but carries no
+data-access methods. All statements start from the db handle with the table as
+an argument: `db.Select().From(Users)`, `db.Insert(Users).Values(...)`,
+`db.Update(Users)`, `db.Delete(Users)`.
 
 ```go
-// Users exposes a Get accessor and Column[T] fields (Users.ID is a
-// sqlkit.Column[int64], ...). All statements start from the db handle with
-// the table as an argument: db.Select().From(Users),
-// db.Insert(Users).Values(...), db.Update(Users), db.Delete(Users).
 var Users = ...
 ```
+
+### CLI flags
+
+| Flag | Purpose |
+|---|---|
+| `-driver` | `pgx` (default) or `mysql` |
+| `-dialect` | override the schema dialect (`postgres`/`mysql`); inferred from `-driver` |
+| `-schema` | schema/database to read (default `public` for postgres, current DB for mysql) |
+| `-tables` | comma-separated subset of tables to generate |
+| `-out` | output file (single-file mode) or directory (multi-file mode); stdout if empty |
+| `-file-per-table` | write one file per table |
+| `-file-name` | single-file output name when `-out` is a directory (default `tables.go`) |
+| `-dto` | also generate a row struct (DTO) per table |
+| `-dto-separate-file` | write DTOs into their own file(s) |
+
+The generated binding is metadata, not an ORM: no `Get`, no relation
+navigation, no per-column option soup. Foreign keys are read into the schema
+model (`schema.Table.ForeignKeys`) for tools that need them — the migration /
+DDL generator that consumes the same model — but they do not add methods to the
+query bindings.
+
+### Using codegen as a library
+
+The `codegen` package is the generator's public API. Build a `schema.Schema`
+by hand or with `inspector.Inspect`, customize the SQL→Go type mapping, and
+choose what to emit:
+
+```go
+model, _ := inspector.Inspect(ctx, db, "postgres", "public")
+
+files, err := codegen.Generate(model, codegen.Options{
+    PackageName:  "appdb",
+    FilePerTable: true,
+    EmitDTO:      true,
+    // Map numeric to a decimal type instead of string.
+    TypeMapper: codegen.DefaultTypeMapper{Overrides: map[string]codegen.GoType{
+        "numeric": {ImportPath: "github.com/shopspring/decimal", Name: "decimal.Decimal"},
+    }},
+})
+// files[i].Name / files[i].Content
+```
+
+Schema metadata — SQL type, length, precision/scale, and the
+primary-key/nullable/default constraints — lives on `schema.Column`, the model
+the generator (and a future DDL/migration generator) consumes. The runtime
+binding stays minimal: each column is a plain
+`sqlkit.NewColumn[T](info, "name")` carrying only the table identity, column
+name, and static type `T`.
 
 ## Querying and scanning
 
@@ -97,8 +159,10 @@ err := db.Select(appdb.Posts.ID, appdb.Posts.Title).From(appdb.Posts).
     Where(appdb.Users.Email.Eq("alice@example.com")).
     All(ctx).Scan(&posts)
 
+// Lookup by primary key is just a query; ErrNoRows when absent.
 var user MyUserDTO
-found, err := appdb.Users.Get(ctx, db, 42, &user) // typed pk; false if absent
+err := db.Select().From(appdb.Users).Where(appdb.Users.ID.Eq(42)).
+    Limit(1).All(ctx).Scan(&user)
 ```
 
 ## Writing
@@ -246,9 +310,10 @@ from the driver name (`"mysql"` → MySQL, otherwise PostgreSQL; override with
 `WithDialect`), and `Returning(...)` fails at compile time with a pointer to
 `Result.LastInsertId`, since MySQL has no RETURNING.
 
-Not yet covered for MySQL: `sqlkitgen` schema loading (the loader's dialect
-switch is the extension point) and integration tests. Track these before
-relying on MySQL in production.
+`sqlkitgen` introspects both PostgreSQL and MySQL schemas (`inspector`'s
+dialect switch is the extension point). MySQL integration tests are not yet
+included; exercise the generated MySQL bindings before relying on them in
+production.
 
 ## Compile-time guarantees
 
@@ -257,7 +322,6 @@ What the compiler enforces:
 - comparison and `IN` values match the column's Go type (`Column[T]` methods take `T`),
 - join conditions compare columns of the same type (`EqExpr(TypedExpr[T])`),
 - `SET` assignments match the column type (`Column[T].Set(T)`),
-- `Get` primary keys are typed (`Users.Get(ctx, ex, id int64, &dst)`),
 - every generated binding satisfies `sqlkit.TableMeta` (a `var _` line in the
   generated file).
 

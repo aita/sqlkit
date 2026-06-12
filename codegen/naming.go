@@ -32,8 +32,31 @@ func goName(name string) string {
 	return sb.String()
 }
 
-// reservedFieldNames are method names of the generated table binding and row
-// struct; column fields that would collide get a Col suffix.
+// singular returns the singular form of a snake_case identifier's last word,
+// using a small set of English rules. It is best-effort: callers dedupe the
+// resulting Go names against reserved identifiers.
+func singular(name string) string {
+	if name == "" {
+		return name
+	}
+	lower := strings.ToLower(name)
+	switch {
+	case strings.HasSuffix(lower, "ies") && len(name) > 3:
+		return name[:len(name)-3] + "y"
+	case strings.HasSuffix(lower, "ches"), strings.HasSuffix(lower, "shes"),
+		strings.HasSuffix(lower, "sses"), strings.HasSuffix(lower, "xes"),
+		strings.HasSuffix(lower, "zes"):
+		return name[:len(name)-2]
+	case strings.HasSuffix(lower, "ss"):
+		return name // e.g. "address" stays "address"
+	case strings.HasSuffix(lower, "s"):
+		return name[:len(name)-1]
+	}
+	return name
+}
+
+// reservedFieldNames are method names of the generated table binding; column
+// fields that would collide get a Col suffix.
 var reservedFieldNames = map[string]bool{
 	"Info": true, "Columns": true, "PrimaryKey": true, "Defaulted": true,
 	"SQLSource": true, "Get": true,
@@ -47,7 +70,7 @@ func fieldName(column string) string {
 	return name
 }
 
-// goKeywords are not usable as parameter names in generated Get signatures.
+// goKeywords are not usable as parameter names in generated signatures.
 var goKeywords = map[string]bool{
 	"break": true, "case": true, "chan": true, "const": true, "continue": true,
 	"default": true, "defer": true, "else": true, "fallthrough": true,
@@ -65,9 +88,9 @@ func paramName(field string) string {
 	for upper < len(runes) && runes[upper] >= 'A' && runes[upper] <= 'Z' {
 		upper++
 	}
-	// Lowercase the leading initialism (ID -> id, URLPath -> urlPath), but
-	// keep the last upper rune when it starts the next word (UserID stays
-	// userID via the single leading rune path).
+	// Lowercase the leading initialism (ID -> id, URLPath -> urlPath), but keep
+	// the last upper rune when it starts the next word (UserID stays userID via
+	// the single leading rune path).
 	if upper > 1 && upper < len(runes) {
 		upper--
 	}
@@ -77,7 +100,7 @@ func paramName(field string) string {
 		}
 	}
 	name := string(runes)
-	if goKeywords[name] || name == "ctx" || name == "s" || name == "t" {
+	if goKeywords[name] || name == "ctx" || name == "s" || name == "t" || name == "ex" || name == "dest" {
 		name += "_"
 	}
 	return name

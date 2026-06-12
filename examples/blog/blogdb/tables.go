@@ -3,15 +3,11 @@
 package blogdb
 
 import (
-	"context"
-	"errors"
 	"github.com/sqlkit-dev/sqlkit/sqlkit"
 	"time"
 )
 
-// UsersTable is the typed binding for table public.users. Row types are
-// not generated: results Scan into caller-defined structs, and
-// Insert(...).Values accepts them, mapped by sqlkit tag / field name.
+// UsersTable is the typed binding for table public.users.
 type UsersTable struct {
 	info      sqlkit.TableInfo
 	ID        sqlkit.Column[int64]
@@ -31,19 +27,6 @@ var Users = func() UsersTable {
 		CreatedAt: sqlkit.NewColumn[time.Time](info, "created_at"),
 	}
 }()
-
-// Get loads the row with the given primary key into dest — any struct
-// following Scan's mapping rules — and reports whether a row was found.
-func (t UsersTable) Get(ctx context.Context, ex sqlkit.Executor, id int64, dest any) (bool, error) {
-	err := ex.Select().From(t).Where(t.ID.Eq(id)).Limit(1).All(ctx).Scan(dest)
-	if err != nil {
-		if errors.Is(err, sqlkit.ErrNoRows) {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
-}
 
 // Info returns the table identity.
 func (t UsersTable) Info() sqlkit.TableInfo { return t.info }
@@ -68,9 +51,7 @@ func (t UsersTable) Defaulted() []sqlkit.AnyColumn {
 
 var _ sqlkit.TableMeta = Users
 
-// PostsTable is the typed binding for table public.posts. Row types are
-// not generated: results Scan into caller-defined structs, and
-// Insert(...).Values accepts them, mapped by sqlkit tag / field name.
+// PostsTable is the typed binding for table public.posts.
 type PostsTable struct {
 	info      sqlkit.TableInfo
 	ID        sqlkit.Column[int64]
@@ -92,19 +73,6 @@ var Posts = func() PostsTable {
 		Published: sqlkit.NewColumn[bool](info, "published"),
 	}
 }()
-
-// Get loads the row with the given primary key into dest — any struct
-// following Scan's mapping rules — and reports whether a row was found.
-func (t PostsTable) Get(ctx context.Context, ex sqlkit.Executor, id int64, dest any) (bool, error) {
-	err := ex.Select().From(t).Where(t.ID.Eq(id)).Limit(1).All(ctx).Scan(dest)
-	if err != nil {
-		if errors.Is(err, sqlkit.ErrNoRows) {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
-}
 
 // Info returns the table identity.
 func (t PostsTable) Info() sqlkit.TableInfo { return t.info }
