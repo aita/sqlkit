@@ -5,8 +5,8 @@ import (
 	stdsql "database/sql"
 	"sync"
 
-	"github.com/sqlkit-dev/sqlkit/sqlkit/rowset"
-	"github.com/sqlkit-dev/sqlkit/sqlkit/sql"
+	"github.com/aita/sqlkit/rowset"
+	"github.com/aita/sqlkit/sql"
 )
 
 // Session is a transaction-scoped database handle. The transaction begins

@@ -23,11 +23,11 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/sqlkit-dev/sqlkit/codegen"
-	"github.com/sqlkit-dev/sqlkit/examples/blog/blogdb"
-	"github.com/sqlkit-dev/sqlkit/inspector"
-	"github.com/sqlkit-dev/sqlkit/sqlkit"
-	"github.com/sqlkit-dev/sqlkit/sqlkit/sql"
+	"github.com/aita/sqlkit"
+	"github.com/aita/sqlkit/codegen"
+	"github.com/aita/sqlkit/examples/blog/blogdb"
+	"github.com/aita/sqlkit/inspector"
+	"github.com/aita/sqlkit/sql"
 )
 
 func schemaPath(t *testing.T) string {

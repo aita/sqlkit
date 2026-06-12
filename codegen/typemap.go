@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sqlkit-dev/sqlkit/schema"
+	"github.com/aita/sqlkit/schema"
 )
 
 // GoType is an alias for schema.GoType, re-exported so library users that only

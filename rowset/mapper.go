@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/sqlkit-dev/sqlkit/internal/names"
+	"github.com/aita/sqlkit/internal/names"
 )
 
 // Scan copies rows into dest, streaming them from the source. Dest must be a

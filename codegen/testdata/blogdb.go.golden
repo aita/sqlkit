@@ -3,7 +3,7 @@
 package blogdb
 
 import (
-	"github.com/sqlkit-dev/sqlkit/sqlkit"
+	"github.com/aita/sqlkit"
 	"time"
 )
 

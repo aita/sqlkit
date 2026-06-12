@@ -1,7 +1,7 @@
 -- Schema for the blog example. Apply with psql, then regenerate bindings:
 --
 --   psql "$DATABASE_URL" -f schema.sql
---   go run github.com/sqlkit-dev/sqlkit/cmd/sqlkitgen \
+--   go run github.com/aita/sqlkit/cmd/sqlkitgen \
 --     -dsn "$DATABASE_URL" -schema public -package blogdb -out blogdb/tables.go
 
 CREATE TABLE users (

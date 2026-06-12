@@ -7,9 +7,9 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/sqlkit-dev/sqlkit/internal/sqltest"
-	"github.com/sqlkit-dev/sqlkit/sqlkit"
-	"github.com/sqlkit-dev/sqlkit/sqlkit/sql"
+	"github.com/aita/sqlkit"
+	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/sql"
 )
 
 var pg = sql.PostgreSQLDialect{}

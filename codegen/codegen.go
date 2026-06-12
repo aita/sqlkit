@@ -8,7 +8,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/sqlkit-dev/sqlkit/schema"
+	"github.com/aita/sqlkit/schema"
 )
 
 // File is a single generated source file: a suggested name and its formatted
@@ -56,7 +56,7 @@ type Options struct {
 	DTOName func(table schema.Table) string
 }
 
-const sqlkitImport = "github.com/sqlkit-dev/sqlkit/sqlkit"
+const sqlkitImport = "github.com/aita/sqlkit"
 
 type columnModel struct {
 	Field      string

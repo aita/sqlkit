@@ -8,7 +8,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/sqlkit-dev/sqlkit/sqlkit/sql"
+	"github.com/aita/sqlkit/sql"
 )
 
 // InsertQuery is an INSERT statement, fed either by Values (row structs,

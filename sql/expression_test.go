@@ -3,7 +3,7 @@ package sql_test
 import (
 	"testing"
 
-	. "github.com/sqlkit-dev/sqlkit/sqlkit/sql"
+	. "github.com/aita/sqlkit/sql"
 )
 
 func TestCaseExpression(t *testing.T) {

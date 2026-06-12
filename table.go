@@ -1,7 +1,7 @@
 package sqlkit
 
 import (
-	"github.com/sqlkit-dev/sqlkit/sqlkit/sql"
+	"github.com/aita/sqlkit/sql"
 )
 
 // TableMeta is implemented by generated table bindings: the table identity
