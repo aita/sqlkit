@@ -35,10 +35,11 @@ type Record struct {
 	rows    *stdsql.Rows
 	columns *recordColumns
 	// scanned guards against scanning the same record twice. database/sql
-	// itself does not error there — sql.Rows.Scan silently re-converts the
-	// current row on repeated calls — so the Record enforces single-scan on
-	// its own. The flag is shared with the iteration, which resets it on
-	// each row advance.
+	// only errors on a repeated Scan without Next when the previous Scan
+	// used *sql.RawBytes (closemuScanHold); with ordinary destinations like
+	// ours it silently re-converts the current row, so the Record enforces
+	// single-scan on its own. The flag is shared with the iteration, which
+	// resets it on each row advance.
 	scanned *bool
 }
 
