@@ -67,9 +67,8 @@ func (rs RecordSet) iterate(yield func(Record) bool) error {
 	if err != nil {
 		return fmt.Errorf("sqlkit: read columns: %w", err)
 	}
-	record := Record{rows: rs.rows, columns: newRecordColumns(columnNames), cache: new([]any)}
+	record := Record{rows: rs.rows, columns: newRecordColumns(columnNames)}
 	for rs.rows.Next() {
-		*record.cache = nil
 		if !yield(record) {
 			return nil
 		}
@@ -94,7 +93,7 @@ type RecordIterator = iter.Seq2[Record, error]
 //
 // Records are fetched on demand; breaking out of the loop stops reading and
 // releases the underlying result set. Each yielded Record is only valid for
-// that loop step — copy values out with Get or Scan instead of retaining it.
+// that loop step — copy values out with Scan instead of retaining it.
 func (rs RecordSet) Iter() RecordIterator {
 	return func(yield func(Record, error) bool) {
 		err := rs.iterate(func(record Record) bool { return yield(record, nil) })

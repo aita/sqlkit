@@ -292,13 +292,15 @@ Scan (single-pass over `sql.Rows`), and breaking out of the loop releases
 the rest of the result set. Each `Record` is a lightweight view over the
 current row of the underlying `sql.Rows` — values are scanned straight into
 your destination, with no per-record map or intermediate slice — so it is
-only valid within its loop step; copy values out with `Get` or `Scan`
-instead of retaining it:
+only valid within its loop step; copy values out with `Scan` instead of
+retaining it:
 
 ```go
 rs, err := db.QueryRecords(ctx, query)
 for record, err := range rs.Records() {
     if err != nil { return err }
+    var row struct{ ID int64 `sqlkit:"id"` }
+    if err := record.Scan(&row); err != nil { return err }
     ...
 }
 ```

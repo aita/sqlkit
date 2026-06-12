@@ -29,49 +29,11 @@ func newRecordColumns(columnNames []string) *recordColumns {
 // Record is a lightweight, read-only view over the current row of the
 // underlying sql.Rows: it holds no row data itself, so iterating a RecordSet
 // allocates nothing per record. Like sql.Rows, a Record is only valid until
-// the iteration advances or ends; copy values out with Get or Scan before
-// moving on instead of retaining the Record.
+// the iteration advances or ends; copy values out with Scan before moving on
+// instead of retaining the Record.
 type Record struct {
 	rows    *stdsql.Rows
 	columns *recordColumns
-	// cache memoizes the row values for Get, reset on each row advance, so
-	// reading several columns scans the row only once.
-	cache *[]any
-}
-
-// Get returns a field value and whether the column is present and readable.
-func (r Record) Get(name string) (any, bool) {
-	if r.columns == nil {
-		return nil, false
-	}
-	index, ok := r.columns.indexes[name]
-	if !ok {
-		return nil, false
-	}
-	values, err := r.values()
-	if err != nil {
-		return nil, false
-	}
-	return values[index], true
-}
-
-// values scans the current row into a snapshot slice, memoized per row.
-func (r Record) values() ([]any, error) {
-	if r.cache != nil && *r.cache != nil {
-		return *r.cache, nil
-	}
-	values := make([]any, len(r.columns.names))
-	targets := make([]any, len(values))
-	for i := range values {
-		targets[i] = &values[i]
-	}
-	if err := r.rows.Scan(targets...); err != nil {
-		return nil, err
-	}
-	if r.cache != nil {
-		*r.cache = values
-	}
-	return values, nil
 }
 
 // Scan copies the current record into dest using `sqlkit` tags or exported

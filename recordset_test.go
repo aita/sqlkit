@@ -42,36 +42,17 @@ func TestRecordsCanBeRanged(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Records() error = %v", err)
 		}
-		value, ok := record.Get("id")
-		if !ok {
-			t.Fatal("missing id field")
+		var row struct {
+			ID int64 `sqlkit:"id"`
 		}
-		values = append(values, value.(int64))
+		if err := record.Scan(&row); err != nil {
+			t.Fatalf("record Scan() error = %v", err)
+		}
+		values = append(values, row.ID)
 	}
 
 	if len(values) != 3 || values[0] != 1 || values[2] != 3 {
 		t.Fatalf("Records() = %#v, want [1 2 3]", values)
-	}
-}
-
-func TestRecordGetReadsSeveralColumns(t *testing.T) {
-	rs := queryRecordSet(t, fakeResult([]string{"id", "email"}, []driver.Value{int64(1), "one@example.test"}))
-
-	for record, err := range rs.Iter() {
-		if err != nil {
-			t.Fatalf("Iter() error = %v", err)
-		}
-		id, ok := record.Get("id")
-		if !ok || id.(int64) != 1 {
-			t.Fatalf("Get(id) = %v, %v", id, ok)
-		}
-		email, ok := record.Get("email")
-		if !ok || email.(string) != "one@example.test" {
-			t.Fatalf("Get(email) = %v, %v", email, ok)
-		}
-		if _, ok := record.Get("missing"); ok {
-			t.Fatal("Get(missing) reported a value")
-		}
 	}
 }
 
@@ -84,8 +65,13 @@ func TestIterStreamsAndStopsEarly(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Iter() error = %v", err)
 		}
-		value, _ := record.Get("id")
-		got = append(got, value.(int64))
+		var row struct {
+			ID int64 `sqlkit:"id"`
+		}
+		if err := record.Scan(&row); err != nil {
+			t.Fatalf("record Scan() error = %v", err)
+		}
+		got = append(got, row.ID)
 		if len(got) == 2 {
 			break // stop before the third record
 		}
