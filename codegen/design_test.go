@@ -43,13 +43,13 @@ func TestGenerateDesignMySQL(t *testing.T) {
 	}
 	got := string(file.Content)
 	for _, want := range []string{
-		`var App = dsl.Schema("app", func() {`,
-		`dsl.Column("id", dsl.BigInt, dsl.PrimaryKey(), dsl.Default())`,
-		`dsl.Column("name", dsl.VarChar(100))`,
-		`dsl.Column("price", dsl.Decimal(10, 2))`,
-		`dsl.Column("attrs", dsl.JSON, dsl.Nullable())`,
-		`dsl.Column("created_at", dsl.Timestamp)`,
-		`dsl.Column("point", dsl.Type("geometry"))`,
+		`var App = Schema("app", func() {`,
+		`Column("id", BigInt, PrimaryKey(), Default())`,
+		`Column("name", VarChar(100))`,
+		`Column("price", Decimal(10, 2))`,
+		`Column("attrs", JSON, Nullable())`,
+		`Column("created_at", Timestamp)`,
+		`Column("point", Type("geometry"))`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("generated design missing %q\n%s", want, got)
@@ -83,8 +83,8 @@ func TestGenerateDesignForeignKeys(t *testing.T) {
 	}
 	got := string(file.Content)
 	for _, want := range []string{
-		`var Orders = dsl.Schema("public", func() {`,
-		`dsl.ForeignKey([]string{"order_region", "order_number"}, "orders", []string{"region", "number"})`,
+		`var Orders = Schema("public", func() {`,
+		`ForeignKey([]string{"order_region", "order_number"}, "orders", []string{"region", "number"})`,
 		`foreign key fk_other_schema references audit.events in another schema`,
 	} {
 		if !strings.Contains(got, want) {

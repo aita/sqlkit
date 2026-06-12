@@ -125,38 +125,39 @@ The `dsl` package is a goa-style alternative to introspection: declare the
 schema as nested function calls in an ordinary Go package, and generate the
 same table bindings from it — no live database required. The design is the
 source of truth, lives in version control, and feeds the same `schema` model
-the rest of the tooling consumes.
+the rest of the tooling consumes. Designs dot-import the dsl, as goa does, so
+the schema reads as bare calls:
 
 ```go
 // design/design.go
 package design
 
-import "github.com/aita/sqlkit/dsl"
+import . "github.com/aita/sqlkit/dsl"
 
-var Blog = dsl.Schema("public", func() {
-    dsl.Table("users", func() {
-        dsl.Column("id", dsl.BigInt, dsl.PrimaryKey(), dsl.Default())
-        dsl.Column("email", dsl.VarChar(255))
-        dsl.Column("name", dsl.Text, dsl.Nullable())
-        dsl.Column("created_at", dsl.Timestamp, dsl.Default())
+var Blog = Schema("public", func() {
+    Table("users", func() {
+        Column("id", BigInt, PrimaryKey(), Default())
+        Column("email", VarChar(255))
+        Column("name", Text, Nullable())
+        Column("created_at", Timestamp, Default())
     })
-    dsl.Table("posts", func() {
-        dsl.Column("id", dsl.BigInt, dsl.PrimaryKey(), dsl.Default())
-        dsl.Column("user_id", dsl.BigInt, dsl.References("users", "id"))
-        dsl.Column("title", dsl.Text)
-        dsl.Column("body", dsl.Text, dsl.Nullable())
-        dsl.Column("published", dsl.Bool, dsl.Default())
+    Table("posts", func() {
+        Column("id", BigInt, PrimaryKey(), Default())
+        Column("user_id", BigInt, References("users", "id"))
+        Column("title", Text)
+        Column("body", Text, Nullable())
+        Column("published", Bool, Default())
     })
 })
 ```
 
-Columns are NOT NULL unless marked `dsl.Nullable()` (nullable columns map to
-pointer types, as with introspection). `dsl.Default()` marks database-side
-defaults (serials, `DEFAULT now()`), `dsl.PrimaryKey()` on several columns
+Columns are NOT NULL unless marked `Nullable()` (nullable columns map to
+pointer types, as with introspection). `Default()` marks database-side
+defaults (serials, `DEFAULT now()`), `PrimaryKey()` on several columns
 declares a composite key, and composite foreign keys use the table-level
-`dsl.ForeignKey`. Types are portable (`dsl.BigInt` is `int8` on PostgreSQL and
-`bigint` on MySQL, `dsl.Timestamp` is `timestamptz`/`datetime`, ...);
-`dsl.Type("citext")` passes an engine type name through verbatim.
+`ForeignKey`. Types are portable (`BigInt` is `int8` on PostgreSQL and
+`bigint` on MySQL, `Timestamp` is `timestamptz`/`datetime`, ...);
+`Type("citext")` passes an engine type name through verbatim.
 
 A small generator program turns the design into code — see
 `examples/blog/gen`:

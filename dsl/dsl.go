@@ -4,23 +4,24 @@
 // consumes. The same design that generates typed table bindings today can
 // feed future tooling (e.g. a migration generator) without changes.
 //
-// A design lives in an ordinary Go package:
+// A design lives in an ordinary Go package that dot-imports the dsl,
+// goa-style, so the schema reads as bare calls:
 //
 //	package design
 //
-//	import "github.com/aita/sqlkit/dsl"
+//	import . "github.com/aita/sqlkit/dsl"
 //
-//	var Blog = dsl.Schema("public", func() {
-//		dsl.Table("users", func() {
-//			dsl.Column("id", dsl.BigInt, dsl.PrimaryKey(), dsl.Default())
-//			dsl.Column("email", dsl.VarChar(255))
-//			dsl.Column("name", dsl.Text, dsl.Nullable())
-//			dsl.Column("created_at", dsl.Timestamp, dsl.Default())
+//	var Blog = Schema("public", func() {
+//		Table("users", func() {
+//			Column("id", BigInt, PrimaryKey(), Default())
+//			Column("email", VarChar(255))
+//			Column("name", Text, Nullable())
+//			Column("created_at", Timestamp, Default())
 //		})
-//		dsl.Table("posts", func() {
-//			dsl.Column("id", dsl.BigInt, dsl.PrimaryKey(), dsl.Default())
-//			dsl.Column("user_id", dsl.BigInt, dsl.References("users", "id"))
-//			dsl.Column("title", dsl.VarChar(200))
+//		Table("posts", func() {
+//			Column("id", BigInt, PrimaryKey(), Default())
+//			Column("user_id", BigInt, References("users", "id"))
+//			Column("title", VarChar(200))
 //		})
 //	})
 //

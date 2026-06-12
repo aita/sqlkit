@@ -31,9 +31,10 @@ const dslImport = "github.com/aita/sqlkit/dsl"
 
 // GenerateDesign renders the schema as a dsl design source file — the inverse
 // of the dsl package: introspect a live database once, then maintain the
-// schema as Go code and generate bindings from it. Unlike binding generation
-// the result is a starting point meant to be edited, so it carries no
-// DO NOT EDIT marker.
+// schema as Go code and generate bindings from it. The dsl package is
+// dot-imported, goa-style, so the design reads as bare Schema/Table/Column
+// calls. Unlike binding generation the result is a starting point meant to be
+// edited, so it carries no DO NOT EDIT marker.
 func GenerateDesign(model schema.Schema, opts DesignOptions) (File, error) {
 	if opts.PackageName == "" {
 		return File{}, fmt.Errorf("codegen: package name is required")
@@ -63,7 +64,7 @@ func GenerateDesign(model schema.Schema, opts DesignOptions) (File, error) {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "// %s is the design of schema %q, bootstrapped from a live database;\n", varName, model.Name)
 	sb.WriteString("// edit it and regenerate the bindings from it.\n")
-	fmt.Fprintf(&sb, "var %s = dsl.Schema(%q, func() {\n", varName, model.Name)
+	fmt.Fprintf(&sb, "var %s = Schema(%q, func() {\n", varName, model.Name)
 	for i, table := range tables {
 		if i > 0 {
 			sb.WriteString("\n")
@@ -73,7 +74,7 @@ func GenerateDesign(model schema.Schema, opts DesignOptions) (File, error) {
 	sb.WriteString("})\n")
 
 	fb := newFileBuf()
-	fb.add(dslImport)
+	fb.add(". " + dslImport)
 	fb.write(sb.String())
 	return fb.fileWithHeader(opts.PackageName, fileName, "// Bootstrapped by sqlkitgen; maintained by hand.\n\n")
 }
@@ -99,25 +100,25 @@ func renderDesignTable(sb *strings.Builder, table schema.Table, dialect string) 
 		}
 	}
 
-	fmt.Fprintf(sb, "\tdsl.Table(%q, func() {\n", table.Name)
+	fmt.Fprintf(sb, "\tTable(%q, func() {\n", table.Name)
 	for _, column := range table.Columns {
-		fmt.Fprintf(sb, "\t\tdsl.Column(%q, %s", column.Name, dslTypeExpr(column, dialect))
+		fmt.Fprintf(sb, "\t\tColumn(%q, %s", column.Name, dslTypeExpr(column, dialect))
 		if column.PrimaryKey {
-			sb.WriteString(", dsl.PrimaryKey()")
+			sb.WriteString(", PrimaryKey()")
 		}
 		if column.HasDefault {
-			sb.WriteString(", dsl.Default()")
+			sb.WriteString(", Default()")
 		}
 		if column.Nullable {
-			sb.WriteString(", dsl.Nullable()")
+			sb.WriteString(", Nullable()")
 		}
 		if fk, ok := refs[column.Name]; ok {
-			fmt.Fprintf(sb, ", dsl.References(%q, %q)", fk.RefTable, fk.RefColumns[0])
+			fmt.Fprintf(sb, ", References(%q, %q)", fk.RefTable, fk.RefColumns[0])
 		}
 		sb.WriteString(")\n")
 	}
 	for _, fk := range rest {
-		fmt.Fprintf(sb, "\t\tdsl.ForeignKey(%s, %q, %s)\n", goStringSlice(fk.Columns), fk.RefTable, goStringSlice(fk.RefColumns))
+		fmt.Fprintf(sb, "\t\tForeignKey(%s, %q, %s)\n", goStringSlice(fk.Columns), fk.RefTable, goStringSlice(fk.RefColumns))
 	}
 	for _, fk := range foreign {
 		fmt.Fprintf(sb, "\t\t// NOTE: foreign key %s references %s.%s in another schema and cannot be declared in the DSL.\n",
@@ -135,78 +136,78 @@ func goStringSlice(items []string) string {
 }
 
 // dslTypeExpr maps an engine type name back to the DSL expression that
-// produces it. Types without a portable DSL name fall back to dsl.Type, which
+// produces it. Types without a portable DSL name fall back to Type, which
 // keeps the engine name verbatim.
 func dslTypeExpr(column schema.Column, dialect string) string {
 	dataType := strings.ToLower(strings.TrimSpace(column.DataType))
 	if dialect == "mysql" {
 		switch dataType {
 		case "bool", "boolean":
-			return "dsl.Bool"
+			return "Bool"
 		case "smallint":
-			return "dsl.SmallInt"
+			return "SmallInt"
 		case "int", "integer":
-			return "dsl.Int"
+			return "Int"
 		case "bigint":
-			return "dsl.BigInt"
+			return "BigInt"
 		case "float":
-			return "dsl.Float"
+			return "Float"
 		case "double":
-			return "dsl.Double"
+			return "Double"
 		case "decimal":
-			return fmt.Sprintf("dsl.Decimal(%d, %d)", column.Precision, column.Scale)
+			return fmt.Sprintf("Decimal(%d, %d)", column.Precision, column.Scale)
 		case "text":
-			return "dsl.Text"
+			return "Text"
 		case "varchar":
-			return fmt.Sprintf("dsl.VarChar(%d)", column.Length)
+			return fmt.Sprintf("VarChar(%d)", column.Length)
 		case "char":
-			return fmt.Sprintf("dsl.Char(%d)", column.Length)
+			return fmt.Sprintf("Char(%d)", column.Length)
 		case "blob":
-			return "dsl.Bytes"
+			return "Bytes"
 		case "json":
-			return "dsl.JSON"
+			return "JSON"
 		case "date":
-			return "dsl.Date"
+			return "Date"
 		case "time":
-			return "dsl.Time"
+			return "Time"
 		case "datetime":
-			return "dsl.Timestamp"
+			return "Timestamp"
 		}
-		return fmt.Sprintf("dsl.Type(%q)", dataType)
+		return fmt.Sprintf("Type(%q)", dataType)
 	}
 	switch dataType {
 	case "bool":
-		return "dsl.Bool"
+		return "Bool"
 	case "int2":
-		return "dsl.SmallInt"
+		return "SmallInt"
 	case "int4":
-		return "dsl.Int"
+		return "Int"
 	case "int8":
-		return "dsl.BigInt"
+		return "BigInt"
 	case "float4":
-		return "dsl.Float"
+		return "Float"
 	case "float8":
-		return "dsl.Double"
+		return "Double"
 	case "numeric":
-		return fmt.Sprintf("dsl.Decimal(%d, %d)", column.Precision, column.Scale)
+		return fmt.Sprintf("Decimal(%d, %d)", column.Precision, column.Scale)
 	case "text":
-		return "dsl.Text"
+		return "Text"
 	case "varchar":
-		return fmt.Sprintf("dsl.VarChar(%d)", column.Length)
+		return fmt.Sprintf("VarChar(%d)", column.Length)
 	case "bpchar":
-		return fmt.Sprintf("dsl.Char(%d)", column.Length)
+		return fmt.Sprintf("Char(%d)", column.Length)
 	case "uuid":
-		return "dsl.UUID"
+		return "UUID"
 	case "bytea":
-		return "dsl.Bytes"
+		return "Bytes"
 	case "jsonb":
-		return "dsl.JSON"
+		return "JSON"
 	case "date":
-		return "dsl.Date"
+		return "Date"
 	case "time":
-		return "dsl.Time"
+		return "Time"
 	case "timestamptz":
-		return "dsl.Timestamp"
+		return "Timestamp"
 	}
-	return fmt.Sprintf("dsl.Type(%q)", dataType)
+	return fmt.Sprintf("Type(%q)", dataType)
 }

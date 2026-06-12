@@ -316,7 +316,12 @@ func (b *fileBuf) fileWithHeader(pkg, name, header string) (File, error) {
 		sort.Strings(paths)
 		buf.WriteString("\nimport (\n")
 		for _, p := range paths {
-			buf.WriteString("\t\"" + p + "\"\n")
+			// An entry may carry an import name ("." or an alias) before the path.
+			if name, path, ok := strings.Cut(p, " "); ok {
+				buf.WriteString("\t" + name + " \"" + path + "\"\n")
+			} else {
+				buf.WriteString("\t\"" + p + "\"\n")
+			}
 		}
 		buf.WriteString(")\n")
 	}
