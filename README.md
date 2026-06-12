@@ -37,6 +37,7 @@ err := db.Select().From(appdb.Users).
 | `schema` | Database schema model shared by the tooling (tables, columns, foreign keys) |
 | `inspector` | PostgreSQL/MySQL `information_schema` introspection into the `schema` model |
 | `codegen` | `schema` → Go code generator (library: customizable types, layout, DTOs) |
+| `dsl` | goa-style in-code schema DSL that produces the `schema` model |
 | `cmd/sqlkitgen` | CLI wrapper around `inspector` + `codegen` |
 
 ## Generating table bindings
@@ -82,6 +83,7 @@ var Users = ...
 | `-file-name` | single-file output name when `-out` is a directory (default `tables.go`) |
 | `-dto` | also generate a row struct (DTO) per table |
 | `-dto-separate-file` | write DTOs into their own file(s) |
+| `-dsl` | emit a `dsl` design file from the schema instead of table bindings |
 
 The generated binding is metadata, not an ORM: no `Get`, no relation
 navigation, no per-column option soup. Foreign keys are read into the schema
@@ -116,6 +118,75 @@ the generator (and a future DDL/migration generator) consumes. The runtime
 binding stays minimal: each column is a plain
 `sqlkit.NewColumn[T](info, "name")` carrying only the table identity, column
 name, and static type `T`.
+
+## Declaring the schema in Go (DSL)
+
+The `dsl` package is a goa-style alternative to introspection: declare the
+schema as nested function calls in an ordinary Go package, and generate the
+same table bindings from it — no live database required. The design is the
+source of truth, lives in version control, and feeds the same `schema` model
+the rest of the tooling consumes.
+
+```go
+// design/design.go
+package design
+
+import "github.com/aita/sqlkit/dsl"
+
+var Blog = dsl.Schema("public", func() {
+    dsl.Table("users", func() {
+        dsl.Column("id", dsl.BigInt, dsl.PrimaryKey(), dsl.Default())
+        dsl.Column("email", dsl.VarChar(255))
+        dsl.Column("name", dsl.Text, dsl.Nullable())
+        dsl.Column("created_at", dsl.Timestamp, dsl.Default())
+    })
+    dsl.Table("posts", func() {
+        dsl.Column("id", dsl.BigInt, dsl.PrimaryKey(), dsl.Default())
+        dsl.Column("user_id", dsl.BigInt, dsl.References("users", "id"))
+        dsl.Column("title", dsl.Text)
+        dsl.Column("body", dsl.Text, dsl.Nullable())
+        dsl.Column("published", dsl.Bool, dsl.Default())
+    })
+})
+```
+
+Columns are NOT NULL unless marked `dsl.Nullable()` (nullable columns map to
+pointer types, as with introspection). `dsl.Default()` marks database-side
+defaults (serials, `DEFAULT now()`), `dsl.PrimaryKey()` on several columns
+declares a composite key, and composite foreign keys use the table-level
+`dsl.ForeignKey`. Types are portable (`dsl.BigInt` is `int8` on PostgreSQL and
+`bigint` on MySQL, `dsl.Timestamp` is `timestamptz`/`datetime`, ...);
+`dsl.Type("citext")` passes an engine type name through verbatim.
+
+A small generator program turns the design into code — see
+`examples/blog/gen`:
+
+```go
+files, err := design.Blog.Generate(codegen.Options{PackageName: "blogdb"})
+if err != nil { ... }
+err = dsl.Write("blogdb", files)
+```
+
+`Generate` accepts the full `codegen.Options` surface (DTOs, file layout, type
+overrides); `Build("postgres")` returns the raw `schema.Schema` for other
+tooling. Misplaced calls (`Column` outside `Table`) panic at package-init
+time; semantic mistakes (duplicate names, dangling foreign keys) are collected
+and reported by `Build`/`Generate`.
+
+### Bootstrapping a design from an existing database
+
+`sqlkitgen -dsl` runs the introspection in reverse: it reads a live schema and
+emits the `dsl` design file for it, so an existing database can be converted
+once and maintained as Go code from then on:
+
+```sh
+go run github.com/aita/sqlkit/cmd/sqlkitgen \
+  -dsn "$DATABASE_URL" -schema public -dsl -package design -out design/design.go
+```
+
+The emitted file is a starting point meant to be edited (it carries no
+`DO NOT EDIT` marker). The same conversion is available as a library via
+`codegen.GenerateDesign(model, codegen.DesignOptions{...})`.
 
 ## Querying and scanning
 

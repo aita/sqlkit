@@ -1,7 +1,8 @@
 // Package schema is the database schema model shared across sqlkit's tooling:
-// the inspector introspects a live database into it, code generation consumes
-// it, and a future DSL and migration generator will produce and consume it too.
-// It is a pure data model with no database or generation dependencies.
+// the inspector introspects a live database into it, the dsl package builds it
+// from in-code designs, code generation consumes it, and a future migration
+// generator will too. It is a pure data model with no database or generation
+// dependencies.
 package schema
 
 // Schema is a loaded database schema.

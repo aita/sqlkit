@@ -3,6 +3,9 @@
 --   psql "$DATABASE_URL" -f schema.sql
 --   go run github.com/aita/sqlkit/cmd/sqlkitgen \
 --     -dsn "$DATABASE_URL" -schema public -package blogdb -out blogdb/tables.go
+--
+-- The same schema is also declared in code in design/design.go (see the dsl
+-- package); `go run ./gen` regenerates blogdb from it without a database.
 
 CREATE TABLE users (
     id         bigserial PRIMARY KEY,

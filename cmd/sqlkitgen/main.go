@@ -5,6 +5,11 @@
 //
 //	sqlkitgen -dsn postgres://user:pass@localhost/app -schema public -package appdb -out appdb/tables.go
 //	sqlkitgen -driver mysql -dsn 'user:pass@tcp(localhost:3306)/app' -package appdb -out appdb -file-per-table -dto
+//	sqlkitgen -dsn postgres://user:pass@localhost/app -schema public -dsl -package design -out design/design.go
+//
+// With -dsl the schema is emitted as a dsl design file (see the dsl package)
+// instead of table bindings: introspect once, then maintain the schema as Go
+// code and generate the bindings from the design.
 //
 // The codegen and inspector packages are the library entry points behind this
 // command; import them directly to customize type mapping and generation.
@@ -45,8 +50,16 @@ func run() error {
 	fileName := flag.String("file-name", "tables.go", "single-file output name (used when -out is a directory)")
 	dto := flag.Bool("dto", false, "also generate a row struct (DTO) per table")
 	dtoSeparate := flag.Bool("dto-separate-file", false, "write DTOs into their own file(s)")
+	dslDesign := flag.Bool("dsl", false, "generate a dsl design file from the schema instead of table bindings")
 	version := flag.Bool("version", false, "print sqlkitgen version")
 	flag.Parse()
+
+	fileNameSet := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "file-name" {
+			fileNameSet = true
+		}
+	})
 
 	if *version {
 		fmt.Println("sqlkitgen dev")
@@ -77,6 +90,22 @@ func run() error {
 	}
 	if len(model.Tables) == 0 {
 		return fmt.Errorf("schema %q contains no tables", *schema)
+	}
+
+	if *dslDesign {
+		designOpts := codegen.DesignOptions{
+			PackageName: *packageName,
+			Tables:      splitList(*tables),
+			Dialect:     resolvedDialect,
+		}
+		if fileNameSet {
+			designOpts.FileName = *fileName
+		}
+		file, err := codegen.GenerateDesign(model, designOpts)
+		if err != nil {
+			return err
+		}
+		return writeFiles([]codegen.File{file}, *out)
 	}
 
 	opts := codegen.Options{
