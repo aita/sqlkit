@@ -190,22 +190,24 @@ func TestRecordScanStruct(t *testing.T) {
 	}
 }
 
-func TestRecordScanIsSingleShot(t *testing.T) {
+func TestRecordCanBeScannedAgain(t *testing.T) {
 	rs := queryRecordSet(t, fakeResult([]string{"id"}, []driver.Value{int64(1)}))
 
 	for record, err := range rs.Iter() {
 		if err != nil {
 			t.Fatalf("Iter() error = %v", err)
 		}
-		var row struct {
+		var first, second struct {
 			ID int64 `sqlkit:"id"`
 		}
-		if err := record.Scan(&row); err != nil {
+		if err := record.Scan(&first); err != nil {
 			t.Fatalf("first Scan() error = %v", err)
 		}
-		err := record.Scan(&row)
-		if err == nil || !strings.Contains(err.Error(), "already scanned") {
-			t.Fatalf("second Scan() error = %v, want already-scanned error", err)
+		if err := record.Scan(&second); err != nil {
+			t.Fatalf("second Scan() error = %v", err)
+		}
+		if first.ID != 1 || second.ID != 1 {
+			t.Fatalf("scans = %#v, %#v, want both ID 1", first, second)
 		}
 	}
 }
