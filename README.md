@@ -13,6 +13,10 @@ A typed SQL toolkit for Go:
   (`OVER (PARTITION BY ...)`).
 - **Code generation from PostgreSQL** — `sqlkitgen` introspects a live schema
   (`information_schema`) and generates the row structs and typed bindings.
+- **Standalone builder** — every chain also compiles unbound with
+  `ToSQL(dialect)` to SQL text + args, ready for pgx, sqlx, or `database/sql`;
+  `ScanRows` applies the same struct mapping to results another library
+  executed. See [Standalone query building](#standalone-query-building-pgx-sqlx-databasesql-).
 
 Chains are bound to the executor they start from — a `Database` (auto-commit)
 or a transaction-scoped `Session` — so terminals take only a context:
@@ -316,6 +320,71 @@ err := db.Select().From(Users).Where(Users.ID.Eq(1)).One(ctx).Scan(&user)
 ```go
 var users []User
 err := db.Select().From(Users).OrderBy(Users.ID.Asc()).Page(ctx, 20, 40).Scan(&users)
+```
+
+## Standalone query building (pgx, sqlx, database/sql, ...)
+
+sqlkit also works as a pure SQL builder, with execution and scanning handled
+by another library. Every builder has an unbound form — the package-level
+constructors `sqlkit.Select`, `sqlkit.Insert`, `sqlkit.Update`,
+`sqlkit.Delete` (and everything in package `sql`) — and compiles to SQL text
+plus bind arguments with `ToSQL(dialect)`. Nothing in that path touches a
+database, and the root module pulls in no driver dependencies:
+
+```go
+query := sqlkit.Select(appdb.Users.ID, appdb.Users.Email).
+    From(appdb.Users).
+    Where(appdb.Users.ID.Gt(10)).
+    OrderBy(appdb.Users.ID.Asc())
+
+sqlText, args, err := query.ToSQL(sql.PostgreSQLDialect{})
+
+// pgx (native pool — $n placeholders match the PostgreSQL dialect):
+rows, err := pool.Query(ctx, sqlText, args...)
+
+// sqlx:
+err = sqlxDB.SelectContext(ctx, &users, sqlText, args...)
+
+// database/sql:
+rows, err := stdDB.QueryContext(ctx, sqlText, args...)
+```
+
+DML compiles the same way — including struct-fed inserts — with
+`sql.MySQLDialect{}` switching to backticks and `?` placeholders:
+
+```go
+sqlText, args, err := sqlkit.Insert(appdb.Users).Values(u).ToSQL(sql.PostgreSQLDialect{})
+sqlText, args, err = sqlkit.Update(appdb.Users).
+    Set(appdb.Users.Name.Set(&name)).
+    Where(appdb.Users.ID.Eq(7)).
+    ToSQL(sql.MySQLDialect{})
+```
+
+When execution goes through `database/sql` (including sqlx and pgx's stdlib
+adapter), `sqlkit.ScanRows` applies sqlkit's column-to-field mapping to the
+result, so the scanning rules stay the same regardless of who ran the query:
+
+```go
+rows, err := stdDB.QueryContext(ctx, sqlText, args...)
+defer rows.Close()
+var users []MyUserDTO
+err = sqlkit.ScanRows(rows, &users)
+```
+
+Table bindings don't require codegen or a live database. For SELECT, a
+`TableInfo` and typed columns are enough; the full `TableMeta` interface
+(what `Insert`/`Update`/`Delete` take, ~30 lines per table — see
+`examples/blog/blogdb` for the shape) can be written by hand too:
+
+```go
+var users = sqlkit.TableInfo{Name: "users"}
+var userID = sqlkit.NewColumn[int64](users, "id")
+var userEmail = sqlkit.NewColumn[string](users, "email")
+
+sqlText, args, err := sqlkit.Select(userID, userEmail).
+    From(users).
+    Where(userEmail.Eq("a@example.com")).
+    ToSQL(sql.PostgreSQLDialect{})
 ```
 
 ## Dialects

@@ -126,6 +126,26 @@ func scanExactlyOne(rows *stdsql.Rows, dest any) error {
 	return rows.Err()
 }
 
+// ScanRows copies an externally produced *sql.Rows result into dest, using
+// the same column-to-field mapping rules as Rows.Scan (`sqlkit` tag, exact
+// name, snake_case, embedded structs flattened, sql.Scanner fields). It makes
+// sqlkit's scanner available when the query is executed by another library —
+// plain database/sql, sqlx, a pgx stdlib pool — typically over SQL produced
+// by the unbound builders with ToSQL:
+//
+//	sqlText, args, _ := sqlkit.Select().From(Users).Where(...).ToSQL(dialect)
+//	rows, _ := otherDB.QueryContext(ctx, sqlText, args...)
+//	defer rows.Close()
+//	err := sqlkit.ScanRows(rows, &users)
+//
+// dest may be a pointer to a slice of structs, struct pointers, or scalars
+// (every remaining row), or a pointer to a struct or scalar (the next row,
+// or ErrNoRows when none is left). The caller keeps ownership of rows and
+// remains responsible for closing them.
+func ScanRows(rows *stdsql.Rows, dest any) error {
+	return scanInto(rows, dest)
+}
+
 func scanInto(rows *stdsql.Rows, dest any) error {
 	dv := reflect.ValueOf(dest)
 	if dv.Kind() != reflect.Pointer || dv.IsNil() {

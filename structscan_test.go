@@ -125,3 +125,62 @@ func TestSessionQueryRunsInTransaction(t *testing.T) {
 		t.Fatalf("authors = %#v", authors)
 	}
 }
+
+// TestScanRowsScansExternallyExecutedQuery exercises the standalone-builder
+// path: a typed unbound query compiled with ToSQL, executed through a plain
+// database/sql handle (standing in for sqlx, a pgx stdlib pool, ...), and
+// scanned with ScanRows.
+func TestScanRowsScansExternallyExecutedQuery(t *testing.T) {
+	fake := newAuthorFake()
+	db := fake.DB() // plain *sql.DB, no sqlkit executor
+
+	info := sqlkit.TableInfo{Name: "users"}
+	userID := sqlkit.NewColumn[int64](info, "user_id")
+	query := sqlkit.Select(
+		userID,
+		sqlkit.NewColumn[string](info, "email"),
+		sqlkit.NewColumn[*string](info, "name"),
+		sqlkit.NewColumn[time.Time](info, "created_at"),
+	).From(info).Where(userID.Gt(0)).OrderBy(userID.Asc())
+
+	sqlText, args, err := query.ToSQL(sql.PostgreSQLDialect{})
+	if err != nil {
+		t.Fatalf("ToSQL() error = %v", err)
+	}
+	want := `SELECT "users"."user_id", "users"."email", "users"."name", "users"."created_at"` +
+		` FROM "users" WHERE ("users"."user_id" > $1) ORDER BY "users"."user_id"`
+	if sqlText != want {
+		t.Fatalf("ToSQL() = %q, want %q", sqlText, want)
+	}
+	if len(args) != 1 || args[0] != int64(0) {
+		t.Fatalf("args = %#v, want [0]", args)
+	}
+
+	rows, err := db.QueryContext(context.Background(), sqlText, args...)
+	if err != nil {
+		t.Fatalf("QueryContext() error = %v", err)
+	}
+	defer rows.Close()
+
+	var authors []authorRow
+	if err := sqlkit.ScanRows(rows, &authors); err != nil {
+		t.Fatalf("ScanRows() error = %v", err)
+	}
+	if len(authors) != 2 || authors[0].UserID != 1 || *authors[0].Nickname != "Alice" {
+		t.Fatalf("authors = %#v", authors)
+	}
+}
+
+func TestScanRowsSingleDestReportsNoRows(t *testing.T) {
+	empty := &sqltest.Fake{}
+	rows, err := empty.DB().QueryContext(context.Background(), "SELECT ...")
+	if err != nil {
+		t.Fatalf("QueryContext() error = %v", err)
+	}
+	defer rows.Close()
+
+	var author authorRow
+	if err := sqlkit.ScanRows(rows, &author); !errors.Is(err, sqlkit.ErrNoRows) {
+		t.Fatalf("ScanRows() on empty result = %v, want ErrNoRows", err)
+	}
+}
