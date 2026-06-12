@@ -190,6 +190,26 @@ func TestRecordScanStruct(t *testing.T) {
 	}
 }
 
+func TestRecordScanIsSingleShot(t *testing.T) {
+	rs := queryRecordSet(t, fakeResult([]string{"id"}, []driver.Value{int64(1)}))
+
+	for record, err := range rs.Iter() {
+		if err != nil {
+			t.Fatalf("Iter() error = %v", err)
+		}
+		var row struct {
+			ID int64 `sqlkit:"id"`
+		}
+		if err := record.Scan(&row); err != nil {
+			t.Fatalf("first Scan() error = %v", err)
+		}
+		err := record.Scan(&row)
+		if err == nil || !strings.Contains(err.Error(), "already scanned") {
+			t.Fatalf("second Scan() error = %v, want already-scanned error", err)
+		}
+	}
+}
+
 func TestRecordSetScanIgnoresUnmatchedColumns(t *testing.T) {
 	rs := queryRecordSet(t, fakeResult(
 		[]string{"id", "extra"},

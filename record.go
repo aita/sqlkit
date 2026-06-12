@@ -30,16 +30,20 @@ func newRecordColumns(columnNames []string) *recordColumns {
 // underlying sql.Rows: it holds no row data itself, so iterating a RecordSet
 // allocates nothing per record. Like sql.Rows, a Record is only valid until
 // the iteration advances or ends; copy values out with Scan before moving on
-// instead of retaining the Record.
+// instead of retaining the Record. Each record can be scanned at most once.
 type Record struct {
 	rows    *stdsql.Rows
 	columns *recordColumns
+	// scanned guards against scanning the same record twice; it is shared
+	// with the iteration, which resets it on each row advance.
+	scanned *bool
 }
 
 // Scan copies the current record into dest using `sqlkit` tags or exported
 // field names. Dest must be a non-nil pointer to a struct. Values go through
 // database/sql scanning straight into the fields, with no intermediate
-// per-record allocation.
+// per-record allocation. A record can be scanned at most once; a second
+// Scan on the same record returns an error.
 func (r Record) Scan(dest any) error {
 	value := reflect.ValueOf(dest)
 	if value.Kind() != reflect.Pointer || value.IsNil() {
@@ -54,6 +58,12 @@ func (r Record) Scan(dest any) error {
 func scanRecordInto(r Record, dest reflect.Value) error {
 	if r.rows == nil || r.columns == nil {
 		return fmt.Errorf("sqlkit: scan on a zero Record")
+	}
+	if r.scanned != nil {
+		if *r.scanned {
+			return fmt.Errorf("sqlkit: record already scanned; a Record can be scanned at most once")
+		}
+		*r.scanned = true
 	}
 	plan := recordScanPlan(dest.Type(), r.columns)
 	return r.rows.Scan(recordScanTargets(dest, plan, len(r.columns.names))...)
