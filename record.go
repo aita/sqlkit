@@ -30,10 +30,19 @@ func newRecordColumns(columnNames []string) *recordColumns {
 // underlying sql.Rows: it holds no row data itself, so iterating a RecordSet
 // allocates nothing per record. Like sql.Rows, a Record is only valid until
 // the iteration advances or ends; copy values out with Scan before moving on
-// instead of retaining the Record.
+// instead of retaining the Record. Scanning a record retained from an
+// earlier iteration step returns an error instead of silently reading
+// whatever row the cursor has advanced to.
 type Record struct {
 	rows    *stdsql.Rows
 	columns *recordColumns
+	// row is the row number this record was yielded for; current points at
+	// the iteration's live row counter. They diverge once the iteration
+	// advances, which lets Scan reject stale records: every yielded record
+	// shares the same sql.Rows cursor, so without this check a retained
+	// record would scan a different row than the one it was yielded for.
+	row     int
+	current *int
 }
 
 // Scan copies the current record into dest using `sqlkit` tags or exported
@@ -42,7 +51,9 @@ type Record struct {
 // per-record allocation. Scanning the same record again simply re-reads the
 // current row: sql.Rows.Scan re-converts the buffered row values, so this
 // needs no guard (database/sql only rejects a repeated Scan when the
-// previous one used *sql.RawBytes).
+// previous one used *sql.RawBytes). Scanning a record from an earlier
+// iteration step, however, returns an error: the shared cursor has moved
+// on, and scanning would silently read a different row.
 func (r Record) Scan(dest any) error {
 	value := reflect.ValueOf(dest)
 	if value.Kind() != reflect.Pointer || value.IsNil() {
@@ -57,6 +68,9 @@ func (r Record) Scan(dest any) error {
 func scanRecordInto(r Record, dest reflect.Value) error {
 	if r.rows == nil || r.columns == nil {
 		return fmt.Errorf("sqlkit: scan on a zero Record")
+	}
+	if r.current != nil && r.row != *r.current {
+		return fmt.Errorf("sqlkit: stale record: the iteration has advanced past this record's row")
 	}
 	plan := recordScanPlan(dest.Type(), r.columns)
 	return r.rows.Scan(recordScanTargets(dest, plan, len(r.columns.names))...)

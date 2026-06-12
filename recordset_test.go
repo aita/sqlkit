@@ -212,6 +212,39 @@ func TestRecordCanBeScannedAgain(t *testing.T) {
 	}
 }
 
+func TestStaleRecordScanErrors(t *testing.T) {
+	rs := queryRecordSet(t, threeRecordFake())
+
+	var stale *sqlkit.Record
+	row := 0
+	for record, err := range rs.Iter() {
+		if err != nil {
+			t.Fatalf("Iter() error = %v", err)
+		}
+		row++
+		if row == 1 {
+			retained := record
+			stale = &retained
+			continue
+		}
+		// The cursor is now on row 2; the record retained from row 1 must
+		// refuse to scan rather than silently read row 2.
+		var got struct {
+			ID int64 `sqlkit:"id"`
+		}
+		err := stale.Scan(&got)
+		if err == nil || !strings.Contains(err.Error(), "stale record") {
+			t.Fatalf("stale Scan() error = %v, want stale-record error", err)
+		}
+		if err := record.Scan(&got); err != nil {
+			t.Fatalf("current Scan() error = %v", err)
+		}
+		if got.ID != int64(row) {
+			t.Fatalf("current record ID = %d, want %d", got.ID, row)
+		}
+	}
+}
+
 func TestRecordSetScanIgnoresUnmatchedColumns(t *testing.T) {
 	rs := queryRecordSet(t, fakeResult(
 		[]string{"id", "extra"},

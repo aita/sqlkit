@@ -67,8 +67,10 @@ func (rs RecordSet) iterate(yield func(Record) bool) error {
 	if err != nil {
 		return fmt.Errorf("sqlkit: read columns: %w", err)
 	}
-	record := Record{rows: rs.rows, columns: newRecordColumns(columnNames)}
+	record := Record{rows: rs.rows, columns: newRecordColumns(columnNames), current: new(int)}
 	for rs.rows.Next() {
+		*record.current++
+		record.row = *record.current
 		if !yield(record) {
 			return nil
 		}
