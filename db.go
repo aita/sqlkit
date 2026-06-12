@@ -5,7 +5,6 @@ import (
 	stdsql "database/sql"
 	"errors"
 
-	"github.com/aita/sqlkit/rowset"
 	"github.com/aita/sqlkit/sql"
 )
 
@@ -144,21 +143,6 @@ func (d *Database) Exec(ctx context.Context, query sql.Query) (stdsql.Result, er
 		return nil, err
 	}
 	return d.db.ExecContext(ctx, sqlText, args...)
-}
-
-// QueryRows compiles and runs a query outside a session, returning a dynamic
-// RowSet for when even the result shape is unknown. Prefer Select/Query and
-// Scan when a destination type is available.
-func (d *Database) QueryRows(ctx context.Context, query sql.Query) (rowset.RowSet, error) {
-	sqlText, args, err := query.ToSQL(d.dialect)
-	if err != nil {
-		return rowset.RowSet{}, err
-	}
-	rows, err := d.db.QueryContext(ctx, sqlText, args...)
-	if err != nil {
-		return rowset.RowSet{}, err
-	}
-	return rowset.FromSQLRows(rows), nil
 }
 
 func (d *Database) sqlDialect() sql.Dialect { return d.dialect }
