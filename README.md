@@ -300,13 +300,15 @@ for user, err := range sqlkit.Records[User](db.RawSQL(ctx, query)) {
 }
 ```
 
-For a single row, query chains offer `First` alongside `All`: it pushes
-`LIMIT 1` into the query, and scanning into a struct yields that row or
-`ErrNoRows`:
+For a single row, query chains offer `First` and `One` alongside `All`.
+`First` pushes `LIMIT 1` into the query and scans the first row (or
+`ErrNoRows`); `One` additionally requires the row to be the only one,
+returning `ErrTooManyRows` otherwise (it pushes `LIMIT 2`, so the check
+never reads further):
 
 ```go
 var user User
-err := db.Select().From(Users).Where(Users.ID.Eq(1)).First(ctx).Scan(&user)
+err := db.Select().From(Users).Where(Users.ID.Eq(1)).One(ctx).Scan(&user)
 ```
 
 ## Dialects

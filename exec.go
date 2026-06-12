@@ -44,21 +44,27 @@ type Executor interface {
 // ErrNoRows is returned when a single-row Scan finds no row.
 var ErrNoRows = stdsql.ErrNoRows
 
+// ErrTooManyRows is returned when a One query yields more than one row.
+var ErrTooManyRows = errors.New("sqlkit: query returned more than one row")
+
 // errNoExecutor is returned when a chain built from the package-level
 // constructors (meant for subqueries and ToSQL) is executed.
 var errNoExecutor = errors.New(
 	"sqlkit: query is not bound to an executor; start the chain from a Database or Session (db.Select(), session.Insert(), ...)")
 
-// Rows is a pending query result. It is produced by All, First, and RawSQL,
-// and materialized with Scan, or streamed row by row with the package-level
-// Records function. Execution is deferred until either terminal, so build
-// and query errors surface there.
+// Rows is a pending query result. It is produced by All, First, One, and
+// RawSQL, and materialized with Scan, or streamed row by row with the
+// package-level Records function. Execution is deferred until either
+// terminal, so build and query errors surface there.
 type Rows struct {
 	ctx     context.Context
 	ex      Executor
 	sqlText string
 	args    []any
 	err     error
+	// exactlyOne makes Scan require a single-row result: ErrNoRows when
+	// empty, ErrTooManyRows when a second row exists. Set by One.
+	exactlyOne bool
 }
 
 func newRows(ctx context.Context, ex Executor, query sql.Query) Rows {
@@ -90,7 +96,34 @@ func (r Rows) Scan(dest any) error {
 		return err
 	}
 	defer rows.Close()
+	if r.exactlyOne {
+		return scanExactlyOne(rows, dest)
+	}
 	return scanInto(rows, dest)
+}
+
+// scanExactlyOne scans the single result row into dest, requiring exactly
+// one: ErrNoRows when the result is empty, ErrTooManyRows when a second row
+// exists.
+func scanExactlyOne(rows *stdsql.Rows, dest any) error {
+	dv := reflect.ValueOf(dest)
+	if dv.Kind() != reflect.Pointer || dv.IsNil() {
+		return fmt.Errorf("sqlkit: Scan destination must be a non-nil pointer, got %T", dest)
+	}
+	if dv.Elem().Kind() == reflect.Slice {
+		return fmt.Errorf("sqlkit: One expects a single-row destination, not a slice; use All for multiple rows")
+	}
+	found, err := structScanOne(rows, dest)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return ErrNoRows
+	}
+	if rows.Next() {
+		return ErrTooManyRows
+	}
+	return rows.Err()
 }
 
 func scanInto(rows *stdsql.Rows, dest any) error {

@@ -126,6 +126,16 @@ func (q SelectQuery) First(ctx context.Context) Rows {
 	return newRows(ctx, q.ex, q.query.Limit(1))
 }
 
+// One is All restricted to exactly one row: Scan yields the row when the
+// result has exactly one, ErrNoRows when it is empty, and ErrTooManyRows
+// when there are more. LIMIT 2 is pushed into the query, so detecting the
+// excess row never reads past the second.
+func (q SelectQuery) One(ctx context.Context) Rows {
+	rows := newRows(ctx, q.ex, q.query.Limit(2))
+	rows.exactlyOne = true
+	return rows
+}
+
 // Count runs SELECT COUNT(*) over this query (as a subquery, so joins,
 // grouping, and predicates apply) and returns the number of matching rows.
 func (q SelectQuery) Count(ctx context.Context) (int64, error) {
@@ -211,6 +221,14 @@ func (q UnionQuery) All(ctx context.Context) Rows {
 // SelectQuery.First.
 func (q UnionQuery) First(ctx context.Context) Rows {
 	return newRows(ctx, q.ex, q.query.Limit(1))
+}
+
+// One is All restricted to exactly one row of the combined result; see
+// SelectQuery.One.
+func (q UnionQuery) One(ctx context.Context) Rows {
+	rows := newRows(ctx, q.ex, q.query.Limit(2))
+	rows.exactlyOne = true
+	return rows
 }
 
 func allColumnsOf(source sql.Source) []sql.Selection {

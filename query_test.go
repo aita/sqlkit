@@ -188,6 +188,66 @@ func TestUnionFirstAppliesLimit(t *testing.T) {
 	}
 }
 
+func TestOneAppliesLimitAndScansSingleRow(t *testing.T) {
+	var gotSQL string
+	fake := &sqltest.Fake{
+		QueryFunc: func(sqlText string, args []any) (sqltest.Result, error) {
+			gotSQL = sqlText
+			return sqltest.Result{
+				Columns: []string{"id", "email", "name"},
+				Rows:    [][]driver.Value{{int64(1), "a@example.com", "Alice"}},
+			}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var one MyUserDTO
+	if err := db.Select().From(Users).One(context.Background()).Scan(&one); err != nil {
+		t.Fatalf("One().Scan() error = %v", err)
+	}
+	if one.Identifier != 1 {
+		t.Fatalf("one = %#v", one)
+	}
+	if !strings.Contains(gotSQL, "LIMIT 2") {
+		t.Fatalf("sql = %q, want LIMIT 2 pushed into the query", gotSQL)
+	}
+}
+
+func TestOneMultipleRowsIsErrTooManyRows(t *testing.T) {
+	db := sqlkit.WrapDB(usersFake().DB()) // two rows
+
+	var one MyUserDTO
+	err := db.Select().From(Users).One(context.Background()).Scan(&one)
+	if !errors.Is(err, sqlkit.ErrTooManyRows) {
+		t.Fatalf("One().Scan() = %v, want ErrTooManyRows", err)
+	}
+}
+
+func TestOneNoRowsIsErrNoRows(t *testing.T) {
+	fake := &sqltest.Fake{
+		QueryFunc: func(string, []any) (sqltest.Result, error) {
+			return sqltest.Result{Columns: []string{"id", "email", "name"}}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var one MyUserDTO
+	err := db.Select().From(Users).One(context.Background()).Scan(&one)
+	if !errors.Is(err, sqlkit.ErrNoRows) {
+		t.Fatalf("One().Scan() = %v, want ErrNoRows", err)
+	}
+}
+
+func TestOneRejectsSliceDestination(t *testing.T) {
+	db := sqlkit.WrapDB(usersFake().DB())
+
+	var many []MyUserDTO
+	err := db.Select().From(Users).One(context.Background()).Scan(&many)
+	if err == nil || !strings.Contains(err.Error(), "single-row destination") {
+		t.Fatalf("One().Scan(&slice) = %v, want single-row destination error", err)
+	}
+}
+
 func TestAllScanScalarSlice(t *testing.T) {
 	fake := &sqltest.Fake{
 		QueryFunc: func(string, []any) (sqltest.Result, error) {
