@@ -300,6 +300,13 @@ for user, err := range sqlkit.Records[User](db.RawSQL(ctx, query)) {
 }
 ```
 
+`First[T]` is the single-row companion: it returns the first row scanned
+into `T` (releasing the rest of the result set) or `ErrNoRows`:
+
+```go
+user, err := sqlkit.First[User](db.RawSQL(ctx, query))
+```
+
 ## Dialects
 
 PostgreSQL is the default and the most exercised dialect. The compiler is
