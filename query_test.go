@@ -5,6 +5,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/aita/sqlkit"
@@ -122,6 +123,226 @@ func TestAllScanSingleStructNoRowsIsErrNoRows(t *testing.T) {
 	err := db.Select().From(Users).All(context.Background()).Scan(&one)
 	if !errors.Is(err, sqlkit.ErrNoRows) {
 		t.Fatalf("Scan() = %v, want ErrNoRows", err)
+	}
+}
+
+func TestFirstAppliesLimitAndScansFirstRow(t *testing.T) {
+	var gotSQL string
+	fake := &sqltest.Fake{
+		QueryFunc: func(sqlText string, args []any) (sqltest.Result, error) {
+			gotSQL = sqlText
+			return sqltest.Result{
+				Columns: []string{"id", "email", "name"},
+				Rows:    [][]driver.Value{{int64(1), "a@example.com", "Alice"}},
+			}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var one MyUserDTO
+	if err := db.Select().From(Users).First(context.Background()).Scan(&one); err != nil {
+		t.Fatalf("First().Scan() error = %v", err)
+	}
+	if one.Identifier != 1 {
+		t.Fatalf("one = %#v", one)
+	}
+	if !strings.Contains(gotSQL, "LIMIT 1") {
+		t.Fatalf("sql = %q, want LIMIT 1 pushed into the query", gotSQL)
+	}
+}
+
+func TestFirstNoRowsIsErrNoRows(t *testing.T) {
+	fake := &sqltest.Fake{
+		QueryFunc: func(string, []any) (sqltest.Result, error) {
+			return sqltest.Result{Columns: []string{"id", "email", "name"}}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var one MyUserDTO
+	err := db.Select().From(Users).First(context.Background()).Scan(&one)
+	if !errors.Is(err, sqlkit.ErrNoRows) {
+		t.Fatalf("First().Scan() = %v, want ErrNoRows", err)
+	}
+}
+
+func TestUnionFirstAppliesLimit(t *testing.T) {
+	var gotSQL string
+	fake := &sqltest.Fake{
+		QueryFunc: func(sqlText string, args []any) (sqltest.Result, error) {
+			gotSQL = sqlText
+			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}}}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var id int64
+	err := db.Select(Users.ID).From(Users).
+		Union(sqlkit.Select(Users.ID).From(Users)).
+		First(context.Background()).Scan(&id)
+	if err != nil {
+		t.Fatalf("First().Scan() error = %v", err)
+	}
+	if id != 1 || !strings.Contains(gotSQL, "LIMIT 1") {
+		t.Fatalf("id = %d, sql = %q, want LIMIT 1", id, gotSQL)
+	}
+}
+
+func TestOneAppliesLimitAndScansSingleRow(t *testing.T) {
+	var gotSQL string
+	fake := &sqltest.Fake{
+		QueryFunc: func(sqlText string, args []any) (sqltest.Result, error) {
+			gotSQL = sqlText
+			return sqltest.Result{
+				Columns: []string{"id", "email", "name"},
+				Rows:    [][]driver.Value{{int64(1), "a@example.com", "Alice"}},
+			}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var one MyUserDTO
+	if err := db.Select().From(Users).One(context.Background()).Scan(&one); err != nil {
+		t.Fatalf("One().Scan() error = %v", err)
+	}
+	if one.Identifier != 1 {
+		t.Fatalf("one = %#v", one)
+	}
+	if !strings.Contains(gotSQL, "LIMIT 2") {
+		t.Fatalf("sql = %q, want LIMIT 2 pushed into the query", gotSQL)
+	}
+}
+
+func TestOneMultipleRowsIsErrTooManyRows(t *testing.T) {
+	db := sqlkit.WrapDB(usersFake().DB()) // two rows
+
+	var one MyUserDTO
+	err := db.Select().From(Users).One(context.Background()).Scan(&one)
+	if !errors.Is(err, sqlkit.ErrTooManyRows) {
+		t.Fatalf("One().Scan() = %v, want ErrTooManyRows", err)
+	}
+}
+
+func TestOneNoRowsIsErrNoRows(t *testing.T) {
+	fake := &sqltest.Fake{
+		QueryFunc: func(string, []any) (sqltest.Result, error) {
+			return sqltest.Result{Columns: []string{"id", "email", "name"}}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var one MyUserDTO
+	err := db.Select().From(Users).One(context.Background()).Scan(&one)
+	if !errors.Is(err, sqlkit.ErrNoRows) {
+		t.Fatalf("One().Scan() = %v, want ErrNoRows", err)
+	}
+}
+
+func TestOneRejectsSliceDestination(t *testing.T) {
+	db := sqlkit.WrapDB(usersFake().DB())
+
+	var many []MyUserDTO
+	err := db.Select().From(Users).One(context.Background()).Scan(&many)
+	if err == nil || !strings.Contains(err.Error(), "single-row destination") {
+		t.Fatalf("One().Scan(&slice) = %v, want single-row destination error", err)
+	}
+}
+
+func TestUnionOneMultipleRowsIsErrTooManyRows(t *testing.T) {
+	fake := &sqltest.Fake{
+		QueryFunc: func(string, []any) (sqltest.Result, error) {
+			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}, {int64(2)}}}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var id int64
+	err := db.Select(Users.ID).From(Users).
+		Union(sqlkit.Select(Users.ID).From(Users)).
+		One(context.Background()).Scan(&id)
+	if !errors.Is(err, sqlkit.ErrTooManyRows) {
+		t.Fatalf("One().Scan() = %v, want ErrTooManyRows", err)
+	}
+}
+
+func TestOneScansScalar(t *testing.T) {
+	fake := &sqltest.Fake{
+		QueryFunc: func(string, []any) (sqltest.Result, error) {
+			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(7)}}}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var id int64
+	if err := db.Select(Users.ID).From(Users).One(context.Background()).Scan(&id); err != nil {
+		t.Fatalf("One().Scan(&int64) error = %v", err)
+	}
+	if id != 7 {
+		t.Fatalf("id = %d, want 7", id)
+	}
+}
+
+func TestFirstScansScalar(t *testing.T) {
+	fake := &sqltest.Fake{
+		QueryFunc: func(string, []any) (sqltest.Result, error) {
+			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(7)}}}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var id int64
+	if err := db.Select(Users.ID).From(Users).First(context.Background()).Scan(&id); err != nil {
+		t.Fatalf("First().Scan(&int64) error = %v", err)
+	}
+	if id != 7 {
+		t.Fatalf("id = %d, want 7", id)
+	}
+}
+
+func TestPageAppliesLimitAndOffset(t *testing.T) {
+	var gotSQL string
+	fake := &sqltest.Fake{
+		QueryFunc: func(sqlText string, args []any) (sqltest.Result, error) {
+			gotSQL = sqlText
+			return sqltest.Result{
+				Columns: []string{"id", "email", "name"},
+				Rows:    [][]driver.Value{{int64(3), "c@example.com", "Carol"}},
+			}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var users []MyUserDTO
+	if err := db.Select().From(Users).Page(context.Background(), 20, 40).Scan(&users); err != nil {
+		t.Fatalf("Page().Scan() error = %v", err)
+	}
+	if len(users) != 1 || users[0].Identifier != 3 {
+		t.Fatalf("users = %#v", users)
+	}
+	if !strings.Contains(gotSQL, "LIMIT 20 OFFSET 40") {
+		t.Fatalf("sql = %q, want LIMIT 20 OFFSET 40 pushed into the query", gotSQL)
+	}
+}
+
+func TestUnionPageAppliesLimitAndOffset(t *testing.T) {
+	var gotSQL string
+	fake := &sqltest.Fake{
+		QueryFunc: func(sqlText string, args []any) (sqltest.Result, error) {
+			gotSQL = sqlText
+			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}}}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var ids []int64
+	err := db.Select(Users.ID).From(Users).
+		Union(sqlkit.Select(Users.ID).From(Users)).
+		Page(context.Background(), 10, 30).Scan(&ids)
+	if err != nil {
+		t.Fatalf("Page().Scan() error = %v", err)
+	}
+	if !strings.Contains(gotSQL, "LIMIT 10 OFFSET 30") {
+		t.Fatalf("sql = %q, want LIMIT 10 OFFSET 30", gotSQL)
 	}
 }
 
