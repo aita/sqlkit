@@ -23,9 +23,9 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"github.com/sqlkit-dev/sqlkit/codegen"
 	"github.com/sqlkit-dev/sqlkit/examples/blog/blogdb"
-	"github.com/sqlkit-dev/sqlkit/internal/codegen"
-	"github.com/sqlkit-dev/sqlkit/internal/loader"
+	"github.com/sqlkit-dev/sqlkit/inspector"
 	"github.com/sqlkit-dev/sqlkit/sqlkit"
 	"github.com/sqlkit-dev/sqlkit/sqlkit/sql"
 )
@@ -99,9 +99,9 @@ func TestLoaderReadsRealSchema(t *testing.T) {
 	db := startPostgres(t)
 	ctx := context.Background()
 
-	model, err := loader.Load(ctx, db.SQL(), "postgres", "public")
+	model, err := inspector.Inspect(ctx, db.SQL(), "postgres", "public")
 	if err != nil {
-		t.Fatalf("loader.Load: %v", err)
+		t.Fatalf("inspector.Inspect: %v", err)
 	}
 
 	tables := map[string]bool{}
@@ -186,17 +186,18 @@ func TestQueryRoundTrip(t *testing.T) {
 		t.Fatalf("insert posts: %v", err)
 	}
 
-	// Get by primary key, into a caller-defined dest.
+	// Lookup by primary key through the query builder (the bindings are
+	// metadata, not an ORM), into a caller-defined dest.
 	var got userRow
-	if found, err := blogdb.Users.Get(ctx, db, aliceID, &got); err != nil || !found {
-		t.Fatalf("Get(%d) found=%v err=%v", aliceID, found, err)
+	if err := db.Select().From(blogdb.Users).Where(blogdb.Users.ID.Eq(aliceID)).Limit(1).All(ctx).Scan(&got); err != nil {
+		t.Fatalf("get(%d): %v", aliceID, err)
 	}
 	if got.Email != "alice@example.com" {
-		t.Fatalf("Get email = %q", got.Email)
+		t.Fatalf("get email = %q", got.Email)
 	}
 	var missing userRow
-	if found, err := blogdb.Users.Get(ctx, db, 999999, &missing); err != nil || found {
-		t.Fatalf("Get(missing) found=%v err=%v; want false, nil", found, err)
+	if err := db.Select().From(blogdb.Users).Where(blogdb.Users.ID.Eq(999999)).Limit(1).All(ctx).Scan(&missing); !errors.Is(err, sqlkit.ErrNoRows) {
+		t.Fatalf("get(missing) = %v; want ErrNoRows", err)
 	}
 
 	// Typed SELECT + JOIN scanned into a caller-defined DTO.
@@ -306,8 +307,8 @@ func TestQueryRoundTrip(t *testing.T) {
 		t.Fatalf("update in session: %v", err)
 	}
 	var after userRow
-	if found, err := blogdb.Users.Get(ctx, db, aliceID, &after); err != nil || !found || after.Name == nil || *after.Name != "Alice" {
-		t.Fatalf("after update = %#v, found=%v, %v", after, found, err)
+	if err := db.Select().From(blogdb.Users).Where(blogdb.Users.ID.Eq(aliceID)).Limit(1).All(ctx).Scan(&after); err != nil || after.Name == nil || *after.Name != "Alice" {
+		t.Fatalf("after update = %#v, %v", after, err)
 	}
 
 	// A callback returning an error rolls the transaction back.
@@ -324,8 +325,8 @@ func TestQueryRoundTrip(t *testing.T) {
 		t.Fatalf("WithSession error = %v, want rollback", err)
 	}
 	var unchanged userRow
-	if found, err := blogdb.Users.Get(ctx, db, aliceID, &unchanged); err != nil || !found || unchanged.Name == nil || *unchanged.Name != "Alice" {
-		t.Fatalf("after rolled-back update = %#v, found=%v, %v; want Alice intact", unchanged, found, err)
+	if err := db.Select().From(blogdb.Users).Where(blogdb.Users.ID.Eq(aliceID)).Limit(1).All(ctx).Scan(&unchanged); err != nil || unchanged.Name == nil || *unchanged.Name != "Alice" {
+		t.Fatalf("after rolled-back update = %#v, %v; want Alice intact", unchanged, err)
 	}
 }
 

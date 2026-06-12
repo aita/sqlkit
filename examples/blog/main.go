@@ -73,9 +73,12 @@ func run(ctx context.Context, db *sqlkit.Database) error {
 		}
 
 		// Typed lookup by primary key; blogdb.Posts.Title.Eq(42) would not compile.
+		// The bindings are metadata, not an ORM: queries go through the builder.
 		var same User
-		if found, err := blogdb.Users.Get(ctx, session, alice.ID, &same); err != nil || !found {
-			return fmt.Errorf("get user %d: found=%v err=%w", alice.ID, found, err)
+		if err := session.Select().From(blogdb.Users).
+			Where(blogdb.Users.ID.Eq(alice.ID)).
+			Limit(1).All(ctx).Scan(&same); err != nil {
+			return fmt.Errorf("get user %d: %w", alice.ID, err)
 		}
 		fmt.Printf("loaded %s\n", same.Email)
 

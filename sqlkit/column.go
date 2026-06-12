@@ -62,13 +62,18 @@ func (t TableInfo) sqlTable() sql.Table { return sql.Table{Schema: t.Schema, Nam
 // Column is a typed reference to a database column. T is the Go type rows
 // scan into, so predicates and assignments built from the column are
 // type-checked at compile time.
+//
+// A Column carries only what query building needs — the table identity, the
+// column name, and the static type T. Schema metadata such as SQL type, length,
+// precision, and constraints lives in the schema model the generator consumes,
+// not on the runtime binding.
 type Column[T any] struct {
 	table TableInfo
 	name  string
 }
 
-// NewColumn creates a typed column bound to a table. It is intended for use
-// by generated code.
+// NewColumn creates a typed column bound to a table. It is intended for use by
+// generated code, but is also a usable constructor for hand-written bindings.
 func NewColumn[T any](table TableInfo, name string) Column[T] {
 	return Column[T]{table: table, name: name}
 }
