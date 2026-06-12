@@ -50,6 +50,43 @@ JOIN information_schema.constraint_column_usage ccu
 WHERE tc.table_schema = $1 AND tc.constraint_type = 'FOREIGN KEY'
 ORDER BY tc.constraint_name, kcu.ordinal_position`
 
+// pgIndexesQuery reads secondary indexes (the primary key index is implied by
+// Column.PrimaryKey) with their columns in index order. Expression indexes are
+// skipped; they have no column list to express.
+const pgIndexesQuery = `
+SELECT t.relname,
+       i.relname,
+       ix.indisunique,
+       a.attname
+FROM pg_index ix
+JOIN pg_class t ON t.oid = ix.indrelid
+JOIN pg_class i ON i.oid = ix.indexrelid
+JOIN pg_namespace n ON n.oid = t.relnamespace
+JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord) ON true
+JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
+WHERE n.nspname = $1 AND t.relkind = 'r' AND NOT ix.indisprimary AND ix.indexprs IS NULL
+ORDER BY t.relname, i.relname, k.ord`
+
+// pgChecksQuery reads CHECK constraints; pg_get_constraintdef renders the
+// clause as "CHECK ((expr))".
+const pgChecksQuery = `
+SELECT t.relname, con.conname, pg_get_constraintdef(con.oid)
+FROM pg_constraint con
+JOIN pg_class t ON t.oid = con.conrelid
+JOIN pg_namespace n ON n.oid = t.relnamespace
+WHERE n.nspname = $1 AND con.contype = 'c'
+ORDER BY t.relname, con.conname`
+
+// pgCommentsQuery reads table comments (objsubid = 0, empty column name) and
+// column comments from pg_description.
+const pgCommentsQuery = `
+SELECT c.relname, COALESCE(a.attname, ''), d.description
+FROM pg_description d
+JOIN pg_class c ON c.oid = d.objoid
+JOIN pg_namespace n ON n.oid = c.relnamespace
+LEFT JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = d.objsubid AND d.objsubid > 0
+WHERE n.nspname = $1 AND c.relkind = 'r' AND d.classoid = 'pg_class'::regclass`
+
 // inspectPostgres reads the schema from PostgreSQL's information_schema.
 func inspectPostgres(ctx context.Context, db Querier, schemaName string) (schema.Schema, error) {
 	if schemaName == "" {
@@ -124,6 +161,69 @@ func inspectPostgres(ctx context.Context, db Querier, schemaName string) (schema
 		return schema.Schema{}, fmt.Errorf("inspector: read foreign keys: %w", err)
 	}
 	attachForeignKeys(&model, fks)
+
+	ixRows, err := db.QueryContext(ctx, pgIndexesQuery, schemaName)
+	if err != nil {
+		return schema.Schema{}, fmt.Errorf("inspector: read indexes: %w", err)
+	}
+	defer ixRows.Close()
+	var indexes []indexRow
+	for ixRows.Next() {
+		var row indexRow
+		if err := ixRows.Scan(&row.table, &row.index, &row.unique, &row.column); err != nil {
+			return schema.Schema{}, fmt.Errorf("inspector: scan index: %w", err)
+		}
+		indexes = append(indexes, row)
+	}
+	if err := ixRows.Err(); err != nil {
+		return schema.Schema{}, fmt.Errorf("inspector: read indexes: %w", err)
+	}
+	attachIndexes(&model, indexes)
+
+	ckRows, err := db.QueryContext(ctx, pgChecksQuery, schemaName)
+	if err != nil {
+		return schema.Schema{}, fmt.Errorf("inspector: read check constraints: %w", err)
+	}
+	defer ckRows.Close()
+	for ckRows.Next() {
+		var tableName, constraint, clause string
+		if err := ckRows.Scan(&tableName, &constraint, &clause); err != nil {
+			return schema.Schema{}, fmt.Errorf("inspector: scan check constraint: %w", err)
+		}
+		attachCheck(&model, tableName, constraint, clause)
+	}
+	if err := ckRows.Err(); err != nil {
+		return schema.Schema{}, fmt.Errorf("inspector: read check constraints: %w", err)
+	}
+
+	cRows, err := db.QueryContext(ctx, pgCommentsQuery, schemaName)
+	if err != nil {
+		return schema.Schema{}, fmt.Errorf("inspector: read comments: %w", err)
+	}
+	defer cRows.Close()
+	for cRows.Next() {
+		var tableName, columnName, comment string
+		if err := cRows.Scan(&tableName, &columnName, &comment); err != nil {
+			return schema.Schema{}, fmt.Errorf("inspector: scan comment: %w", err)
+		}
+		index, ok := tableIndex[tableName]
+		if !ok {
+			continue
+		}
+		if columnName == "" {
+			model.Tables[index].Comment = comment
+			continue
+		}
+		columns := model.Tables[index].Columns
+		for i := range columns {
+			if columns[i].Name == columnName {
+				columns[i].Comment = comment
+			}
+		}
+	}
+	if err := cRows.Err(); err != nil {
+		return schema.Schema{}, fmt.Errorf("inspector: read comments: %w", err)
+	}
 
 	return model, nil
 }

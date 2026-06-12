@@ -224,6 +224,35 @@ func TestNaming(t *testing.T) {
 	}
 }
 
+func TestGenerateComments(t *testing.T) {
+	model := schema.Schema{
+		Name:    "public",
+		Dialect: "postgres",
+		Tables: []schema.Table{
+			{
+				Schema:  "public",
+				Name:    "users",
+				Comment: "Registered accounts",
+				Columns: []schema.Column{
+					{Name: "id", DataType: "int8", PrimaryKey: true},
+					{Name: "email", DataType: "varchar", Length: 255, Comment: "Unique login address"},
+				},
+			},
+		},
+	}
+	got := string(generateSingle(t, model, Options{PackageName: "appdb", EmitDTO: true}))
+	for _, want := range []string{
+		"// UsersTable is the typed binding for table public.users.\n// Registered accounts\ntype UsersTable struct {",
+		"\t// Unique login address\n\tEmail sqlkit.Column[string]",
+		"// Registered accounts\ntype User struct {",
+		"\t// Unique login address\n\tEmail string `sqlkit:\"email\"`",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated code missing %q\n%s", want, got)
+		}
+	}
+}
+
 func TestGenerateUnknownTypeFails(t *testing.T) {
 	model := schema.Schema{Tables: []schema.Table{{
 		Schema:  "public",

@@ -37,7 +37,7 @@ func (s *SchemaExpr) Build(dialect string) (schema.Schema, error) {
 
 	tables := make([]schema.Table, 0, len(s.tables))
 	for _, t := range s.tables {
-		st := schema.Table{Schema: s.name, Name: t.name}
+		st := schema.Table{Schema: s.name, Name: t.name, Comment: t.comment}
 		if len(t.columns) == 0 {
 			fail("table %q declares no columns", t.name)
 		}
@@ -58,6 +58,7 @@ func (s *SchemaExpr) Build(dialect string) (schema.Schema, error) {
 				Length:     c.typ.length,
 				Precision:  c.typ.precision,
 				Scale:      c.typ.scale,
+				Comment:    c.comment,
 			})
 		}
 
@@ -72,6 +73,46 @@ func (s *SchemaExpr) Build(dialect string) (schema.Schema, error) {
 				RefSchema:  s.name,
 				RefTable:   fk.refTable,
 				RefColumns: fk.refColumns,
+			})
+		}
+
+		indexNames := map[string]bool{}
+		for _, ix := range t.collectIndexes() {
+			if len(ix.columns) == 0 {
+				fail("table %q: index declares no columns", t.name)
+				continue
+			}
+			ok := true
+			for _, name := range ix.columns {
+				if !hasColumn(t, name) {
+					fail("table %q: index references unknown column %q", t.name, name)
+					ok = false
+				}
+			}
+			if !ok {
+				continue
+			}
+			prefix := "idx"
+			if ix.unique {
+				prefix = "uq"
+			}
+			name := fmt.Sprintf("%s_%s_%s", prefix, t.name, strings.Join(ix.columns, "_"))
+			if indexNames[name] {
+				fail("table %q: index %q is declared twice", t.name, name)
+				continue
+			}
+			indexNames[name] = true
+			st.Indexes = append(st.Indexes, schema.Index{Name: name, Columns: ix.columns, Unique: ix.unique})
+		}
+
+		for i, expr := range t.checks {
+			if strings.TrimSpace(expr) == "" {
+				fail("table %q: Check requires an expression", t.name)
+				continue
+			}
+			st.Checks = append(st.Checks, schema.Check{
+				Name:       fmt.Sprintf("ck_%s_%d", t.name, i+1),
+				Expression: expr,
 			})
 		}
 		tables = append(tables, st)
@@ -97,6 +138,18 @@ func (t *tableExpr) collectForeignKeys() []fkExpr {
 		}
 	}
 	return append(fks, t.foreignKeys...)
+}
+
+// collectIndexes merges column-level Unique options with table-level
+// Index/UniqueIndex declarations, column-level first.
+func (t *tableExpr) collectIndexes() []indexExpr {
+	var indexes []indexExpr
+	for _, c := range t.columns {
+		if c.unique {
+			indexes = append(indexes, indexExpr{columns: []string{c.name}, unique: true})
+		}
+	}
+	return append(indexes, t.indexes...)
 }
 
 func validateForeignKey(t *tableExpr, fk fkExpr, byName map[string]*tableExpr) error {

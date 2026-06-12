@@ -93,6 +93,51 @@ func TestGenerateDesignForeignKeys(t *testing.T) {
 	}
 }
 
+func TestGenerateDesignIndexesChecksComments(t *testing.T) {
+	model := schema.Schema{
+		Name:    "public",
+		Dialect: "postgres",
+		Tables: []schema.Table{
+			{
+				Schema:  "public",
+				Name:    "products",
+				Comment: "Sellable products",
+				Columns: []schema.Column{
+					{Name: "id", DataType: "int8", PrimaryKey: true, HasDefault: true},
+					{Name: "sku", DataType: "varchar", Length: 64, Comment: "Stock keeping unit"},
+					{Name: "vendor", DataType: "text"},
+					{Name: "name", DataType: "text"},
+					{Name: "price", DataType: "numeric", Precision: 10, Scale: 2},
+				},
+				Indexes: []schema.Index{
+					{Name: "products_sku_key", Columns: []string{"sku"}, Unique: true},
+					{Name: "idx_products_name", Columns: []string{"name"}},
+					{Name: "uq_products_vendor_name", Columns: []string{"vendor", "name"}, Unique: true},
+				},
+				Checks: []schema.Check{
+					{Name: "products_price_check", Expression: "price > 0"},
+				},
+			},
+		},
+	}
+	file, err := GenerateDesign(model, DesignOptions{PackageName: "design"})
+	if err != nil {
+		t.Fatalf("GenerateDesign() error = %v", err)
+	}
+	got := string(file.Content)
+	for _, want := range []string{
+		`TableComment("Sellable products")`,
+		`Column("sku", VarChar(64), Unique(), Comment("Stock keeping unit"))`,
+		`Index("name")`,
+		`UniqueIndex("vendor", "name")`,
+		`Check("price > 0")`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated design missing %q\n%s", want, got)
+		}
+	}
+}
+
 func TestGenerateDesignErrors(t *testing.T) {
 	if _, err := GenerateDesign(fixtureSchema(), DesignOptions{}); err == nil {
 		t.Error("GenerateDesign() without package name: expected error")

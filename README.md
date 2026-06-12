@@ -136,8 +136,9 @@ import . "github.com/aita/sqlkit/dsl"
 
 var Blog = Schema("public", func() {
     Table("users", func() {
+        TableComment("Registered blog authors")
         Column("id", BigInt, PrimaryKey(), Default())
-        Column("email", VarChar(255))
+        Column("email", VarChar(255), Unique(), Comment("Unique login address"))
         Column("name", Text, Nullable())
         Column("created_at", Timestamp, Default())
     })
@@ -147,6 +148,8 @@ var Blog = Schema("public", func() {
         Column("title", Text)
         Column("body", Text, Nullable())
         Column("published", Bool, Default())
+        Index("user_id")
+        Check("title <> ''")
     })
 })
 ```
@@ -158,6 +161,14 @@ declares a composite key, and composite foreign keys use the table-level
 `ForeignKey`. Types are portable (`BigInt` is `int8` on PostgreSQL and
 `bigint` on MySQL, `Timestamp` is `timestamptz`/`datetime`, ...);
 `Type("citext")` passes an engine type name through verbatim.
+
+Indexes, constraints, and comments round out the design: `Unique()` puts a
+single-column unique index on a column, `Index`/`UniqueIndex` declare
+(composite) indexes at the table level, and `Check` adds a CHECK constraint.
+`Comment` on a column and `TableComment` on a table carry through to the
+generated bindings and DTOs as Go doc comments — and the inspector reads the
+same metadata back from live PostgreSQL/MySQL schemas, so `-dsl` bootstraps
+preserve it.
 
 A small generator program turns the design into code — see
 `examples/blog/gen`:

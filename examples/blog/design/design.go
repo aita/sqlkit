@@ -11,8 +11,9 @@ import . "github.com/aita/sqlkit/dsl"
 // Blog mirrors schema.sql: users and the posts that reference them.
 var Blog = Schema("public", func() {
 	Table("users", func() {
+		TableComment("Registered blog authors")
 		Column("id", BigInt, PrimaryKey(), Default())
-		Column("email", VarChar(255))
+		Column("email", VarChar(255), Unique(), Comment("Unique login address"))
 		Column("name", Text, Nullable())
 		Column("created_at", Timestamp, Default())
 	})
@@ -22,5 +23,7 @@ var Blog = Schema("public", func() {
 		Column("title", Text)
 		Column("body", Text, Nullable())
 		Column("published", Bool, Default())
+		Index("user_id")
+		Check("title <> ''")
 	})
 })

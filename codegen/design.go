@@ -100,7 +100,22 @@ func renderDesignTable(sb *strings.Builder, table schema.Table, dialect string) 
 		}
 	}
 
+	// Single-column unique indexes likewise become a Unique option on their
+	// column; the rest stay table-level Index/UniqueIndex declarations.
+	uniques := map[string]bool{}
+	var indexes []schema.Index
+	for _, ix := range table.Indexes {
+		if ix.Unique && len(ix.Columns) == 1 && !uniques[ix.Columns[0]] {
+			uniques[ix.Columns[0]] = true
+		} else {
+			indexes = append(indexes, ix)
+		}
+	}
+
 	fmt.Fprintf(sb, "\tTable(%q, func() {\n", table.Name)
+	if table.Comment != "" {
+		fmt.Fprintf(sb, "\t\tTableComment(%q)\n", table.Comment)
+	}
 	for _, column := range table.Columns {
 		fmt.Fprintf(sb, "\t\tColumn(%q, %s", column.Name, dslTypeExpr(column, dialect))
 		if column.PrimaryKey {
@@ -112,13 +127,29 @@ func renderDesignTable(sb *strings.Builder, table schema.Table, dialect string) 
 		if column.Nullable {
 			sb.WriteString(", Nullable()")
 		}
+		if uniques[column.Name] {
+			sb.WriteString(", Unique()")
+		}
 		if fk, ok := refs[column.Name]; ok {
 			fmt.Fprintf(sb, ", References(%q, %q)", fk.RefTable, fk.RefColumns[0])
+		}
+		if column.Comment != "" {
+			fmt.Fprintf(sb, ", Comment(%q)", column.Comment)
 		}
 		sb.WriteString(")\n")
 	}
 	for _, fk := range rest {
 		fmt.Fprintf(sb, "\t\tForeignKey(%s, %q, %s)\n", goStringSlice(fk.Columns), fk.RefTable, goStringSlice(fk.RefColumns))
+	}
+	for _, ix := range indexes {
+		call := "Index"
+		if ix.Unique {
+			call = "UniqueIndex"
+		}
+		fmt.Fprintf(sb, "\t\t%s(%s)\n", call, quotedList(ix.Columns))
+	}
+	for _, check := range table.Checks {
+		fmt.Fprintf(sb, "\t\tCheck(%q)\n", check.Expression)
 	}
 	for _, fk := range foreign {
 		fmt.Fprintf(sb, "\t\t// NOTE: foreign key %s references %s.%s in another schema and cannot be declared in the DSL.\n",
@@ -127,12 +158,16 @@ func renderDesignTable(sb *strings.Builder, table schema.Table, dialect string) 
 	sb.WriteString("\t})\n")
 }
 
-func goStringSlice(items []string) string {
+func quotedList(items []string) string {
 	quoted := make([]string, len(items))
 	for i, item := range items {
 		quoted[i] = fmt.Sprintf("%q", item)
 	}
-	return "[]string{" + strings.Join(quoted, ", ") + "}"
+	return strings.Join(quoted, ", ")
+}
+
+func goStringSlice(items []string) string {
+	return "[]string{" + quotedList(items) + "}"
 }
 
 // dslTypeExpr maps an engine type name back to the DSL expression that

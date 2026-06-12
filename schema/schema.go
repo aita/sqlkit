@@ -18,8 +18,11 @@ type Schema struct {
 type Table struct {
 	Schema      string
 	Name        string
+	Comment     string
 	Columns     []Column
 	ForeignKeys []ForeignKey
+	Indexes     []Index
+	Checks      []Check
 }
 
 // Column is a database column.
@@ -36,6 +39,23 @@ type Column struct {
 	// decimal(10, 2); 0 when not applicable.
 	Precision int
 	Scale     int
+	Comment   string
+}
+
+// Index is a secondary index over Columns (the primary key index is not
+// listed; it is implied by Column.PrimaryKey). Unique indexes cover both
+// explicit unique indexes and the indexes backing UNIQUE constraints.
+type Index struct {
+	Name    string
+	Columns []string
+	Unique  bool
+}
+
+// Check is a CHECK constraint with its bare boolean expression (no CHECK
+// keyword or outer parentheses).
+type Check struct {
+	Name       string
+	Expression string
 }
 
 // ForeignKey describes a foreign-key constraint: the local Columns reference

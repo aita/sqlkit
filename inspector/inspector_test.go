@@ -36,6 +36,29 @@ func TestInspectPostgres(t *testing.T) {
 						{"posts", "id"},
 					},
 				}, nil
+			case strings.Contains(sql, "pg_index"):
+				return sqltest.Result{
+					Columns: []string{"table_name", "index_name", "unique", "column_name"},
+					Rows: [][]driver.Value{
+						{"users", "users_email_key", true, "email"},
+						{"posts", "idx_posts_user_id", false, "user_id"},
+					},
+				}, nil
+			case strings.Contains(sql, "pg_constraint"):
+				return sqltest.Result{
+					Columns: []string{"table_name", "constraint_name", "clause"},
+					Rows: [][]driver.Value{
+						{"users", "users_balance_check", "CHECK ((balance >= (0)::numeric))"},
+					},
+				}, nil
+			case strings.Contains(sql, "pg_description"):
+				return sqltest.Result{
+					Columns: []string{"table_name", "column_name", "comment"},
+					Rows: [][]driver.Value{
+						{"users", "", "Registered accounts"},
+						{"users", "email", "Unique login address"},
+					},
+				}, nil
 			default:
 				return sqltest.Result{
 					Columns: []string{"table_name", "column_name", "udt_name", "nullable", "has_default", "length", "precision", "scale"},
@@ -61,12 +84,19 @@ func TestInspectPostgres(t *testing.T) {
 		Dialect: "postgres",
 		Tables: []schema.Table{
 			{
-				Schema: "public",
-				Name:   "users",
+				Schema:  "public",
+				Name:    "users",
+				Comment: "Registered accounts",
 				Columns: []schema.Column{
 					{Name: "id", DataType: "int8", HasDefault: true, PrimaryKey: true},
-					{Name: "email", DataType: "varchar", Length: 255},
+					{Name: "email", DataType: "varchar", Length: 255, Comment: "Unique login address"},
 					{Name: "balance", DataType: "numeric", Precision: 10, Scale: 2},
+				},
+				Indexes: []schema.Index{
+					{Name: "users_email_key", Columns: []string{"email"}, Unique: true},
+				},
+				Checks: []schema.Check{
+					{Name: "users_balance_check", Expression: "balance >= (0)::numeric"},
 				},
 			},
 			{
@@ -79,6 +109,9 @@ func TestInspectPostgres(t *testing.T) {
 				ForeignKeys: []schema.ForeignKey{
 					{Name: "posts_user_id_fkey", Columns: []string{"user_id"}, RefSchema: "public", RefTable: "users", RefColumns: []string{"id"}},
 				},
+				Indexes: []schema.Index{
+					{Name: "idx_posts_user_id", Columns: []string{"user_id"}},
+				},
 			},
 		},
 	}
@@ -87,8 +120,8 @@ func TestInspectPostgres(t *testing.T) {
 	}
 
 	queries := fake.Queries()
-	if len(queries) != 3 {
-		t.Fatalf("queries = %d, want 3 (columns, primary keys, foreign keys)", len(queries))
+	if len(queries) != 6 {
+		t.Fatalf("queries = %d, want 6 (columns, primary keys, foreign keys, indexes, checks, comments)", len(queries))
 	}
 	for _, query := range queries {
 		if !reflect.DeepEqual(query.Args, []any{"public"}) {
@@ -108,15 +141,29 @@ func TestInspectMySQL(t *testing.T) {
 						{"fk_posts_user", "posts", "user_id", "app", "users", "id"},
 					},
 				}, nil
+			case strings.Contains(sql, "STATISTICS"):
+				return sqltest.Result{
+					Columns: []string{"table_name", "index_name", "unique", "column_name"},
+					Rows: [][]driver.Value{
+						{"users", "uq_users_email", true, "email"},
+					},
+				}, nil
+			case strings.Contains(sql, "CHECK_CONSTRAINTS"):
+				return sqltest.Result{
+					Columns: []string{"table_name", "constraint_name", "clause"},
+					Rows: [][]driver.Value{
+						{"users", "users_chk_1", "(`balance` >= 0)"},
+					},
+				}, nil
 			default:
 				return sqltest.Result{
-					Columns: []string{"table_name", "column_name", "data_type", "nullable", "has_default", "is_pk", "length", "precision", "scale"},
+					Columns: []string{"table_name", "column_name", "data_type", "nullable", "has_default", "is_pk", "length", "precision", "scale", "column_comment", "table_comment"},
 					Rows: [][]driver.Value{
-						{"users", "id", "bigint", false, true, true, 0, 19, 0},
-						{"users", "email", "varchar", false, false, false, 255, 0, 0},
-						{"users", "balance", "decimal", false, false, false, 0, 10, 2},
-						{"posts", "id", "bigint", false, true, true, 0, 19, 0},
-						{"posts", "user_id", "bigint", false, false, false, 0, 19, 0},
+						{"users", "id", "bigint", false, true, true, 0, 19, 0, "", "Registered accounts"},
+						{"users", "email", "varchar", false, false, false, 255, 0, 0, "Unique login address", "Registered accounts"},
+						{"users", "balance", "decimal", false, false, false, 0, 10, 2, "", "Registered accounts"},
+						{"posts", "id", "bigint", false, true, true, 0, 19, 0, "", ""},
+						{"posts", "user_id", "bigint", false, false, false, 0, 19, 0, "", ""},
 					},
 				}, nil
 			}
@@ -133,12 +180,19 @@ func TestInspectMySQL(t *testing.T) {
 		Dialect: "mysql",
 		Tables: []schema.Table{
 			{
-				Schema: "app",
-				Name:   "users",
+				Schema:  "app",
+				Name:    "users",
+				Comment: "Registered accounts",
 				Columns: []schema.Column{
 					{Name: "id", DataType: "bigint", HasDefault: true, PrimaryKey: true},
-					{Name: "email", DataType: "varchar", Length: 255},
+					{Name: "email", DataType: "varchar", Length: 255, Comment: "Unique login address"},
 					{Name: "balance", DataType: "decimal", Precision: 10, Scale: 2},
+				},
+				Indexes: []schema.Index{
+					{Name: "uq_users_email", Columns: []string{"email"}, Unique: true},
+				},
+				Checks: []schema.Check{
+					{Name: "users_chk_1", Expression: "`balance` >= 0"},
 				},
 			},
 			{
@@ -159,8 +213,8 @@ func TestInspectMySQL(t *testing.T) {
 	}
 
 	queries := fake.Queries()
-	if len(queries) != 2 {
-		t.Fatalf("queries = %d, want 2 (columns, foreign keys)", len(queries))
+	if len(queries) != 4 {
+		t.Fatalf("queries = %d, want 4 (columns, foreign keys, indexes, checks)", len(queries))
 	}
 	for _, query := range queries {
 		if !reflect.DeepEqual(query.Args, []any{"app"}) {

@@ -136,6 +136,47 @@ func TestCompositeForeignKey(t *testing.T) {
 	}
 }
 
+func TestIndexesChecksComments(t *testing.T) {
+	design := dsl.Schema("public", func() {
+		dsl.Table("products", func() {
+			dsl.TableComment("Sellable products")
+			dsl.Column("id", dsl.BigInt, dsl.PrimaryKey(), dsl.Default())
+			dsl.Column("sku", dsl.VarChar(64), dsl.Unique(), dsl.Comment("Stock keeping unit"))
+			dsl.Column("vendor", dsl.Text)
+			dsl.Column("name", dsl.Text)
+			dsl.Column("price", dsl.Decimal(10, 2))
+			dsl.Index("name")
+			dsl.UniqueIndex("vendor", "name")
+			dsl.Check("price > 0")
+		})
+	})
+	got, err := design.Build("postgres")
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	table := got.Tables[0]
+	if table.Comment != "Sellable products" {
+		t.Errorf("table comment = %q", table.Comment)
+	}
+	if table.Columns[1].Comment != "Stock keeping unit" {
+		t.Errorf("column comment = %q", table.Columns[1].Comment)
+	}
+	wantIndexes := []schema.Index{
+		{Name: "uq_products_sku", Columns: []string{"sku"}, Unique: true},
+		{Name: "idx_products_name", Columns: []string{"name"}},
+		{Name: "uq_products_vendor_name", Columns: []string{"vendor", "name"}, Unique: true},
+	}
+	if !reflect.DeepEqual(table.Indexes, wantIndexes) {
+		t.Errorf("indexes = %+v\nwant %+v", table.Indexes, wantIndexes)
+	}
+	wantChecks := []schema.Check{
+		{Name: "ck_products_1", Expression: "price > 0"},
+	}
+	if !reflect.DeepEqual(table.Checks, wantChecks) {
+		t.Errorf("checks = %+v\nwant %+v", table.Checks, wantChecks)
+	}
+}
+
 func TestGenerate(t *testing.T) {
 	files, err := blogDesign().Generate(codegen.Options{PackageName: "blogdb", EmitDTO: true})
 	if err != nil {
@@ -259,6 +300,54 @@ func TestBuildErrors(t *testing.T) {
 			want: "References is declared twice",
 		},
 		{
+			name: "index on unknown column",
+			design: func() *dsl.SchemaExpr {
+				return dsl.Schema("public", func() {
+					dsl.Table("users", func() {
+						dsl.Column("id", dsl.BigInt)
+						dsl.Index("email")
+					})
+				})
+			},
+			want: `index references unknown column "email"`,
+		},
+		{
+			name: "index without columns",
+			design: func() *dsl.SchemaExpr {
+				return dsl.Schema("public", func() {
+					dsl.Table("users", func() {
+						dsl.Column("id", dsl.BigInt)
+						dsl.Index()
+					})
+				})
+			},
+			want: "index declares no columns",
+		},
+		{
+			name: "duplicate index",
+			design: func() *dsl.SchemaExpr {
+				return dsl.Schema("public", func() {
+					dsl.Table("users", func() {
+						dsl.Column("email", dsl.Text, dsl.Unique())
+						dsl.UniqueIndex("email")
+					})
+				})
+			},
+			want: `index "uq_users_email" is declared twice`,
+		},
+		{
+			name: "empty check",
+			design: func() *dsl.SchemaExpr {
+				return dsl.Schema("public", func() {
+					dsl.Table("users", func() {
+						dsl.Column("id", dsl.BigInt)
+						dsl.Check("  ")
+					})
+				})
+			},
+			want: "Check requires an expression",
+		},
+		{
 			name: "type unavailable on dialect",
 			design: func() *dsl.SchemaExpr {
 				return dsl.Schema("public", func() {
@@ -304,6 +393,10 @@ func TestMisplacedCallsPanic(t *testing.T) {
 	mustPanic("Table outside Schema", func() { dsl.Table("users", nil) })
 	mustPanic("Column outside Table", func() { dsl.Column("id", dsl.BigInt) })
 	mustPanic("ForeignKey outside Table", func() { dsl.ForeignKey(nil, "users", nil) })
+	mustPanic("Index outside Table", func() { dsl.Index("id") })
+	mustPanic("UniqueIndex outside Table", func() { dsl.UniqueIndex("id") })
+	mustPanic("Check outside Table", func() { dsl.Check("id > 0") })
+	mustPanic("TableComment outside Table", func() { dsl.TableComment("x") })
 	mustPanic("nested Schema", func() {
 		dsl.Schema("a", func() { dsl.Schema("b", nil) })
 	})

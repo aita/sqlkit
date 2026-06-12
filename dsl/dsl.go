@@ -49,18 +49,29 @@ type SchemaExpr struct {
 
 type tableExpr struct {
 	name        string
+	comment     string
 	columns     []*columnExpr
 	foreignKeys []fkExpr
+	indexes     []indexExpr
+	checks      []string
 }
 
 type columnExpr struct {
 	name       string
 	typ        DataType
+	comment    string
 	nullable   bool
 	hasDefault bool
 	primaryKey bool
+	unique     bool
 	ref        *fkRef
 	errs       []error
+}
+
+// indexExpr is an Index or UniqueIndex declaration.
+type indexExpr struct {
+	columns []string
+	unique  bool
 }
 
 // fkRef is a single-column foreign key declared with the References option.
@@ -171,6 +182,44 @@ func ForeignKey(columns []string, refTable string, refColumns []string) {
 	})
 }
 
+// Index declares a secondary index over the named columns inside Table. The
+// index is named idx_<table>_<columns>.
+func Index(columns ...string) {
+	if curTable == nil {
+		panic("dsl: Index must be called inside Table")
+	}
+	curTable.indexes = append(curTable.indexes, indexExpr{columns: columns})
+}
+
+// UniqueIndex declares a unique index (or UNIQUE constraint) over the named
+// columns inside Table. The index is named uq_<table>_<columns>. For a single
+// column the Unique column option is more convenient.
+func UniqueIndex(columns ...string) {
+	if curTable == nil {
+		panic("dsl: UniqueIndex must be called inside Table")
+	}
+	curTable.indexes = append(curTable.indexes, indexExpr{columns: columns, unique: true})
+}
+
+// Check declares a CHECK constraint inside Table. expr is the bare boolean
+// expression, e.g. "price > 0". Constraints are named ck_<table>_<n> in
+// declaration order.
+func Check(expr string) {
+	if curTable == nil {
+		panic("dsl: Check must be called inside Table")
+	}
+	curTable.checks = append(curTable.checks, expr)
+}
+
+// TableComment sets the table's comment inside Table. Column comments use the
+// Comment option instead.
+func TableComment(text string) {
+	if curTable == nil {
+		panic("dsl: TableComment must be called inside Table")
+	}
+	curTable.comment = text
+}
+
 func (s *SchemaExpr) fail(format string, args ...any) {
 	s.errs = append(s.errs, fmt.Errorf(format, args...))
 }
@@ -195,6 +244,19 @@ func Nullable() ColumnOption {
 // inserts can omit it.
 func Default() ColumnOption {
 	return func(c *columnExpr) { c.hasDefault = true }
+}
+
+// Unique declares a single-column unique index (named uq_<table>_<column>) on
+// the column. Multi-column uniqueness uses the table-level UniqueIndex.
+func Unique() ColumnOption {
+	return func(c *columnExpr) { c.unique = true }
+}
+
+// Comment sets the column's comment; the code generator carries it into the
+// generated bindings as a doc comment. Table comments use the table-level
+// TableComment.
+func Comment(text string) ColumnOption {
+	return func(c *columnExpr) { c.comment = text }
 }
 
 // References declares the column a foreign key to column refColumn of

@@ -65,6 +65,8 @@ type columnModel struct {
 	GoTypeImp  string
 	PrimaryKey bool
 	HasDefault bool
+	// Doc is the column comment as doc-comment lines.
+	Doc []string
 }
 
 type tableModel struct {
@@ -75,6 +77,8 @@ type tableModel struct {
 	Name      string
 	Qualified string
 	Columns   []columnModel
+	// Doc is the table comment as doc-comment lines.
+	Doc []string
 }
 
 // Generate renders the schema into one or more Go source files according to
@@ -138,6 +142,7 @@ func buildTable(table schema.Table, dialect string, mapper TypeMapper) (*tableMo
 		Schema:    table.Schema,
 		Name:      table.Name,
 		Qualified: qualified(table.Schema, table.Name),
+		Doc:       docLines(table.Comment),
 	}
 	for _, column := range table.Columns {
 		goType, err := mapper.GoTypeFor(column, dialect)
@@ -152,10 +157,23 @@ func buildTable(table schema.Table, dialect string, mapper TypeMapper) (*tableMo
 			GoTypeImp:  goType.ImportPath,
 			PrimaryKey: column.PrimaryKey,
 			HasDefault: column.HasDefault,
+			Doc:        docLines(column.Comment),
 		}
 		tm.Columns = append(tm.Columns, cm)
 	}
 	return tm, nil
+}
+
+// docLines splits a database comment into doc-comment lines.
+func docLines(comment string) []string {
+	if strings.TrimSpace(comment) == "" {
+		return nil
+	}
+	var lines []string
+	for _, line := range strings.Split(comment, "\n") {
+		lines = append(lines, strings.TrimRight(line, " \t\r"))
+	}
+	return lines
 }
 
 func defaultDTOName(table schema.Table) string {
@@ -352,9 +370,15 @@ func execute(tmpl *template.Template, tm *tableModel) string {
 }
 
 var bindingTemplate = template.Must(template.New("binding").Parse(`// {{.TypeName}} is the typed binding for table {{.Qualified}}.
+{{- range .Doc}}
+// {{.}}
+{{- end}}
 type {{.TypeName}} struct {
 	info sqlkit.TableInfo
 {{- range .Columns}}
+{{- range .Doc}}
+	// {{.}}
+{{- end}}
 	{{.Field}} sqlkit.Column[{{.GoType}}]
 {{- end}}
 }
@@ -396,8 +420,14 @@ var _ sqlkit.TableMeta = {{.VarName}}
 
 var dtoTemplate = template.Must(template.New("dto").Parse("// {{.DTOName}} is a generated row struct for table {{.Qualified}}; any struct\n" +
 	"// following Scan's mapping rules works as a destination or Insert value.\n" +
+	"{{- range .Doc}}\n" +
+	"// {{.}}\n" +
+	"{{- end}}\n" +
 	"type {{.DTOName}} struct {\n" +
 	"{{- range .Columns}}\n" +
+	"{{- range .Doc}}\n" +
+	"\t// {{.}}\n" +
+	"{{- end}}\n" +
 	"\t{{.Field}} {{.GoType}} `sqlkit:\"{{.Name}}\"`\n" +
 	"{{- end}}\n" +
 	"}\n"))
