@@ -31,18 +31,29 @@ err := db.Select().From(appdb.Users).
 | `sqlkit` | Typed query chains, `Database`, `Session`, result scanning |
 | `sqlkit/sql` | SQL AST, dialects, compiler, and all statement generation |
 | `sqlkit/rowset` | Dynamic, streaming result mapping (escape hatch) |
-| `cmd/sqlkitgen` | PostgreSQL schema → Go code generator |
+| `codegen` | Schema → Go code generator (library: customizable types, layout, DTOs, relations) |
+| `loader` | PostgreSQL/MySQL `information_schema` introspection into the codegen model |
+| `cmd/sqlkitgen` | CLI wrapper around `loader` + `codegen` |
 
 ## Generating table bindings
 
+`sqlkitgen` introspects a live **PostgreSQL or MySQL** schema and generates
+typed bindings:
+
 ```sh
+# PostgreSQL
 go run github.com/sqlkit-dev/sqlkit/cmd/sqlkitgen \
   -dsn "$DATABASE_URL" -schema public -package appdb -out appdb/tables.go
+
+# MySQL, one file per table, with row DTOs in their own files
+go run github.com/sqlkit-dev/sqlkit/cmd/sqlkitgen \
+  -driver mysql -dsn 'user:pass@tcp(localhost:3306)/app' \
+  -package appdb -out appdb -file-per-table -dto -dto-separate-file
 ```
 
-For each table the generator emits a typed binding — and nothing else. Row
-types are not generated: you define the structs you want to scan into and
-insert from, and fields map by name.
+By default the generator emits a typed binding per table — and nothing else.
+Row types are not generated unless you ask for them (`-dto`): you can define
+the structs you scan into and insert from, and fields map by name.
 
 ```go
 // Users exposes a Get accessor and Column[T] fields (Users.ID is a
@@ -51,6 +62,61 @@ insert from, and fields map by name.
 // db.Insert(Users).Values(...), db.Update(Users), db.Delete(Users).
 var Users = ...
 ```
+
+### CLI flags
+
+| Flag | Purpose |
+|---|---|
+| `-driver` | `pgx` (default) or `mysql` |
+| `-dialect` | override the schema dialect (`postgres`/`mysql`); inferred from `-driver` |
+| `-schema` | schema/database to read (default `public` for postgres, current DB for mysql) |
+| `-tables` | comma-separated subset of tables to generate |
+| `-out` | output file (single-file mode) or directory (multi-file mode); stdout if empty |
+| `-file-per-table` | write one file per table |
+| `-file-name` | single-file output name when `-out` is a directory (default `tables.go`) |
+| `-dto` | also generate a row struct (DTO) per table |
+| `-dto-separate-file` | write DTOs into their own file(s) |
+| `-no-accessors` | omit `Get` and `Relations` accessors |
+| `-no-relations` | omit foreign-key `Relations` accessors only |
+
+### Relations from foreign keys
+
+Foreign keys become typed accessors on the involved bindings. For
+`posts.user_id REFERENCES users(id)`:
+
+```go
+// belongs-to: load the referenced users row.
+found, err := blogdb.Posts.User(ctx, db, post.UserID, &user)
+
+// has-many: load the posts that reference a users row.
+err := blogdb.Users.Posts(ctx, db, user.ID, &posts)
+```
+
+### Using codegen as a library
+
+The `codegen` package is the generator's public API. Build a `codegen.Schema`
+by hand or with `loader.Load`, customize the SQL→Go type mapping, and choose
+what to emit:
+
+```go
+schema, _ := loader.Load(ctx, db, "postgres", "public")
+
+files, err := codegen.Generate(schema, codegen.Options{
+    PackageName:  "appdb",
+    FilePerTable: true,
+    EmitDTO:      true,
+    // Map numeric to a decimal type instead of string.
+    TypeMapper: codegen.DefaultTypeMapper{Overrides: map[string]codegen.GoType{
+        "numeric": {ImportPath: "github.com/shopspring/decimal", Name: "decimal.Decimal"},
+    }},
+})
+// files[i].Name / files[i].Content
+```
+
+Generated bindings build columns with functional options carrying schema
+metadata, e.g. `sqlkit.NewColumn[int64](info, "id", sqlkit.WithPrimaryKey(),
+sqlkit.WithDefault())`; the metadata is readable via `Column.IsPrimaryKey()`,
+`Column.SQLType()`, and friends.
 
 ## Querying and scanning
 

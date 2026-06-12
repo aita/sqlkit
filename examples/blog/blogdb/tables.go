@@ -9,9 +9,7 @@ import (
 	"time"
 )
 
-// UsersTable is the typed binding for table public.users. Row types are
-// not generated: results Scan into caller-defined structs, and
-// Insert(...).Values accepts them, mapped by sqlkit tag / field name.
+// UsersTable is the typed binding for table public.users.
 type UsersTable struct {
 	info      sqlkit.TableInfo
 	ID        sqlkit.Column[int64]
@@ -25,25 +23,12 @@ var Users = func() UsersTable {
 	info := sqlkit.TableInfo{Schema: "public", Name: "users"}
 	return UsersTable{
 		info:      info,
-		ID:        sqlkit.NewColumn[int64](info, "id"),
-		Email:     sqlkit.NewColumn[string](info, "email"),
-		Name:      sqlkit.NewColumn[*string](info, "name"),
-		CreatedAt: sqlkit.NewColumn[time.Time](info, "created_at"),
+		ID:        sqlkit.NewColumn[int64](info, "id", sqlkit.WithSQLType("int8"), sqlkit.WithPrimaryKey(), sqlkit.WithDefault()),
+		Email:     sqlkit.NewColumn[string](info, "email", sqlkit.WithSQLType("varchar")),
+		Name:      sqlkit.NewColumn[*string](info, "name", sqlkit.WithSQLType("text"), sqlkit.WithNullable()),
+		CreatedAt: sqlkit.NewColumn[time.Time](info, "created_at", sqlkit.WithSQLType("timestamptz"), sqlkit.WithDefault()),
 	}
 }()
-
-// Get loads the row with the given primary key into dest — any struct
-// following Scan's mapping rules — and reports whether a row was found.
-func (t UsersTable) Get(ctx context.Context, ex sqlkit.Executor, id int64, dest any) (bool, error) {
-	err := ex.Select().From(t).Where(t.ID.Eq(id)).Limit(1).All(ctx).Scan(dest)
-	if err != nil {
-		if errors.Is(err, sqlkit.ErrNoRows) {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
-}
 
 // Info returns the table identity.
 func (t UsersTable) Info() sqlkit.TableInfo { return t.info }
@@ -68,9 +53,25 @@ func (t UsersTable) Defaulted() []sqlkit.AnyColumn {
 
 var _ sqlkit.TableMeta = Users
 
-// PostsTable is the typed binding for table public.posts. Row types are
-// not generated: results Scan into caller-defined structs, and
-// Insert(...).Values accepts them, mapped by sqlkit tag / field name.
+// Get loads the row with the given primary key into dest — any struct
+// following Scan's mapping rules — and reports whether a row was found.
+func (t UsersTable) Get(ctx context.Context, ex sqlkit.Executor, id int64, dest any) (bool, error) {
+	err := ex.Select().From(t).Where(t.ID.Eq(id)).Limit(1).All(ctx).Scan(dest)
+	if err != nil {
+		if errors.Is(err, sqlkit.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// Posts loads the public.posts rows that reference this public.users row.
+func (t UsersTable) Posts(ctx context.Context, ex sqlkit.Executor, id int64, dest any) error {
+	return ex.Select().From(Posts).Where(Posts.UserID.Eq(id)).All(ctx).Scan(dest)
+}
+
+// PostsTable is the typed binding for table public.posts.
 type PostsTable struct {
 	info      sqlkit.TableInfo
 	ID        sqlkit.Column[int64]
@@ -85,26 +86,13 @@ var Posts = func() PostsTable {
 	info := sqlkit.TableInfo{Schema: "public", Name: "posts"}
 	return PostsTable{
 		info:      info,
-		ID:        sqlkit.NewColumn[int64](info, "id"),
-		UserID:    sqlkit.NewColumn[int64](info, "user_id"),
-		Title:     sqlkit.NewColumn[string](info, "title"),
-		Body:      sqlkit.NewColumn[*string](info, "body"),
-		Published: sqlkit.NewColumn[bool](info, "published"),
+		ID:        sqlkit.NewColumn[int64](info, "id", sqlkit.WithSQLType("int8"), sqlkit.WithPrimaryKey(), sqlkit.WithDefault()),
+		UserID:    sqlkit.NewColumn[int64](info, "user_id", sqlkit.WithSQLType("int8")),
+		Title:     sqlkit.NewColumn[string](info, "title", sqlkit.WithSQLType("text")),
+		Body:      sqlkit.NewColumn[*string](info, "body", sqlkit.WithSQLType("text"), sqlkit.WithNullable()),
+		Published: sqlkit.NewColumn[bool](info, "published", sqlkit.WithSQLType("bool"), sqlkit.WithDefault()),
 	}
 }()
-
-// Get loads the row with the given primary key into dest — any struct
-// following Scan's mapping rules — and reports whether a row was found.
-func (t PostsTable) Get(ctx context.Context, ex sqlkit.Executor, id int64, dest any) (bool, error) {
-	err := ex.Select().From(t).Where(t.ID.Eq(id)).Limit(1).All(ctx).Scan(dest)
-	if err != nil {
-		if errors.Is(err, sqlkit.ErrNoRows) {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
-}
 
 // Info returns the table identity.
 func (t PostsTable) Info() sqlkit.TableInfo { return t.info }
@@ -128,3 +116,28 @@ func (t PostsTable) Defaulted() []sqlkit.AnyColumn {
 }
 
 var _ sqlkit.TableMeta = Posts
+
+// Get loads the row with the given primary key into dest — any struct
+// following Scan's mapping rules — and reports whether a row was found.
+func (t PostsTable) Get(ctx context.Context, ex sqlkit.Executor, id int64, dest any) (bool, error) {
+	err := ex.Select().From(t).Where(t.ID.Eq(id)).Limit(1).All(ctx).Scan(dest)
+	if err != nil {
+		if errors.Is(err, sqlkit.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// User loads the public.users row referenced by this row's user_id.
+func (t PostsTable) User(ctx context.Context, ex sqlkit.Executor, userID int64, dest any) (bool, error) {
+	err := ex.Select().From(Users).Where(Users.ID.Eq(userID)).Limit(1).All(ctx).Scan(dest)
+	if err != nil {
+		if errors.Is(err, sqlkit.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}

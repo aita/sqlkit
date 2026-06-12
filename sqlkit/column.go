@@ -65,13 +65,68 @@ func (t TableInfo) sqlTable() sql.Table { return sql.Table{Schema: t.Schema, Nam
 type Column[T any] struct {
 	table TableInfo
 	name  string
+	meta  columnMeta
 }
 
-// NewColumn creates a typed column bound to a table. It is intended for use
-// by generated code.
-func NewColumn[T any](table TableInfo, name string) Column[T] {
-	return Column[T]{table: table, name: name}
+// columnMeta carries the schema-derived metadata of a column. It is populated
+// through ColumnOption values passed to NewColumn.
+type columnMeta struct {
+	sqlType    string
+	primaryKey bool
+	nullable   bool
+	hasDefault bool
 }
+
+// ColumnOption configures the metadata of a Column built with NewColumn. The
+// functional-option form lets generated code (and hand-written bindings) attach
+// the database constraints and SQL type of a column without widening the
+// NewColumn signature.
+type ColumnOption func(*columnMeta)
+
+// WithSQLType records the database type name of the column (e.g. "int8",
+// "varchar"), available later through Column.SQLType.
+func WithSQLType(sqlType string) ColumnOption {
+	return func(m *columnMeta) { m.sqlType = sqlType }
+}
+
+// WithPrimaryKey marks the column as part of the table's primary key.
+func WithPrimaryKey() ColumnOption {
+	return func(m *columnMeta) { m.primaryKey = true }
+}
+
+// WithNullable marks the column as nullable.
+func WithNullable() ColumnOption {
+	return func(m *columnMeta) { m.nullable = true }
+}
+
+// WithDefault marks the column as having a database-side default.
+func WithDefault() ColumnOption {
+	return func(m *columnMeta) { m.hasDefault = true }
+}
+
+// NewColumn creates a typed column bound to a table. Optional ColumnOption
+// values attach schema metadata (SQL type, primary-key/nullable/default
+// constraints). It is intended for use by generated code, but is also a usable
+// constructor for hand-written bindings.
+func NewColumn[T any](table TableInfo, name string, opts ...ColumnOption) Column[T] {
+	c := Column[T]{table: table, name: name}
+	for _, opt := range opts {
+		opt(&c.meta)
+	}
+	return c
+}
+
+// SQLType returns the database type name recorded with WithSQLType, or "".
+func (c Column[T]) SQLType() string { return c.meta.sqlType }
+
+// IsPrimaryKey reports whether the column was tagged with WithPrimaryKey.
+func (c Column[T]) IsPrimaryKey() bool { return c.meta.primaryKey }
+
+// IsNullable reports whether the column was tagged with WithNullable.
+func (c Column[T]) IsNullable() bool { return c.meta.nullable }
+
+// HasDefault reports whether the column was tagged with WithDefault.
+func (c Column[T]) HasDefault() bool { return c.meta.hasDefault }
 
 func (Column[T]) SQLExpression() {}
 func (Column[T]) SQLSelection()  {}

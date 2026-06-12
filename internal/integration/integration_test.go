@@ -23,9 +23,9 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"github.com/sqlkit-dev/sqlkit/codegen"
 	"github.com/sqlkit-dev/sqlkit/examples/blog/blogdb"
-	"github.com/sqlkit-dev/sqlkit/internal/codegen"
-	"github.com/sqlkit-dev/sqlkit/internal/loader"
+	"github.com/sqlkit-dev/sqlkit/loader"
 	"github.com/sqlkit-dev/sqlkit/sqlkit"
 	"github.com/sqlkit-dev/sqlkit/sqlkit/sql"
 )

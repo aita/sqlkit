@@ -1,9 +1,13 @@
-// Command sqlkitgen generates typed sqlkit table bindings from a live
-// PostgreSQL schema.
+// Command sqlkitgen generates typed sqlkit table bindings (and, optionally, row
+// DTOs) from a live PostgreSQL or MySQL schema.
 //
 // Usage:
 //
 //	sqlkitgen -dsn postgres://user:pass@localhost/app -schema public -package appdb -out appdb/tables.go
+//	sqlkitgen -driver mysql -dsn 'user:pass@tcp(localhost:3306)/app' -package appdb -out appdb -file-per-table -dto
+//
+// The codegen and loader packages are the library entry points behind this
+// command; import them directly to customize type mapping and generation.
 package main
 
 import (
@@ -13,11 +17,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
+	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 
-	"github.com/sqlkit-dev/sqlkit/internal/codegen"
-	"github.com/sqlkit-dev/sqlkit/internal/loader"
+	"github.com/sqlkit-dev/sqlkit/codegen"
+	"github.com/sqlkit-dev/sqlkit/loader"
 )
 
 func main() {
@@ -29,10 +35,18 @@ func main() {
 
 func run() error {
 	dsn := flag.String("dsn", "", "database connection string (required)")
-	driver := flag.String("driver", "pgx", "database/sql driver name (pgx; mysql is reserved for future support)")
-	schema := flag.String("schema", "public", "database schema to load")
-	packageName := flag.String("package", "", "package name of the generated file (required)")
-	out := flag.String("out", "", "output file (default stdout)")
+	driver := flag.String("driver", "pgx", "database/sql driver name (pgx or mysql)")
+	dialect := flag.String("dialect", "", "schema dialect override (postgres or mysql); inferred from -driver by default")
+	schema := flag.String("schema", "", "database schema/database to load (default: public for postgres, current DB for mysql)")
+	packageName := flag.String("package", "", "package name of the generated files (required)")
+	out := flag.String("out", "", "output file (single-file mode) or directory (multi-file mode); default stdout")
+	tables := flag.String("tables", "", "comma-separated list of tables to generate (default: all)")
+	filePerTable := flag.Bool("file-per-table", false, "write one file per table")
+	fileName := flag.String("file-name", "tables.go", "single-file output name (used when -out is a directory)")
+	dto := flag.Bool("dto", false, "also generate a row struct (DTO) per table")
+	dtoSeparate := flag.Bool("dto-separate-file", false, "write DTOs into their own file(s)")
+	noAccessors := flag.Bool("no-accessors", false, "omit Get and Relations accessors")
+	noRelations := flag.Bool("no-relations", false, "omit foreign-key Relations accessors")
 	version := flag.Bool("version", false, "print sqlkitgen version")
 	flag.Parse()
 
@@ -47,6 +61,11 @@ func run() error {
 		return fmt.Errorf("-package is required")
 	}
 
+	resolvedDialect := *dialect
+	if resolvedDialect == "" {
+		resolvedDialect = dialectFor(*driver)
+	}
+
 	ctx := context.Background()
 	db, err := sql.Open(*driver, *dsn)
 	if err != nil {
@@ -54,7 +73,7 @@ func run() error {
 	}
 	defer db.Close()
 
-	model, err := loader.Load(ctx, db, dialectFor(*driver), *schema)
+	model, err := loader.Load(ctx, db, resolvedDialect, *schema)
 	if err != nil {
 		return err
 	}
@@ -62,19 +81,74 @@ func run() error {
 		return fmt.Errorf("schema %q contains no tables", *schema)
 	}
 
-	source, err := codegen.Generate(model, codegen.Options{PackageName: *packageName})
+	opts := codegen.Options{
+		PackageName:     *packageName,
+		Tables:          splitList(*tables),
+		Dialect:         resolvedDialect,
+		FilePerTable:    *filePerTable,
+		FileName:        *fileName,
+		EmitDTO:         *dto,
+		DTOSeparateFile: *dtoSeparate,
+		OmitAccessors:   *noAccessors,
+		OmitRelations:   *noRelations,
+	}
+	files, err := codegen.Generate(model, opts)
 	if err != nil {
 		return err
 	}
 
-	if *out == "" {
-		_, err = os.Stdout.Write(source)
+	return writeFiles(files, *out)
+}
+
+// writeFiles emits the generated files. With no -out, files go to stdout. A
+// single file with an -out ending in .go is written to that path; otherwise
+// -out is treated as a directory and each file is written under it.
+func writeFiles(files []codegen.File, out string) error {
+	if out == "" {
+		for i, file := range files {
+			if len(files) > 1 {
+				fmt.Printf("// --- %s ---\n", file.Name)
+			}
+			if _, err := os.Stdout.Write(file.Content); err != nil {
+				return err
+			}
+			if i < len(files)-1 {
+				fmt.Println()
+			}
+		}
+		return nil
+	}
+
+	if len(files) == 1 && strings.HasSuffix(out, ".go") {
+		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(out, files[0].Content, 0o644)
+	}
+
+	if err := os.MkdirAll(out, 0o755); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(*out), 0o755); err != nil {
-		return err
+	for _, file := range files {
+		if err := os.WriteFile(filepath.Join(out, file.Name), file.Content, 0o644); err != nil {
+			return err
+		}
 	}
-	return os.WriteFile(*out, source, 0o644)
+	return nil
+}
+
+func splitList(csv string) []string {
+	if strings.TrimSpace(csv) == "" {
+		return nil
+	}
+	parts := strings.Split(csv, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 // dialectFor maps a driver name to the loader dialect.
