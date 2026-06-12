@@ -28,9 +28,8 @@ err := db.Select().From(appdb.Users).
 
 | Package | Purpose |
 |---|---|
-| `sqlkit` | Typed query chains, `Database`, `Session`, result scanning (module root) |
+| `sqlkit` | Typed query chains, `Database`, `Session`, result scanning, dynamic `RecordSet` (module root) |
 | `sql` | SQL AST, dialects, compiler, and all statement generation |
-| `rowset` | Dynamic, streaming result mapping (escape hatch) |
 | `schema` | Database schema model shared by the tooling (tables, columns, foreign keys) |
 | `inspector` | PostgreSQL/MySQL `information_schema` introspection into the `schema` model |
 | `codegen` | `schema` → Go code generator (library: customizable types, layout, DTOs) |
@@ -287,14 +286,16 @@ var now time.Time
 err = db.RawSQL(ctx, sql.Select(sql.Raw("now()"))).Scan(&now)
 ```
 
-`db.QueryRows` returns a dynamic `rowset.RowSet` when even the result shape
-is unknown. It streams: rows are fetched on demand during iteration or Scan
-(single-pass over `sql.Rows`), and breaking out of the loop releases the rest
-of the result set:
+`db.QueryRecords` returns a dynamic `RecordSet` when even the result shape
+is unknown. It streams: records are fetched on demand during iteration or
+Scan (single-pass over `sql.Rows`), and breaking out of the loop releases
+the rest of the result set. Each `Record` holds its values positionally
+against a column layout shared by the whole set, so no per-record map is
+built:
 
 ```go
-rs, err := db.QueryRows(ctx, query)
-for row, err := range rs.Rows() {
+rs, err := db.QueryRecords(ctx, query)
+for record, err := range rs.Records() {
     if err != nil { return err }
     ...
 }

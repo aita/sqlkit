@@ -5,7 +5,6 @@ import (
 	stdsql "database/sql"
 	"sync"
 
-	"github.com/aita/sqlkit/rowset"
 	"github.com/aita/sqlkit/sql"
 )
 
@@ -132,18 +131,19 @@ func (s *Session) Exec(ctx context.Context, query sql.Query) (stdsql.Result, err
 	return s.execContext(ctx, sqlText, args...)
 }
 
-// QueryRows compiles and runs a query, returning a dynamic RowSet. Prefer
-// All(...).Scan or RawSQL(...).Scan when a destination type is available.
-func (s *Session) QueryRows(ctx context.Context, query sql.Query) (rowset.RowSet, error) {
+// QueryRecords compiles and runs a query, returning a dynamic RecordSet.
+// Prefer All(...).Scan or RawSQL(...).Scan when a destination type is
+// available.
+func (s *Session) QueryRecords(ctx context.Context, query sql.Query) (RecordSet, error) {
 	sqlText, args, err := query.ToSQL(s.dialect)
 	if err != nil {
-		return rowset.RowSet{}, err
+		return RecordSet{}, err
 	}
 	rows, err := s.queryContext(ctx, sqlText, args...)
 	if err != nil {
-		return rowset.RowSet{}, err
+		return RecordSet{}, err
 	}
-	return rowset.FromSQLRows(rows), nil
+	return FromSQLRows(rows), nil
 }
 
 func (s *Session) sqlDialect() sql.Dialect { return s.dialect }

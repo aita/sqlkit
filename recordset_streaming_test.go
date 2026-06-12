@@ -1,4 +1,4 @@
-package rowset_test
+package sqlkit_test
 
 import (
 	"context"
@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aita/sqlkit"
 	"github.com/aita/sqlkit/internal/sqltest"
-	"github.com/aita/sqlkit/rowset"
 )
 
-func queryRowSet(t *testing.T, fake *sqltest.Fake) rowset.RowSet {
+func queryRecordSet(t *testing.T, fake *sqltest.Fake) sqlkit.RecordSet {
 	t.Helper()
 	db := fake.DB()
 	t.Cleanup(func() { _ = db.Close() })
@@ -19,10 +19,10 @@ func queryRowSet(t *testing.T, fake *sqltest.Fake) rowset.RowSet {
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
-	return rowset.FromSQLRows(rows)
+	return sqlkit.FromSQLRows(rows)
 }
 
-func threeRowFake() *sqltest.Fake {
+func threeRecordFake() *sqltest.Fake {
 	return &sqltest.Fake{
 		QueryFunc: func(string, []any) (sqltest.Result, error) {
 			return sqltest.Result{
@@ -34,32 +34,32 @@ func threeRowFake() *sqltest.Fake {
 }
 
 func TestIterStreamsAndStopsEarly(t *testing.T) {
-	fake := threeRowFake()
-	rs := queryRowSet(t, fake)
+	fake := threeRecordFake()
+	rs := queryRecordSet(t, fake)
 
 	var got []int64
-	for row, err := range rs.Iter() {
+	for record, err := range rs.Iter() {
 		if err != nil {
 			t.Fatalf("Iter() error = %v", err)
 		}
-		value, _ := row.Get("id")
+		value, _ := record.Get("id")
 		got = append(got, value.(int64))
 		if len(got) == 2 {
-			break // stop before the third row
+			break // stop before the third record
 		}
 	}
 	if len(got) != 2 || got[1] != 2 {
 		t.Fatalf("got = %#v", got)
 	}
-	// The driver was asked for at most the rows we consumed (plus lookahead),
-	// not the whole result set.
+	// The driver was asked for at most the records we consumed (plus
+	// lookahead), not the whole result set.
 	if fake.RowReads() > 2 {
 		t.Fatalf("driver row reads = %d, want <= 2 after early break", fake.RowReads())
 	}
 }
 
-func TestSQLRowSetIsSinglePass(t *testing.T) {
-	rs := queryRowSet(t, threeRowFake())
+func TestSQLRecordSetIsSinglePass(t *testing.T) {
+	rs := queryRecordSet(t, threeRecordFake())
 
 	count := 0
 	for _, err := range rs.Iter() {
@@ -69,7 +69,7 @@ func TestSQLRowSetIsSinglePass(t *testing.T) {
 		count++
 	}
 	if count != 3 {
-		t.Fatalf("first pass rows = %d, want 3", count)
+		t.Fatalf("first pass records = %d, want 3", count)
 	}
 
 	var second error
@@ -81,39 +81,39 @@ func TestSQLRowSetIsSinglePass(t *testing.T) {
 	}
 }
 
-func TestScanStructReadsOnlyFirstRow(t *testing.T) {
-	fake := threeRowFake()
-	rs := queryRowSet(t, fake)
+func TestScanStructReadsOnlyFirstRecord(t *testing.T) {
+	fake := threeRecordFake()
+	rs := queryRecordSet(t, fake)
 
-	var row struct {
+	var record struct {
 		ID int64 `sqlkit:"id"`
 	}
-	if err := rs.Scan(&row); err != nil {
+	if err := rs.Scan(&record); err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
-	if row.ID != 1 {
-		t.Fatalf("row = %#v", row)
+	if record.ID != 1 {
+		t.Fatalf("record = %#v", record)
 	}
 	if fake.RowReads() > 1 {
 		t.Fatalf("driver row reads = %d, want 1 for single-struct Scan", fake.RowReads())
 	}
 }
 
-func TestScanSliceStreamsAllRows(t *testing.T) {
-	rs := queryRowSet(t, threeRowFake())
+func TestScanSliceStreamsAllRecords(t *testing.T) {
+	rs := queryRecordSet(t, threeRecordFake())
 
-	var rows []struct {
+	var records []struct {
 		ID int64 `sqlkit:"id"`
 	}
-	if err := rs.Scan(&rows); err != nil {
+	if err := rs.Scan(&records); err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
-	if len(rows) != 3 || rows[2].ID != 3 {
-		t.Fatalf("rows = %#v", rows)
+	if len(records) != 3 || records[2].ID != 3 {
+		t.Fatalf("records = %#v", records)
 	}
 }
 
-func TestRowSetScanSupportsScannerAndPointerFields(t *testing.T) {
+func TestRecordSetScanSupportsScannerAndPointerFields(t *testing.T) {
 	fake := &sqltest.Fake{
 		QueryFunc: func(string, []any) (sqltest.Result, error) {
 			return sqltest.Result{
@@ -125,19 +125,19 @@ func TestRowSetScanSupportsScannerAndPointerFields(t *testing.T) {
 			}, nil
 		},
 	}
-	rs := queryRowSet(t, fake)
+	rs := queryRecordSet(t, fake)
 
-	var rows []struct {
+	var records []struct {
 		Name sql.NullString `sqlkit:"name"` // database/sql Scanner
 		Nick *string        `sqlkit:"nick"` // pointer for NULL
 	}
-	if err := rs.Scan(&rows); err != nil {
+	if err := rs.Scan(&records); err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
-	if !rows[0].Name.Valid || rows[0].Name.String != "Alice" || *rows[0].Nick != "al" {
-		t.Fatalf("row 0 = %#v", rows[0])
+	if !records[0].Name.Valid || records[0].Name.String != "Alice" || *records[0].Nick != "al" {
+		t.Fatalf("record 0 = %#v", records[0])
 	}
-	if rows[1].Name.Valid || rows[1].Nick != nil {
-		t.Fatalf("row 1 = %#v, want NULLs", rows[1])
+	if records[1].Name.Valid || records[1].Nick != nil {
+		t.Fatalf("record 1 = %#v, want NULLs", records[1])
 	}
 }
