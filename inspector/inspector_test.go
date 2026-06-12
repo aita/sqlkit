@@ -1,4 +1,4 @@
-package loader
+package inspector
 
 import (
 	"context"
@@ -7,17 +7,17 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sqlkit-dev/sqlkit/codegen"
 	"github.com/sqlkit-dev/sqlkit/internal/sqltest"
+	"github.com/sqlkit-dev/sqlkit/schema"
 )
 
-func TestLoadRejectsUnsupportedDialects(t *testing.T) {
-	if _, err := Load(context.Background(), nil, "oracle", ""); err == nil {
-		t.Fatal("Load(oracle) succeeded, want unsupported error")
+func TestInspectRejectsUnsupportedDialects(t *testing.T) {
+	if _, err := Inspect(context.Background(), nil, "oracle", ""); err == nil {
+		t.Fatal("Inspect(oracle) succeeded, want unsupported error")
 	}
 }
 
-func TestLoadPostgres(t *testing.T) {
+func TestInspectPostgres(t *testing.T) {
 	fake := &sqltest.Fake{
 		QueryFunc: func(sql string, args []any) (sqltest.Result, error) {
 			switch {
@@ -50,19 +50,19 @@ func TestLoadPostgres(t *testing.T) {
 		},
 	}
 
-	schema, err := Load(context.Background(), fake.DB(), "postgres", "public")
+	got, err := Inspect(context.Background(), fake.DB(), "postgres", "public")
 	if err != nil {
-		t.Fatalf("Load() error = %v", err)
+		t.Fatalf("Inspect() error = %v", err)
 	}
 
-	want := codegen.Schema{
+	want := schema.Schema{
 		Name:    "public",
 		Dialect: "postgres",
-		Tables: []codegen.Table{
+		Tables: []schema.Table{
 			{
 				Schema: "public",
 				Name:   "users",
-				Columns: []codegen.Column{
+				Columns: []schema.Column{
 					{Name: "id", DataType: "int8", HasDefault: true, PrimaryKey: true},
 					{Name: "email", DataType: "varchar"},
 				},
@@ -70,18 +70,18 @@ func TestLoadPostgres(t *testing.T) {
 			{
 				Schema: "public",
 				Name:   "posts",
-				Columns: []codegen.Column{
+				Columns: []schema.Column{
 					{Name: "id", DataType: "int8", HasDefault: true, PrimaryKey: true},
 					{Name: "user_id", DataType: "int8"},
 				},
-				ForeignKeys: []codegen.ForeignKey{
+				ForeignKeys: []schema.ForeignKey{
 					{Name: "posts_user_id_fkey", Columns: []string{"user_id"}, RefSchema: "public", RefTable: "users", RefColumns: []string{"id"}},
 				},
 			},
 		},
 	}
-	if !reflect.DeepEqual(schema, want) {
-		t.Fatalf("Load() = %#v,\nwant %#v", schema, want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Inspect() = %#v,\nwant %#v", got, want)
 	}
 
 	queries := fake.Queries()
@@ -95,7 +95,7 @@ func TestLoadPostgres(t *testing.T) {
 	}
 }
 
-func TestLoadMySQL(t *testing.T) {
+func TestInspectMySQL(t *testing.T) {
 	fake := &sqltest.Fake{
 		QueryFunc: func(sql string, args []any) (sqltest.Result, error) {
 			switch {
@@ -120,19 +120,19 @@ func TestLoadMySQL(t *testing.T) {
 		},
 	}
 
-	schema, err := Load(context.Background(), fake.DB(), "mysql", "app")
+	got, err := Inspect(context.Background(), fake.DB(), "mysql", "app")
 	if err != nil {
-		t.Fatalf("Load() error = %v", err)
+		t.Fatalf("Inspect() error = %v", err)
 	}
 
-	want := codegen.Schema{
+	want := schema.Schema{
 		Name:    "app",
 		Dialect: "mysql",
-		Tables: []codegen.Table{
+		Tables: []schema.Table{
 			{
 				Schema: "app",
 				Name:   "users",
-				Columns: []codegen.Column{
+				Columns: []schema.Column{
 					{Name: "id", DataType: "bigint", HasDefault: true, PrimaryKey: true},
 					{Name: "email", DataType: "varchar"},
 				},
@@ -140,18 +140,18 @@ func TestLoadMySQL(t *testing.T) {
 			{
 				Schema: "app",
 				Name:   "posts",
-				Columns: []codegen.Column{
+				Columns: []schema.Column{
 					{Name: "id", DataType: "bigint", HasDefault: true, PrimaryKey: true},
 					{Name: "user_id", DataType: "bigint"},
 				},
-				ForeignKeys: []codegen.ForeignKey{
+				ForeignKeys: []schema.ForeignKey{
 					{Name: "fk_posts_user", Columns: []string{"user_id"}, RefSchema: "app", RefTable: "users", RefColumns: []string{"id"}},
 				},
 			},
 		},
 	}
-	if !reflect.DeepEqual(schema, want) {
-		t.Fatalf("Load() = %#v,\nwant %#v", schema, want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Inspect() = %#v,\nwant %#v", got, want)
 	}
 
 	queries := fake.Queries()

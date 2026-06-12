@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"text/template"
+
+	"github.com/sqlkit-dev/sqlkit/schema"
 )
 
 // File is a single generated source file: a suggested name and its formatted
@@ -58,7 +60,7 @@ type Options struct {
 	// DTOName derives the DTO type name from a table. Defaults to a singular,
 	// collision-avoiding name (e.g. table "users" -> "User"). When the derived
 	// name collides with a binding identifier, "Row" is appended.
-	DTOName func(table Table) string
+	DTOName func(table schema.Table) string
 }
 
 const sqlkitImport = "github.com/sqlkit-dev/sqlkit/sqlkit"
@@ -109,13 +111,13 @@ type tableModel struct {
 
 // Generate renders the schema into one or more Go source files according to
 // opts and returns their formatted contents.
-func Generate(schema Schema, opts Options) ([]File, error) {
+func Generate(model schema.Schema, opts Options) ([]File, error) {
 	if opts.PackageName == "" {
 		return nil, fmt.Errorf("codegen: package name is required")
 	}
 	dialect := opts.Dialect
 	if dialect == "" {
-		dialect = schema.Dialect
+		dialect = model.Dialect
 	}
 	mapper := opts.TypeMapper
 	if mapper == nil {
@@ -126,7 +128,7 @@ func Generate(schema Schema, opts Options) ([]File, error) {
 		dtoName = defaultDTOName
 	}
 
-	tables := filterTables(schema.Tables, opts.Tables)
+	tables := filterTables(model.Tables, opts.Tables)
 	if len(tables) == 0 {
 		return nil, fmt.Errorf("codegen: no tables to generate")
 	}
@@ -167,7 +169,7 @@ func Generate(schema Schema, opts Options) ([]File, error) {
 }
 
 // buildTable builds the binding model for a single table.
-func buildTable(table Table, dialect string, mapper TypeMapper) (*tableModel, error) {
+func buildTable(table schema.Table, dialect string, mapper TypeMapper) (*tableModel, error) {
 	varName := goName(table.Name)
 	tm := &tableModel{
 		TypeName:  varName + "Table",
@@ -201,7 +203,7 @@ func buildTable(table Table, dialect string, mapper TypeMapper) (*tableModel, er
 }
 
 // columnOptions renders the sqlkit.NewColumn functional options for a column.
-func columnOptions(column Column) []string {
+func columnOptions(column schema.Column) []string {
 	var opts []string
 	if column.DataType != "" {
 		opts = append(opts, fmt.Sprintf("sqlkit.WithSQLType(%q)", column.DataType))
@@ -220,7 +222,7 @@ func columnOptions(column Column) []string {
 
 // buildRelations turns foreign keys into typed Relations accessors on both the
 // referencing table (belongs-to) and the referenced table (has-many).
-func buildRelations(tables []Table, index map[string]*tableModel) {
+func buildRelations(tables []schema.Table, index map[string]*tableModel) {
 	used := map[string]map[string]bool{}
 	reserve := func(tm *tableModel) map[string]bool {
 		set, ok := used[tm.Name]
@@ -333,7 +335,7 @@ func uniqueParam(existing []relParam, base string) string {
 	}
 }
 
-func belongsToName(fk ForeignKey, parent Table) string {
+func belongsToName(fk schema.ForeignKey, parent schema.Table) string {
 	if len(fk.Columns) == 1 {
 		col := fk.Columns[0]
 		if len(col) > 3 && strings.EqualFold(col[len(col)-3:], "_id") {
@@ -355,20 +357,20 @@ func columnRef(tm *tableModel, dbName string) (field, goType string, ok bool) {
 	return "", "", false
 }
 
-func tableByName(tables []Table, name string) Table {
+func tableByName(tables []schema.Table, name string) schema.Table {
 	for _, t := range tables {
 		if t.Name == name {
 			return t
 		}
 	}
-	return Table{}
+	return schema.Table{}
 }
 
-func defaultDTOName(table Table) string {
+func defaultDTOName(table schema.Table) string {
 	return goName(singular(table.Name))
 }
 
-func filterTables(tables []Table, only []string) []Table {
+func filterTables(tables []schema.Table, only []string) []schema.Table {
 	if len(only) == 0 {
 		return tables
 	}
@@ -376,7 +378,7 @@ func filterTables(tables []Table, only []string) []Table {
 	for _, name := range only {
 		want[name] = true
 	}
-	var out []Table
+	var out []schema.Table
 	for _, table := range tables {
 		if want[table.Name] {
 			out = append(out, table)
@@ -385,11 +387,11 @@ func filterTables(tables []Table, only []string) []Table {
 	return out
 }
 
-func qualified(schema, name string) string {
-	if schema == "" {
+func qualified(schemaName, name string) string {
+	if schemaName == "" {
 		return name
 	}
-	return schema + "." + name
+	return schemaName + "." + name
 }
 
 // assemble groups the rendered table segments into files per the layout

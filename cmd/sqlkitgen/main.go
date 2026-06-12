@@ -6,7 +6,7 @@
 //	sqlkitgen -dsn postgres://user:pass@localhost/app -schema public -package appdb -out appdb/tables.go
 //	sqlkitgen -driver mysql -dsn 'user:pass@tcp(localhost:3306)/app' -package appdb -out appdb -file-per-table -dto
 //
-// The codegen and loader packages are the library entry points behind this
+// The codegen and inspector packages are the library entry points behind this
 // command; import them directly to customize type mapping and generation.
 package main
 
@@ -23,7 +23,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/sqlkit-dev/sqlkit/codegen"
-	"github.com/sqlkit-dev/sqlkit/loader"
+	"github.com/sqlkit-dev/sqlkit/inspector"
 )
 
 func main() {
@@ -73,7 +73,7 @@ func run() error {
 	}
 	defer db.Close()
 
-	model, err := loader.Load(ctx, db, resolvedDialect, *schema)
+	model, err := inspector.Inspect(ctx, db, resolvedDialect, *schema)
 	if err != nil {
 		return err
 	}
@@ -151,7 +151,7 @@ func splitList(csv string) []string {
 	return out
 }
 
-// dialectFor maps a driver name to the loader dialect.
+// dialectFor maps a driver name to the inspector dialect.
 func dialectFor(driver string) string {
 	switch driver {
 	case "mysql":

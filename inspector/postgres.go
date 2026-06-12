@@ -1,10 +1,10 @@
-package loader
+package inspector
 
 import (
 	"context"
 	"fmt"
 
-	"github.com/sqlkit-dev/sqlkit/codegen"
+	"github.com/sqlkit-dev/sqlkit/schema"
 )
 
 const pgColumnsQuery = `
@@ -29,7 +29,7 @@ WHERE tc.table_schema = $1 AND tc.constraint_type = 'PRIMARY KEY'`
 
 // pgForeignKeysQuery reads foreign-key column pairs. constraint_column_usage is
 // reliable for single-column foreign keys (the common case); composite keys may
-// mispair and can be corrected with a custom loader if needed.
+// mispair and can be corrected with a custom inspector if needed.
 const pgForeignKeysQuery = `
 SELECT tc.constraint_name,
        tc.table_name,
@@ -47,46 +47,46 @@ JOIN information_schema.constraint_column_usage ccu
 WHERE tc.table_schema = $1 AND tc.constraint_type = 'FOREIGN KEY'
 ORDER BY tc.constraint_name, kcu.ordinal_position`
 
-// loadPostgres reads the schema from PostgreSQL's information_schema.
-func loadPostgres(ctx context.Context, db Querier, schema string) (codegen.Schema, error) {
-	if schema == "" {
-		schema = "public"
+// inspectPostgres reads the schema from PostgreSQL's information_schema.
+func inspectPostgres(ctx context.Context, db Querier, schemaName string) (schema.Schema, error) {
+	if schemaName == "" {
+		schemaName = "public"
 	}
-	model := codegen.Schema{Name: schema, Dialect: "postgres"}
+	model := schema.Schema{Name: schemaName, Dialect: "postgres"}
 
-	rows, err := db.QueryContext(ctx, pgColumnsQuery, schema)
+	rows, err := db.QueryContext(ctx, pgColumnsQuery, schemaName)
 	if err != nil {
-		return codegen.Schema{}, fmt.Errorf("loader: read columns: %w", err)
+		return schema.Schema{}, fmt.Errorf("inspector: read columns: %w", err)
 	}
 	defer rows.Close()
 	tableIndex := map[string]int{}
 	for rows.Next() {
 		var tableName string
-		var column codegen.Column
+		var column schema.Column
 		if err := rows.Scan(&tableName, &column.Name, &column.DataType, &column.Nullable, &column.HasDefault); err != nil {
-			return codegen.Schema{}, fmt.Errorf("loader: scan column: %w", err)
+			return schema.Schema{}, fmt.Errorf("inspector: scan column: %w", err)
 		}
 		index, ok := tableIndex[tableName]
 		if !ok {
 			index = len(model.Tables)
 			tableIndex[tableName] = index
-			model.Tables = append(model.Tables, codegen.Table{Schema: schema, Name: tableName})
+			model.Tables = append(model.Tables, schema.Table{Schema: schemaName, Name: tableName})
 		}
 		model.Tables[index].Columns = append(model.Tables[index].Columns, column)
 	}
 	if err := rows.Err(); err != nil {
-		return codegen.Schema{}, fmt.Errorf("loader: read columns: %w", err)
+		return schema.Schema{}, fmt.Errorf("inspector: read columns: %w", err)
 	}
 
-	pkRows, err := db.QueryContext(ctx, pgPrimaryKeysQuery, schema)
+	pkRows, err := db.QueryContext(ctx, pgPrimaryKeysQuery, schemaName)
 	if err != nil {
-		return codegen.Schema{}, fmt.Errorf("loader: read primary keys: %w", err)
+		return schema.Schema{}, fmt.Errorf("inspector: read primary keys: %w", err)
 	}
 	defer pkRows.Close()
 	for pkRows.Next() {
 		var tableName, columnName string
 		if err := pkRows.Scan(&tableName, &columnName); err != nil {
-			return codegen.Schema{}, fmt.Errorf("loader: scan primary key: %w", err)
+			return schema.Schema{}, fmt.Errorf("inspector: scan primary key: %w", err)
 		}
 		index, ok := tableIndex[tableName]
 		if !ok {
@@ -100,24 +100,24 @@ func loadPostgres(ctx context.Context, db Querier, schema string) (codegen.Schem
 		}
 	}
 	if err := pkRows.Err(); err != nil {
-		return codegen.Schema{}, fmt.Errorf("loader: read primary keys: %w", err)
+		return schema.Schema{}, fmt.Errorf("inspector: read primary keys: %w", err)
 	}
 
-	fkRows, err := db.QueryContext(ctx, pgForeignKeysQuery, schema)
+	fkRows, err := db.QueryContext(ctx, pgForeignKeysQuery, schemaName)
 	if err != nil {
-		return codegen.Schema{}, fmt.Errorf("loader: read foreign keys: %w", err)
+		return schema.Schema{}, fmt.Errorf("inspector: read foreign keys: %w", err)
 	}
 	defer fkRows.Close()
 	var fks []fkRow
 	for fkRows.Next() {
 		var row fkRow
 		if err := fkRows.Scan(&row.constraint, &row.table, &row.column, &row.refSchema, &row.refTable, &row.refColumn); err != nil {
-			return codegen.Schema{}, fmt.Errorf("loader: scan foreign key: %w", err)
+			return schema.Schema{}, fmt.Errorf("inspector: scan foreign key: %w", err)
 		}
 		fks = append(fks, row)
 	}
 	if err := fkRows.Err(); err != nil {
-		return codegen.Schema{}, fmt.Errorf("loader: read foreign keys: %w", err)
+		return schema.Schema{}, fmt.Errorf("inspector: read foreign keys: %w", err)
 	}
 	attachForeignKeys(&model, fks)
 

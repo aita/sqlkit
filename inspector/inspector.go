@@ -1,31 +1,31 @@
-// Package loader reads database schema metadata into the codegen model. Both
+// Package inspector reads database schema metadata into the schema model. Both
 // PostgreSQL and MySQL are supported; the dialect switch is the extension point
 // for other engines.
-package loader
+package inspector
 
 import (
 	"context"
 	"database/sql"
 	"fmt"
 
-	"github.com/sqlkit-dev/sqlkit/codegen"
+	"github.com/sqlkit-dev/sqlkit/schema"
 )
 
-// Querier is the subset of *sql.DB used by the loader.
+// Querier is the subset of *sql.DB used by the inspector.
 type Querier interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
-// Load reads all base tables of a schema for the given dialect ("postgres" or
-// "mysql"; an empty dialect defaults to PostgreSQL).
-func Load(ctx context.Context, db Querier, dialect, schema string) (codegen.Schema, error) {
+// Inspect reads all base tables of a schema for the given dialect ("postgres"
+// or "mysql"; an empty dialect defaults to PostgreSQL).
+func Inspect(ctx context.Context, db Querier, dialect, schemaName string) (schema.Schema, error) {
 	switch dialect {
 	case "", "postgres", "postgresql", "pgx":
-		return loadPostgres(ctx, db, schema)
+		return inspectPostgres(ctx, db, schemaName)
 	case "mysql":
-		return loadMySQL(ctx, db, schema)
+		return inspectMySQL(ctx, db, schemaName)
 	default:
-		return codegen.Schema{}, fmt.Errorf("loader: unsupported dialect %q", dialect)
+		return schema.Schema{}, fmt.Errorf("inspector: unsupported dialect %q", dialect)
 	}
 }
 
@@ -41,7 +41,7 @@ type fkRow struct {
 
 // attachForeignKeys groups foreign-key rows by (table, constraint) and attaches
 // them to the matching tables, preserving column order.
-func attachForeignKeys(model *codegen.Schema, rows []fkRow) {
+func attachForeignKeys(model *schema.Schema, rows []fkRow) {
 	tableIndex := map[string]int{}
 	for i := range model.Tables {
 		tableIndex[model.Tables[i].Name] = i
@@ -58,7 +58,7 @@ func attachForeignKeys(model *codegen.Schema, rows []fkRow) {
 		if !ok {
 			fi = len(model.Tables[ti].ForeignKeys)
 			fkIndex[key] = fi
-			model.Tables[ti].ForeignKeys = append(model.Tables[ti].ForeignKeys, codegen.ForeignKey{
+			model.Tables[ti].ForeignKeys = append(model.Tables[ti].ForeignKeys, schema.ForeignKey{
 				Name:      row.constraint,
 				RefSchema: row.refSchema,
 				RefTable:  row.refTable,

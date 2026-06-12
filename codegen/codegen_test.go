@@ -6,21 +6,23 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sqlkit-dev/sqlkit/schema"
 )
 
 var update = flag.Bool("update", false, "rewrite golden files")
 
 // fixtureSchema mirrors examples/blog/schema.sql: users and posts with a
 // foreign key from posts.user_id to users.id.
-func fixtureSchema() Schema {
-	return Schema{
+func fixtureSchema() schema.Schema {
+	return schema.Schema{
 		Name:    "public",
 		Dialect: "postgres",
-		Tables: []Table{
+		Tables: []schema.Table{
 			{
 				Schema: "public",
 				Name:   "users",
-				Columns: []Column{
+				Columns: []schema.Column{
 					{Name: "id", DataType: "int8", PrimaryKey: true, HasDefault: true},
 					{Name: "email", DataType: "varchar"},
 					{Name: "name", DataType: "text", Nullable: true},
@@ -30,14 +32,14 @@ func fixtureSchema() Schema {
 			{
 				Schema: "public",
 				Name:   "posts",
-				Columns: []Column{
+				Columns: []schema.Column{
 					{Name: "id", DataType: "int8", PrimaryKey: true, HasDefault: true},
 					{Name: "user_id", DataType: "int8"},
 					{Name: "title", DataType: "text"},
 					{Name: "body", DataType: "text", Nullable: true},
 					{Name: "published", DataType: "bool", HasDefault: true},
 				},
-				ForeignKeys: []ForeignKey{
+				ForeignKeys: []schema.ForeignKey{
 					{Name: "posts_user_id_fkey", Columns: []string{"user_id"}, RefSchema: "public", RefTable: "users", RefColumns: []string{"id"}},
 				},
 			},
@@ -45,9 +47,9 @@ func fixtureSchema() Schema {
 	}
 }
 
-func generateSingle(t *testing.T, schema Schema, opts Options) []byte {
+func generateSingle(t *testing.T, model schema.Schema, opts Options) []byte {
 	t.Helper()
-	files, err := Generate(schema, opts)
+	files, err := Generate(model, opts)
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
@@ -136,16 +138,16 @@ func TestOmitRelations(t *testing.T) {
 }
 
 func TestDTONameCollisionForSingularTable(t *testing.T) {
-	schema := Schema{
+	model := schema.Schema{
 		Name:    "public",
 		Dialect: "postgres",
-		Tables: []Table{{
+		Tables: []schema.Table{{
 			Schema:  "public",
 			Name:    "account",
-			Columns: []Column{{Name: "id", DataType: "int8", PrimaryKey: true}},
+			Columns: []schema.Column{{Name: "id", DataType: "int8", PrimaryKey: true}},
 		}},
 	}
-	body := string(generateSingle(t, schema, Options{PackageName: "x", EmitDTO: true}))
+	body := string(generateSingle(t, model, Options{PackageName: "x", EmitDTO: true}))
 	// var Account (binding) must not collide with the DTO type, which becomes
 	// AccountRow.
 	if !strings.Contains(body, "type AccountRow struct") {
@@ -165,13 +167,13 @@ func TestCustomTypeMapper(t *testing.T) {
 }
 
 func TestMySQLTypeMapping(t *testing.T) {
-	schema := Schema{
+	model := schema.Schema{
 		Name:    "app",
 		Dialect: "mysql",
-		Tables: []Table{{
+		Tables: []schema.Table{{
 			Schema: "app",
 			Name:   "items",
-			Columns: []Column{
+			Columns: []schema.Column{
 				{Name: "id", DataType: "bigint", PrimaryKey: true, HasDefault: true},
 				{Name: "qty", DataType: "int"},
 				{Name: "label", DataType: "varchar"},
@@ -179,7 +181,7 @@ func TestMySQLTypeMapping(t *testing.T) {
 			},
 		}},
 	}
-	body := string(generateSingle(t, schema, Options{PackageName: "appdb"}))
+	body := string(generateSingle(t, model, Options{PackageName: "appdb"}))
 	for _, want := range []string{"sqlkit.Column[int64]", "sqlkit.Column[int32]", "sqlkit.Column[string]", "sqlkit.Column[time.Time]"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("MySQL mapping missing %q:\n%s", want, body)
@@ -230,12 +232,12 @@ func TestNaming(t *testing.T) {
 }
 
 func TestGenerateUnknownTypeFails(t *testing.T) {
-	schema := Schema{Tables: []Table{{
+	model := schema.Schema{Tables: []schema.Table{{
 		Schema:  "public",
 		Name:    "things",
-		Columns: []Column{{Name: "weird", DataType: "hstore"}},
+		Columns: []schema.Column{{Name: "weird", DataType: "hstore"}},
 	}}}
-	if _, err := Generate(schema, Options{PackageName: "x"}); err == nil {
+	if _, err := Generate(model, Options{PackageName: "x"}); err == nil {
 		t.Fatal("Generate() with unsupported type succeeded, want error")
 	}
 }

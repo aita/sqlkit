@@ -25,7 +25,7 @@ import (
 
 	"github.com/sqlkit-dev/sqlkit/codegen"
 	"github.com/sqlkit-dev/sqlkit/examples/blog/blogdb"
-	"github.com/sqlkit-dev/sqlkit/loader"
+	"github.com/sqlkit-dev/sqlkit/inspector"
 	"github.com/sqlkit-dev/sqlkit/sqlkit"
 	"github.com/sqlkit-dev/sqlkit/sqlkit/sql"
 )
@@ -99,9 +99,9 @@ func TestLoaderReadsRealSchema(t *testing.T) {
 	db := startPostgres(t)
 	ctx := context.Background()
 
-	model, err := loader.Load(ctx, db.SQL(), "postgres", "public")
+	model, err := inspector.Inspect(ctx, db.SQL(), "postgres", "public")
 	if err != nil {
-		t.Fatalf("loader.Load: %v", err)
+		t.Fatalf("inspector.Inspect: %v", err)
 	}
 
 	tables := map[string]bool{}

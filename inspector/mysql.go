@@ -1,10 +1,10 @@
-package loader
+package inspector
 
 import (
 	"context"
 	"fmt"
 
-	"github.com/sqlkit-dev/sqlkit/codegen"
+	"github.com/sqlkit-dev/sqlkit/schema"
 )
 
 const mysqlColumnsQuery = `
@@ -31,60 +31,60 @@ FROM information_schema.KEY_COLUMN_USAGE
 WHERE TABLE_SCHEMA = ? AND REFERENCED_TABLE_NAME IS NOT NULL
 ORDER BY CONSTRAINT_NAME, ORDINAL_POSITION`
 
-// loadMySQL reads the schema from MySQL's information_schema. An empty schema
+// inspectMySQL reads the schema from MySQL's information_schema. An empty schema
 // resolves to the connection's current database via DATABASE().
-func loadMySQL(ctx context.Context, db Querier, schema string) (codegen.Schema, error) {
-	if schema == "" {
+func inspectMySQL(ctx context.Context, db Querier, schemaName string) (schema.Schema, error) {
+	if schemaName == "" {
 		current, err := currentMySQLSchema(ctx, db)
 		if err != nil {
-			return codegen.Schema{}, err
+			return schema.Schema{}, err
 		}
-		schema = current
+		schemaName = current
 	}
-	if schema == "" {
-		return codegen.Schema{}, fmt.Errorf("loader: no MySQL schema selected; pass a database name")
+	if schemaName == "" {
+		return schema.Schema{}, fmt.Errorf("inspector: no MySQL schema selected; pass a database name")
 	}
-	model := codegen.Schema{Name: schema, Dialect: "mysql"}
+	model := schema.Schema{Name: schemaName, Dialect: "mysql"}
 
-	rows, err := db.QueryContext(ctx, mysqlColumnsQuery, schema)
+	rows, err := db.QueryContext(ctx, mysqlColumnsQuery, schemaName)
 	if err != nil {
-		return codegen.Schema{}, fmt.Errorf("loader: read columns: %w", err)
+		return schema.Schema{}, fmt.Errorf("inspector: read columns: %w", err)
 	}
 	defer rows.Close()
 	tableIndex := map[string]int{}
 	for rows.Next() {
 		var tableName string
-		var column codegen.Column
+		var column schema.Column
 		if err := rows.Scan(&tableName, &column.Name, &column.DataType, &column.Nullable, &column.HasDefault, &column.PrimaryKey); err != nil {
-			return codegen.Schema{}, fmt.Errorf("loader: scan column: %w", err)
+			return schema.Schema{}, fmt.Errorf("inspector: scan column: %w", err)
 		}
 		index, ok := tableIndex[tableName]
 		if !ok {
 			index = len(model.Tables)
 			tableIndex[tableName] = index
-			model.Tables = append(model.Tables, codegen.Table{Schema: schema, Name: tableName})
+			model.Tables = append(model.Tables, schema.Table{Schema: schemaName, Name: tableName})
 		}
 		model.Tables[index].Columns = append(model.Tables[index].Columns, column)
 	}
 	if err := rows.Err(); err != nil {
-		return codegen.Schema{}, fmt.Errorf("loader: read columns: %w", err)
+		return schema.Schema{}, fmt.Errorf("inspector: read columns: %w", err)
 	}
 
-	fkRows, err := db.QueryContext(ctx, mysqlForeignKeysQuery, schema)
+	fkRows, err := db.QueryContext(ctx, mysqlForeignKeysQuery, schemaName)
 	if err != nil {
-		return codegen.Schema{}, fmt.Errorf("loader: read foreign keys: %w", err)
+		return schema.Schema{}, fmt.Errorf("inspector: read foreign keys: %w", err)
 	}
 	defer fkRows.Close()
 	var fks []fkRow
 	for fkRows.Next() {
 		var row fkRow
 		if err := fkRows.Scan(&row.constraint, &row.table, &row.column, &row.refSchema, &row.refTable, &row.refColumn); err != nil {
-			return codegen.Schema{}, fmt.Errorf("loader: scan foreign key: %w", err)
+			return schema.Schema{}, fmt.Errorf("inspector: scan foreign key: %w", err)
 		}
 		fks = append(fks, row)
 	}
 	if err := fkRows.Err(); err != nil {
-		return codegen.Schema{}, fmt.Errorf("loader: read foreign keys: %w", err)
+		return schema.Schema{}, fmt.Errorf("inspector: read foreign keys: %w", err)
 	}
 	attachForeignKeys(&model, fks)
 
@@ -94,20 +94,20 @@ func loadMySQL(ctx context.Context, db Querier, schema string) (codegen.Schema, 
 func currentMySQLSchema(ctx context.Context, db Querier) (string, error) {
 	rows, err := db.QueryContext(ctx, "SELECT DATABASE()")
 	if err != nil {
-		return "", fmt.Errorf("loader: resolve current database: %w", err)
+		return "", fmt.Errorf("inspector: resolve current database: %w", err)
 	}
 	defer rows.Close()
-	var schema *string
+	var current *string
 	if rows.Next() {
-		if err := rows.Scan(&schema); err != nil {
-			return "", fmt.Errorf("loader: resolve current database: %w", err)
+		if err := rows.Scan(&current); err != nil {
+			return "", fmt.Errorf("inspector: resolve current database: %w", err)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return "", fmt.Errorf("loader: resolve current database: %w", err)
+		return "", fmt.Errorf("inspector: resolve current database: %w", err)
 	}
-	if schema == nil {
+	if current == nil {
 		return "", nil
 	}
-	return *schema, nil
+	return *current, nil
 }

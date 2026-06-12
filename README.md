@@ -31,9 +31,10 @@ err := db.Select().From(appdb.Users).
 | `sqlkit` | Typed query chains, `Database`, `Session`, result scanning |
 | `sqlkit/sql` | SQL AST, dialects, compiler, and all statement generation |
 | `sqlkit/rowset` | Dynamic, streaming result mapping (escape hatch) |
-| `codegen` | Schema → Go code generator (library: customizable types, layout, DTOs, relations) |
-| `loader` | PostgreSQL/MySQL `information_schema` introspection into the codegen model |
-| `cmd/sqlkitgen` | CLI wrapper around `loader` + `codegen` |
+| `schema` | Database schema model shared by the tooling (tables, columns, foreign keys) |
+| `inspector` | PostgreSQL/MySQL `information_schema` introspection into the `schema` model |
+| `codegen` | `schema` → Go code generator (library: customizable types, layout, DTOs, relations) |
+| `cmd/sqlkitgen` | CLI wrapper around `inspector` + `codegen` |
 
 ## Generating table bindings
 
@@ -94,14 +95,14 @@ err := blogdb.Users.Posts(ctx, db, user.ID, &posts)
 
 ### Using codegen as a library
 
-The `codegen` package is the generator's public API. Build a `codegen.Schema`
-by hand or with `loader.Load`, customize the SQL→Go type mapping, and choose
-what to emit:
+The `codegen` package is the generator's public API. Build a `schema.Schema`
+by hand or with `inspector.Inspect`, customize the SQL→Go type mapping, and
+choose what to emit:
 
 ```go
-schema, _ := loader.Load(ctx, db, "postgres", "public")
+model, _ := inspector.Inspect(ctx, db, "postgres", "public")
 
-files, err := codegen.Generate(schema, codegen.Options{
+files, err := codegen.Generate(model, codegen.Options{
     PackageName:  "appdb",
     FilePerTable: true,
     EmitDTO:      true,
@@ -312,9 +313,10 @@ from the driver name (`"mysql"` → MySQL, otherwise PostgreSQL; override with
 `WithDialect`), and `Returning(...)` fails at compile time with a pointer to
 `Result.LastInsertId`, since MySQL has no RETURNING.
 
-Not yet covered for MySQL: `sqlkitgen` schema loading (the loader's dialect
-switch is the extension point) and integration tests. Track these before
-relying on MySQL in production.
+`sqlkitgen` introspects both PostgreSQL and MySQL schemas (`inspector`'s
+dialect switch is the extension point). MySQL integration tests are not yet
+included; exercise the generated MySQL bindings before relying on them in
+production.
 
 ## Compile-time guarantees
 
