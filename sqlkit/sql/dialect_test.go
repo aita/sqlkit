@@ -17,3 +17,28 @@ func TestPostgreSQLDialectPlaceholder(t *testing.T) {
 		}
 	}
 }
+
+func TestMySQLDialectQuoteIdent(t *testing.T) {
+	dialect := MySQLDialect{}
+	if got, want := dialect.QuoteIdent("blog.user`profiles"), "`blog`.`user``profiles`"; got != want {
+		t.Fatalf("QuoteIdent() = %q, want %q", got, want)
+	}
+}
+
+func TestMySQLDialectPlaceholder(t *testing.T) {
+	dialect := MySQLDialect{}
+	for position := 1; position <= 3; position++ {
+		if got := dialect.Placeholder(position); got != "?" {
+			t.Fatalf("Placeholder(%d) = %q, want ?", position, got)
+		}
+	}
+}
+
+func TestDialectNamesAndCapabilities(t *testing.T) {
+	if (PostgreSQLDialect{}).Name() != "postgres" || !(PostgreSQLDialect{}).SupportsReturning() {
+		t.Fatal("postgres dialect metadata wrong")
+	}
+	if (MySQLDialect{}).Name() != "mysql" || (MySQLDialect{}).SupportsReturning() {
+		t.Fatal("mysql dialect metadata wrong")
+	}
+}

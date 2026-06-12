@@ -9,7 +9,10 @@ func TestRowsCanBeRanged(t *testing.T) {
 	)
 
 	var values []int
-	for row := range rs.Rows() {
+	for row, err := range rs.Rows() {
+		if err != nil {
+			t.Fatalf("Rows() error = %v", err)
+		}
 		value, ok := row.Get("id")
 		if !ok {
 			t.Fatal("missing id field")
@@ -25,7 +28,7 @@ func TestRowsCanBeRanged(t *testing.T) {
 func TestRowSetScanStructSlice(t *testing.T) {
 	type user struct {
 		ID    int    `sqlkit:"id"`
-		Email string `db:"email"`
+		Email string `sqlkit:"email"`
 	}
 
 	rs := newRowSet(
@@ -66,7 +69,7 @@ func TestRowSetScanStruct(t *testing.T) {
 
 func TestRowScanStruct(t *testing.T) {
 	type user struct {
-		Email string `db:"email"`
+		Email string `sqlkit:"email"`
 	}
 
 	row := newRow(map[string]any{"email": "row@example.test"})

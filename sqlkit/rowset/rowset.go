@@ -1,3 +1,5 @@
+// Package rowset provides a dynamic, reflection-based view over query
+// results, as an escape hatch for when even the result shape is unknown.
 package rowset
 
 import (
@@ -6,6 +8,10 @@ import (
 )
 
 // RowSet is a read-only view over query results and their field metadata.
+// A RowSet built over *sql.Rows streams: rows are read from the database one
+// at a time during iteration or Scan, never materialized all at once, and
+// the underlying rows are closed when iteration finishes or stops early.
+// Such a RowSet is single-pass — iterating it a second time yields an error.
 type RowSet struct {
 	fields []Field
 	source rowSource
@@ -13,7 +19,9 @@ type RowSet struct {
 
 type rowSource interface {
 	Fields() ([]Field, error)
-	Rows() ([]Row, error)
+	// iterate streams rows to yield until exhaustion or yield returns false,
+	// and returns the first read error.
+	iterate(yield func(Row) bool) error
 }
 
 type memorySource struct {
@@ -26,14 +34,27 @@ func newRowSet(fields []Field, rows []Row) RowSet {
 }
 
 func (s memorySource) Fields() ([]Field, error) { return append([]Field(nil), s.fields...), nil }
-func (s memorySource) Rows() ([]Row, error)     { return append([]Row(nil), s.rows...), nil }
 
-type sqlRowsSource struct{ rows *sql.Rows }
+func (s memorySource) iterate(yield func(Row) bool) error {
+	for _, row := range s.rows {
+		if !yield(row) {
+			return nil
+		}
+	}
+	return nil
+}
 
-// FromSQLRows wraps database/sql rows for later scanning and mapping.
-func FromSQLRows(rows *sql.Rows) RowSet { return RowSet{source: sqlRowsSource{rows: rows}} }
+type sqlRowsSource struct {
+	rows     *sql.Rows
+	consumed bool
+}
 
-func (s sqlRowsSource) Fields() ([]Field, error) {
+// FromSQLRows wraps database/sql rows for streaming iteration and mapping.
+// The rows are read on demand and closed when iteration completes or stops;
+// the resulting RowSet is single-pass.
+func FromSQLRows(rows *sql.Rows) RowSet { return RowSet{source: &sqlRowsSource{rows: rows}} }
+
+func (s *sqlRowsSource) Fields() ([]Field, error) {
 	columnTypes, err := s.rows.ColumnTypes()
 	if err != nil {
 		return nil, err
@@ -46,12 +67,17 @@ func (s sqlRowsSource) Fields() ([]Field, error) {
 	return fields, nil
 }
 
-func (s sqlRowsSource) Rows() ([]Row, error) {
+func (s *sqlRowsSource) iterate(yield func(Row) bool) error {
+	if s.consumed {
+		return fmt.Errorf("rowset: result set already consumed; a RowSet over sql.Rows is single-pass")
+	}
+	s.consumed = true
+	defer s.rows.Close()
+
 	columns, err := s.rows.Columns()
 	if err != nil {
-		return nil, err
+		return err
 	}
-	var out []Row
 	for s.rows.Next() {
 		values := make([]any, len(columns))
 		scanTargets := make([]any, len(columns))
@@ -59,18 +85,17 @@ func (s sqlRowsSource) Rows() ([]Row, error) {
 			scanTargets[i] = &values[i]
 		}
 		if err := s.rows.Scan(scanTargets...); err != nil {
-			return nil, err
+			return err
 		}
 		rowValues := make(map[string]any, len(columns))
 		for i, column := range columns {
 			rowValues[column] = values[i]
 		}
-		out = append(out, newRow(rowValues))
+		if !yield(newRow(rowValues)) {
+			return nil
+		}
 	}
-	if err := s.rows.Err(); err != nil {
-		return nil, err
-	}
-	return out, nil
+	return s.rows.Err()
 }
 
 // Fields returns a copy of the row set field metadata.
@@ -96,13 +121,13 @@ func (rs RowSet) collectFields() ([]Field, error) {
 	return fields, nil
 }
 
-func (rs RowSet) collectRows() ([]Row, error) {
+// iterate streams the rows to yield and returns the first read error.
+func (rs RowSet) iterate(yield func(Row) bool) error {
 	if rs.source == nil {
-		return nil, nil
+		return nil
 	}
-	rows, err := rs.source.Rows()
-	if err != nil {
-		return nil, fmt.Errorf("rowset: read rows: %w", err)
+	if err := rs.source.iterate(yield); err != nil {
+		return fmt.Errorf("rowset: read rows: %w", err)
 	}
-	return rows, nil
+	return nil
 }
