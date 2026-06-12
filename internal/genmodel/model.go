@@ -7,7 +7,7 @@ type Schema struct {
 	Tables []Table
 }
 
-// Table is a database table or view.
+// Table is a database table.
 type Table struct {
 	Schema  string
 	Name    string
@@ -16,8 +16,9 @@ type Table struct {
 
 // Column is a database column.
 type Column struct {
-	Name         string
-	DatabaseType string
-	Nullable     bool
-	PrimaryKey   bool
+	Name       string
+	DataType   string // engine type name (PostgreSQL udt_name today, e.g. "int8")
+	Nullable   bool
+	HasDefault bool
+	PrimaryKey bool
 }

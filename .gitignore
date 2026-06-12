@@ -1,0 +1,5 @@
+# build artifacts
+/basic
+/sqlkitgen
+*.test
+/blog

@@ -15,7 +15,7 @@ func (r Row) Get(name string) (any, bool) {
 	return value, ok
 }
 
-// Scan copies this row into dest using sqlkit/db/json tags or exported field names.
+// Scan copies this row into dest using `sqlkit` tags or exported field names.
 func (r Row) Scan(dest any) error {
 	value := reflect.ValueOf(dest)
 	if value.Kind() != reflect.Pointer || value.IsNil() {
