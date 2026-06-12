@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sqlkit-dev/sqlkit/internal/sqltest"
-	"github.com/sqlkit-dev/sqlkit/schema"
+	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/schema"
 )
 
 func TestInspectRejectsUnsupportedDialects(t *testing.T) {

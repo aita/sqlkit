@@ -3,7 +3,7 @@ package sqlkit
 import (
 	"context"
 
-	"github.com/sqlkit-dev/sqlkit/sqlkit/sql"
+	"github.com/aita/sqlkit/sql"
 )
 
 // columnSource is implemented by sources (generated tables) that can list

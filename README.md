@@ -28,12 +28,12 @@ err := db.Select().From(appdb.Users).
 
 | Package | Purpose |
 |---|---|
-| `sqlkit` | Typed query chains, `Database`, `Session`, result scanning |
-| `sqlkit/sql` | SQL AST, dialects, compiler, and all statement generation |
-| `sqlkit/rowset` | Dynamic, streaming result mapping (escape hatch) |
+| `sqlkit` | Typed query chains, `Database`, `Session`, result scanning (module root) |
+| `sql` | SQL AST, dialects, compiler, and all statement generation |
+| `rowset` | Dynamic, streaming result mapping (escape hatch) |
 | `schema` | Database schema model shared by the tooling (tables, columns, foreign keys) |
 | `inspector` | PostgreSQL/MySQL `information_schema` introspection into the `schema` model |
-| `codegen` | `schema` → Go code generator (library: customizable types, layout, DTOs, relations) |
+| `codegen` | `schema` → Go code generator (library: customizable types, layout, DTOs) |
 | `cmd/sqlkitgen` | CLI wrapper around `inspector` + `codegen` |
 
 ## Generating table bindings
@@ -43,11 +43,11 @@ typed bindings:
 
 ```sh
 # PostgreSQL
-go run github.com/sqlkit-dev/sqlkit/cmd/sqlkitgen \
+go run github.com/aita/sqlkit/cmd/sqlkitgen \
   -dsn "$DATABASE_URL" -schema public -package appdb -out appdb/tables.go
 
 # MySQL, one file per table, with row DTOs in their own files
-go run github.com/sqlkit-dev/sqlkit/cmd/sqlkitgen \
+go run github.com/aita/sqlkit/cmd/sqlkitgen \
   -driver mysql -dsn 'user:pass@tcp(localhost:3306)/app' \
   -package appdb -out appdb -file-per-table -dto -dto-separate-file
 ```

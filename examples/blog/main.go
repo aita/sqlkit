@@ -16,9 +16,9 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
-	"github.com/sqlkit-dev/sqlkit/examples/blog/blogdb"
-	"github.com/sqlkit-dev/sqlkit/sqlkit"
-	"github.com/sqlkit-dev/sqlkit/sqlkit/sql"
+	"github.com/aita/sqlkit"
+	"github.com/aita/sqlkit/examples/blog/blogdb"
+	"github.com/aita/sqlkit/sql"
 )
 
 func main() {

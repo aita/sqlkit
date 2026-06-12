@@ -13,7 +13,7 @@
 package sqlkit
 
 import (
-	"github.com/sqlkit-dev/sqlkit/sqlkit/sql"
+	"github.com/aita/sqlkit/sql"
 )
 
 // SourceExpression aliases sql.SourceExpression so generated code only needs

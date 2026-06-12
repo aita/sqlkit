@@ -1,12 +1,12 @@
 // This is a separate module so the testcontainers dependency tree does not
 // reach the root sqlkit module that library consumers import.
-module github.com/sqlkit-dev/sqlkit/internal/integration
+module github.com/aita/sqlkit/internal/integration
 
 go 1.25.0
 
 require (
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/sqlkit-dev/sqlkit v0.0.0
+	github.com/aita/sqlkit v0.0.0
 	github.com/testcontainers/testcontainers-go v0.42.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0
 )
@@ -69,4 +69,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/sqlkit-dev/sqlkit => ../..
+replace github.com/aita/sqlkit => ../..

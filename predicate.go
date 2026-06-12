@@ -1,6 +1,6 @@
 package sqlkit
 
-import "github.com/sqlkit-dev/sqlkit/sqlkit/sql"
+import "github.com/aita/sqlkit/sql"
 
 // Predicate is a boolean SQL expression usable in WHERE, HAVING, and JOIN ON
 // clauses. Predicates are built from typed columns, so a type mismatch is a

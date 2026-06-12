@@ -5,8 +5,8 @@ import (
 	stdsql "database/sql"
 	"errors"
 
-	"github.com/sqlkit-dev/sqlkit/sqlkit/rowset"
-	"github.com/sqlkit-dev/sqlkit/sqlkit/sql"
+	"github.com/aita/sqlkit/rowset"
+	"github.com/aita/sqlkit/sql"
 )
 
 // Database is the entry point of sqlkit: it wraps a database/sql handle, runs

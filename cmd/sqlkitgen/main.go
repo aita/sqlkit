@@ -22,8 +22,8 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 
-	"github.com/sqlkit-dev/sqlkit/codegen"
-	"github.com/sqlkit-dev/sqlkit/inspector"
+	"github.com/aita/sqlkit/codegen"
+	"github.com/aita/sqlkit/inspector"
 )
 
 func main() {
