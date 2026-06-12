@@ -38,12 +38,13 @@ func TestInspectPostgres(t *testing.T) {
 				}, nil
 			default:
 				return sqltest.Result{
-					Columns: []string{"table_name", "column_name", "udt_name", "nullable", "has_default"},
+					Columns: []string{"table_name", "column_name", "udt_name", "nullable", "has_default", "length", "precision", "scale"},
 					Rows: [][]driver.Value{
-						{"users", "id", "int8", false, true},
-						{"users", "email", "varchar", false, false},
-						{"posts", "id", "int8", false, true},
-						{"posts", "user_id", "int8", false, false},
+						{"users", "id", "int8", false, true, 0, 64, 0},
+						{"users", "email", "varchar", false, false, 255, 0, 0},
+						{"users", "balance", "numeric", false, false, 0, 10, 2},
+						{"posts", "id", "int8", false, true, 0, 64, 0},
+						{"posts", "user_id", "int8", false, false, 0, 64, 0},
 					},
 				}, nil
 			}
@@ -64,7 +65,8 @@ func TestInspectPostgres(t *testing.T) {
 				Name:   "users",
 				Columns: []schema.Column{
 					{Name: "id", DataType: "int8", HasDefault: true, PrimaryKey: true},
-					{Name: "email", DataType: "varchar"},
+					{Name: "email", DataType: "varchar", Length: 255},
+					{Name: "balance", DataType: "numeric", Precision: 10, Scale: 2},
 				},
 			},
 			{
@@ -108,12 +110,13 @@ func TestInspectMySQL(t *testing.T) {
 				}, nil
 			default:
 				return sqltest.Result{
-					Columns: []string{"table_name", "column_name", "data_type", "nullable", "has_default", "is_pk"},
+					Columns: []string{"table_name", "column_name", "data_type", "nullable", "has_default", "is_pk", "length", "precision", "scale"},
 					Rows: [][]driver.Value{
-						{"users", "id", "bigint", false, true, true},
-						{"users", "email", "varchar", false, false, false},
-						{"posts", "id", "bigint", false, true, true},
-						{"posts", "user_id", "bigint", false, false, false},
+						{"users", "id", "bigint", false, true, true, 0, 19, 0},
+						{"users", "email", "varchar", false, false, false, 255, 0, 0},
+						{"users", "balance", "decimal", false, false, false, 0, 10, 2},
+						{"posts", "id", "bigint", false, true, true, 0, 19, 0},
+						{"posts", "user_id", "bigint", false, false, false, 0, 19, 0},
 					},
 				}, nil
 			}
@@ -134,7 +137,8 @@ func TestInspectMySQL(t *testing.T) {
 				Name:   "users",
 				Columns: []schema.Column{
 					{Name: "id", DataType: "bigint", HasDefault: true, PrimaryKey: true},
-					{Name: "email", DataType: "varchar"},
+					{Name: "email", DataType: "varchar", Length: 255},
+					{Name: "balance", DataType: "decimal", Precision: 10, Scale: 2},
 				},
 			},
 			{

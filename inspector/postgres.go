@@ -12,7 +12,10 @@ SELECT c.table_name,
        c.column_name,
        c.udt_name,
        c.is_nullable = 'YES',
-       c.column_default IS NOT NULL OR c.is_identity = 'YES'
+       c.column_default IS NOT NULL OR c.is_identity = 'YES',
+       COALESCE(c.character_maximum_length, 0),
+       COALESCE(c.numeric_precision, 0),
+       COALESCE(c.numeric_scale, 0)
 FROM information_schema.columns c
 JOIN information_schema.tables t
   ON t.table_schema = c.table_schema AND t.table_name = c.table_name
@@ -63,9 +66,10 @@ func inspectPostgres(ctx context.Context, db Querier, schemaName string) (schema
 	for rows.Next() {
 		var tableName string
 		var column schema.Column
-		if err := rows.Scan(&tableName, &column.Name, &column.DataType, &column.Nullable, &column.HasDefault); err != nil {
+		if err := rows.Scan(&tableName, &column.Name, &column.DataType, &column.Nullable, &column.HasDefault, &column.Length, &column.Precision, &column.Scale); err != nil {
 			return schema.Schema{}, fmt.Errorf("inspector: scan column: %w", err)
 		}
+		normalizeNumeric(&column)
 		index, ok := tableIndex[tableName]
 		if !ok {
 			index = len(model.Tables)

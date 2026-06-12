@@ -3,8 +3,6 @@
 package blogdb
 
 import (
-	"context"
-	"errors"
 	"github.com/sqlkit-dev/sqlkit/sqlkit"
 	"time"
 )
@@ -24,7 +22,7 @@ var Users = func() UsersTable {
 	return UsersTable{
 		info:      info,
 		ID:        sqlkit.NewColumn[int64](info, "id", sqlkit.WithSQLType("int8"), sqlkit.WithPrimaryKey(), sqlkit.WithDefault()),
-		Email:     sqlkit.NewColumn[string](info, "email", sqlkit.WithSQLType("varchar")),
+		Email:     sqlkit.NewColumn[string](info, "email", sqlkit.WithSQLType("varchar"), sqlkit.WithLength(255)),
 		Name:      sqlkit.NewColumn[*string](info, "name", sqlkit.WithSQLType("text"), sqlkit.WithNullable()),
 		CreatedAt: sqlkit.NewColumn[time.Time](info, "created_at", sqlkit.WithSQLType("timestamptz"), sqlkit.WithDefault()),
 	}
@@ -53,23 +51,8 @@ func (t UsersTable) Defaulted() []sqlkit.AnyColumn {
 
 var _ sqlkit.TableMeta = Users
 
-// Get loads the row with the given primary key into dest — any struct
-// following Scan's mapping rules — and reports whether a row was found.
-func (t UsersTable) Get(ctx context.Context, ex sqlkit.Executor, id int64, dest any) (bool, error) {
-	err := ex.Select().From(t).Where(t.ID.Eq(id)).Limit(1).All(ctx).Scan(dest)
-	if err != nil {
-		if errors.Is(err, sqlkit.ErrNoRows) {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
-}
-
-// Posts loads the public.posts rows that reference this public.users row.
-func (t UsersTable) Posts(ctx context.Context, ex sqlkit.Executor, id int64, dest any) error {
-	return ex.Select().From(Posts).Where(Posts.UserID.Eq(id)).All(ctx).Scan(dest)
-}
+// Posts returns the public.posts table that references public.users (foreign key posts_user_id_fkey).
+func (t UsersTable) Posts() PostsTable { return Posts }
 
 // PostsTable is the typed binding for table public.posts.
 type PostsTable struct {
@@ -117,27 +100,5 @@ func (t PostsTable) Defaulted() []sqlkit.AnyColumn {
 
 var _ sqlkit.TableMeta = Posts
 
-// Get loads the row with the given primary key into dest — any struct
-// following Scan's mapping rules — and reports whether a row was found.
-func (t PostsTable) Get(ctx context.Context, ex sqlkit.Executor, id int64, dest any) (bool, error) {
-	err := ex.Select().From(t).Where(t.ID.Eq(id)).Limit(1).All(ctx).Scan(dest)
-	if err != nil {
-		if errors.Is(err, sqlkit.ErrNoRows) {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
-}
-
-// User loads the public.users row referenced by this row's user_id.
-func (t PostsTable) User(ctx context.Context, ex sqlkit.Executor, userID int64, dest any) (bool, error) {
-	err := ex.Select().From(Users).Where(Users.ID.Eq(userID)).Limit(1).All(ctx).Scan(dest)
-	if err != nil {
-		if errors.Is(err, sqlkit.ErrNoRows) {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
-}
+// User returns the public.users table referenced by user_id (foreign key posts_user_id_fkey).
+func (t PostsTable) User() UsersTable { return Users }

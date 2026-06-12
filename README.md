@@ -56,11 +56,13 @@ By default the generator emits a typed binding per table — and nothing else.
 Row types are not generated unless you ask for them (`-dto`): you can define
 the structs you scan into and insert from, and fields map by name.
 
+The binding is metadata, not an ORM: it exposes `Column[T]` fields (`Users.ID`
+is a `sqlkit.Column[int64]`, ...) and the table identity, but carries no
+data-access methods. All statements start from the db handle with the table as
+an argument: `db.Select().From(Users)`, `db.Insert(Users).Values(...)`,
+`db.Update(Users)`, `db.Delete(Users)`.
+
 ```go
-// Users exposes a Get accessor and Column[T] fields (Users.ID is a
-// sqlkit.Column[int64], ...). All statements start from the db handle with
-// the table as an argument: db.Select().From(Users),
-// db.Insert(Users).Values(...), db.Update(Users), db.Delete(Users).
 var Users = ...
 ```
 
@@ -77,20 +79,25 @@ var Users = ...
 | `-file-name` | single-file output name when `-out` is a directory (default `tables.go`) |
 | `-dto` | also generate a row struct (DTO) per table |
 | `-dto-separate-file` | write DTOs into their own file(s) |
-| `-no-accessors` | omit `Get` and `Relations` accessors |
-| `-no-relations` | omit foreign-key `Relations` accessors only |
+| `-no-relations` | omit foreign-key `Relations` navigation methods |
 
 ### Relations from foreign keys
 
-Foreign keys become typed accessors on the involved bindings. For
-`posts.user_id REFERENCES users(id)`:
+Foreign keys become navigation methods that **return the related table
+binding** — metadata only, never an executor-bound query (the bindings are not
+an ORM). For `posts.user_id REFERENCES users(id)`:
 
 ```go
-// belongs-to: load the referenced users row.
-found, err := blogdb.Posts.User(ctx, db, post.UserID, &user)
+// belongs-to: posts -> users.
+func (PostsTable) User() UsersTable { return Users }
+// has-many: users -> posts.
+func (UsersTable) Posts() PostsTable { return Posts }
 
-// has-many: load the posts that reference a users row.
-err := blogdb.Users.Posts(ctx, db, user.ID, &posts)
+// Use them to build queries from the related table:
+var author User
+err := db.Select().From(blogdb.Posts.User()).
+    Where(blogdb.Posts.User().ID.Eq(post.UserID)).
+    Limit(1).All(ctx).Scan(&author)
 ```
 
 ### Using codegen as a library
@@ -115,9 +122,16 @@ files, err := codegen.Generate(model, codegen.Options{
 ```
 
 Generated bindings build columns with functional options carrying schema
-metadata, e.g. `sqlkit.NewColumn[int64](info, "id", sqlkit.WithPrimaryKey(),
-sqlkit.WithDefault())`; the metadata is readable via `Column.IsPrimaryKey()`,
-`Column.SQLType()`, and friends.
+metadata, including type lengths and numeric precision, e.g.
+
+```go
+Email:   sqlkit.NewColumn[string](info, "email", sqlkit.WithSQLType("varchar"), sqlkit.WithLength(255)),
+Balance: sqlkit.NewColumn[string](info, "balance", sqlkit.WithSQLType("numeric"), sqlkit.WithPrecision(10, 2)),
+ID:      sqlkit.NewColumn[int64](info, "id", sqlkit.WithSQLType("int8"), sqlkit.WithPrimaryKey(), sqlkit.WithDefault()),
+```
+
+The metadata is readable via `Column.IsPrimaryKey()`, `Column.SQLType()`,
+`Column.Length()`, `Column.Precision()`, `Column.Scale()`, and friends.
 
 ## Querying and scanning
 

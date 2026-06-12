@@ -19,7 +19,7 @@ type File struct {
 }
 
 // Options configures generation. The zero value (with PackageName set) emits a
-// single file of table bindings with their accessors.
+// single file of table bindings.
 type Options struct {
 	// PackageName is the package of the generated files. Required.
 	PackageName string
@@ -46,11 +46,9 @@ type Options struct {
 	// table bindings.
 	DTOSeparateFile bool
 
-	// OmitAccessors suppresses the generated Get and Relations accessors (which
-	// need an executor); the bindings and DTOs are still emitted.
-	OmitAccessors bool
-
-	// OmitRelations suppresses the foreign-key Relations accessors only.
+	// OmitRelations suppresses the foreign-key Relations methods. Relations are
+	// pure navigation: each returns the related table binding (metadata), never
+	// an executor-bound query — the bindings are not an ORM.
 	OmitRelations bool
 
 	// TypeMapper customizes the SQL→Go type mapping. Defaults to
@@ -75,24 +73,14 @@ type columnModel struct {
 	HasDefault bool
 }
 
-type pkModel struct {
-	Field  string
-	Param  string
-	GoType string
-}
-
+// relationModel is a foreign-key navigation method that returns the related
+// table binding. It carries no executor or query — the binding is metadata, not
+// an ORM entity.
 type relationModel struct {
-	Comment string
-	Method  string
-	Many    bool
-	Target  string // binding var of the related table, used in From()
-	Params  []relParam
-	Where   string // predicate list rendered inside Where(...)
-}
-
-type relParam struct {
-	Name   string
-	GoType string
+	Comment    string
+	Method     string
+	ReturnType string // type name of the related binding, e.g. "UsersTable"
+	ReturnVar  string // package var of the related binding, e.g. "Users"
 }
 
 type tableModel struct {
@@ -103,9 +91,6 @@ type tableModel struct {
 	Name      string
 	Qualified string
 	Columns   []columnModel
-	PK        []pkModel
-	HasPK     bool
-	EmitGet   bool
 	Relations []relationModel
 }
 
@@ -156,12 +141,11 @@ func Generate(model schema.Schema, opts Options) ([]File, error) {
 			reserved[name] = true
 			tm.DTOName = name
 		}
-		tm.EmitGet = tm.HasPK && !opts.OmitAccessors
 		models = append(models, tm)
 		index[table.Name] = tm
 	}
 
-	if !opts.OmitAccessors && !opts.OmitRelations {
+	if !opts.OmitRelations {
 		buildRelations(tables, index)
 	}
 
@@ -194,10 +178,6 @@ func buildTable(table schema.Table, dialect string, mapper TypeMapper) (*tableMo
 			HasDefault: column.HasDefault,
 		}
 		tm.Columns = append(tm.Columns, cm)
-		if column.PrimaryKey {
-			tm.HasPK = true
-			tm.PK = append(tm.PK, pkModel{Field: field, Param: paramName(field), GoType: goType.String()})
-		}
 	}
 	return tm, nil
 }
@@ -207,6 +187,12 @@ func columnOptions(column schema.Column) []string {
 	var opts []string
 	if column.DataType != "" {
 		opts = append(opts, fmt.Sprintf("sqlkit.WithSQLType(%q)", column.DataType))
+	}
+	if column.Length > 0 {
+		opts = append(opts, fmt.Sprintf("sqlkit.WithLength(%d)", column.Length))
+	}
+	if column.Precision > 0 {
+		opts = append(opts, fmt.Sprintf("sqlkit.WithPrecision(%d, %d)", column.Precision, column.Scale))
 	}
 	if column.PrimaryKey {
 		opts = append(opts, "sqlkit.WithPrimaryKey()")
@@ -220,8 +206,10 @@ func columnOptions(column schema.Column) []string {
 	return opts
 }
 
-// buildRelations turns foreign keys into typed Relations accessors on both the
-// referencing table (belongs-to) and the referenced table (has-many).
+// buildRelations turns foreign keys into navigation methods that return the
+// related table binding: a belongs-to method on the referencing table and a
+// has-many method on the referenced table. They return metadata, not queries —
+// the bindings are not an ORM.
 func buildRelations(tables []schema.Table, index map[string]*tableModel) {
 	used := map[string]map[string]bool{}
 	reserve := func(tm *tableModel) map[string]bool {
@@ -256,82 +244,26 @@ func buildRelations(tables []schema.Table, index map[string]*tableModel) {
 			}
 			parentTable := tableByName(tables, fk.RefTable)
 
-			// belongs-to: childModel.<Parent>(...) loads the referenced row.
-			var btWhere []string
-			var btParams []relParam
-			for i, refCol := range fk.RefColumns {
-				pf, pt, ok := columnRef(parent, refCol)
-				if !ok {
-					btWhere = nil
-					break
-				}
-				param := paramName(goName(fk.Columns[i]))
-				param = uniqueParam(btParams, param)
-				btParams = append(btParams, relParam{Name: param, GoType: pt})
-				btWhere = append(btWhere, fmt.Sprintf("%s.%s.Eq(%s)", parent.VarName, pf, param))
-			}
-			if len(btWhere) == len(fk.Columns) {
-				set := reserve(childModel)
-				method := unique(set, belongsToName(fk, parentTable))
-				childModel.Relations = append(childModel.Relations, relationModel{
-					Comment: fmt.Sprintf("// %s loads the %s row referenced by this row's %s.", method, parent.Qualified, strings.Join(fk.Columns, ", ")),
-					Method:  method,
-					Many:    false,
-					Target:  parent.VarName,
-					Params:  btParams,
-					Where:   strings.Join(btWhere, ", "),
-				})
-			}
+			// belongs-to: child.<Parent>() returns the referenced table binding.
+			set := reserve(childModel)
+			method := unique(set, belongsToName(fk, parentTable))
+			childModel.Relations = append(childModel.Relations, relationModel{
+				Comment:    fmt.Sprintf("// %s returns the %s table referenced by %s (foreign key %s).", method, parent.Qualified, strings.Join(fk.Columns, ", "), fk.Name),
+				Method:     method,
+				ReturnType: parent.TypeName,
+				ReturnVar:  parent.VarName,
+			})
 
-			// has-many: parentModel.<Children>(...) loads the referencing rows.
-			var hmWhere []string
-			var hmParams []relParam
-			for i, col := range fk.Columns {
-				cf, _, ok := columnRef(childModel, col)
-				if !ok {
-					hmWhere = nil
-					break
-				}
-				_, pt, ok := columnRef(parent, fk.RefColumns[i])
-				if !ok {
-					hmWhere = nil
-					break
-				}
-				param := paramName(goName(fk.RefColumns[i]))
-				param = uniqueParam(hmParams, param)
-				hmParams = append(hmParams, relParam{Name: param, GoType: pt})
-				hmWhere = append(hmWhere, fmt.Sprintf("%s.%s.Eq(%s)", childModel.VarName, cf, param))
-			}
-			if len(hmWhere) == len(fk.Columns) {
-				set := reserve(parent)
-				method := unique(set, goName(child.Name))
-				parent.Relations = append(parent.Relations, relationModel{
-					Comment: fmt.Sprintf("// %s loads the %s rows that reference this %s row.", method, childModel.Qualified, parent.Qualified),
-					Method:  method,
-					Many:    true,
-					Target:  childModel.VarName,
-					Params:  hmParams,
-					Where:   strings.Join(hmWhere, ", "),
-				})
-			}
+			// has-many: parent.<Children>() returns the referencing table binding.
+			pset := reserve(parent)
+			pmethod := unique(pset, goName(child.Name))
+			parent.Relations = append(parent.Relations, relationModel{
+				Comment:    fmt.Sprintf("// %s returns the %s table that references %s (foreign key %s).", pmethod, childModel.Qualified, parent.Qualified, fk.Name),
+				Method:     pmethod,
+				ReturnType: childModel.TypeName,
+				ReturnVar:  childModel.VarName,
+			})
 		}
-	}
-}
-
-func uniqueParam(existing []relParam, base string) string {
-	name := base
-	for i := 2; ; i++ {
-		clash := false
-		for _, p := range existing {
-			if p.Name == name {
-				clash = true
-				break
-			}
-		}
-		if !clash {
-			return name
-		}
-		name = fmt.Sprintf("%s%d", base, i)
 	}
 }
 
@@ -346,15 +278,6 @@ func belongsToName(fk schema.ForeignKey, parent schema.Table) string {
 		return goName(singular(parent.Name))
 	}
 	return goName(singular(fk.RefTable))
-}
-
-func columnRef(tm *tableModel, dbName string) (field, goType string, ok bool) {
-	for _, c := range tm.Columns {
-		if c.Name == dbName {
-			return c.Field, c.GoType, true
-		}
-	}
-	return "", "", false
 }
 
 func tableByName(tables []schema.Table, name string) schema.Table {
@@ -412,10 +335,7 @@ func assemble(models []*tableModel, opts Options) ([]File, error) {
 			fb := newFileBuf()
 			fb.add(bindingImports(tm)...)
 			fb.write(renderBinding(tm))
-			if acc := renderAccessors(tm); acc != "" {
-				fb.add(accessorImports(tm)...)
-				fb.write(acc)
-			}
+			fb.write(renderRelations(tm))
 			if opts.EmitDTO && !opts.DTOSeparateFile {
 				fb.add(dtoImports(tm)...)
 				fb.write(renderDTO(tm))
@@ -440,10 +360,7 @@ func assemble(models []*tableModel, opts Options) ([]File, error) {
 	for _, tm := range models {
 		fb.add(bindingImports(tm)...)
 		fb.write(renderBinding(tm))
-		if acc := renderAccessors(tm); acc != "" {
-			fb.add(accessorImports(tm)...)
-			fb.write(acc)
-		}
+		fb.write(renderRelations(tm))
 		if opts.EmitDTO && !opts.DTOSeparateFile {
 			fb.add(dtoImports(tm)...)
 			fb.write(renderDTO(tm))
@@ -486,20 +403,6 @@ func dtoImports(tm *tableModel) []string {
 		if c.GoTypeImp != "" {
 			imports = append(imports, c.GoTypeImp)
 		}
-	}
-	return imports
-}
-
-func accessorImports(tm *tableModel) []string {
-	imports := []string{sqlkitImport, "context"}
-	needErrors := tm.EmitGet
-	for _, r := range tm.Relations {
-		if !r.Many {
-			needErrors = true
-		}
-	}
-	if needErrors {
-		imports = append(imports, "errors")
 	}
 	return imports
 }
@@ -560,11 +463,11 @@ func renderBinding(tm *tableModel) string {
 	return execute(bindingTemplate, tm)
 }
 
-func renderAccessors(tm *tableModel) string {
-	if !tm.EmitGet && len(tm.Relations) == 0 {
+func renderRelations(tm *tableModel) string {
+	if len(tm.Relations) == 0 {
 		return ""
 	}
-	return execute(accessorsTemplate, tm)
+	return execute(relationsTemplate, tm)
 }
 
 func renderDTO(tm *tableModel) string {
@@ -622,39 +525,12 @@ func (t {{.TypeName}}) Defaulted() []sqlkit.AnyColumn {
 var _ sqlkit.TableMeta = {{.VarName}}
 `))
 
-var accessorsTemplate = template.Must(template.New("accessors").Parse(`{{if .EmitGet -}}
-// Get loads the row with the given primary key into dest — any struct
-// following Scan's mapping rules — and reports whether a row was found.
-func (t {{.TypeName}}) Get(ctx context.Context, ex sqlkit.Executor{{range .PK}}, {{.Param}} {{.GoType}}{{end}}, dest any) (bool, error) {
-	err := ex.Select().From(t).Where({{range $i, $p := .PK}}{{if $i}}, {{end}}t.{{$p.Field}}.Eq({{$p.Param}}){{end}}).Limit(1).All(ctx).Scan(dest)
-	if err != nil {
-		if errors.Is(err, sqlkit.ErrNoRows) {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
-}
+var relationsTemplate = template.Must(template.New("relations").Parse(`{{- range $i, $r := .Relations}}{{if $i}}
 {{end}}
-{{- range .Relations}}
-{{.Comment}}
-{{if .Many -}}
-func (t {{$.TypeName}}) {{.Method}}(ctx context.Context, ex sqlkit.Executor{{range .Params}}, {{.Name}} {{.GoType}}{{end}}, dest any) error {
-	return ex.Select().From({{.Target}}).Where({{.Where}}).All(ctx).Scan(dest)
-}
-{{else -}}
-func (t {{$.TypeName}}) {{.Method}}(ctx context.Context, ex sqlkit.Executor{{range .Params}}, {{.Name}} {{.GoType}}{{end}}, dest any) (bool, error) {
-	err := ex.Select().From({{.Target}}).Where({{.Where}}).Limit(1).All(ctx).Scan(dest)
-	if err != nil {
-		if errors.Is(err, sqlkit.ErrNoRows) {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
-}
-{{end}}
-{{- end}}`))
+{{$r.Comment}}
+func (t {{$.TypeName}}) {{$r.Method}}() {{$r.ReturnType}} { return {{$r.ReturnVar}} }
+{{- end}}
+`))
 
 var dtoTemplate = template.Must(template.New("dto").Parse("// {{.DTOName}} is a generated row struct for table {{.Qualified}}; any struct\n" +
 	"// following Scan's mapping rules works as a destination or Insert value.\n" +

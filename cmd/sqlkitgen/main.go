@@ -45,8 +45,7 @@ func run() error {
 	fileName := flag.String("file-name", "tables.go", "single-file output name (used when -out is a directory)")
 	dto := flag.Bool("dto", false, "also generate a row struct (DTO) per table")
 	dtoSeparate := flag.Bool("dto-separate-file", false, "write DTOs into their own file(s)")
-	noAccessors := flag.Bool("no-accessors", false, "omit Get and Relations accessors")
-	noRelations := flag.Bool("no-relations", false, "omit foreign-key Relations accessors")
+	noRelations := flag.Bool("no-relations", false, "omit foreign-key Relations navigation methods")
 	version := flag.Bool("version", false, "print sqlkitgen version")
 	flag.Parse()
 
@@ -89,7 +88,6 @@ func run() error {
 		FileName:        *fileName,
 		EmitDTO:         *dto,
 		DTOSeparateFile: *dtoSeparate,
-		OmitAccessors:   *noAccessors,
 		OmitRelations:   *noRelations,
 	}
 	files, err := codegen.Generate(model, opts)

@@ -28,6 +28,13 @@ type Column struct {
 	Nullable   bool
 	HasDefault bool
 	PrimaryKey bool
+	// Length is the declared type length, e.g. the N of varchar(N) or char(N);
+	// 0 when not applicable.
+	Length int
+	// Precision and Scale describe a numeric/decimal type, e.g. (10, 2) of
+	// decimal(10, 2); 0 when not applicable.
+	Precision int
+	Scale     int
 }
 
 // ForeignKey describes a foreign-key constraint: the local Columns reference

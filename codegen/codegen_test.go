@@ -24,7 +24,7 @@ func fixtureSchema() schema.Schema {
 				Name:   "users",
 				Columns: []schema.Column{
 					{Name: "id", DataType: "int8", PrimaryKey: true, HasDefault: true},
-					{Name: "email", DataType: "varchar"},
+					{Name: "email", DataType: "varchar", Length: 255},
 					{Name: "name", DataType: "text", Nullable: true},
 					{Name: "created_at", DataType: "timestamptz", HasDefault: true},
 				},
@@ -116,24 +116,29 @@ func TestGenerateTablesFilter(t *testing.T) {
 	}
 }
 
-func TestRelationsAccessors(t *testing.T) {
+func TestRelationsReturnRelatedTable(t *testing.T) {
 	body := string(generateSingle(t, fixtureSchema(), Options{PackageName: "blogdb"}))
-	// belongs-to on posts, has-many on users.
-	if !strings.Contains(body, "func (t PostsTable) User(") {
-		t.Error("missing belongs-to relation PostsTable.User")
+	// belongs-to on posts returns the users binding; has-many on users returns
+	// the posts binding. Relations are pure navigation, never executor-bound.
+	if !strings.Contains(body, "func (t PostsTable) User() UsersTable { return Users }") {
+		t.Error("missing belongs-to relation PostsTable.User returning UsersTable")
 	}
-	if !strings.Contains(body, "func (t UsersTable) Posts(") {
-		t.Error("missing has-many relation UsersTable.Posts")
+	if !strings.Contains(body, "func (t UsersTable) Posts() PostsTable { return Posts }") {
+		t.Error("missing has-many relation UsersTable.Posts returning PostsTable")
+	}
+	// The bindings are not an ORM: no executor-bound accessors.
+	if strings.Contains(body, "sqlkit.Executor") || strings.Contains(body, ") Get(") {
+		t.Errorf("generated bindings must not carry executor-bound accessors:\n%s", body)
 	}
 }
 
 func TestOmitRelations(t *testing.T) {
 	body := string(generateSingle(t, fixtureSchema(), Options{PackageName: "blogdb", OmitRelations: true}))
-	if strings.Contains(body, "func (t PostsTable) User(") {
+	if strings.Contains(body, "func (t PostsTable) User()") {
 		t.Error("OmitRelations did not suppress relations")
 	}
-	if !strings.Contains(body, "func (t PostsTable) Get(") {
-		t.Error("OmitRelations should keep Get accessor")
+	if !strings.Contains(body, "type PostsTable struct") {
+		t.Error("OmitRelations should keep the table binding")
 	}
 }
 

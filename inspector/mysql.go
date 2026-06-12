@@ -13,7 +13,10 @@ SELECT c.TABLE_NAME,
        c.DATA_TYPE,
        c.IS_NULLABLE = 'YES',
        (c.COLUMN_DEFAULT IS NOT NULL OR c.EXTRA LIKE '%auto_increment%'),
-       c.COLUMN_KEY = 'PRI'
+       c.COLUMN_KEY = 'PRI',
+       COALESCE(c.CHARACTER_MAXIMUM_LENGTH, 0),
+       COALESCE(c.NUMERIC_PRECISION, 0),
+       COALESCE(c.NUMERIC_SCALE, 0)
 FROM information_schema.COLUMNS c
 JOIN information_schema.TABLES t
   ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME
@@ -55,9 +58,10 @@ func inspectMySQL(ctx context.Context, db Querier, schemaName string) (schema.Sc
 	for rows.Next() {
 		var tableName string
 		var column schema.Column
-		if err := rows.Scan(&tableName, &column.Name, &column.DataType, &column.Nullable, &column.HasDefault, &column.PrimaryKey); err != nil {
+		if err := rows.Scan(&tableName, &column.Name, &column.DataType, &column.Nullable, &column.HasDefault, &column.PrimaryKey, &column.Length, &column.Precision, &column.Scale); err != nil {
 			return schema.Schema{}, fmt.Errorf("inspector: scan column: %w", err)
 		}
+		normalizeNumeric(&column)
 		index, ok := tableIndex[tableName]
 		if !ok {
 			index = len(model.Tables)

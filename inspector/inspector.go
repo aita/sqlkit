@@ -29,6 +29,22 @@ func Inspect(ctx context.Context, db Querier, dialect, schemaName string) (schem
 	}
 }
 
+// decimalTypes are the SQL types for which a precision/scale is meaningful.
+// information_schema reports a numeric_precision for integer types too, which
+// we drop to keep WithPrecision to genuine decimal/numeric columns.
+var decimalTypes = map[string]bool{
+	"numeric": true,
+	"decimal": true,
+}
+
+// normalizeNumeric clears precision/scale on non-decimal columns.
+func normalizeNumeric(column *schema.Column) {
+	if !decimalTypes[column.DataType] {
+		column.Precision = 0
+		column.Scale = 0
+	}
+}
+
 // fkRow is one referencing column of a foreign-key constraint.
 type fkRow struct {
 	constraint string

@@ -75,6 +75,9 @@ type columnMeta struct {
 	primaryKey bool
 	nullable   bool
 	hasDefault bool
+	length     int
+	precision  int
+	scale      int
 }
 
 // ColumnOption configures the metadata of a Column built with NewColumn. The
@@ -104,6 +107,21 @@ func WithDefault() ColumnOption {
 	return func(m *columnMeta) { m.hasDefault = true }
 }
 
+// WithLength records a type length, such as the N of varchar(N) or char(N).
+func WithLength(length int) ColumnOption {
+	return func(m *columnMeta) { m.length = length }
+}
+
+// WithPrecision records the precision and scale of a numeric/decimal type,
+// such as the (10, 2) of decimal(10, 2). Pass scale 0 for types that have only
+// a precision.
+func WithPrecision(precision, scale int) ColumnOption {
+	return func(m *columnMeta) {
+		m.precision = precision
+		m.scale = scale
+	}
+}
+
 // NewColumn creates a typed column bound to a table. Optional ColumnOption
 // values attach schema metadata (SQL type, primary-key/nullable/default
 // constraints). It is intended for use by generated code, but is also a usable
@@ -127,6 +145,16 @@ func (c Column[T]) IsNullable() bool { return c.meta.nullable }
 
 // HasDefault reports whether the column was tagged with WithDefault.
 func (c Column[T]) HasDefault() bool { return c.meta.hasDefault }
+
+// Length returns the type length recorded with WithLength (e.g. varchar(N)), or
+// 0 if unset.
+func (c Column[T]) Length() int { return c.meta.length }
+
+// Precision returns the numeric precision recorded with WithPrecision, or 0.
+func (c Column[T]) Precision() int { return c.meta.precision }
+
+// Scale returns the numeric scale recorded with WithPrecision, or 0.
+func (c Column[T]) Scale() int { return c.meta.scale }
 
 func (Column[T]) SQLExpression() {}
 func (Column[T]) SQLSelection()  {}
