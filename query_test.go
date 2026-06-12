@@ -248,6 +248,57 @@ func TestOneRejectsSliceDestination(t *testing.T) {
 	}
 }
 
+func TestUnionOneMultipleRowsIsErrTooManyRows(t *testing.T) {
+	fake := &sqltest.Fake{
+		QueryFunc: func(string, []any) (sqltest.Result, error) {
+			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}, {int64(2)}}}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var id int64
+	err := db.Select(Users.ID).From(Users).
+		Union(sqlkit.Select(Users.ID).From(Users)).
+		One(context.Background()).Scan(&id)
+	if !errors.Is(err, sqlkit.ErrTooManyRows) {
+		t.Fatalf("One().Scan() = %v, want ErrTooManyRows", err)
+	}
+}
+
+func TestOneScansScalar(t *testing.T) {
+	fake := &sqltest.Fake{
+		QueryFunc: func(string, []any) (sqltest.Result, error) {
+			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(7)}}}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var id int64
+	if err := db.Select(Users.ID).From(Users).One(context.Background()).Scan(&id); err != nil {
+		t.Fatalf("One().Scan(&int64) error = %v", err)
+	}
+	if id != 7 {
+		t.Fatalf("id = %d, want 7", id)
+	}
+}
+
+func TestFirstScansScalar(t *testing.T) {
+	fake := &sqltest.Fake{
+		QueryFunc: func(string, []any) (sqltest.Result, error) {
+			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(7)}}}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var id int64
+	if err := db.Select(Users.ID).From(Users).First(context.Background()).Scan(&id); err != nil {
+		t.Fatalf("First().Scan(&int64) error = %v", err)
+	}
+	if id != 7 {
+		t.Fatalf("id = %d, want 7", id)
+	}
+}
+
 func TestPageAppliesLimitAndOffset(t *testing.T) {
 	var gotSQL string
 	fake := &sqltest.Fake{

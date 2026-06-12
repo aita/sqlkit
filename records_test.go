@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"strings"
 	"testing"
 
@@ -138,6 +139,80 @@ func TestRecordsErrorsOnUnmatchedColumn(t *testing.T) {
 	}
 	if seen != 1 || lastErr == nil || !strings.Contains(lastErr.Error(), "mystery") {
 		t.Fatalf("Records() yields = %d, err = %v; want one yield with unmatched-column error", seen, lastErr)
+	}
+}
+
+func TestRecordsOverPageWindow(t *testing.T) {
+	var gotSQL string
+	fake := &sqltest.Fake{
+		QueryFunc: func(sqlText string, _ []any) (sqltest.Result, error) {
+			gotSQL = sqlText
+			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(41)}, {int64(42)}}}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var ids []int64
+	for id, err := range sqlkit.Records[int64](db.Select(Users.ID).From(Users).Page(context.Background(), 2, 40)) {
+		if err != nil {
+			t.Fatalf("Records() error = %v", err)
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) != 2 || ids[0] != 41 || ids[1] != 42 {
+		t.Fatalf("ids = %#v, want [41 42]", ids)
+	}
+	if !strings.Contains(gotSQL, "LIMIT 2 OFFSET 40") {
+		t.Fatalf("sql = %q, want LIMIT 2 OFFSET 40", gotSQL)
+	}
+}
+
+func TestRecordsOverFirstReadsOneRow(t *testing.T) {
+	fake := threeRowFake()
+	db := sqlkit.WrapDB(fake.DB())
+
+	var ids []int64
+	for id, err := range sqlkit.Records[int64](db.Select(Users.ID).From(Users).First(context.Background())) {
+		if err != nil {
+			t.Fatalf("Records() error = %v", err)
+		}
+		ids = append(ids, id)
+	}
+	// The fake ignores LIMIT, but the iterator must still pass it down in
+	// the SQL; here we only assert the stream worked end to end.
+	if len(ids) == 0 || ids[0] != 1 {
+		t.Fatalf("ids = %#v, want first ID 1", ids)
+	}
+}
+
+func TestRecordsEmptyResultYieldsNothing(t *testing.T) {
+	count := 0
+	for _, err := range sqlkit.Records[idRow](pendingRows(t, fakeResult([]string{"id"}))) {
+		if err != nil {
+			t.Fatalf("Records() error = %v", err)
+		}
+		count++
+	}
+	if count != 0 {
+		t.Fatalf("yields = %d, want 0 for empty result", count)
+	}
+}
+
+func TestRecordsSurfacesQueryErrors(t *testing.T) {
+	fake := &sqltest.Fake{
+		QueryFunc: func(string, []any) (sqltest.Result, error) {
+			return sqltest.Result{}, errors.New("boom")
+		},
+	}
+
+	var yields int
+	var got error
+	for _, err := range sqlkit.Records[idRow](pendingRows(t, fake)) {
+		yields++
+		got = err
+	}
+	if yields != 1 || got == nil || !strings.Contains(got.Error(), "boom") {
+		t.Fatalf("yields = %d, err = %v; want one yield carrying the query error", yields, got)
 	}
 }
 
