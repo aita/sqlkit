@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
-	"errors"
 	"strings"
 	"testing"
 
@@ -139,28 +138,6 @@ func TestRecordsErrorsOnUnmatchedColumn(t *testing.T) {
 	}
 	if seen != 1 || lastErr == nil || !strings.Contains(lastErr.Error(), "mystery") {
 		t.Fatalf("Records() yields = %d, err = %v; want one yield with unmatched-column error", seen, lastErr)
-	}
-}
-
-func TestFirstReturnsFirstRowOnly(t *testing.T) {
-	fake := threeRowFake()
-
-	row, err := sqlkit.First[idRow](pendingRows(t, fake))
-	if err != nil {
-		t.Fatalf("First() error = %v", err)
-	}
-	if row.ID != 1 {
-		t.Fatalf("First() = %#v, want ID 1", row)
-	}
-	if fake.RowReads() > 1 {
-		t.Fatalf("driver row reads = %d, want 1 for First", fake.RowReads())
-	}
-}
-
-func TestFirstReturnsErrNoRowsWhenEmpty(t *testing.T) {
-	_, err := sqlkit.First[idRow](pendingRows(t, fakeResult([]string{"id"})))
-	if !errors.Is(err, sqlkit.ErrNoRows) {
-		t.Fatalf("First() error = %v, want ErrNoRows", err)
 	}
 }
 

@@ -49,10 +49,10 @@ var ErrNoRows = stdsql.ErrNoRows
 var errNoExecutor = errors.New(
 	"sqlkit: query is not bound to an executor; start the chain from a Database or Session (db.Select(), session.Insert(), ...)")
 
-// Rows is a pending query result. It is produced by All and RawSQL, and
-// materialized with Scan, or with the package-level Records (streaming
-// iteration) and First (first row only) functions. Execution is deferred
-// until a terminal, so build and query errors surface there.
+// Rows is a pending query result. It is produced by All, First, and RawSQL,
+// and materialized with Scan, or streamed row by row with the package-level
+// Records function. Execution is deferred until either terminal, so build
+// and query errors surface there.
 type Rows struct {
 	ctx     context.Context
 	ex      Executor
@@ -169,21 +169,6 @@ func Records[T any](r Rows) iter.Seq2[T, error] {
 			yield(zero, err)
 		}
 	}
-}
-
-// First runs the query and returns the first row scanned into T, or
-// ErrNoRows when the result is empty:
-//
-//	user, err := sqlkit.First[User](db.RawSQL(ctx, query))
-//
-// Only the first row is read; the rest of the result set is released. T
-// follows the same rules as Records.
-func First[T any](r Rows) (T, error) {
-	for value, err := range Records[T](r) {
-		return value, err
-	}
-	var zero T
-	return zero, ErrNoRows
 }
 
 // runExec compiles and runs a statement, returning the database/sql result.

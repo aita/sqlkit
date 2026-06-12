@@ -119,6 +119,13 @@ func (q SelectQuery) All(ctx context.Context) Rows {
 	return newRows(ctx, q.ex, q.query)
 }
 
+// First is All limited to the first row: LIMIT 1 is pushed into the query,
+// and Scan into a struct or scalar yields that row, or ErrNoRows when the
+// result is empty.
+func (q SelectQuery) First(ctx context.Context) Rows {
+	return newRows(ctx, q.ex, q.query.Limit(1))
+}
+
 // Count runs SELECT COUNT(*) over this query (as a subquery, so joins,
 // grouping, and predicates apply) and returns the number of matching rows.
 func (q SelectQuery) Count(ctx context.Context) (int64, error) {
@@ -198,6 +205,12 @@ func (q UnionQuery) ToSQL(dialect sql.Dialect) (string, []any, error) {
 // chain was built from.
 func (q UnionQuery) All(ctx context.Context) Rows {
 	return newRows(ctx, q.ex, q.query)
+}
+
+// First is All limited to the first row of the combined result; see
+// SelectQuery.First.
+func (q UnionQuery) First(ctx context.Context) Rows {
+	return newRows(ctx, q.ex, q.query.Limit(1))
 }
 
 func allColumnsOf(source sql.Source) []sql.Selection {

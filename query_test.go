@@ -5,6 +5,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/aita/sqlkit"
@@ -122,6 +123,68 @@ func TestAllScanSingleStructNoRowsIsErrNoRows(t *testing.T) {
 	err := db.Select().From(Users).All(context.Background()).Scan(&one)
 	if !errors.Is(err, sqlkit.ErrNoRows) {
 		t.Fatalf("Scan() = %v, want ErrNoRows", err)
+	}
+}
+
+func TestFirstAppliesLimitAndScansFirstRow(t *testing.T) {
+	var gotSQL string
+	fake := &sqltest.Fake{
+		QueryFunc: func(sqlText string, args []any) (sqltest.Result, error) {
+			gotSQL = sqlText
+			return sqltest.Result{
+				Columns: []string{"id", "email", "name"},
+				Rows:    [][]driver.Value{{int64(1), "a@example.com", "Alice"}},
+			}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var one MyUserDTO
+	if err := db.Select().From(Users).First(context.Background()).Scan(&one); err != nil {
+		t.Fatalf("First().Scan() error = %v", err)
+	}
+	if one.Identifier != 1 {
+		t.Fatalf("one = %#v", one)
+	}
+	if !strings.Contains(gotSQL, "LIMIT 1") {
+		t.Fatalf("sql = %q, want LIMIT 1 pushed into the query", gotSQL)
+	}
+}
+
+func TestFirstNoRowsIsErrNoRows(t *testing.T) {
+	fake := &sqltest.Fake{
+		QueryFunc: func(string, []any) (sqltest.Result, error) {
+			return sqltest.Result{Columns: []string{"id", "email", "name"}}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var one MyUserDTO
+	err := db.Select().From(Users).First(context.Background()).Scan(&one)
+	if !errors.Is(err, sqlkit.ErrNoRows) {
+		t.Fatalf("First().Scan() = %v, want ErrNoRows", err)
+	}
+}
+
+func TestUnionFirstAppliesLimit(t *testing.T) {
+	var gotSQL string
+	fake := &sqltest.Fake{
+		QueryFunc: func(sqlText string, args []any) (sqltest.Result, error) {
+			gotSQL = sqlText
+			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}}}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var id int64
+	err := db.Select(Users.ID).From(Users).
+		Union(sqlkit.Select(Users.ID).From(Users)).
+		First(context.Background()).Scan(&id)
+	if err != nil {
+		t.Fatalf("First().Scan() error = %v", err)
+	}
+	if id != 1 || !strings.Contains(gotSQL, "LIMIT 1") {
+		t.Fatalf("id = %d, sql = %q, want LIMIT 1", id, gotSQL)
 	}
 }
 

@@ -300,11 +300,13 @@ for user, err := range sqlkit.Records[User](db.RawSQL(ctx, query)) {
 }
 ```
 
-`First[T]` is the single-row companion: it returns the first row scanned
-into `T` (releasing the rest of the result set) or `ErrNoRows`:
+For a single row, query chains offer `First` alongside `All`: it pushes
+`LIMIT 1` into the query, and scanning into a struct yields that row or
+`ErrNoRows`:
 
 ```go
-user, err := sqlkit.First[User](db.RawSQL(ctx, query))
+var user User
+err := db.Select().From(Users).Where(Users.ID.Eq(1)).First(ctx).Scan(&user)
 ```
 
 ## Dialects
