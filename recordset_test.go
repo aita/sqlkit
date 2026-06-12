@@ -1,17 +1,43 @@
-package sqlkit
+package sqlkit_test
 
 import (
-	"fmt"
+	"context"
+	"database/sql"
+	"database/sql/driver"
+	"strings"
 	"testing"
+
+	"github.com/aita/sqlkit"
+	"github.com/aita/sqlkit/internal/sqltest"
 )
 
-func TestRecordsCanBeRanged(t *testing.T) {
-	rs := newRecordSet(
-		[]Field{{Name: "id", GoType: "int"}},
-		[][]any{{1}, {2}},
-	)
+func queryRecordSet(t *testing.T, fake *sqltest.Fake) sqlkit.RecordSet {
+	t.Helper()
+	db := fake.DB()
+	t.Cleanup(func() { _ = db.Close() })
+	rows, err := db.QueryContext(context.Background(), "SELECT id FROM t")
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	return sqlkit.FromSQLRows(rows)
+}
 
-	var values []int
+func fakeResult(columns []string, rows ...[]driver.Value) *sqltest.Fake {
+	return &sqltest.Fake{
+		QueryFunc: func(string, []any) (sqltest.Result, error) {
+			return sqltest.Result{Columns: columns, Rows: rows}, nil
+		},
+	}
+}
+
+func threeRecordFake() *sqltest.Fake {
+	return fakeResult([]string{"id"}, []driver.Value{int64(1)}, []driver.Value{int64(2)}, []driver.Value{int64(3)})
+}
+
+func TestRecordsCanBeRanged(t *testing.T) {
+	rs := queryRecordSet(t, threeRecordFake())
+
+	var values []int64
 	for record, err := range rs.Records() {
 		if err != nil {
 			t.Fatalf("Records() error = %v", err)
@@ -20,27 +46,111 @@ func TestRecordsCanBeRanged(t *testing.T) {
 		if !ok {
 			t.Fatal("missing id field")
 		}
-		values = append(values, value.(int))
+		values = append(values, value.(int64))
 	}
 
-	if len(values) != 2 || values[0] != 1 || values[1] != 2 {
-		t.Fatalf("Records() = %#v, want [1 2]", values)
+	if len(values) != 3 || values[0] != 1 || values[2] != 3 {
+		t.Fatalf("Records() = %#v, want [1 2 3]", values)
+	}
+}
+
+func TestRecordGetReadsSeveralColumns(t *testing.T) {
+	rs := queryRecordSet(t, fakeResult([]string{"id", "email"}, []driver.Value{int64(1), "one@example.test"}))
+
+	for record, err := range rs.Iter() {
+		if err != nil {
+			t.Fatalf("Iter() error = %v", err)
+		}
+		id, ok := record.Get("id")
+		if !ok || id.(int64) != 1 {
+			t.Fatalf("Get(id) = %v, %v", id, ok)
+		}
+		email, ok := record.Get("email")
+		if !ok || email.(string) != "one@example.test" {
+			t.Fatalf("Get(email) = %v, %v", email, ok)
+		}
+		if _, ok := record.Get("missing"); ok {
+			t.Fatal("Get(missing) reported a value")
+		}
+	}
+}
+
+func TestIterStreamsAndStopsEarly(t *testing.T) {
+	fake := threeRecordFake()
+	rs := queryRecordSet(t, fake)
+
+	var got []int64
+	for record, err := range rs.Iter() {
+		if err != nil {
+			t.Fatalf("Iter() error = %v", err)
+		}
+		value, _ := record.Get("id")
+		got = append(got, value.(int64))
+		if len(got) == 2 {
+			break // stop before the third record
+		}
+	}
+	if len(got) != 2 || got[1] != 2 {
+		t.Fatalf("got = %#v", got)
+	}
+	// The driver was asked for at most the records we consumed (plus
+	// lookahead), not the whole result set.
+	if fake.RowReads() > 2 {
+		t.Fatalf("driver row reads = %d, want <= 2 after early break", fake.RowReads())
+	}
+}
+
+func TestRecordSetIsSinglePass(t *testing.T) {
+	rs := queryRecordSet(t, threeRecordFake())
+
+	count := 0
+	for _, err := range rs.Iter() {
+		if err != nil {
+			t.Fatalf("first pass error = %v", err)
+		}
+		count++
+	}
+	if count != 3 {
+		t.Fatalf("first pass records = %d, want 3", count)
+	}
+
+	var second error
+	for _, err := range rs.Iter() {
+		second = err
+	}
+	if second == nil || !strings.Contains(second.Error(), "single-pass") {
+		t.Fatalf("second pass error = %v, want single-pass error", second)
+	}
+}
+
+func TestScanStructReadsOnlyFirstRecord(t *testing.T) {
+	fake := threeRecordFake()
+	rs := queryRecordSet(t, fake)
+
+	var record struct {
+		ID int64 `sqlkit:"id"`
+	}
+	if err := rs.Scan(&record); err != nil {
+		t.Fatalf("Scan() error = %v", err)
+	}
+	if record.ID != 1 {
+		t.Fatalf("record = %#v", record)
+	}
+	if fake.RowReads() > 1 {
+		t.Fatalf("driver row reads = %d, want 1 for single-struct Scan", fake.RowReads())
 	}
 }
 
 func TestRecordSetScanStructSlice(t *testing.T) {
 	type user struct {
-		ID    int    `sqlkit:"id"`
+		ID    int64  `sqlkit:"id"`
 		Email string `sqlkit:"email"`
 	}
-
-	rs := newRecordSet(
-		[]Field{{Name: "id", GoType: "int"}, {Name: "email", GoType: "string"}},
-		[][]any{
-			{1, "one@example.test"},
-			{2, "two@example.test"},
-		},
-	)
+	rs := queryRecordSet(t, fakeResult(
+		[]string{"id", "email"},
+		[]driver.Value{int64(1), "one@example.test"},
+		[]driver.Value{int64(2), "two@example.test"},
+	))
 
 	var users []user
 	if err := rs.Scan(&users); err != nil {
@@ -51,22 +161,25 @@ func TestRecordSetScanStructSlice(t *testing.T) {
 	}
 }
 
-func TestRecordSetScanStruct(t *testing.T) {
-	type user struct {
-		ID int `sqlkit:"id"`
+func TestRecordSetScanSupportsScannerAndPointerFields(t *testing.T) {
+	rs := queryRecordSet(t, fakeResult(
+		[]string{"name", "nick"},
+		[]driver.Value{"Alice", "al"},
+		[]driver.Value{nil, nil},
+	))
+
+	var records []struct {
+		Name sql.NullString `sqlkit:"name"` // database/sql Scanner
+		Nick *string        `sqlkit:"nick"` // pointer for NULL
 	}
-
-	rs := newRecordSet(
-		[]Field{{Name: "id", GoType: "int"}},
-		[][]any{{42}},
-	)
-
-	var got user
-	if err := rs.Scan(&got); err != nil {
+	if err := rs.Scan(&records); err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
-	if got.ID != 42 {
-		t.Fatalf("Scan() = %#v, want ID 42", got)
+	if !records[0].Name.Valid || records[0].Name.String != "Alice" || *records[0].Nick != "al" {
+		t.Fatalf("record 0 = %#v", records[0])
+	}
+	if records[1].Name.Valid || records[1].Nick != nil {
+		t.Fatalf("record 1 = %#v, want NULLs", records[1])
 	}
 }
 
@@ -74,50 +187,36 @@ func TestRecordScanStruct(t *testing.T) {
 	type user struct {
 		Email string `sqlkit:"email"`
 	}
+	rs := queryRecordSet(t, fakeResult([]string{"email"}, []driver.Value{"record@example.test"}))
 
-	record := Record{columns: newRecordColumns([]string{"email"}), values: []any{"record@example.test"}}
 	var got user
-	if err := record.Scan(&got); err != nil {
-		t.Fatalf("Scan() error = %v", err)
+	for record, err := range rs.Iter() {
+		if err != nil {
+			t.Fatalf("Iter() error = %v", err)
+		}
+		if err := record.Scan(&got); err != nil {
+			t.Fatalf("Scan() error = %v", err)
+		}
+		break
 	}
 	if got.Email != "record@example.test" {
 		t.Fatalf("Scan() = %#v, want mapped email", got)
 	}
 }
 
-func ExampleRecordSet_Scan_slice() {
-	type User struct {
-		ID    int    `sqlkit:"id"`
-		Email string `sqlkit:"email"`
+func TestRecordSetScanIgnoresUnmatchedColumns(t *testing.T) {
+	rs := queryRecordSet(t, fakeResult(
+		[]string{"id", "extra"},
+		[]driver.Value{int64(7), "ignored"},
+	))
+
+	var record struct {
+		ID int64 `sqlkit:"id"`
 	}
-
-	records := newRecordSet(
-		[]Field{{Name: "id"}, {Name: "email"}},
-		[][]any{{1, "user@example.test"}},
-	)
-
-	var users []User
-	if err := records.Scan(&users); err != nil {
-		panic(err)
+	if err := rs.Scan(&record); err != nil {
+		t.Fatalf("Scan() error = %v", err)
 	}
-	fmt.Println(users[0].ID, users[0].Email)
-	// Output: 1 user@example.test
-}
-
-func ExampleRecordSet_Scan_struct() {
-	type User struct {
-		ID int `sqlkit:"id"`
+	if record.ID != 7 {
+		t.Fatalf("record = %#v", record)
 	}
-
-	records := newRecordSet(
-		[]Field{{Name: "id"}},
-		[][]any{{7}},
-	)
-
-	var user User
-	if err := records.Scan(&user); err != nil {
-		panic(err)
-	}
-	fmt.Println(user.ID)
-	// Output: 7
 }

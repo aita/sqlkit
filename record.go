@@ -10,7 +10,7 @@ import (
 )
 
 // recordColumns holds the column layout of a result set, shared by every
-// Record produced from it, so each record carries only its value slice.
+// Record produced from it.
 type recordColumns struct {
 	names   []string
 	indexes map[string]int
@@ -26,15 +26,20 @@ func newRecordColumns(columnNames []string) *recordColumns {
 	return &recordColumns{names: append([]string(nil), columnNames...), indexes: indexes}
 }
 
-// Record is a read-only view of one result record. It stores values
-// positionally against a column layout shared across the whole record set,
-// so no per-record map is built.
+// Record is a lightweight, read-only view over the current row of the
+// underlying sql.Rows: it holds no row data itself, so iterating a RecordSet
+// allocates nothing per record. Like sql.Rows, a Record is only valid until
+// the iteration advances or ends; copy values out with Get or Scan before
+// moving on instead of retaining the Record.
 type Record struct {
+	rows    *stdsql.Rows
 	columns *recordColumns
-	values  []any
+	// cache memoizes the row values for Get, reset on each row advance, so
+	// reading several columns scans the row only once.
+	cache *[]any
 }
 
-// Get returns a field value and whether the column is present.
+// Get returns a field value and whether the column is present and readable.
 func (r Record) Get(name string) (any, bool) {
 	if r.columns == nil {
 		return nil, false
@@ -43,11 +48,36 @@ func (r Record) Get(name string) (any, bool) {
 	if !ok {
 		return nil, false
 	}
-	return r.values[index], true
+	values, err := r.values()
+	if err != nil {
+		return nil, false
+	}
+	return values[index], true
 }
 
-// Scan copies this record into dest using `sqlkit` tags or exported field
-// names. Dest must be a non-nil pointer to a struct.
+// values scans the current row into a snapshot slice, memoized per row.
+func (r Record) values() ([]any, error) {
+	if r.cache != nil && *r.cache != nil {
+		return *r.cache, nil
+	}
+	values := make([]any, len(r.columns.names))
+	targets := make([]any, len(values))
+	for i := range values {
+		targets[i] = &values[i]
+	}
+	if err := r.rows.Scan(targets...); err != nil {
+		return nil, err
+	}
+	if r.cache != nil {
+		*r.cache = values
+	}
+	return values, nil
+}
+
+// Scan copies the current record into dest using `sqlkit` tags or exported
+// field names. Dest must be a non-nil pointer to a struct. Values go through
+// database/sql scanning straight into the fields, with no intermediate
+// per-record allocation.
 func (r Record) Scan(dest any) error {
 	value := reflect.ValueOf(dest)
 	if value.Kind() != reflect.Pointer || value.IsNil() {
@@ -56,11 +86,18 @@ func (r Record) Scan(dest any) error {
 	if value.Elem().Kind() != reflect.Struct {
 		return errRecordStructPointer("scan")
 	}
-	plan := recordScanPlan(value.Elem().Type(), r.columns)
-	return scanRecordWithPlan(r, value.Elem(), plan)
+	return scanRecordInto(r, value.Elem())
 }
 
-// fieldColumn pairs a struct field index with the record value index it is
+func scanRecordInto(r Record, dest reflect.Value) error {
+	if r.rows == nil || r.columns == nil {
+		return fmt.Errorf("sqlkit: scan on a zero Record")
+	}
+	plan := recordScanPlan(dest.Type(), r.columns)
+	return r.rows.Scan(recordScanTargets(dest, plan, len(r.columns.names))...)
+}
+
+// fieldColumn pairs a struct field index with the column position it is
 // filled from.
 type fieldColumn struct {
 	field  int
@@ -99,13 +136,18 @@ func recordScanPlan(structType reflect.Type, columns *recordColumns) []fieldColu
 	return plan
 }
 
-func scanRecordWithPlan(record Record, dest reflect.Value, plan []fieldColumn) error {
-	for _, entry := range plan {
-		if err := assignRecordValue(dest.Field(entry.field), record.values[entry.column]); err != nil {
-			return fmt.Errorf("field %s: %w", dest.Type().Field(entry.field).Name, err)
-		}
+// recordScanTargets builds one sql.Rows.Scan target per column: planned
+// columns point at their struct field, the rest at a shared discard slot.
+func recordScanTargets(dest reflect.Value, plan []fieldColumn, columnCount int) []any {
+	var discard any
+	targets := make([]any, columnCount)
+	for i := range targets {
+		targets[i] = &discard
 	}
-	return nil
+	for _, entry := range plan {
+		targets[entry.column] = dest.Field(entry.field).Addr().Interface()
+	}
+	return targets
 }
 
 func recordFieldColumnName(field reflect.StructField) string {
@@ -116,38 +158,6 @@ func recordFieldColumnName(field reflect.StructField) string {
 		}
 	}
 	return field.Name
-}
-
-func assignRecordValue(dest reflect.Value, value any) error {
-	// database/sql Scanner implementations decide for themselves how to
-	// accept the value, including NULL (e.g. sql.NullString).
-	if dest.CanAddr() {
-		if scanner, ok := dest.Addr().Interface().(stdsql.Scanner); ok {
-			return scanner.Scan(value)
-		}
-	}
-	if value == nil {
-		return nil
-	}
-	// Nullable destinations may be pointers: allocate and fill.
-	if dest.Kind() == reflect.Pointer {
-		elem := reflect.New(dest.Type().Elem())
-		if err := assignRecordValue(elem.Elem(), value); err != nil {
-			return err
-		}
-		dest.Set(elem)
-		return nil
-	}
-	source := reflect.ValueOf(value)
-	if source.Type().AssignableTo(dest.Type()) {
-		dest.Set(source)
-		return nil
-	}
-	if source.Type().ConvertibleTo(dest.Type()) {
-		dest.Set(source.Convert(dest.Type()))
-		return nil
-	}
-	return fmt.Errorf("cannot assign %s to %s", source.Type(), dest.Type())
 }
 
 func errRecordNonNilPointer(operation string) error {
