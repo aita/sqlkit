@@ -21,10 +21,10 @@ var Users = func() UsersTable {
 	info := sqlkit.TableInfo{Schema: "public", Name: "users"}
 	return UsersTable{
 		info:      info,
-		ID:        sqlkit.NewColumn[int64](info, "id", sqlkit.WithSQLType("int8"), sqlkit.WithPrimaryKey(), sqlkit.WithDefault()),
-		Email:     sqlkit.NewColumn[string](info, "email", sqlkit.WithSQLType("varchar"), sqlkit.WithLength(255)),
-		Name:      sqlkit.NewColumn[*string](info, "name", sqlkit.WithSQLType("text"), sqlkit.WithNullable()),
-		CreatedAt: sqlkit.NewColumn[time.Time](info, "created_at", sqlkit.WithSQLType("timestamptz"), sqlkit.WithDefault()),
+		ID:        sqlkit.NewColumn[int64](info, "id"),
+		Email:     sqlkit.NewColumn[string](info, "email"),
+		Name:      sqlkit.NewColumn[*string](info, "name"),
+		CreatedAt: sqlkit.NewColumn[time.Time](info, "created_at"),
 	}
 }()
 
@@ -51,9 +51,6 @@ func (t UsersTable) Defaulted() []sqlkit.AnyColumn {
 
 var _ sqlkit.TableMeta = Users
 
-// Posts returns the public.posts table that references public.users (foreign key posts_user_id_fkey).
-func (t UsersTable) Posts() PostsTable { return Posts }
-
 // User is a generated row struct for table public.users; any struct
 // following Scan's mapping rules works as a destination or Insert value.
 type User struct {
@@ -78,11 +75,11 @@ var Posts = func() PostsTable {
 	info := sqlkit.TableInfo{Schema: "public", Name: "posts"}
 	return PostsTable{
 		info:      info,
-		ID:        sqlkit.NewColumn[int64](info, "id", sqlkit.WithSQLType("int8"), sqlkit.WithPrimaryKey(), sqlkit.WithDefault()),
-		UserID:    sqlkit.NewColumn[int64](info, "user_id", sqlkit.WithSQLType("int8")),
-		Title:     sqlkit.NewColumn[string](info, "title", sqlkit.WithSQLType("text")),
-		Body:      sqlkit.NewColumn[*string](info, "body", sqlkit.WithSQLType("text"), sqlkit.WithNullable()),
-		Published: sqlkit.NewColumn[bool](info, "published", sqlkit.WithSQLType("bool"), sqlkit.WithDefault()),
+		ID:        sqlkit.NewColumn[int64](info, "id"),
+		UserID:    sqlkit.NewColumn[int64](info, "user_id"),
+		Title:     sqlkit.NewColumn[string](info, "title"),
+		Body:      sqlkit.NewColumn[*string](info, "body"),
+		Published: sqlkit.NewColumn[bool](info, "published"),
 	}
 }()
 
@@ -108,9 +105,6 @@ func (t PostsTable) Defaulted() []sqlkit.AnyColumn {
 }
 
 var _ sqlkit.TableMeta = Posts
-
-// User returns the public.users table referenced by user_id (foreign key posts_user_id_fkey).
-func (t PostsTable) User() UsersTable { return Users }
 
 // Post is a generated row struct for table public.posts; any struct
 // following Scan's mapping rules works as a destination or Insert value.

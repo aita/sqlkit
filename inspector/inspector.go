@@ -31,7 +31,7 @@ func Inspect(ctx context.Context, db Querier, dialect, schemaName string) (schem
 
 // decimalTypes are the SQL types for which a precision/scale is meaningful.
 // information_schema reports a numeric_precision for integer types too, which
-// we drop to keep WithPrecision to genuine decimal/numeric columns.
+// we drop so Precision/Scale stay limited to genuine decimal/numeric columns.
 var decimalTypes = map[string]bool{
 	"numeric": true,
 	"decimal": true,

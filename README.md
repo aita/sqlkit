@@ -79,26 +79,12 @@ var Users = ...
 | `-file-name` | single-file output name when `-out` is a directory (default `tables.go`) |
 | `-dto` | also generate a row struct (DTO) per table |
 | `-dto-separate-file` | write DTOs into their own file(s) |
-| `-no-relations` | omit foreign-key `Relations` navigation methods |
 
-### Relations from foreign keys
-
-Foreign keys become navigation methods that **return the related table
-binding** — metadata only, never an executor-bound query (the bindings are not
-an ORM). For `posts.user_id REFERENCES users(id)`:
-
-```go
-// belongs-to: posts -> users.
-func (PostsTable) User() UsersTable { return Users }
-// has-many: users -> posts.
-func (UsersTable) Posts() PostsTable { return Posts }
-
-// Use them to build queries from the related table:
-var author User
-err := db.Select().From(blogdb.Posts.User()).
-    Where(blogdb.Posts.User().ID.Eq(post.UserID)).
-    Limit(1).All(ctx).Scan(&author)
-```
+The generated binding is metadata, not an ORM: no `Get`, no relation
+navigation, no per-column option soup. Foreign keys are read into the schema
+model (`schema.Table.ForeignKeys`) for tools that need them — the migration /
+DDL generator that consumes the same model — but they do not add methods to the
+query bindings.
 
 ### Using codegen as a library
 
@@ -121,17 +107,12 @@ files, err := codegen.Generate(model, codegen.Options{
 // files[i].Name / files[i].Content
 ```
 
-Generated bindings build columns with functional options carrying schema
-metadata, including type lengths and numeric precision, e.g.
-
-```go
-Email:   sqlkit.NewColumn[string](info, "email", sqlkit.WithSQLType("varchar"), sqlkit.WithLength(255)),
-Balance: sqlkit.NewColumn[string](info, "balance", sqlkit.WithSQLType("numeric"), sqlkit.WithPrecision(10, 2)),
-ID:      sqlkit.NewColumn[int64](info, "id", sqlkit.WithSQLType("int8"), sqlkit.WithPrimaryKey(), sqlkit.WithDefault()),
-```
-
-The metadata is readable via `Column.IsPrimaryKey()`, `Column.SQLType()`,
-`Column.Length()`, `Column.Precision()`, `Column.Scale()`, and friends.
+Schema metadata — SQL type, length, precision/scale, and the
+primary-key/nullable/default constraints — lives on `schema.Column`, the model
+the generator (and a future DDL/migration generator) consumes. The runtime
+binding stays minimal: each column is a plain
+`sqlkit.NewColumn[T](info, "name")` carrying only the table identity, column
+name, and static type `T`.
 
 ## Querying and scanning
 
@@ -178,8 +159,10 @@ err := db.Select(appdb.Posts.ID, appdb.Posts.Title).From(appdb.Posts).
     Where(appdb.Users.Email.Eq("alice@example.com")).
     All(ctx).Scan(&posts)
 
+// Lookup by primary key is just a query; ErrNoRows when absent.
 var user MyUserDTO
-found, err := appdb.Users.Get(ctx, db, 42, &user) // typed pk; false if absent
+err := db.Select().From(appdb.Users).Where(appdb.Users.ID.Eq(42)).
+    Limit(1).All(ctx).Scan(&user)
 ```
 
 ## Writing
@@ -339,7 +322,6 @@ What the compiler enforces:
 - comparison and `IN` values match the column's Go type (`Column[T]` methods take `T`),
 - join conditions compare columns of the same type (`EqExpr(TypedExpr[T])`),
 - `SET` assignments match the column type (`Column[T].Set(T)`),
-- `Get` primary keys are typed (`Users.Get(ctx, ex, id int64, &dst)`),
 - every generated binding satisfies `sqlkit.TableMeta` (a `var _` line in the
   generated file).
 

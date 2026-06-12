@@ -116,29 +116,17 @@ func TestGenerateTablesFilter(t *testing.T) {
 	}
 }
 
-func TestRelationsReturnRelatedTable(t *testing.T) {
+func TestBindingsAreNotAnORM(t *testing.T) {
 	body := string(generateSingle(t, fixtureSchema(), Options{PackageName: "blogdb"}))
-	// belongs-to on posts returns the users binding; has-many on users returns
-	// the posts binding. Relations are pure navigation, never executor-bound.
-	if !strings.Contains(body, "func (t PostsTable) User() UsersTable { return Users }") {
-		t.Error("missing belongs-to relation PostsTable.User returning UsersTable")
+	// The binding is metadata: no executor-bound accessors, no relation
+	// navigation methods, and plain NewColumn calls without metadata options.
+	for _, banned := range []string{"sqlkit.Executor", ") Get(", ") User()", ") Posts()", "sqlkit.With"} {
+		if strings.Contains(body, banned) {
+			t.Errorf("generated binding should not contain %q:\n%s", banned, body)
+		}
 	}
-	if !strings.Contains(body, "func (t UsersTable) Posts() PostsTable { return Posts }") {
-		t.Error("missing has-many relation UsersTable.Posts returning PostsTable")
-	}
-	// The bindings are not an ORM: no executor-bound accessors.
-	if strings.Contains(body, "sqlkit.Executor") || strings.Contains(body, ") Get(") {
-		t.Errorf("generated bindings must not carry executor-bound accessors:\n%s", body)
-	}
-}
-
-func TestOmitRelations(t *testing.T) {
-	body := string(generateSingle(t, fixtureSchema(), Options{PackageName: "blogdb", OmitRelations: true}))
-	if strings.Contains(body, "func (t PostsTable) User()") {
-		t.Error("OmitRelations did not suppress relations")
-	}
-	if !strings.Contains(body, "type PostsTable struct") {
-		t.Error("OmitRelations should keep the table binding")
+	if !strings.Contains(body, `sqlkit.NewColumn[int64](info, "id")`) {
+		t.Errorf("expected plain NewColumn call:\n%s", body)
 	}
 }
 

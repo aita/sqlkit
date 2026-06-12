@@ -46,11 +46,6 @@ type Options struct {
 	// table bindings.
 	DTOSeparateFile bool
 
-	// OmitRelations suppresses the foreign-key Relations methods. Relations are
-	// pure navigation: each returns the related table binding (metadata), never
-	// an executor-bound query — the bindings are not an ORM.
-	OmitRelations bool
-
 	// TypeMapper customizes the SQL→Go type mapping. Defaults to
 	// DefaultTypeMapper{}.
 	TypeMapper TypeMapper
@@ -68,19 +63,8 @@ type columnModel struct {
 	Name       string
 	GoType     string
 	GoTypeImp  string
-	Options    []string
 	PrimaryKey bool
 	HasDefault bool
-}
-
-// relationModel is a foreign-key navigation method that returns the related
-// table binding. It carries no executor or query — the binding is metadata, not
-// an ORM entity.
-type relationModel struct {
-	Comment    string
-	Method     string
-	ReturnType string // type name of the related binding, e.g. "UsersTable"
-	ReturnVar  string // package var of the related binding, e.g. "Users"
 }
 
 type tableModel struct {
@@ -91,7 +75,6 @@ type tableModel struct {
 	Name      string
 	Qualified string
 	Columns   []columnModel
-	Relations []relationModel
 }
 
 // Generate renders the schema into one or more Go source files according to
@@ -127,7 +110,6 @@ func Generate(model schema.Schema, opts Options) ([]File, error) {
 	}
 
 	models := make([]*tableModel, 0, len(tables))
-	index := map[string]*tableModel{}
 	for _, table := range tables {
 		tm, err := buildTable(table, dialect, mapper)
 		if err != nil {
@@ -142,11 +124,6 @@ func Generate(model schema.Schema, opts Options) ([]File, error) {
 			tm.DTOName = name
 		}
 		models = append(models, tm)
-		index[table.Name] = tm
-	}
-
-	if !opts.OmitRelations {
-		buildRelations(tables, index)
 	}
 
 	return assemble(models, opts)
@@ -173,120 +150,12 @@ func buildTable(table schema.Table, dialect string, mapper TypeMapper) (*tableMo
 			Name:       column.Name,
 			GoType:     goType.String(),
 			GoTypeImp:  goType.ImportPath,
-			Options:    columnOptions(column),
 			PrimaryKey: column.PrimaryKey,
 			HasDefault: column.HasDefault,
 		}
 		tm.Columns = append(tm.Columns, cm)
 	}
 	return tm, nil
-}
-
-// columnOptions renders the sqlkit.NewColumn functional options for a column.
-func columnOptions(column schema.Column) []string {
-	var opts []string
-	if column.DataType != "" {
-		opts = append(opts, fmt.Sprintf("sqlkit.WithSQLType(%q)", column.DataType))
-	}
-	if column.Length > 0 {
-		opts = append(opts, fmt.Sprintf("sqlkit.WithLength(%d)", column.Length))
-	}
-	if column.Precision > 0 {
-		opts = append(opts, fmt.Sprintf("sqlkit.WithPrecision(%d, %d)", column.Precision, column.Scale))
-	}
-	if column.PrimaryKey {
-		opts = append(opts, "sqlkit.WithPrimaryKey()")
-	}
-	if column.Nullable {
-		opts = append(opts, "sqlkit.WithNullable()")
-	}
-	if column.HasDefault {
-		opts = append(opts, "sqlkit.WithDefault()")
-	}
-	return opts
-}
-
-// buildRelations turns foreign keys into navigation methods that return the
-// related table binding: a belongs-to method on the referencing table and a
-// has-many method on the referenced table. They return metadata, not queries —
-// the bindings are not an ORM.
-func buildRelations(tables []schema.Table, index map[string]*tableModel) {
-	used := map[string]map[string]bool{}
-	reserve := func(tm *tableModel) map[string]bool {
-		set, ok := used[tm.Name]
-		if !ok {
-			set = map[string]bool{}
-			for name := range reservedFieldNames {
-				set[name] = true
-			}
-			for _, c := range tm.Columns {
-				set[c.Field] = true
-			}
-			used[tm.Name] = set
-		}
-		return set
-	}
-	unique := func(set map[string]bool, base string) string {
-		name := base
-		for i := 2; set[name]; i++ {
-			name = fmt.Sprintf("%s%d", base, i)
-		}
-		set[name] = true
-		return name
-	}
-
-	for _, child := range tables {
-		childModel := index[child.Name]
-		for _, fk := range child.ForeignKeys {
-			parent, ok := index[fk.RefTable]
-			if !ok || len(fk.Columns) == 0 || len(fk.Columns) != len(fk.RefColumns) {
-				continue
-			}
-			parentTable := tableByName(tables, fk.RefTable)
-
-			// belongs-to: child.<Parent>() returns the referenced table binding.
-			set := reserve(childModel)
-			method := unique(set, belongsToName(fk, parentTable))
-			childModel.Relations = append(childModel.Relations, relationModel{
-				Comment:    fmt.Sprintf("// %s returns the %s table referenced by %s (foreign key %s).", method, parent.Qualified, strings.Join(fk.Columns, ", "), fk.Name),
-				Method:     method,
-				ReturnType: parent.TypeName,
-				ReturnVar:  parent.VarName,
-			})
-
-			// has-many: parent.<Children>() returns the referencing table binding.
-			pset := reserve(parent)
-			pmethod := unique(pset, goName(child.Name))
-			parent.Relations = append(parent.Relations, relationModel{
-				Comment:    fmt.Sprintf("// %s returns the %s table that references %s (foreign key %s).", pmethod, childModel.Qualified, parent.Qualified, fk.Name),
-				Method:     pmethod,
-				ReturnType: childModel.TypeName,
-				ReturnVar:  childModel.VarName,
-			})
-		}
-	}
-}
-
-func belongsToName(fk schema.ForeignKey, parent schema.Table) string {
-	if len(fk.Columns) == 1 {
-		col := fk.Columns[0]
-		if len(col) > 3 && strings.EqualFold(col[len(col)-3:], "_id") {
-			return goName(col[:len(col)-3])
-		}
-	}
-	if parent.Name != "" {
-		return goName(singular(parent.Name))
-	}
-	return goName(singular(fk.RefTable))
-}
-
-func tableByName(tables []schema.Table, name string) schema.Table {
-	for _, t := range tables {
-		if t.Name == name {
-			return t
-		}
-	}
-	return schema.Table{}
 }
 
 func defaultDTOName(table schema.Table) string {
@@ -335,7 +204,6 @@ func assemble(models []*tableModel, opts Options) ([]File, error) {
 			fb := newFileBuf()
 			fb.add(bindingImports(tm)...)
 			fb.write(renderBinding(tm))
-			fb.write(renderRelations(tm))
 			if opts.EmitDTO && !opts.DTOSeparateFile {
 				fb.add(dtoImports(tm)...)
 				fb.write(renderDTO(tm))
@@ -360,7 +228,6 @@ func assemble(models []*tableModel, opts Options) ([]File, error) {
 	for _, tm := range models {
 		fb.add(bindingImports(tm)...)
 		fb.write(renderBinding(tm))
-		fb.write(renderRelations(tm))
 		if opts.EmitDTO && !opts.DTOSeparateFile {
 			fb.add(dtoImports(tm)...)
 			fb.write(renderDTO(tm))
@@ -463,13 +330,6 @@ func renderBinding(tm *tableModel) string {
 	return execute(bindingTemplate, tm)
 }
 
-func renderRelations(tm *tableModel) string {
-	if len(tm.Relations) == 0 {
-		return ""
-	}
-	return execute(relationsTemplate, tm)
-}
-
 func renderDTO(tm *tableModel) string {
 	return execute(dtoTemplate, tm)
 }
@@ -496,7 +356,7 @@ var {{.VarName}} = func() {{.TypeName}} {
 	return {{.TypeName}}{
 		info: info,
 {{- range .Columns}}
-		{{.Field}}: sqlkit.NewColumn[{{.GoType}}](info, {{printf "%q" .Name}}{{range .Options}}, {{.}}{{end}}),
+		{{.Field}}: sqlkit.NewColumn[{{.GoType}}](info, {{printf "%q" .Name}}),
 {{- end}}
 	}
 }()
@@ -523,13 +383,6 @@ func (t {{.TypeName}}) Defaulted() []sqlkit.AnyColumn {
 }
 
 var _ sqlkit.TableMeta = {{.VarName}}
-`))
-
-var relationsTemplate = template.Must(template.New("relations").Parse(`{{- range $i, $r := .Relations}}{{if $i}}
-{{end}}
-{{$r.Comment}}
-func (t {{$.TypeName}}) {{$r.Method}}() {{$r.ReturnType}} { return {{$r.ReturnVar}} }
-{{- end}}
 `))
 
 var dtoTemplate = template.Must(template.New("dto").Parse("// {{.DTOName}} is a generated row struct for table {{.Qualified}}; any struct\n" +
