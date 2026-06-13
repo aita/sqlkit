@@ -455,6 +455,29 @@ func TestCount(t *testing.T) {
 	}
 }
 
+func TestUnionCount(t *testing.T) {
+	fake := &sqltest.Fake{
+		QueryFunc: func(sqlText string, args []any) (sqltest.Result, error) {
+			return sqltest.Result{Columns: []string{"count"}, Rows: [][]driver.Value{{int64(5)}}}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	n, err := db.Select(Users.ID).From(Users).
+		UnionAll(sqlkit.Select(Users.ID).From(Users)).
+		Count(context.Background())
+	if err != nil {
+		t.Fatalf("Count() error = %v", err)
+	}
+	if n != 5 {
+		t.Fatalf("Count() = %d, want 5", n)
+	}
+	want := `SELECT COUNT(*) FROM ((SELECT "public"."users"."id" FROM "public"."users") UNION ALL (SELECT "public"."users"."id" FROM "public"."users")) AS "q"`
+	if got := fake.Queries()[0].SQL; got != want {
+		t.Fatalf("Count() SQL = %q,\nwant %q", got, want)
+	}
+}
+
 func TestWindowProjectionScan(t *testing.T) {
 	fake := &sqltest.Fake{
 		QueryFunc: func(sqlText string, args []any) (sqltest.Result, error) {
