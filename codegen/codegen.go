@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"fmt"
 	"go/format"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"text/template"
 
 	"github.com/aita/sqlkit/meta"
+	"github.com/aita/sqlkit/sqldef"
 )
 
 // File is a single generated source file: a suggested name and its formatted
@@ -16,6 +19,19 @@ import (
 type File struct {
 	Name    string
 	Content []byte
+}
+
+// Write writes generated files into dir, creating it if needed.
+func Write(dir string, files []File) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	for _, file := range files {
+		if err := os.WriteFile(filepath.Join(dir, file.Name), file.Content, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Options configures generation. The zero value (with PackageName set) emits a
@@ -81,10 +97,22 @@ type tableModel struct {
 	Doc []string
 }
 
-// Generate renders the catalog into one or more Go source files according to
-// opts and returns their formatted contents. The dialect (opts.Dialect,
-// default postgres) selects the default SQL→Go type table.
-func Generate(catalog meta.Meta, opts Options) ([]File, error) {
+// Generate builds the catalog and renders its tables into one or more Go
+// source files according to opts, returning their formatted contents. The
+// dialect (opts.Dialect, default postgres) selects the default SQL→Go type
+// table.
+func Generate(catalog *sqldef.Catalog, opts Options) ([]File, error) {
+	model, err := catalog.Build()
+	if err != nil {
+		return nil, err
+	}
+	return generate(model, opts)
+}
+
+// generate renders an already-built schema model — the shared core behind
+// Generate, with the model passed directly so the package's own tests can
+// exercise it without the sqldef DSL.
+func generate(model meta.Meta, opts Options) ([]File, error) {
 	if opts.PackageName == "" {
 		return nil, fmt.Errorf("codegen: package name is required")
 	}
@@ -101,7 +129,7 @@ func Generate(catalog meta.Meta, opts Options) ([]File, error) {
 		dtoName = defaultDTOName
 	}
 
-	tables := filterTables(catalog.Tables, opts.Tables)
+	tables := filterTables(model.Tables, opts.Tables)
 	if len(tables) == 0 {
 		return nil, fmt.Errorf("codegen: no tables to generate")
 	}

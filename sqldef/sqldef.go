@@ -35,16 +35,16 @@
 // table is dialect-agnostic; the generators resolve the type when you choose a
 // dialect. A small generator program turns the catalog into Go source and DDL:
 //
-//	files, err := schema.Catalog.Generate(codegen.Options{PackageName: "appdb"})
+//	files, err := codegen.Generate(schema.Catalog, codegen.Options{PackageName: "appdb"})
 //	if err != nil { ... }
-//	err = sqldef.Write("appdb", files)
+//	err = codegen.Write("appdb", files)
 //	sql, err := schema.Catalog.DDL("postgres")
 //
 // Tables declared with Catalog.Table live in the unnamed default schema and
 // generate unqualified names (use this for schemaless engines like MySQL or
 // SQLite); Catalog.Schema("public").Table(...) qualifies them. Columns are NOT
 // NULL unless marked Nullable. Mistakes — duplicate names, dangling foreign
-// keys — are collected and reported by Build/Generate/DDL.
+// keys — are collected and reported by Build/DDL.
 package sqldef
 
 import (

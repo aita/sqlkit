@@ -10,7 +10,6 @@ import (
 
 	"github.com/aita/sqlkit/codegen"
 	"github.com/aita/sqlkit/examples/blog/schema"
-	"github.com/aita/sqlkit/sqldef"
 )
 
 const sqlHeader = `-- Generated from schema/schema.go by 'go run ./gen'. Apply with:
@@ -20,11 +19,11 @@ const sqlHeader = `-- Generated from schema/schema.go by 'go run ./gen'. Apply w
 `
 
 func main() {
-	files, err := schema.Catalog.Generate(codegen.Options{PackageName: "blogdb"})
+	files, err := codegen.Generate(schema.Catalog, codegen.Options{PackageName: "blogdb"})
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := sqldef.Write("blogdb", files); err != nil {
+	if err := codegen.Write("blogdb", files); err != nil {
 		log.Fatal(err)
 	}
 

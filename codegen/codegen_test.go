@@ -45,7 +45,7 @@ func fixtureTables() []meta.Table {
 
 func generateSingle(t *testing.T, tables []meta.Table, opts Options) []byte {
 	t.Helper()
-	files, err := Generate(meta.Meta{Tables: tables}, opts)
+	files, err := generate(meta.Meta{Tables: tables}, opts)
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
@@ -86,7 +86,7 @@ func TestGenerateWithDTOGolden(t *testing.T) {
 }
 
 func TestGenerateFilePerTable(t *testing.T) {
-	files, err := Generate(meta.Meta{Tables: fixtureTables()}, Options{PackageName: "blogdb", FilePerTable: true, EmitDTO: true, DTOSeparateFile: true})
+	files, err := generate(meta.Meta{Tables: fixtureTables()}, Options{PackageName: "blogdb", FilePerTable: true, EmitDTO: true, DTOSeparateFile: true})
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
@@ -102,7 +102,7 @@ func TestGenerateFilePerTable(t *testing.T) {
 }
 
 func TestGenerateTablesFilter(t *testing.T) {
-	files, err := Generate(meta.Meta{Tables: fixtureTables()}, Options{PackageName: "blogdb", Tables: []string{"users"}})
+	files, err := generate(meta.Meta{Tables: fixtureTables()}, Options{PackageName: "blogdb", Tables: []string{"users"}})
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
@@ -243,7 +243,7 @@ func TestGenerateUnknownTypeFails(t *testing.T) {
 		Name:    "things",
 		Columns: []meta.Column{{Name: "weird", Type: meta.Of("postgres", "hstore", 0, 0, 0)}},
 	}}}
-	if _, err := Generate(catalog, Options{PackageName: "x"}); err == nil {
-		t.Fatal("Generate() with unsupported type succeeded, want error")
+	if _, err := generate(catalog, Options{PackageName: "x"}); err == nil {
+		t.Fatal("generate() with unsupported type succeeded, want error")
 	}
 }

@@ -264,7 +264,7 @@ func TestSchemalessDatabase(t *testing.T) {
 }
 
 func TestGenerate(t *testing.T) {
-	files, err := blogCatalog().Generate(codegen.Options{PackageName: "blogdb", EmitDTO: true})
+	files, err := codegen.Generate(blogCatalog(), codegen.Options{PackageName: "blogdb", EmitDTO: true})
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}

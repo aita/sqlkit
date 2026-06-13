@@ -3,6 +3,7 @@ module github.com/aita/sqlkit
 go 1.25.0
 
 require (
+	github.com/alecthomas/kong v1.15.0
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/jackc/pgx/v5 v5.10.0
 )
