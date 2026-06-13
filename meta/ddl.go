@@ -14,6 +14,10 @@ import (
 // matters), then comments. Catalogs built with the sqldef package and schemas
 // read by the inspector both feed it through the same model.
 //
+// The statements are built as sql-package DDL nodes (the DDL side of the SQL
+// DSL) and compiled through the dialect, so meta, the migrate diff engine, and
+// hand-written migrations share one rendering path.
+//
 // Default expressions render only when the model carries them (Column.DefaultExpr,
 // declared as sqldef.Default(sql.Raw("now()"))), compiled for the dialect; an
 // integer primary key with a default but no expression renders as a serial
@@ -64,92 +68,174 @@ func (md Metadata) DropSQL(d sql.Dialect) string {
 	return strings.Join(stmts, "\n\n") + "\n"
 }
 
-// CreateSQL returns the CREATE TABLE statement for the table on dialect d,
-// including its primary key, CHECK constraints, and (where the dialect renders
-// them inline) column and table comments. It returns an error if a column has
-// no type on the dialect.
-func (t Table) CreateSQL(d sql.Dialect) (string, error) {
-	var defs []string
+// SQLTable returns the sql-package table reference for the table.
+func (t Table) SQLTable() sql.Table {
+	return sql.Table{Schema: t.Schema.Name, Name: t.Name}
+}
+
+// columnType adapts a portable meta.Type to an sql.ColumnType, resolving the
+// engine type for the dialect at render time. That keeps the DDL nodes a table
+// builds dialect-independent, so a schema's tables drop straight into a
+// migration's Up/Down lists and resolve their types when the migrator compiles
+// them for a dialect.
+type columnType struct {
+	name string // column name, for error messages
+	typ  Type   // nil when the column declares no type
+}
+
+// RenderType resolves the engine type for the dialect.
+func (ct columnType) RenderType(d sql.Dialect) (string, error) {
+	if ct.typ == nil {
+		return "", fmt.Errorf("column %q has no type", ct.name)
+	}
+	eng, ok := ct.typ.Engine(d.Name())
+	if !ok {
+		return "", fmt.Errorf("column %q has no type on dialect %s", ct.name, d.Name())
+	}
+	return d.ColumnType(eng.Name, eng.Length, eng.Precision, eng.Scale), nil
+}
+
+// RenderAutoIncrement resolves the auto-incrementing clause for the dialect.
+func (ct columnType) RenderAutoIncrement(d sql.Dialect) (string, bool) {
+	if ct.typ == nil {
+		return "", false
+	}
+	eng, ok := ct.typ.Engine(d.Name())
+	if !ok {
+		return "", false
+	}
+	return d.AutoIncrementColumn(eng.Name, eng.Length, eng.Precision, eng.Scale)
+}
+
+// ColumnDef builds the dialect-independent sql.ColumnDef for the column — the
+// building block of CREATE TABLE and ALTER TABLE ADD COLUMN. The portable type
+// resolves when the statement is compiled for a dialect.
+func (c Column) ColumnDef() sql.ColumnDef {
+	return sql.ColumnDef{
+		Name:          c.Name,
+		Type:          columnType{name: c.Name, typ: c.Type},
+		NotNull:       !c.Nullable,
+		Default:       c.DefaultExpr,
+		AutoIncrement: c.PrimaryKey && c.HasDefault && c.DefaultExpr == nil,
+		Comment:       c.Comment,
+	}
+}
+
+// Column returns the named column, or false when the table has none.
+func (t Table) Column(name string) (Column, bool) {
+	for _, c := range t.Columns {
+		if c.Name == name {
+			return c, true
+		}
+	}
+	return Column{}, false
+}
+
+// CreateStatement builds the CREATE TABLE DDL node for the table, including its
+// primary key, CHECK constraints, and comment. It is dialect-independent — the
+// column types resolve when it is compiled with ToSQL — so it can be used
+// directly in a migration's Up list (schema.Users.CreateStatement()).
+func (t Table) CreateStatement() sql.CreateTableStmt {
+	stmt := sql.CreateTable(t.SQLTable())
 	var pk []string
 	for _, column := range t.Columns {
-		if column.Type == nil {
-			return "", fmt.Errorf("meta: table %q column %q has no type", t.Name, column.Name)
-		}
-		eng, ok := column.Type.Engine(d.Name())
-		if !ok {
-			return "", fmt.Errorf("meta: table %q column %q has no type on dialect %s", t.Name, column.Name, d.Name())
-		}
-		def, err := columnDef(column, eng, d)
-		if err != nil {
-			return "", fmt.Errorf("meta: table %q column %q: %w", t.Name, column.Name, err)
-		}
-		defs = append(defs, def)
+		stmt = stmt.Column(column.ColumnDef())
 		if column.PrimaryKey {
 			pk = append(pk, column.Name)
 		}
 	}
 	if len(pk) > 0 {
-		defs = append(defs, "PRIMARY KEY ("+quoteAll(d, pk)+")")
+		stmt = stmt.PrimaryKey(pk...)
 	}
 	for _, check := range t.Checks {
-		expr, err := sql.CompileStatic(d, check.Expression)
-		if err != nil {
-			return "", fmt.Errorf("meta: table %q check %q: %w", t.Name, check.Name, err)
-		}
-		defs = append(defs, "CONSTRAINT "+d.QuoteName(check.Name)+" CHECK ("+expr+")")
+		stmt = stmt.Check(check.Name, check.Expression)
 	}
+	return stmt.Comment(t.Comment)
+}
 
-	var sb strings.Builder
-	sb.WriteString("CREATE TABLE " + qualify(d, t.Schema.Name, t.Name) + " (\n")
-	for i, def := range defs {
-		sb.WriteString("    " + def)
-		if i < len(defs)-1 {
-			sb.WriteString(",")
-		}
-		sb.WriteString("\n")
+// CreateSQL returns the CREATE TABLE statement for the table on dialect d. It
+// errors if a column has no type on the dialect.
+func (t Table) CreateSQL(d sql.Dialect) (string, error) {
+	out, _, err := t.CreateStatement().ToSQL(d)
+	if err != nil {
+		return "", fmt.Errorf("meta: table %q: %w", t.Name, err)
 	}
-	sb.WriteString(")" + d.InlineTableComment(t.Comment) + ";")
-	return sb.String(), nil
+	return out, nil
+}
+
+// DropStatement builds the DROP TABLE DDL node for the table.
+func (t Table) DropStatement() sql.DropTableStmt {
+	return sql.DropTable(t.SQLTable()).IfExists()
 }
 
 // DropSQL returns the DROP TABLE statement for the table on dialect d.
 func (t Table) DropSQL(d sql.Dialect) string {
-	return "DROP TABLE IF EXISTS " + qualify(d, t.Schema.Name, t.Name) + ";"
+	out, _, _ := t.DropStatement().ToSQL(d)
+	return out
+}
+
+// CreateStatement builds the CREATE INDEX DDL node for the index on its table.
+func (ix Index) CreateStatement(table Table) sql.CreateIndexStmt {
+	stmt := sql.CreateIndex(ix.Name, table.SQLTable(), ix.Columns...)
+	if ix.Unique {
+		stmt = stmt.Unique()
+	}
+	return stmt
 }
 
 // CreateSQL returns the CREATE INDEX statement for the index on its table.
 func (ix Index) CreateSQL(table Table, d sql.Dialect) string {
-	kind := "INDEX"
-	if ix.Unique {
-		kind = "UNIQUE INDEX"
-	}
-	return "CREATE " + kind + " " + d.QuoteName(ix.Name) + " ON " +
-		qualify(d, table.Schema.Name, table.Name) + " (" + quoteAll(d, ix.Columns) + ");"
+	out, _, _ := ix.CreateStatement(table).ToSQL(d)
+	return out
+}
+
+// DropStatement builds the DROP INDEX DDL node for the index on its table.
+func (ix Index) DropStatement(table Table) sql.DropIndexStmt {
+	return sql.DropIndex(ix.Name, table.SQLTable())
 }
 
 // DropSQL returns the DROP INDEX statement for the index on its table.
 func (ix Index) DropSQL(table Table, d sql.Dialect) string {
-	return d.DropIndex(
-		qualify(d, table.Schema.Name, ix.Name),
-		d.QuoteName(ix.Name),
-		qualify(d, table.Schema.Name, table.Name),
-	)
+	out, _, _ := ix.DropStatement(table).ToSQL(d)
+	return out
 }
 
-// addConstraintSQL renders the ALTER TABLE ... ADD CONSTRAINT statement that
-// adds the foreign key to its table.
+// AddStatement builds the ALTER TABLE ... ADD CONSTRAINT DDL node that adds the
+// foreign key to its table.
+func (fk ForeignKey) AddStatement(table Table) sql.AlterTableStmt {
+	return sql.AlterTable(table.SQLTable()).AddForeignKey(sql.ForeignKeyConstraint{
+		Name:       fk.Name,
+		Columns:    fk.Columns,
+		RefSchema:  fk.RefSchema.Name,
+		RefTable:   fk.RefTable,
+		RefColumns: fk.RefColumns,
+	})
+}
+
+// DropStatement builds the DDL node that drops the foreign key from its table.
+func (fk ForeignKey) DropStatement(table Table) sql.DropForeignKeyStmt {
+	return sql.DropForeignKey(table.SQLTable(), fk.Name)
+}
+
 func (fk ForeignKey) addConstraintSQL(table Table, d sql.Dialect) string {
-	return "ALTER TABLE " + qualify(d, table.Schema.Name, table.Name) +
-		" ADD CONSTRAINT " + d.QuoteName(fk.Name) +
-		" FOREIGN KEY (" + quoteAll(d, fk.Columns) + ")" +
-		" REFERENCES " + qualify(d, fk.RefSchema.Name, fk.RefTable) +
-		" (" + quoteAll(d, fk.RefColumns) + ");"
+	out, _, _ := fk.AddStatement(table).ToSQL(d)
+	return out
 }
 
-// dropConstraintSQL renders the ALTER TABLE ... statement that drops the
-// foreign key from its table.
 func (fk ForeignKey) dropConstraintSQL(table Table, d sql.Dialect) string {
-	return d.DropForeignKey(qualify(d, table.Schema.Name, table.Name), d.QuoteName(fk.Name))
+	out, _, _ := fk.DropStatement(table).ToSQL(d)
+	return out
+}
+
+// CommentStatements builds the standalone comment DDL nodes for the table and
+// its columns (PostgreSQL COMMENT ON ...). On dialects that comment inline they
+// render empty.
+func (t Table) CommentStatements() []sql.Statement {
+	stmts := []sql.Statement{sql.CommentOnTable(t.SQLTable(), t.Comment)}
+	for _, column := range t.Columns {
+		stmts = append(stmts, sql.CommentOnColumn(t.SQLTable(), column.Name, column.Comment))
+	}
+	return stmts
 }
 
 // commentStatementsSQL renders the table's standalone comment statements
@@ -157,53 +243,10 @@ func (fk ForeignKey) dropConstraintSQL(table Table, d sql.Dialect) string {
 // render comments inline in the CREATE TABLE statement (MySQL).
 func (t Table) commentStatementsSQL(d sql.Dialect) string {
 	var stmts []string
-	qualified := qualify(d, t.Schema.Name, t.Name)
-	if stmt := d.TableCommentStatement(qualified, t.Comment); stmt != "" {
-		stmts = append(stmts, stmt)
-	}
-	for _, column := range t.Columns {
-		if stmt := d.ColumnCommentStatement(qualified, d.QuoteName(column.Name), column.Comment); stmt != "" {
-			stmts = append(stmts, stmt)
+	for _, s := range t.CommentStatements() {
+		if out, _, _ := s.ToSQL(d); out != "" {
+			stmts = append(stmts, out)
 		}
 	}
 	return strings.Join(stmts, "\n")
-}
-
-// columnDef renders a single column definition for the resolved engine type.
-func columnDef(column Column, eng Engine, d sql.Dialect) (string, error) {
-	if column.PrimaryKey && column.HasDefault && column.DefaultExpr == nil {
-		if clause, ok := d.AutoIncrementColumn(eng.Name, eng.Length, eng.Precision, eng.Scale); ok {
-			return d.QuoteName(column.Name) + " " + clause + d.InlineColumnComment(column.Comment), nil
-		}
-	}
-	def := d.QuoteName(column.Name) + " " + d.ColumnType(eng.Name, eng.Length, eng.Precision, eng.Scale)
-	if !column.Nullable {
-		def += " NOT NULL"
-	}
-	if column.DefaultExpr != nil {
-		expr, err := sql.CompileStatic(d, column.DefaultExpr)
-		if err != nil {
-			return "", err
-		}
-		def += " DEFAULT " + expr
-	}
-	return def + d.InlineColumnComment(column.Comment), nil
-}
-
-// qualify renders a schema-qualified identifier, quoting each part; an empty
-// schema yields an unqualified name.
-func qualify(d sql.Dialect, schemaName, name string) string {
-	if schemaName == "" {
-		return d.QuoteName(name)
-	}
-	return d.QuoteName(schemaName) + "." + d.QuoteName(name)
-}
-
-// quoteAll quotes each identifier and joins them with ", ".
-func quoteAll(d sql.Dialect, names []string) string {
-	quoted := make([]string, len(names))
-	for i, name := range names {
-		quoted[i] = d.QuoteName(name)
-	}
-	return strings.Join(quoted, ", ")
 }

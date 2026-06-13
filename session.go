@@ -154,11 +154,17 @@ func (s *Session) RawSQL(ctx context.Context, query any, args ...any) Rows {
 	return newRawRows(ctx, s, query, args)
 }
 
-// Exec compiles and runs a statement through the session's transaction.
+// Exec compiles and runs a statement through the session's transaction. It
+// accepts any sql.Query, including the DDL statements built with the sql package
+// (sql.CreateTable, sql.AlterTable, ...). A statement that renders empty for the
+// dialect is a no-op and returns a nil result.
 func (s *Session) Exec(ctx context.Context, query sql.Query) (stdsql.Result, error) {
 	sqlText, args, err := query.ToSQL(s.dialect)
 	if err != nil {
 		return nil, err
+	}
+	if sqlText == "" {
+		return nil, nil
 	}
 	return s.execContext(ctx, sqlText, args...)
 }
