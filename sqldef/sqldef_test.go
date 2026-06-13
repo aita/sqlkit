@@ -30,9 +30,9 @@ func blogCatalog() *sqldef.Catalog {
 	return catalog
 }
 
-func buildCatalog(t *testing.T, design *sqldef.Catalog) meta.Meta {
+func buildCatalog(t *testing.T, c *sqldef.Catalog) meta.Meta {
 	t.Helper()
-	catalog, err := design.Build()
+	catalog, err := c.Build()
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}

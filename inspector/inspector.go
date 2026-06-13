@@ -21,7 +21,7 @@ type Querier interface {
 // or "mysql"; an empty dialect defaults to PostgreSQL) into a meta.Meta.
 // Each table carries its schema in Table.Schema. Introspection is meant for
 // the initial bootstrap; afterwards the schema is maintained as a sqldef
-// design.
+// catalog.
 func Inspect(ctx context.Context, db Querier, dialect, schemaName string) (meta.Meta, error) {
 	var tables []meta.Table
 	var err error

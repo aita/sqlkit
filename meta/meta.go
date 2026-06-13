@@ -1,12 +1,12 @@
 // Package meta is the database schema metadata model: the flat, value-only
 // abstraction of tables and columns that sqlkit's SQL generators consume. The
-// sqldef package builds it from in-code designs and the inspector introspects
+// sqldef package builds it from in-code catalogs and the inspector introspects
 // a live database into it (for the initial bootstrap); the codegen and ddl
 // generators take it from there. It is a pure data model with no database,
 // dialect, or generation dependencies — the dialect is supplied to the
 // generators at call time, not stored on the model.
 //
-// Everything is a value type with no back-references, so a design may be split
+// Everything is a value type with no back-references, so a catalog may be split
 // across packages: each exposes the []Table it owns and the generators run
 // over the concatenation.
 package meta
@@ -100,7 +100,7 @@ type Column struct {
 	Type       Type
 	Nullable   bool
 	HasDefault bool
-	// DefaultExpr is the default's SQL expression when known (designs declare
+	// DefaultExpr is the default's SQL expression when known (catalogs declare
 	// it with Default("now()")); HasDefault may be set without it, e.g. by the
 	// inspector. The DDL generator renders integer primary keys that have a
 	// default but no expression as serial/auto-increment columns.

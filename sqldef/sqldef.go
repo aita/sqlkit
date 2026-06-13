@@ -1,12 +1,12 @@
 // Package sqldef declares database schemas as plain Go values that build
 // directly into the meta model. A catalog (sqldef.NewCatalog) is the reusable
 // root: each Table call assembles and returns a meta.Table immediately, so
-// foreign keys reference those values (References(Users, "id")), designs can
-// be split across files or packages, and the design Builds into a meta.Meta
+// foreign keys reference those values (References(Users, "id")), catalogs can
+// be split across files or packages, and the catalog Builds into a meta.Meta
 // that every generator — the typed table bindings (codegen) and the DDL (ddl)
 // — consumes.
 //
-// A design package conventionally takes the name schema and imports this
+// A catalog package conventionally takes the name schema and imports this
 // package for the building blocks:
 //
 //	package schema
@@ -53,7 +53,7 @@ import (
 	"github.com/aita/sqlkit/meta"
 )
 
-// Catalog is the root a schema design hangs off: it accumulates the
+// Catalog is the root the tables hang off: it accumulates the
 // meta.Tables declared on it, plus any declaration errors, and Builds them
 // into a meta.Meta. Create one with NewCatalog.
 type Catalog struct {
@@ -104,7 +104,7 @@ func (d *Catalog) Table(name string, elements ...TableElement) meta.Table {
 	return d.Schema(d.defaultSchema).Table(name, elements...)
 }
 
-// Schema is a handle for declaring tables in a named schema of a design.
+// Schema is a handle for declaring tables in a named schema of a catalog.
 type Schema struct {
 	catalog *Catalog
 	name    string

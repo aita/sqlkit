@@ -12,7 +12,7 @@ import (
 	"github.com/aita/sqlkit/meta"
 )
 
-// Build validates the design and returns the assembled meta.Meta. Tables
+// Build validates the catalog and returns the assembled meta.Meta. Tables
 // are already built (Table assembles each one eagerly), so Build only checks
 // for declaration errors; no dialect is needed — column types stay portable
 // and the generators resolve them. The returned meta.Meta is the
@@ -30,7 +30,7 @@ func (d *Catalog) Build() (meta.Meta, error) {
 
 // resolveFK validates a foreign key against the local columns and the
 // referenced table, assigns its name, and returns the meta.ForeignKey. It
-// reports failures to the design and returns ok=false on error.
+// reports failures to the catalog and returns ok=false on error.
 func (d *Catalog) resolveFK(table string, columns []meta.Column, fk fkDef) (meta.ForeignKey, bool) {
 	if fk.ref.Name == "" {
 		d.fail("table %q: foreign key references an unnamed table", table)

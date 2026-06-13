@@ -5,7 +5,7 @@ package schema
 
 import "github.com/aita/sqlkit/sqldef"
 
-// Catalog holds the blog design.
+// Catalog holds the blog catalog.
 var Catalog = sqldef.NewCatalog()
 
 // Public is the PostgreSQL schema the blog tables live in.

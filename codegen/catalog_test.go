@@ -50,7 +50,7 @@ func TestGenerateCatalogMySQL(t *testing.T) {
 		`sqldef.Column("point", sqldef.Type("geometry")),`,
 	} {
 		if !strings.Contains(got, want) {
-			t.Errorf("generated design missing %q\n%s", want, got)
+			t.Errorf("generated catalog missing %q\n%s", want, got)
 		}
 	}
 }
@@ -94,7 +94,7 @@ func TestGenerateCatalogForeignKeys(t *testing.T) {
 		`foreign key fk_other_schema references audit.events outside this catalog`,
 	} {
 		if !strings.Contains(got, want) {
-			t.Errorf("generated design missing %q\n%s", want, got)
+			t.Errorf("generated catalog missing %q\n%s", want, got)
 		}
 	}
 }
@@ -135,7 +135,7 @@ func TestGenerateCatalogIndexesChecksComments(t *testing.T) {
 		`sqldef.Check("price > 0"),`,
 	} {
 		if !strings.Contains(got, want) {
-			t.Errorf("generated design missing %q\n%s", want, got)
+			t.Errorf("generated catalog missing %q\n%s", want, got)
 		}
 	}
 }

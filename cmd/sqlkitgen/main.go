@@ -1,5 +1,5 @@
-// Command sqlkitgen bootstraps a sqldef schema design from a live PostgreSQL
-// or MySQL database. It introspects the schema once and emits a Go design file
+// Command sqlkitgen bootstraps a sqldef catalog from a live PostgreSQL
+// or MySQL database. It introspects the schema once and emits a Go catalog file
 // built on the sqldef package; from then on you maintain the schema as code
 // and generate the typed table bindings and DDL from the catalog
 // (sqldef.Catalog.Generate / Catalog.DDL — see examples/blog/gen).
@@ -41,7 +41,7 @@ func run() error {
 	driver := flag.String("driver", "pgx", "database/sql driver name (pgx or mysql)")
 	dialect := flag.String("dialect", "", "schema dialect override (postgres or mysql); inferred from -driver by default")
 	schema := flag.String("schema", "", "database schema/database to load (default: public for postgres, current DB for mysql)")
-	packageName := flag.String("package", "", "package name of the generated design file (required)")
+	packageName := flag.String("package", "", "package name of the generated catalog file (required)")
 	out := flag.String("out", "", "output file or directory; stdout if empty")
 	tables := flag.String("tables", "", "comma-separated list of tables to include (default: all)")
 	version := flag.Bool("version", false, "print sqlkitgen version")
