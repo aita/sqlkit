@@ -434,10 +434,71 @@ func (c *Compiler) CompileJoin(join JoinClause) (string, []any, error) {
 	return compiled, args, nil
 }
 
+// compileWith emits the WITH [RECURSIVE] prefix for a list of CTEs, sharing this
+// compiler so placeholder numbering stays consistent with the outer statement.
+// The block is RECURSIVE when any CTE is. It returns "" when there are no CTEs,
+// keeping non-CTE output byte-identical.
+func (c *Compiler) compileWith(ctes []CTE) (string, []any, error) {
+	if len(ctes) == 0 {
+		return "", nil, nil
+	}
+	recursive := false
+	for _, cte := range ctes {
+		if cte.recursive {
+			recursive = true
+			break
+		}
+	}
+	var sb strings.Builder
+	var args []any
+	sb.WriteString("WITH ")
+	if recursive {
+		sb.WriteString("RECURSIVE ")
+	}
+	for i, cte := range ctes {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		if cte.name == "" {
+			return "", nil, fmt.Errorf("sqlkit/sql: CTE requires a name")
+		}
+		if cte.query == nil {
+			return "", nil, fmt.Errorf("sqlkit/sql: CTE %q requires a query", cte.name)
+		}
+		sb.WriteString(c.Dialect.QuoteName(cte.name))
+		if len(cte.columns) > 0 {
+			sb.WriteString(" (")
+			for j, col := range cte.columns {
+				if j > 0 {
+					sb.WriteString(", ")
+				}
+				sb.WriteString(c.Dialect.QuoteName(col))
+			}
+			sb.WriteString(")")
+		}
+		sb.WriteString(" AS (")
+		body, bodyArgs, err := c.compileSubquery(cte.query)
+		if err != nil {
+			return "", nil, err
+		}
+		sb.WriteString(body)
+		sb.WriteString(")")
+		args = append(args, bodyArgs...)
+	}
+	sb.WriteString(" ")
+	return sb.String(), args, nil
+}
+
 // CompileSelect compiles a SELECT statement.
 func (c *Compiler) CompileSelect(q SelectQuery) (string, []any, error) {
 	var sb strings.Builder
 	var args []any
+	withSQL, withArgs, err := c.compileWith(q.with)
+	if err != nil {
+		return "", nil, err
+	}
+	sb.WriteString(withSQL)
+	args = append(args, withArgs...)
 	sb.WriteString("SELECT ")
 	if q.distinct {
 		sb.WriteString("DISTINCT ")
@@ -622,6 +683,12 @@ func (c *Compiler) CompileUpdate(q UpdateQuery) (string, []any, error) {
 	}
 	var sb strings.Builder
 	var args []any
+	withSQL, withArgs, err := c.compileWith(q.with)
+	if err != nil {
+		return "", nil, err
+	}
+	sb.WriteString(withSQL)
+	args = append(args, withArgs...)
 	sb.WriteString("UPDATE ")
 	sb.WriteString(c.Dialect.QuoteIdent(q.table.QualifiedName()))
 	sb.WriteString(" SET ")
@@ -660,6 +727,12 @@ func (c *Compiler) CompileDelete(q DeleteQuery) (string, []any, error) {
 	}
 	var sb strings.Builder
 	var args []any
+	withSQL, withArgs, err := c.compileWith(q.with)
+	if err != nil {
+		return "", nil, err
+	}
+	sb.WriteString(withSQL)
+	args = append(args, withArgs...)
 	sb.WriteString("DELETE FROM ")
 	sb.WriteString(c.Dialect.QuoteIdent(q.table.QualifiedName()))
 	if q.where != nil {

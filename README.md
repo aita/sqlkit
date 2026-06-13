@@ -15,8 +15,8 @@ notation and compiler cover both queries (DML) and schema changes (DDL):
   result into any destination you define (`sqlkit` tag / snake_case mapping,
   `sql.Scanner` support). The query shape and the DTO are decoupled.
 - **Full SQL surface** — joins, GROUP BY / HAVING, ORDER BY, DISTINCT,
-  UNION / INTERSECT / EXCEPT, aggregates, CASE / IF, and window functions
-  (`OVER (PARTITION BY ...)`).
+  UNION / INTERSECT / EXCEPT, CTEs (`WITH` / `WITH RECURSIVE`), aggregates,
+  CASE / IF, and window functions (`OVER (PARTITION BY ...)`).
 - **Code generation from PostgreSQL** — `sqlkit` introspects a live schema
   (`information_schema`) and generates the row structs and typed bindings.
 - **Standalone builder** — every chain also compiles unbound with
@@ -683,6 +683,53 @@ err = sqlkit.Union(
     db.Select(appdb.Users.Email).From(appdb.Users).Where(...),
     sqlkit.Select(appdb.Admins.Email).From(appdb.Admins),
 ).OrderBy(sql.Asc(sql.Col("email"))).All(ctx).Scan(&emails)
+```
+
+## Common table expressions (WITH)
+
+`CTE(name)` turns a query into a named common table expression. The returned
+value doubles as a FROM/JOIN source and a handle for its output columns (`Col`).
+Attach it to a `SELECT`, `UPDATE`, or `DELETE` with `WithCTE`, which emits a
+leading `WITH` clause; list CTEs in dependency order (a CTE before any CTE whose
+body references it). Bind placeholders stay numbered consistently across the CTE
+bodies and the main statement. Pass `sql.Recursive()` and `sql.Columns(...)`
+options to configure a CTE.
+
+```go
+// WITH "active" AS (SELECT ...) SELECT ... FROM "active"
+active := db.Select(appdb.Users.ID).From(appdb.Users).
+    Where(appdb.Users.Active.Eq(true)).
+    CTE("active")
+
+var ids []int64
+err := db.Select(active.Col("id")).
+    From(active).
+    WithCTE(active).
+    All(ctx).Scan(&ids)
+
+// sql.Columns declares an explicit column list: WITH "t" ("org_id", "n") AS (...)
+totals := db.Select(appdb.Users.OrgID, sql.As(sql.CountAll(), "n")).
+    From(appdb.Users).GroupBy(appdb.Users.OrgID).
+    CTE("t", sql.Columns("org_id", "n"))
+err = db.Select(totals.Col("org_id"), totals.Col("n")).
+    From(totals).
+    WithCTE(totals).
+    All(ctx).Scan(&dst)
+
+// Recursive CTE: build the body (base UNION ALL recursive term) first, then
+// convert with sql.Recursive(). The recursive term references the CTE by name.
+base := db.Select(appdb.Nodes.ID, appdb.Nodes.ParentID).From(appdb.Nodes).
+    Where(appdb.Nodes.ParentID.IsNull())
+step := db.Select(sql.Col("nodes.id"), sql.Col("nodes.parent_id")).From(appdb.Nodes).
+    Join(sql.Tbl("tree"), sqlkit.Cond(sql.Eq(sql.Col("nodes.parent_id"), sql.Col("tree.id"))))
+tree := base.UnionAll(step).CTE("tree", sql.Recursive(), sql.Columns("id", "parent_id"))
+err = db.Select(tree.Col("id")).
+    From(tree).
+    WithCTE(tree).
+    All(ctx).Scan(&dst)
+
+// WithCTE works on UPDATE/DELETE too — reference the CTE from a WHERE subquery:
+// WITH "doomed" AS (...) DELETE FROM "users" WHERE "org_id" IN (SELECT ... FROM "doomed")
 ```
 
 `Coalesce`, `NullIf`, `Greatest`, `Least`, `Sum`, `Avg`, `Min`, `Max`,

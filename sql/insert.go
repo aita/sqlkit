@@ -56,6 +56,7 @@ func (q InsertQuery) compile(c *Compiler) (string, []any, error) {
 
 // UpdateQuery is the runtime representation for an UPDATE statement.
 type UpdateQuery struct {
+	with      []CTE
 	table     Table
 	sets      []Assignment
 	where     Expression
@@ -100,6 +101,7 @@ func (q UpdateQuery) compile(c *Compiler) (string, []any, error) {
 
 // DeleteQuery is the runtime representation for a DELETE statement.
 type DeleteQuery struct {
+	with      []CTE
 	table     Table
 	where     Expression
 	returning []Selection

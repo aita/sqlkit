@@ -31,6 +31,13 @@ func (q UpdateQuery) Set(assignments ...sql.Assignment) UpdateQuery {
 	return q
 }
 
+// WithCTE prepends common table expressions to the UPDATE, emitting a leading
+// WITH clause. Reference them from a WHERE subquery.
+func (q UpdateQuery) WithCTE(ctes ...sql.CTE) UpdateQuery {
+	q.query = q.query.WithCTE(ctes...)
+	return q
+}
+
 // Where adds predicates, combined with AND.
 func (q UpdateQuery) Where(predicates ...Predicate) UpdateQuery {
 	if expr := combineWhere(predicates); expr != nil {

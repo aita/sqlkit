@@ -104,6 +104,20 @@ func (q SelectQuery) Distinct() SelectQuery {
 	return q
 }
 
+// CTE wraps this SELECT as a common table expression named name, for use as a
+// FROM source and column handle, and attached to a statement with WithCTE. Pass
+// sql.Recursive() / sql.Columns(...) options to configure it.
+func (q SelectQuery) CTE(name string, opts ...sql.CTEOption) sql.CTE {
+	return q.query.CTE(name, opts...)
+}
+
+// WithCTE prepends common table expressions to the SELECT, emitting a leading
+// WITH clause. Like the other clause methods it must be called after From.
+func (q SelectQuery) WithCTE(ctes ...sql.CTE) SelectQuery {
+	q.query = q.query.WithCTE(ctes...)
+	return q
+}
+
 // SQLSource marks the query as a subquery source.
 func (q SelectQuery) SQLSource() SourceExpression { return q.query.SQLSource() }
 

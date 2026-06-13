@@ -1,0 +1,84 @@
+package sql
+
+// CTE is a named common table expression built from a query with Query.CTE.
+// A CTE doubles as a FROM/JOIN source and a handle for referencing its output
+// columns (Col). Attach it to a statement with WithCTE, which emits a leading
+// WITH clause:
+//
+//	active := Select(Col("id")).From(users).Where(...).CTE("active")
+//	Select(active.Col("id")).From(active).WithCTE(active)
+type CTE struct {
+	name      string
+	columns   []string // optional explicit output column list
+	query     Query
+	recursive bool
+}
+
+// cteOptions accumulates the optional settings applied by CTEOption.
+type cteOptions struct {
+	columns   []string
+	recursive bool
+}
+
+// CTEOption configures a CTE created with Query.CTE.
+type CTEOption func(*cteOptions)
+
+// Recursive marks the CTE as recursive. A WITH block containing any recursive
+// CTE is emitted as WITH RECURSIVE. Build the recursive term by combining the
+// base query with Union/UnionAll before calling CTE, referencing the CTE by its
+// name (a plain Table/Col reference).
+func Recursive() CTEOption {
+	return func(o *cteOptions) { o.recursive = true }
+}
+
+// Columns declares an explicit output column list for the CTE,
+// e.g. q.CTE("totals", Columns("org_id", "n")).
+func Columns(names ...string) CTEOption {
+	return func(o *cteOptions) { o.columns = names }
+}
+
+// CTE wraps this SELECT as a common table expression named name.
+func (q SelectQuery) CTE(name string, opts ...CTEOption) CTE {
+	return newCTE(name, q, opts)
+}
+
+// CTE wraps this set-operation query as a common table expression. Use it for
+// recursive CTEs, whose body is a UNION of the base and recursive terms.
+func (q CompoundQuery) CTE(name string, opts ...CTEOption) CTE {
+	return newCTE(name, q, opts)
+}
+
+func newCTE(name string, query Query, opts []CTEOption) CTE {
+	var o cteOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return CTE{name: name, columns: o.columns, query: query, recursive: o.recursive}
+}
+
+// Col references one of the CTE's output columns, qualified by the CTE name.
+func (c CTE) Col(name string) ColumnExpression {
+	return ColumnExpression{Name: c.name + "." + name}
+}
+
+// SQLSource lets a CTE be used as a FROM/JOIN source, referenced by name.
+func (c CTE) SQLSource() SourceExpression { return SourceExpression{Name: c.name} }
+
+// WithCTE prepends common table expressions to the SELECT, in the given order.
+// Repeated calls append. List a CTE before any CTE whose body references it.
+func (q SelectQuery) WithCTE(ctes ...CTE) SelectQuery {
+	q.with = append(q.with, ctes...)
+	return q
+}
+
+// WithCTE prepends common table expressions to the UPDATE.
+func (q UpdateQuery) WithCTE(ctes ...CTE) UpdateQuery {
+	q.with = append(q.with, ctes...)
+	return q
+}
+
+// WithCTE prepends common table expressions to the DELETE.
+func (q DeleteQuery) WithCTE(ctes ...CTE) DeleteQuery {
+	q.with = append(q.with, ctes...)
+	return q
+}
