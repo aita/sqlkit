@@ -77,6 +77,10 @@ type Scope struct {
 	order  []string
 	tables map[string]*tableState
 
+	// batchSize, when > 0, splits the staged value inserts of each table into
+	// Insert statements of at most this many rows (see WithBatchSize).
+	batchSize int
+
 	// nesting
 	parent    *Scope
 	savepoint string
@@ -90,6 +94,17 @@ type Option func(*Scope)
 // map, or whose checksum differs (schema drift), fails fast.
 func WithIdentities(identities *meta.IdentityMap) Option {
 	return func(s *Scope) { s.identities = identities }
+}
+
+// WithBatchSize splits the value rows staged with Add (those passed by value,
+// without primary-key write-back) into INSERT statements of at most n rows each
+// per table at flush, keeping large bulk inserts within the database's
+// bind-parameter and statement-size limits. n <= 0 (the default) inserts each
+// table's value rows in a single statement. Pointer rows still insert one at a
+// time so their generated keys can be written back. The setting is inherited by
+// nested scopes.
+func WithBatchSize(n int) Option {
+	return func(s *Scope) { s.batchSize = n }
 }
 
 // NewScope creates a Unit of Work that loads and flushes through ex. Pass a
@@ -112,6 +127,7 @@ func (s *Scope) NewScope() *Scope {
 	return &Scope{
 		ex:         s.ex,
 		identities: s.identities,
+		batchSize:  s.batchSize,
 		tables:     map[string]*tableState{},
 		parent:     s,
 	}
@@ -357,7 +373,7 @@ func (s *Scope) flushInserts(ctx context.Context, ts *tableState) error {
 		batch = append(batch, row)
 	}
 	if len(batch) > 0 {
-		if _, err := s.ex.Insert(ts.table).Values(batch...).Exec(ctx); err != nil {
+		if _, err := s.ex.Insert(ts.table).Values(batch...).BatchSize(s.batchSize).Exec(ctx); err != nil {
 			return fmt.Errorf("uow: insert into %s: %w", ts.key, err)
 		}
 	}

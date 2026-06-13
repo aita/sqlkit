@@ -104,6 +104,54 @@ func TestAddValueBatchesIntoOneInsert(t *testing.T) {
 	}
 }
 
+func TestWithBatchSizeSplitsValueInserts(t *testing.T) {
+	fake := &sqltest.Fake{}
+	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()), uow.WithBatchSize(2))
+	if err := scope.Add(newUsers(),
+		userRow{Email: "a@x"}, userRow{Email: "b@x"},
+		userRow{Email: "c@x"}, userRow{Email: "d@x"},
+		userRow{Email: "e@x"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := scope.Flush(ctx()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	// 5 rows in batches of 2 => 3 INSERT statements (2, 2, 1).
+	if got := len(fake.Execs()); got != 3 {
+		t.Fatalf("got %d execs, want 3 batched inserts: %v", got, fake.Statements())
+	}
+}
+
+func TestWithBatchSizeKeepsColumnSetAcrossBatches(t *testing.T) {
+	// id is defaulted. Only a later batch carries a non-zero id, so every batch
+	// must include the id column — the staged rows are compiled as one insert
+	// (column set derived from all rows) before being split.
+	fake := &sqltest.Fake{}
+	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()), uow.WithBatchSize(2))
+	if err := scope.Add(newUsers(),
+		userRow{Email: "a@x"}, // id zero
+		userRow{Email: "b@x"}, // id zero
+		userRow{ID: 9, Email: "c@x"},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := scope.Flush(ctx()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	execs := fake.Execs()
+	if len(execs) != 2 {
+		t.Fatalf("got %d execs, want 2 batches: %v", len(execs), fake.Statements())
+	}
+	for i, want := range []int{6, 3} { // (id,email,name)x2, then x1
+		if got := len(execs[i].Args); got != want {
+			t.Fatalf("execs[%d] args = %d, want %d; SQL = %q", i, got, want, execs[i].SQL)
+		}
+		if !strings.Contains(execs[i].SQL, `"id"`) {
+			t.Fatalf("execs[%d] omitted id: %q", i, execs[i].SQL)
+		}
+	}
+}
+
 func TestAddPointerWritesBackViaReturning(t *testing.T) {
 	fake := &sqltest.Fake{QueryFunc: usersResult(99, "c@x", "")}
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB())) // postgres default => RETURNING

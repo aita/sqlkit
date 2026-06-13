@@ -743,6 +743,16 @@ err = db.Delete(appdb.Posts).Where(appdb.Posts.Published.Eq(false)).
 Columns with a database-side default are omitted from INSERT when their value
 is the Go zero value in every row, so serial keys and defaults are filled in.
 
+**Bulk inserts.** `BatchSize(n)` splits a `Values` insert into separate `Exec`
+statements of at most `n` rows each, keeping large inserts within the
+database's bind-parameter and statement-size limits. The returned result sums
+`RowsAffected` across batches. Run it inside a `Session` if the batches must
+share a transaction.
+
+```go
+_, err = db.Insert(appdb.Users).Values(users).BatchSize(1000).Exec(ctx)
+```
+
 **Upsert.** `OnConflictDoNothing` / `OnConflictDoUpdate` render PostgreSQL's
 `ON CONFLICT` and MySQL's `ON DUPLICATE KEY UPDATE`. In a `DO UPDATE`
 assignment, `Column.Excluded()` refers to the row the INSERT proposed
