@@ -1,6 +1,10 @@
 package main
 
 import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -78,5 +82,137 @@ func TestAutogenerateRequiresOneSource(t *testing.T) {
 	// Both sources selected.
 	if err := (&autogenerateCmd{FromDB: true, FromGit: "HEAD"}).Run(); err == nil || !strings.Contains(err.Error(), "exactly one source") {
 		t.Errorf("both sources: expected 'exactly one source' error, got %v", err)
+	}
+}
+
+// TestAutogenerateFromGit exercises the --from-git source path end to end in a
+// throwaway git repository: it commits a catalog, edits the working tree, then
+// runs autogenerate so the command checks the committed revision out into a
+// worktree, runs its snapshot shims with `go run`, diffs the two snapshots, and
+// writes a migration file. This covers gitSnapshot/targetSnapshot, the shim
+// execution, and the gob snapshot boundary that the unit tests cannot reach.
+//
+// The temp module replaces github.com/aita/sqlkit with this checkout, and the
+// catalog/shim packages have no external dependencies, so the shims build
+// offline against the module cache already populated by the test run.
+func TestAutogenerateFromGit(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	// The sqlkit module root, captured before chdir so the temp module's replace
+	// directive can point at it with an absolute path.
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoRoot, err := filepath.Abs(filepath.Join(wd, "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "go.mod"), fmt.Sprintf(`module sqlkitgittest.example/proj
+
+go 1.25.0
+
+require github.com/aita/sqlkit v0.0.0
+
+replace github.com/aita/sqlkit => %s
+`, repoRoot))
+	writeTestFile(t, filepath.Join(dir, "go.sum"), "")
+
+	// Initial committed catalog: widgets(id, name).
+	writeTestFile(t, filepath.Join(dir, "schema", "schema.go"), catalogSource(
+		`sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+		sqldef.Column("name", sqldef.Text),`))
+
+	runGit(t, dir, "init")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "sqlkit test")
+	// Disable commit signing: the test repo must commit without any globally
+	// configured signing key or server.
+	runGit(t, dir, "config", "commit.gpgsign", "false")
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "initial catalog")
+
+	// Working-tree catalog adds a column; --from-git HEAD diffs the committed
+	// revision (source) against this working tree (target).
+	writeTestFile(t, filepath.Join(dir, "schema", "schema.go"), catalogSource(
+		`sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+		sqldef.Column("name", sqldef.Text),
+		sqldef.Column("sku", sqldef.VarChar(64), sqldef.Nullable()),`))
+
+	t.Chdir(dir)
+	// Let the shims resolve the local replace without a pre-populated go.sum.
+	t.Setenv("GOFLAGS", "-mod=mod")
+
+	cmd := &autogenerateCmd{
+		Name:       "add sku",
+		Catalog:    "./schema",
+		Var:        "Catalog",
+		FromGit:    "HEAD",
+		Migrations: "./migrations",
+		Package:    "migrations",
+		Registry:   "Registry",
+	}
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("autogenerate --from-git: %v", err)
+	}
+
+	matches, err := filepath.Glob(filepath.Join(dir, "migrations", "*.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected exactly one generated migration, got %v", matches)
+	}
+	src, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	if !strings.Contains(body, `op.AddColumn("widgets", sqldef.Column("sku"`) {
+		t.Errorf("generated Up missing AddColumn(sku):\n%s", body)
+	}
+	if !strings.Contains(body, `op.DropColumn("widgets", "sku")`) {
+		t.Errorf("generated Down missing DropColumn(sku):\n%s", body)
+	}
+}
+
+// catalogSource renders a schema package declaring a widgets table with the
+// given column elements. It is compiled by the autogenerate shims (via go run),
+// not gofmt'd, so its indentation is unimportant.
+func catalogSource(columns string) string {
+	return `package schema
+
+import "github.com/aita/sqlkit/sqldef"
+
+var Catalog *sqldef.Catalog = func() *sqldef.Catalog {
+	c := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
+	c.Table("widgets",
+` + columns + `
+	)
+	return c
+}()
+`
+}
+
+func writeTestFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
 }
