@@ -7,9 +7,10 @@ type Source interface {
 
 // SourceExpression is the compiled representation of a FROM/JOIN source.
 type SourceExpression struct {
-	Name  string
-	Query Query
-	Alias string
+	Name    string
+	Query   Query
+	Alias   string
+	Lateral bool
 }
 
 // SQLSource marks SourceExpression as a Source.
@@ -47,6 +48,15 @@ func Alias(query Query, alias string) SourceExpression {
 func SourceAlias(source Source, alias string) SourceExpression {
 	expr := source.SQLSource()
 	expr.Alias = alias
+	return expr
+}
+
+// Lateral marks a source as LATERAL, so a joined subquery may reference columns
+// of the sources to its left (PostgreSQL LATERAL). Combine with Alias to name
+// the derived table, e.g. Lateral(Alias(subquery, "recent")).
+func Lateral(source Source) SourceExpression {
+	expr := source.SQLSource()
+	expr.Lateral = true
 	return expr
 }
 

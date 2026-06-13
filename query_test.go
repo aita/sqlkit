@@ -485,6 +485,78 @@ func TestTypedQuantifiedComparison(t *testing.T) {
 		[]any{"hot"})
 }
 
+func TestTypedOuterAndCrossJoins(t *testing.T) {
+	assertToSQL(t,
+		sqlkit.Select(Posts.ID).From(Posts).RightJoin(Users, Posts.UserID.EqExpr(Users.ID)),
+		`SELECT "public"."posts"."id" FROM "public"."posts" RIGHT JOIN "public"."users" ON ("public"."posts"."user_id" = "public"."users"."id")`,
+		nil)
+	assertToSQL(t,
+		sqlkit.Select(Posts.ID).From(Posts).FullJoin(Users, Posts.UserID.EqExpr(Users.ID)),
+		`SELECT "public"."posts"."id" FROM "public"."posts" FULL JOIN "public"."users" ON ("public"."posts"."user_id" = "public"."users"."id")`,
+		nil)
+	assertToSQL(t,
+		sqlkit.Select(Posts.ID).From(Posts).CrossJoin(Users),
+		`SELECT "public"."posts"."id" FROM "public"."posts" CROSS JOIN "public"."users"`,
+		nil)
+}
+
+func TestTypedArithmeticAndCast(t *testing.T) {
+	// UPDATE ... SET id = id + 1 via a typed arithmetic expression.
+	assertToSQL(t,
+		sqlkit.Update(Users).Set(Users.ID.SetExpr(Users.ID.Add(1))).Where(Users.ID.Eq(7)),
+		`UPDATE "public"."users" SET "id" = ("public"."users"."id" + $1) WHERE ("public"."users"."id" = $2)`,
+		[]any{int64(1), int64(7)})
+
+	assertToSQL(t,
+		sqlkit.Select(sql.As(sqlkit.Cast[int64](Users.Email, "integer"), "n")).From(Users),
+		`SELECT CAST("public"."users"."email" AS integer) AS "n" FROM "public"."users"`,
+		nil)
+}
+
+func TestTypedOnConflictDoUpdate(t *testing.T) {
+	name := "Alice"
+	query := sqlkit.Insert(Users).
+		Values(User{ID: 1, Email: "a@example.com", Name: &name}).
+		OnConflictDoUpdate([]sqlkit.AnyColumn{Users.ID}, Users.Email.SetExpr(Users.Email.Excluded())).
+		Returning(Users.ID)
+	assertToSQL(t, query,
+		`INSERT INTO "public"."users" ("id", "email", "name") VALUES ($1, $2, $3) ON CONFLICT ("id") DO UPDATE SET "email" = excluded."email" RETURNING "public"."users"."id"`,
+		[]any{int64(1), "a@example.com", &name})
+}
+
+func TestTypedOnConflictDoNothing(t *testing.T) {
+	name := "Alice"
+	query := sqlkit.Insert(Users).
+		Values(User{ID: 1, Email: "a@example.com", Name: &name}).
+		OnConflictDoNothing(Users.ID)
+	assertToSQL(t, query,
+		`INSERT INTO "public"."users" ("id", "email", "name") VALUES ($1, $2, $3) ON CONFLICT ("id") DO NOTHING`,
+		[]any{int64(1), "a@example.com", &name})
+}
+
+func TestTypedUpdateFromAndDeleteUsing(t *testing.T) {
+	assertToSQL(t,
+		sqlkit.Update(Posts).
+			Set(Posts.Title.SetExpr(sqlkit.SubExpr[string](
+				sqlkit.Select(Users.Email).From(Users).Where(Users.ID.EqExpr(Posts.UserID))))).
+			From(Users).
+			Where(Users.ID.EqExpr(Posts.UserID)),
+		`UPDATE "public"."posts" SET "title" = (SELECT "public"."users"."email" FROM "public"."users" WHERE ("public"."users"."id" = "public"."posts"."user_id")) FROM "public"."users" WHERE ("public"."users"."id" = "public"."posts"."user_id")`,
+		nil)
+
+	assertToSQL(t,
+		sqlkit.Delete(Posts).Using(Users).Where(Users.ID.EqExpr(Posts.UserID), Users.Email.Eq("x@example.com")),
+		`DELETE FROM "public"."posts" USING "public"."users" WHERE (("public"."users"."id" = "public"."posts"."user_id") AND ("public"."users"."email" = $1))`,
+		[]any{"x@example.com"})
+}
+
+func TestTypedOrderByNulls(t *testing.T) {
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).OrderBy(Users.Name.Asc().NullsLast(), Users.ID.Desc()),
+		`SELECT "public"."users"."id" FROM "public"."users" ORDER BY "public"."users"."name" NULLS LAST, "public"."users"."id" DESC`,
+		nil)
+}
+
 func TestTypedLikeVariants(t *testing.T) {
 	assertToSQL(t,
 		sqlkit.Select(Users.ID).From(Users).Where(sqlkit.NotLike(Users.Email, "%@spam.com")),

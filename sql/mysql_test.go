@@ -84,6 +84,32 @@ func TestMySQLInsertUpdateDelete(t *testing.T) {
 	assertMySQL(t, del, "DELETE FROM `users` WHERE (`id` = ?)", []any{1})
 }
 
+func TestMySQLOnDuplicateKeyUpdate(t *testing.T) {
+	// MySQL ignores the conflict target and uses VALUES(col) for the new row.
+	insert := InsertInto(Table{Name: "users"}).Columns("email", "name").Values("a@x.com", "Alice").
+		OnConflictDoUpdate([]string{"email"}, Set("name", Excluded("name")))
+	assertMySQL(t, insert,
+		"INSERT INTO `users` (`email`, `name`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `name` = VALUES(`name`)",
+		[]any{"a@x.com", "Alice"})
+}
+
+func TestMySQLRejectsDoNothingAndConflictWhere(t *testing.T) {
+	doNothing := InsertInto(Table{Name: "users"}).Columns("email").Values("a@x.com").
+		OnConflictDoNothing("email")
+	if _, _, err := doNothing.ToSQL(MySQLDialect{}); err == nil ||
+		!strings.Contains(err.Error(), "DO NOTHING") {
+		t.Fatalf("ToSQL() error = %v, want DO NOTHING rejection", err)
+	}
+
+	withWhere := InsertInto(Table{Name: "users"}).Columns("email", "name").Values("a@x.com", "Alice").
+		OnConflictDoUpdate([]string{"email"}, Set("name", Excluded("name"))).
+		OnConflictWhere(Ne(Col("name"), Val("locked")))
+	if _, _, err := withWhere.ToSQL(MySQLDialect{}); err == nil ||
+		!strings.Contains(err.Error(), "WHERE") {
+		t.Fatalf("ToSQL() error = %v, want WHERE rejection", err)
+	}
+}
+
 func TestMySQLRejectsReturning(t *testing.T) {
 	insert := InsertInto(Table{Name: "users"}).Columns("email").Values("a@x.com").Returning(Col("id"))
 	_, _, err := insert.ToSQL(MySQLDialect{})

@@ -84,6 +84,37 @@ func (q SelectQuery) LeftJoin(source sql.Source, on Predicate) SelectQuery {
 	return q
 }
 
+// RightJoin adds a RIGHT JOIN.
+func (q SelectQuery) RightJoin(source sql.Source, on Predicate) SelectQuery {
+	q.query = q.query.RightJoin(source, on.Expression())
+	return q
+}
+
+// FullJoin adds a FULL OUTER JOIN.
+func (q SelectQuery) FullJoin(source sql.Source, on Predicate) SelectQuery {
+	q.query = q.query.FullJoin(source, on.Expression())
+	return q
+}
+
+// CrossJoin adds a CROSS JOIN, the Cartesian product of the inputs. It takes no
+// ON condition.
+func (q SelectQuery) CrossJoin(source sql.Source) SelectQuery {
+	q.query = q.query.CrossJoin(source)
+	return q
+}
+
+// RightJoinRel adds a RIGHT JOIN to a relation's target on its foreign-key
+// condition.
+func (q SelectQuery) RightJoinRel(rel Relation) SelectQuery {
+	return q.RightJoin(rel.Target(), rel.JoinOn())
+}
+
+// FullJoinRel adds a FULL OUTER JOIN to a relation's target on its foreign-key
+// condition.
+func (q SelectQuery) FullJoinRel(rel Relation) SelectQuery {
+	return q.FullJoin(rel.Target(), rel.JoinOn())
+}
+
 // JoinRel adds an INNER JOIN to a relation's target on its foreign-key
 // condition, so callers never spell out the ON clause:
 //

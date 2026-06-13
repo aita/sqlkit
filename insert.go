@@ -21,8 +21,17 @@ type InsertQuery struct {
 	rows         []any
 	selectSrc    sql.Query
 	columns      []AnyColumn
+	conflict     *insertConflict
 	returning    []sql.Selection
 	hasReturning bool
+}
+
+// insertConflict holds a typed upsert action mirroring sql.conflictClause.
+type insertConflict struct {
+	doUpdate bool
+	target   []AnyColumn
+	sets     []sql.Assignment
+	where    sql.Expression
 }
 
 // Insert creates an unbound INSERT builder, for ToSQL or tests. Executing it
@@ -70,6 +79,41 @@ func (q InsertQuery) FromSelect(query sql.Query) InsertQuery {
 	return q
 }
 
+// OnConflictDoNothing makes this an upsert that skips conflicting rows
+// (PostgreSQL ON CONFLICT [ (target...) ] DO NOTHING). target names the
+// conflicting columns. MySQL has no DO NOTHING form.
+func (q InsertQuery) OnConflictDoNothing(target ...AnyColumn) InsertQuery {
+	q.conflict = &insertConflict{target: target}
+	return q
+}
+
+// OnConflictDoUpdate makes this an upsert that updates conflicting rows
+// (PostgreSQL ON CONFLICT (target...) DO UPDATE SET ..., MySQL ON DUPLICATE KEY
+// UPDATE ...). Build assignments with Column.Set / SetExpr, referencing the
+// proposed values with Column.Excluded:
+//
+//	db.Insert(Users).Values(u).
+//		OnConflictDoUpdate([]sqlkit.AnyColumn{Users.ID}, Users.Name.SetExpr(Users.Name.Excluded())).
+//		Exec(ctx)
+func (q InsertQuery) OnConflictDoUpdate(target []AnyColumn, assignments ...sql.Assignment) InsertQuery {
+	q.conflict = &insertConflict{doUpdate: true, target: target, sets: assignments}
+	return q
+}
+
+// OnConflictWhere adds a predicate to a preceding OnConflictDoUpdate
+// (PostgreSQL ON CONFLICT ... DO UPDATE SET ... WHERE ...). It is unsupported
+// on MySQL and has no effect without a DO UPDATE action.
+func (q InsertQuery) OnConflictWhere(predicates ...Predicate) InsertQuery {
+	if q.conflict != nil {
+		if expr := combineWhere(predicates); expr != nil {
+			clause := *q.conflict
+			clause.where = expr
+			q.conflict = &clause
+		}
+	}
+	return q
+}
+
 // Returning adds an explicit RETURNING clause and makes the statement yield
 // rows: end the chain with All(...).Scan to read them (e.g. database-generated
 // keys). With no arguments it returns all table columns; otherwise the given
@@ -86,10 +130,27 @@ func (q InsertQuery) ToSQL(dialect sql.Dialect) (string, []any, error) {
 	if err != nil {
 		return "", nil, err
 	}
+	if q.conflict != nil {
+		insert = q.applyConflict(insert)
+	}
 	if q.hasReturning {
 		insert = insert.Returning(q.returningSelections()...)
 	}
 	return insert.ToSQL(dialect)
+}
+
+// applyConflict copies this query's upsert configuration onto the sql builder.
+func (q InsertQuery) applyConflict(insert sql.InsertQuery) sql.InsertQuery {
+	target := columnNames(q.conflict.target)
+	if q.conflict.doUpdate {
+		insert = insert.OnConflictDoUpdate(target, q.conflict.sets...)
+	} else {
+		insert = insert.OnConflictDoNothing(target...)
+	}
+	if q.conflict.where != nil {
+		insert = insert.OnConflictWhere(q.conflict.where)
+	}
+	return insert
 }
 
 func (q InsertQuery) returningSelections() []sql.Selection {

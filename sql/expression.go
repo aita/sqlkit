@@ -56,6 +56,7 @@ type BinaryExpression struct {
 }
 
 func (BinaryExpression) SQLExpression() {}
+func (BinaryExpression) SQLSelection()  {}
 
 // Eq creates an equality expression. Non-expression operands are converted to
 // bind values so callers can write Eq(Col("id"), 123).
@@ -75,6 +76,22 @@ func Gt(left, right any) BinaryExpression { return binary(left, ">", right) }
 
 // Ge creates a "greater than or equal" expression.
 func Ge(left, right any) BinaryExpression { return binary(left, ">=", right) }
+
+// Add creates an "a + b" arithmetic expression. Non-expression operands become
+// bind values.
+func Add(left, right any) BinaryExpression { return binary(left, "+", right) }
+
+// Sub creates an "a - b" arithmetic expression.
+func Sub(left, right any) BinaryExpression { return binary(left, "-", right) }
+
+// Mul creates an "a * b" arithmetic expression.
+func Mul(left, right any) BinaryExpression { return binary(left, "*", right) }
+
+// Div creates an "a / b" arithmetic expression.
+func Div(left, right any) BinaryExpression { return binary(left, "/", right) }
+
+// Mod creates an "a % b" arithmetic expression.
+func Mod(left, right any) BinaryExpression { return binary(left, "%", right) }
 
 // Like creates a LIKE expression.
 func Like(left, pattern any) BinaryExpression { return binary(left, "LIKE", pattern) }
@@ -272,6 +289,17 @@ func All(left any, operator string, query Query) QuantifiedExpression {
 	return QuantifiedExpression{Left: Expr(left), Operator: operator, Quantifier: "ALL", Query: query}
 }
 
+// ExcludedExpression refers, inside an upsert's DO UPDATE assignments, to the
+// value the conflicting INSERT proposed for a column. It renders per dialect:
+// PostgreSQL's excluded.<col> and MySQL's VALUES(<col>).
+type ExcludedExpression struct{ Column string }
+
+func (ExcludedExpression) SQLExpression() {}
+
+// Excluded references the proposed value for column in an OnConflictDoUpdate
+// assignment, e.g. Set("name", Excluded("name")) to overwrite with the new row.
+func Excluded(column string) ExcludedExpression { return ExcludedExpression{Column: column} }
+
 // NullPredicate tests an expression for IS NULL / IS NOT NULL.
 type NullPredicate struct {
 	Operand Expression
@@ -321,8 +349,9 @@ func As(selection Selection, alias string) AliasedSelection {
 
 // OrderTerm is one ORDER BY term.
 type OrderTerm struct {
-	Expr Expression
-	Desc bool
+	Expr  Expression
+	Desc  bool
+	Nulls string // "", "FIRST", or "LAST" (PostgreSQL NULLS ordering)
 }
 
 // Asc creates an ascending ORDER BY term.
@@ -330,6 +359,13 @@ func Asc(expr Expression) OrderTerm { return OrderTerm{Expr: expr} }
 
 // Desc creates a descending ORDER BY term.
 func Desc(expr Expression) OrderTerm { return OrderTerm{Expr: expr, Desc: true} }
+
+// NullsFirst orders NULLs before non-NULLs (PostgreSQL NULLS FIRST). It is a
+// PostgreSQL extension; MySQL does not accept the NULLS clause.
+func (t OrderTerm) NullsFirst() OrderTerm { t.Nulls = "FIRST"; return t }
+
+// NullsLast orders NULLs after non-NULLs (PostgreSQL NULLS LAST).
+func (t OrderTerm) NullsLast() OrderTerm { t.Nulls = "LAST"; return t }
 
 // Assignment is one SET clause item in UPDATE, or a column/value pair in INSERT.
 type Assignment struct {
@@ -462,6 +498,24 @@ func JSONGet(operand any, path ...any) JSONAccessExpression {
 // MySQL JSON_UNQUOTE(JSON_EXTRACT(...))), so it compares against string values.
 func JSONGetText(operand any, path ...any) JSONAccessExpression {
 	return JSONAccessExpression{Operand: Expr(operand), Path: path, AsText: true}
+}
+
+// CastExpression converts an operand to another SQL type. It renders as the
+// standard CAST(operand AS type), which both PostgreSQL and MySQL accept; the
+// target type spelling is the caller's responsibility (e.g. "integer",
+// "text", "numeric(10, 2)").
+type CastExpression struct {
+	Operand Expression
+	Type    string
+}
+
+func (CastExpression) SQLExpression() {}
+func (CastExpression) SQLSelection()  {}
+
+// Cast creates a CAST(operand AS sqlType) expression. A non-expression operand
+// becomes a bind value.
+func Cast(operand any, sqlType string) CastExpression {
+	return CastExpression{Operand: Expr(operand), Type: sqlType}
 }
 
 // RowNumber creates the ROW_NUMBER() window function.

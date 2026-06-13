@@ -64,6 +64,25 @@ func (q SelectQuery) LeftJoin(source Source, on Expression) SelectQuery {
 	return q
 }
 
+// RightJoin adds a RIGHT JOIN clause.
+func (q SelectQuery) RightJoin(source Source, on Expression) SelectQuery {
+	q.joins = append(q.joins, JoinClause{Kind: "RIGHT JOIN", Source: source, On: on})
+	return q
+}
+
+// FullJoin adds a FULL OUTER JOIN clause.
+func (q SelectQuery) FullJoin(source Source, on Expression) SelectQuery {
+	q.joins = append(q.joins, JoinClause{Kind: "FULL JOIN", Source: source, On: on})
+	return q
+}
+
+// CrossJoin adds a CROSS JOIN clause. A cross join has no ON condition; it
+// produces the Cartesian product of its inputs.
+func (q SelectQuery) CrossJoin(source Source) SelectQuery {
+	q.joins = append(q.joins, JoinClause{Kind: "CROSS JOIN", Source: source})
+	return q
+}
+
 // Where adds a WHERE predicate, combined with AND when called repeatedly.
 func (q SelectQuery) Where(expr Expression) SelectQuery {
 	if q.where == nil {

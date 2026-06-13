@@ -269,6 +269,11 @@ func (c Column[T]) Asc() sql.OrderTerm { return sql.Asc(c) }
 // Desc creates a descending ORDER BY term.
 func (c Column[T]) Desc() sql.OrderTerm { return sql.Desc(c) }
 
+// Excluded refers to this column's proposed value inside an OnConflictDoUpdate
+// assignment (PostgreSQL excluded.col, MySQL VALUES(col)), e.g.
+// Users.Name.SetExpr(Users.Name.Excluded()) to overwrite with the new row.
+func (c Column[T]) Excluded() TypedExpr[T] { return typedNode[T]{sql.Excluded(c.name)} }
+
 // Set creates a typed SET assignment for UPDATE statements.
 func (c Column[T]) Set(value T) sql.Assignment { return sql.Set(c.name, sql.Val(value)) }
 
@@ -304,6 +309,37 @@ func (typedScalarSubquery[T]) typedExpr(T) {}
 func (v typedScalarSubquery[T]) UnwrapExpression() sql.Expression {
 	return v.ScalarSubqueryExpression
 }
+
+// typedNode tags an arbitrary sql.Expression with a static Go type T, so it
+// satisfies TypedExpr[T] / TypedSelection[T]. The compiler matches by concrete
+// type, so UnwrapExpression exposes the wrapped node.
+type typedNode[T any] struct{ expr sql.Expression }
+
+func (typedNode[T]) SQLExpression()                     {}
+func (typedNode[T]) SQLSelection()                      {}
+func (typedNode[T]) typedExpr(T)                        {}
+func (n typedNode[T]) UnwrapExpression() sql.Expression { return n.expr }
+
+// Cast converts an expression to sqlType, keeping the result typed as T so it
+// stays usable in typed comparisons and projections. The target type spelling
+// is the caller's (e.g. "integer", "text", "numeric(10, 2)"); it is not checked
+// against T.
+func Cast[T any](expr sql.Expression, sqlType string) TypedSelection[T] {
+	return typedNode[T]{sql.Cast(expr, sqlType)}
+}
+
+// Add creates a "column + value" expression, typed as T (e.g. for
+// Set(n.SetExpr(n.Add(1)))). Subtraction, multiplication, and division follow.
+func (c Column[T]) Add(value T) TypedSelection[T] { return typedNode[T]{sql.Add(c, sql.Val(value))} }
+
+// Sub creates a "column - value" expression.
+func (c Column[T]) Sub(value T) TypedSelection[T] { return typedNode[T]{sql.Sub(c, sql.Val(value))} }
+
+// Mul creates a "column * value" expression.
+func (c Column[T]) Mul(value T) TypedSelection[T] { return typedNode[T]{sql.Mul(c, sql.Val(value))} }
+
+// Div creates a "column / value" expression.
+func (c Column[T]) Div(value T) TypedSelection[T] { return typedNode[T]{sql.Div(c, sql.Val(value))} }
 
 // Like creates a LIKE predicate for string expressions.
 func Like(expr TypedExpr[string], pattern string) Predicate {
