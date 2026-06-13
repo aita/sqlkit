@@ -76,3 +76,13 @@ func (q UnionQuery) One(ctx context.Context) Rows {
 func (q UnionQuery) Page(ctx context.Context, limit, offset int) Rows {
 	return newRows(ctx, q.ex, q.query.Limit(limit).Offset(offset))
 }
+
+// Count runs SELECT COUNT(*) over the combined result (wrapped as a subquery,
+// so the set operation applies) and returns the number of rows; see
+// SelectQuery.Count.
+func (q UnionQuery) Count(ctx context.Context) (int64, error) {
+	count := sql.Select(sql.CountAll()).From(sql.Alias(q.query, "q"))
+	var n int64
+	err := newRows(ctx, q.ex, count).Scan(&n)
+	return n, err
+}
