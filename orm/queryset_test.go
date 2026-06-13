@@ -80,6 +80,24 @@ func TestQuerySetBelongsToJoin(t *testing.T) {
 		[]any{30})
 }
 
+func TestQuerySetSelfReferentialJoin(t *testing.T) {
+	db := newDB()
+
+	// Forward belongs-to: join the manager (employees AS manager).
+	mgr := Employees.Q(db).
+		Join(Employees.Rels.Manager).
+		Where(Employees.Rels.Manager.ID.Eq(7))
+	assertSQL(t, mgr,
+		`SELECT "employees"."id", "employees"."manager_id", "employees"."name" FROM "employees" JOIN "employees" AS "manager" ON ("manager"."id" = "employees"."manager_id") WHERE ("manager"."id" = $1)`,
+		[]any{int64(7)})
+
+	// Reverse has-many: join the reports (employees AS employees_ref).
+	reports := Employees.Q(db).Join(Employees.Rels.Employees)
+	assertSQL(t, reports,
+		`SELECT "employees"."id", "employees"."manager_id", "employees"."name" FROM "employees" JOIN "employees" AS "employees_ref" ON ("employees_ref"."manager_id" = "employees"."id")`,
+		nil)
+}
+
 func TestQuerySetOrderLimitOffsetDistinct(t *testing.T) {
 	db := newDB()
 	qs := Users.Queryer(db).

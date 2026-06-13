@@ -122,6 +122,10 @@ type relationModel struct {
 	TargetCtor    string // target columns constructor, e.g. "newProfilesColumns"
 	Cardinality   string // "orm.ToOne" or "orm.ToMany"
 	JoinOn        string // the JoinOn predicate expression, fully rendered
+	// Alias is non-empty for self-referential relations, where the target is an
+	// aliased view of the same table (so the self-join is unambiguous). The
+	// relation value is then built with TargetCtor().As(Alias).
+	Alias string
 }
 
 // Generate renders the catalog into one or more Go source files according to
@@ -604,7 +608,11 @@ var {{.VarName}} = {{.TypeName}}{
 {{- if .Relations}}
 	Rels: {{.RelsType}}{
 {{- range .Relations}}
+{{- if .Alias}}
+		{{.Field}}: {{.RelType}}{ {{.TargetColumns}}: {{.TargetCtor}}().As({{printf "%q" .Alias}}) },
+{{- else}}
 		{{.Field}}: {{.RelType}}{ {{.TargetColumns}}: {{.TargetCtor}}() },
+{{- end}}
 {{- end}}
 	},
 {{- end}}

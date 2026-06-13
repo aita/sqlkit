@@ -133,6 +133,39 @@ func TestGenerateRelationsGolden(t *testing.T) {
 	}
 }
 
+func TestGenerateSelfReferentialRelations(t *testing.T) {
+	tables := []meta.Table{{
+		Schema: meta.Schema{Name: "public"},
+		Name:   "employees",
+		Columns: []meta.Column{
+			{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true, HasDefault: true},
+			{Name: "manager_id", Type: meta.Of("postgres", "int8", 0, 0, 0), Nullable: true},
+			{Name: "name", Type: meta.Of("postgres", "text", 0, 0, 0)},
+		},
+		ForeignKeys: []meta.ForeignKey{
+			{Name: "employees_manager_id_fkey", Columns: []string{"manager_id"}, RefSchema: meta.Schema{Name: "public"}, RefTable: "employees", RefColumns: []string{"id"}},
+		},
+	}}
+	body := string(generateSingle(t, tables, Options{PackageName: "hrdb", EmitRelations: true}))
+
+	for _, want := range []string{
+		// Forward belongs-to "Manager" with the target aliased "manager".
+		"type EmployeesManagerRel struct{ EmployeesColumns }",
+		`EmployeesColumns: newEmployeesColumns().As("manager")`,
+		"func (r EmployeesManagerRel) Cardinality() orm.Cardinality { return orm.ToOne }",
+		// JoinOn equates the aliased target id to the base manager_id.
+		"sqlkit.Cond(sql.Eq(r.ID, newEmployeesColumns().ManagerID))",
+		// Reverse has-many; alias suffixed to avoid colliding with the table name.
+		"func (r EmployeesEmployeesRel) Cardinality() orm.Cardinality { return orm.ToMany }",
+		`As("employees_ref")`,
+		"sqlkit.Cond(sql.Eq(r.ManagerID, newEmployeesColumns().ID))",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("self-referential relations missing %q\n%s", want, body)
+		}
+	}
+}
+
 func TestGenerateRelationsNoForeignKeysOmitsSQLImport(t *testing.T) {
 	// A relation-aware binding for a table without foreign keys still emits the
 	// Queryer surface (orm import) but no JoinOn expressions, so it must not

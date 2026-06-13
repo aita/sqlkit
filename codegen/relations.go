@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/aita/sqlkit/internal/names"
 	"github.com/aita/sqlkit/meta"
 )
 
@@ -17,9 +18,9 @@ var relationMethodNames = []string{
 // buildRelations derives the relation models for every generated table from the
 // foreign keys among them, keyed by qualified table name. For each FK it adds a
 // belongs-to relation on the child and the matching reverse (has-one when the
-// FK is unique, else has-many) on the parent. Foreign keys to tables outside
-// the generated set, and self-references, are skipped (the latter needs join
-// aliasing, deferred).
+// FK is unique, else has-many) on the parent. Self-references emit both
+// relations on the one table with the target aliased (so the self-join is
+// unambiguous). Foreign keys to tables outside the generated set are skipped.
 func buildRelations(tables []meta.Table) map[string][]relationModel {
 	byName := make(map[string]meta.Table, len(tables))
 	for _, t := range tables {
@@ -49,9 +50,6 @@ func buildRelations(tables []meta.Table) map[string][]relationModel {
 			if !ok {
 				continue // FK targets a table we are not generating
 			}
-			if parentQual == childQual {
-				continue // self-reference: needs alias support (deferred)
-			}
 			if len(fk.Columns) == 0 || len(fk.Columns) != len(fk.RefColumns) {
 				continue // malformed FK; skip rather than emit broken code
 			}
@@ -60,6 +58,41 @@ func buildRelations(tables []meta.Table) map[string][]relationModel {
 			parentVar := goName(parent.Name)
 			childCtor := "new" + childVar + "Columns"
 			parentCtor := "new" + parentVar + "Columns"
+
+			if parentQual == childQual {
+				// Self-reference: target is an aliased view of the same table so
+				// the self-join is unambiguous. Forward (belongs-to) and reverse
+				// relations both live on this table.
+				fwdName := uniqueName(reserved[childQual],
+					fkDerivedName(fk.Columns), goName(singular(child.Name)))
+				out[childQual] = append(out[childQual], relationModel{
+					Field:         fwdName,
+					RelType:       childVar + fwdName + "Rel",
+					TargetColumns: childVar + "Columns",
+					TargetCtor:    childCtor,
+					Cardinality:   "orm.ToOne",
+					Alias:         selfAlias(fwdName, child.Name),
+					JoinOn:        joinOn(fk.RefColumns, childCtor, fk.Columns),
+				})
+
+				var revBase, revCard string
+				if uniqueFK(child, fk.Columns) {
+					revBase, revCard = goName(singular(child.Name)), "orm.ToOne"
+				} else {
+					revBase, revCard = goName(child.Name), "orm.ToMany"
+				}
+				revName := uniqueName(reserved[childQual], revBase, fwdName+"Reverse")
+				out[childQual] = append(out[childQual], relationModel{
+					Field:         revName,
+					RelType:       childVar + revName + "Rel",
+					TargetColumns: childVar + "Columns",
+					TargetCtor:    childCtor,
+					Cardinality:   revCard,
+					Alias:         selfAlias(revName, child.Name),
+					JoinOn:        joinOn(fk.Columns, childCtor, fk.RefColumns),
+				})
+				continue
+			}
 
 			// Forward (belongs-to) on child, target = parent. The relation embeds
 			// the parent columns, so JoinOn equates r.<parentRef> = child.<fk>.
@@ -94,6 +127,18 @@ func buildRelations(tables []meta.Table) map[string][]relationModel {
 		}
 	}
 	return out
+}
+
+// selfAlias derives the table alias a self-referential relation's target is
+// referenced by: the snake_case of the relation field name, suffixed when it
+// would collide with the table's own name (which would make the self-join
+// ambiguous).
+func selfAlias(field, tableName string) string {
+	alias := names.SnakeCase(field)
+	if alias == tableName {
+		alias += "_ref"
+	}
+	return alias
 }
 
 // joinOn renders the JoinOn predicate. targetCols are accessed on the embedded

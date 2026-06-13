@@ -182,3 +182,78 @@ var Posts = PostsTable{
 	PostsColumns: newPostsColumns(),
 	Rels:         PostsRels{User: PostsUserRel{UsersColumns: newUsersColumns()}},
 }
+
+// --- employees (manager_id -> employees.id: self-reference) ---
+
+type EmployeesColumns struct {
+	info      sqlkit.TableInfo
+	ID        sqlkit.Column[int64]
+	ManagerID sqlkit.Column[int64]
+	Name      sqlkit.Column[string]
+}
+
+func newEmployeesColumns() EmployeesColumns {
+	info := sqlkit.TableInfo{Name: "employees"}
+	return EmployeesColumns{
+		info:      info,
+		ID:        sqlkit.NewColumn[int64](info, "id"),
+		ManagerID: sqlkit.NewColumn[int64](info, "manager_id"),
+		Name:      sqlkit.NewColumn[string](info, "name"),
+	}
+}
+
+func (t EmployeesColumns) Info() sqlkit.TableInfo             { return t.info }
+func (t EmployeesColumns) SQLSource() sqlkit.SourceExpression { return t.info.SQLSource() }
+func (t EmployeesColumns) Columns() []sqlkit.AnyColumn {
+	return []sqlkit.AnyColumn{t.ID, t.ManagerID, t.Name}
+}
+func (t EmployeesColumns) PrimaryKey() []sqlkit.AnyColumn { return []sqlkit.AnyColumn{t.ID} }
+func (t EmployeesColumns) Defaulted() []sqlkit.AnyColumn  { return []sqlkit.AnyColumn{t.ID} }
+func (t EmployeesColumns) As(alias string) EmployeesColumns {
+	info := t.info.WithAlias(alias)
+	return EmployeesColumns{
+		info:      info,
+		ID:        sqlkit.NewColumn[int64](info, "id"),
+		ManagerID: sqlkit.NewColumn[int64](info, "manager_id"),
+		Name:      sqlkit.NewColumn[string](info, "name"),
+	}
+}
+
+type EmployeesRels struct {
+	Manager   EmployeesManagerRel
+	Employees EmployeesEmployeesRel
+}
+
+type EmployeesManagerRel struct{ EmployeesColumns }
+
+func (r EmployeesManagerRel) Target() sqlkit.Table { return r.EmployeesColumns }
+func (r EmployeesManagerRel) JoinOn() sqlkit.Predicate {
+	return sqlkit.Cond(sql.Eq(r.EmployeesColumns.ID, newEmployeesColumns().ManagerID))
+}
+func (r EmployeesManagerRel) Cardinality() orm.Cardinality { return orm.ToOne }
+func (r EmployeesManagerRel) Name() string                 { return "Manager" }
+
+type EmployeesEmployeesRel struct{ EmployeesColumns }
+
+func (r EmployeesEmployeesRel) Target() sqlkit.Table { return r.EmployeesColumns }
+func (r EmployeesEmployeesRel) JoinOn() sqlkit.Predicate {
+	return sqlkit.Cond(sql.Eq(r.EmployeesColumns.ManagerID, newEmployeesColumns().ID))
+}
+func (r EmployeesEmployeesRel) Cardinality() orm.Cardinality { return orm.ToMany }
+func (r EmployeesEmployeesRel) Name() string                 { return "Employees" }
+
+type EmployeesTable struct {
+	EmployeesColumns
+	Rels EmployeesRels
+}
+
+func (t EmployeesTable) Queryer(ex sqlkit.Executor) orm.QuerySet { return orm.NewQuerySet(ex, t) }
+func (t EmployeesTable) Q(ex sqlkit.Executor) orm.QuerySet       { return orm.NewQuerySet(ex, t) }
+
+var Employees = EmployeesTable{
+	EmployeesColumns: newEmployeesColumns(),
+	Rels: EmployeesRels{
+		Manager:   EmployeesManagerRel{EmployeesColumns: newEmployeesColumns().As("manager")},
+		Employees: EmployeesEmployeesRel{EmployeesColumns: newEmployeesColumns().As("employees_ref")},
+	},
+}
