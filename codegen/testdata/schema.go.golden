@@ -1,0 +1,29 @@
+// Bootstrapped by sqlkitgen; maintained by hand.
+
+package schema
+
+import (
+	"github.com/aita/sqlkit/sqldef"
+)
+
+// Catalog holds the schema bootstrapped from a live database; edit it
+// and regenerate the bindings and DDL from it.
+var Catalog = sqldef.NewCatalog()
+
+// Public is schema "public" of the catalog.
+var Public = Catalog.Schema("public")
+
+var Users = Public.Table("users",
+	sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+	sqldef.Column("email", sqldef.VarChar(255)),
+	sqldef.Column("name", sqldef.Text, sqldef.Nullable()),
+	sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default()),
+)
+
+var Posts = Public.Table("posts",
+	sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+	sqldef.Column("user_id", sqldef.BigInt, sqldef.References(Users, "id")),
+	sqldef.Column("title", sqldef.Text),
+	sqldef.Column("body", sqldef.Text, sqldef.Nullable()),
+	sqldef.Column("published", sqldef.Bool, sqldef.Default()),
+)

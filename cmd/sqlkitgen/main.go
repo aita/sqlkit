@@ -1,13 +1,16 @@
-// Command sqlkitgen generates typed sqlkit table bindings (and, optionally, row
-// DTOs) from a live PostgreSQL or MySQL schema.
+// Command sqlkitgen bootstraps a sqldef catalog from a live PostgreSQL
+// or MySQL database. It introspects the schema once and emits a Go catalog file
+// built on the sqldef package; from then on you maintain the schema as code
+// and generate the typed table bindings and DDL from the catalog
+// (sqldef.Catalog.Generate / Catalog.DDL — see examples/blog/gen).
 //
 // Usage:
 //
-//	sqlkitgen -dsn postgres://user:pass@localhost/app -schema public -package appdb -out appdb/tables.go
-//	sqlkitgen -driver mysql -dsn 'user:pass@tcp(localhost:3306)/app' -package appdb -out appdb -file-per-table -dto
+//	sqlkitgen -dsn postgres://user:pass@localhost/app -schema public -package schema -out schema/schema.go
+//	sqlkitgen -driver mysql -dsn 'user:pass@tcp(localhost:3306)/app' -package schema -out schema/
 //
 // The codegen and inspector packages are the library entry points behind this
-// command; import them directly to customize type mapping and generation.
+// command; import them directly to customize the conversion.
 package main
 
 import (
@@ -38,13 +41,9 @@ func run() error {
 	driver := flag.String("driver", "pgx", "database/sql driver name (pgx or mysql)")
 	dialect := flag.String("dialect", "", "schema dialect override (postgres or mysql); inferred from -driver by default")
 	schema := flag.String("schema", "", "database schema/database to load (default: public for postgres, current DB for mysql)")
-	packageName := flag.String("package", "", "package name of the generated files (required)")
-	out := flag.String("out", "", "output file (single-file mode) or directory (multi-file mode); default stdout")
-	tables := flag.String("tables", "", "comma-separated list of tables to generate (default: all)")
-	filePerTable := flag.Bool("file-per-table", false, "write one file per table")
-	fileName := flag.String("file-name", "tables.go", "single-file output name (used when -out is a directory)")
-	dto := flag.Bool("dto", false, "also generate a row struct (DTO) per table")
-	dtoSeparate := flag.Bool("dto-separate-file", false, "write DTOs into their own file(s)")
+	packageName := flag.String("package", "", "package name of the generated catalog file (required)")
+	out := flag.String("out", "", "output file or directory; stdout if empty")
+	tables := flag.String("tables", "", "comma-separated list of tables to include (default: all)")
 	version := flag.Bool("version", false, "print sqlkitgen version")
 	flag.Parse()
 
@@ -71,29 +70,23 @@ func run() error {
 	}
 	defer db.Close()
 
-	model, err := inspector.Inspect(ctx, db, resolvedDialect, *schema)
+	inspected, err := inspector.Inspect(ctx, db, resolvedDialect, *schema)
 	if err != nil {
 		return err
 	}
-	if len(model.Tables) == 0 {
+	if len(inspected.Tables) == 0 {
 		return fmt.Errorf("schema %q contains no tables", *schema)
 	}
 
-	opts := codegen.Options{
-		PackageName:     *packageName,
-		Tables:          splitList(*tables),
-		Dialect:         resolvedDialect,
-		FilePerTable:    *filePerTable,
-		FileName:        *fileName,
-		EmitDTO:         *dto,
-		DTOSeparateFile: *dtoSeparate,
-	}
-	files, err := codegen.Generate(model, opts)
+	file, err := codegen.GenerateCatalog(inspected, codegen.CatalogOptions{
+		PackageName: *packageName,
+		Tables:      splitList(*tables),
+		Dialect:     resolvedDialect,
+	})
 	if err != nil {
 		return err
 	}
-
-	return writeFiles(files, *out)
+	return writeFiles([]codegen.File{file}, *out)
 }
 
 // writeFiles emits the generated files. With no -out, files go to stdout. A
