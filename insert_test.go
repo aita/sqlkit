@@ -230,6 +230,38 @@ func TestInsertBatchSizeSingleStatementWhenNotExceeded(t *testing.T) {
 	}
 }
 
+func TestInsertBatchSizeKeepsColumnSetAcrossBatches(t *testing.T) {
+	// id is defaulted. Only a later batch carries a non-zero id, so the whole
+	// insert must include id in every batch (binding explicit zeroes) — the
+	// column set is derived from all rows, not per chunk.
+	fake := &sqltest.Fake{}
+	db := sqlkit.WrapDB(fake.DB())
+
+	_, err := db.Insert(Users).Values(
+		User{Email: "a@example.com"}, // id zero
+		User{Email: "b@example.com"}, // id zero
+		User{ID: 9, Email: "c@example.com"},
+	).BatchSize(2).Exec(context.Background())
+	if err != nil {
+		t.Fatalf("Exec() error = %v", err)
+	}
+
+	execs := fake.Execs()
+	if len(execs) != 2 {
+		t.Fatalf("execs = %d, want 2", len(execs))
+	}
+	// Every batch includes the id column, so the first 2-row batch binds 6 args
+	// (id, email, name x2) and the trailing 1-row batch binds 3.
+	for i, want := range []int{6, 3} {
+		if got := len(execs[i].Args); got != want {
+			t.Fatalf("execs[%d] args = %d, want %d; SQL = %q", i, got, want, execs[i].SQL)
+		}
+		if !strings.Contains(execs[i].SQL, `"id"`) {
+			t.Fatalf("execs[%d] omitted id: %q", i, execs[i].SQL)
+		}
+	}
+}
+
 func TestInsertBatchSizeIgnoredByToSQL(t *testing.T) {
 	// ToSQL always compiles the full statement regardless of BatchSize.
 	insert := sqlkit.Insert(Users).Values(

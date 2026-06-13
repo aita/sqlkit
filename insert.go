@@ -283,15 +283,29 @@ func (q InsertQuery) Exec(ctx context.Context) (stdsql.Result, error) {
 }
 
 // execBatched inserts q.rows in chunks of q.batchSize, one statement per chunk.
+// The statement is built once so the mapped columns and the defaulted-and-zero
+// omission mask are derived from all rows (preserving non-batched Values
+// semantics), then the row list is split into per-chunk statements that share
+// that fixed column set.
 func (q InsertQuery) execBatched(ctx context.Context) (stdsql.Result, error) {
 	if q.ex == nil {
 		return nil, errNoExecutor
 	}
+	insert, err := q.build()
+	if err != nil {
+		return nil, err
+	}
+	if q.conflict != nil {
+		insert = q.applyConflict(insert)
+	}
+	dialect := q.ex.sqlDialect()
 	result := &batchResult{}
-	for start := 0; start < len(q.rows); start += q.batchSize {
-		batch := q
-		batch.rows = q.rows[start:min(start+q.batchSize, len(q.rows))]
-		res, err := runExec(ctx, q.ex, batch)
+	for _, batch := range insert.SplitRows(q.batchSize) {
+		sqlText, args, err := batch.ToSQL(dialect)
+		if err != nil {
+			return nil, err
+		}
+		res, err := q.ex.execContext(ctx, sqlText, args...)
 		if err != nil {
 			return nil, err
 		}

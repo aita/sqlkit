@@ -85,6 +85,24 @@ func (q InsertQuery) Returning(selections ...Selection) InsertQuery {
 	return q
 }
 
+// SplitRows partitions a VALUES insert into copies of at most n rows each, every
+// copy keeping the same column list, conflict, and returning clauses. It lets a
+// large insert run as several statements without re-deriving the column set per
+// chunk — the columns are already fixed on q. n <= 0, or a query with n or fewer
+// VALUES rows, yields q unchanged as a single element.
+func (q InsertQuery) SplitRows(n int) []InsertQuery {
+	if n <= 0 || len(q.rows) <= n {
+		return []InsertQuery{q}
+	}
+	out := make([]InsertQuery, 0, (len(q.rows)+n-1)/n)
+	for start := 0; start < len(q.rows); start += n {
+		batch := q
+		batch.rows = q.rows[start:min(start+n, len(q.rows))]
+		out = append(out, batch)
+	}
+	return out
+}
+
 // ToSQL compiles the INSERT query.
 func (q InsertQuery) ToSQL(dialect Dialect) (string, []any, error) {
 	return q.compile(NewCompiler(dialect))
