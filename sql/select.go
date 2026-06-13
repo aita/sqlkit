@@ -13,6 +13,7 @@ type compilable interface {
 
 // SelectQuery is the runtime representation for a SELECT statement.
 type SelectQuery struct {
+	with      []CTE
 	from      Source
 	columns   []Selection
 	joins     []JoinClause

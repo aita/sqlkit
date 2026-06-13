@@ -31,6 +31,13 @@ func (q DeleteQuery) Where(predicates ...Predicate) DeleteQuery {
 	return q
 }
 
+// WithCTE prepends common table expressions to the DELETE, emitting a leading
+// WITH clause. Reference them from a WHERE subquery.
+func (q DeleteQuery) WithCTE(ctes ...sql.CTE) DeleteQuery {
+	q.query = q.query.WithCTE(ctes...)
+	return q
+}
+
 // Returning adds an explicit RETURNING clause and makes the statement yield
 // rows: end the chain with All(...).Scan to read them. With no arguments it
 // returns all table columns.

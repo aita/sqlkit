@@ -32,6 +32,12 @@ func (t Table) QualifiedName() string {
 // SQLSource marks Table as a Source.
 func (t Table) SQLSource() SourceExpression { return SourceExpression{Name: t.QualifiedName()} }
 
+// Tbl creates a FROM/JOIN source that refers to a table or CTE by name, the
+// source-side counterpart to Col. It is shorthand for Table{Name: name} — handy
+// for referencing a recursive CTE by name from its own body, e.g.
+// Join(Tbl("tree"), Eq(Col("nodes.parent_id"), Col("tree.id"))).
+func Tbl(name string) Table { return Table{Name: name} }
+
 // Alias creates a subquery source from a query and alias.
 func Alias(query Query, alias string) SourceExpression {
 	return SourceExpression{Query: query, Alias: alias}

@@ -57,6 +57,13 @@ func TestSelectQueryAcceptsJoin(t *testing.T) {
 		nil)
 }
 
+func TestNameSourceHelper(t *testing.T) {
+	query := Select(Col("t.id")).From(Tbl("t")).Join(Tbl("u"), Eq(Col("t.id"), Col("u.id")))
+	assertSQL(t, query,
+		`SELECT "t"."id" FROM "t" JOIN "u" ON ("t"."id" = "u"."id")`,
+		nil)
+}
+
 func TestSelectQueryAcceptsSubqueryFrom(t *testing.T) {
 	subquery := Select(Col("users.id")).From(Table{Name: "users"}).Where(Eq(Col("users.id"), Int(7)))
 	query := Select(Col("active_users.id")).From(Alias(subquery, "active_users"))

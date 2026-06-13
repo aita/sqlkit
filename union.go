@@ -101,6 +101,13 @@ func (q UnionQuery) Offset(n int) UnionQuery {
 // SQLSource marks the query as a subquery source.
 func (q UnionQuery) SQLSource() SourceExpression { return q.query.SQLSource() }
 
+// CTE wraps this set-operation query as a common table expression named name,
+// for use as a FROM source and column handle (typically a recursive CTE). Pass
+// sql.Recursive() / sql.Columns(...) options to configure it.
+func (q UnionQuery) CTE(name string, opts ...sql.CTEOption) sql.CTE {
+	return q.query.CTE(name, opts...)
+}
+
 // ToSQL compiles the query.
 func (q UnionQuery) ToSQL(dialect sql.Dialect) (string, []any, error) {
 	return q.query.ToSQL(dialect)
