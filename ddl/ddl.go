@@ -1,12 +1,12 @@
 // Package ddl renders the meta schema model as SQL DDL: CREATE TABLE
 // statements with primary keys and CHECK constraints, ALTER TABLE statements
 // for foreign keys (emitted after all tables so declaration order never
-// matters), CREATE INDEX statements, and comments. Designs written with the
-// schema package and schemas read by the inspector both feed it through the
+// matters), CREATE INDEX statements, and comments. Catalogs built with the
+// sqldef package and schemas read by the inspector both feed it through the
 // same model.
 //
 // Default expressions render only when the model carries them
-// (meta.Column.DefaultExpr, declared as schema.Default("now()")); an integer
+// (meta.Column.DefaultExpr, declared as sqldef.Default("now()")); an integer
 // primary key with a default but no expression renders as a serial
 // (PostgreSQL) or AUTO_INCREMENT (MySQL) column.
 package ddl

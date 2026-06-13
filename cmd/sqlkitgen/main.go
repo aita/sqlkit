@@ -78,7 +78,7 @@ func run() error {
 		return fmt.Errorf("schema %q contains no tables", *schema)
 	}
 
-	file, err := codegen.GenerateDesign(inspected, codegen.DesignOptions{
+	file, err := codegen.GenerateCatalog(inspected, codegen.CatalogOptions{
 		PackageName: *packageName,
 		Tables:      splitList(*tables),
 		Dialect:     resolvedDialect,

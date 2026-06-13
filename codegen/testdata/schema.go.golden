@@ -1,12 +1,12 @@
 // Bootstrapped by sqlkitgen; maintained by hand.
 
-package design
+package schema
 
 import (
 	"github.com/aita/sqlkit/sqldef"
 )
 
-// Catalog holds the design bootstrapped from a live database; edit it
+// Catalog holds the schema bootstrapped from a live database; edit it
 // and regenerate the bindings and DDL from it.
 var Catalog = sqldef.NewCatalog()
 

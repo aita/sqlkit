@@ -7,12 +7,12 @@ import (
 	"github.com/aita/sqlkit/meta"
 )
 
-// DesignOptions configures GenerateDesign.
-type DesignOptions struct {
-	// PackageName is the package of the generated design file. Required.
+// CatalogOptions configures GenerateCatalog.
+type CatalogOptions struct {
+	// PackageName is the package of the generated catalog file. Required.
 	PackageName string
 
-	// FileName is the output file name (default "design.go").
+	// FileName is the output file name (default "schema.go").
 	FileName string
 
 	// Tables, when non-empty, restricts generation to these table names.
@@ -25,12 +25,12 @@ type DesignOptions struct {
 
 const sqldefImport = "github.com/aita/sqlkit/sqldef"
 
-// GenerateDesign renders the catalog as a sqldef design source file — the
-// inverse of building a catalog: introspect a live database once, then
-// maintain the schema as Go code and generate bindings and DDL from it.
-// Unlike binding generation the result is a starting point meant to be
-// edited, so it carries no DO NOT EDIT marker.
-func GenerateDesign(catalog meta.Meta, opts DesignOptions) (File, error) {
+// GenerateCatalog renders the schema as sqldef catalog source — the inverse of
+// building a catalog: introspect a live database once, then maintain the
+// schema as Go code and generate bindings and DDL from it. Unlike binding
+// generation the result is a starting point meant to be edited, so it carries
+// no DO NOT EDIT marker.
+func GenerateCatalog(catalog meta.Meta, opts CatalogOptions) (File, error) {
 	if opts.PackageName == "" {
 		return File{}, fmt.Errorf("codegen: package name is required")
 	}
@@ -40,7 +40,7 @@ func GenerateDesign(catalog meta.Meta, opts DesignOptions) (File, error) {
 	}
 	fileName := opts.FileName
 	if fileName == "" {
-		fileName = "design.go"
+		fileName = "schema.go"
 	}
 
 	tables := filterTables(catalog.Tables, opts.Tables)
@@ -88,7 +88,7 @@ func GenerateDesign(catalog meta.Meta, opts DesignOptions) (File, error) {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("// Catalog holds the design bootstrapped from a live database; edit it\n")
+	sb.WriteString("// Catalog holds the schema bootstrapped from a live database; edit it\n")
 	sb.WriteString("// and regenerate the bindings and DDL from it.\n")
 	sb.WriteString("var Catalog = sqldef.NewCatalog()\n")
 	for _, name := range schemaOrder {
@@ -100,7 +100,7 @@ func GenerateDesign(catalog meta.Meta, opts DesignOptions) (File, error) {
 	var trailers []string
 	for _, table := range tables {
 		sb.WriteString("\n")
-		renderDesignTable(&sb, &trailers, table, schemaVars[table.Schema.Name], tableVars, dialect)
+		renderCatalogTable(&sb, &trailers, table, schemaVars[table.Schema.Name], tableVars, dialect)
 	}
 	if len(trailers) > 0 {
 		sb.WriteString("\n")
@@ -115,7 +115,7 @@ func GenerateDesign(catalog meta.Meta, opts DesignOptions) (File, error) {
 	return fb.fileWithHeader(opts.PackageName, fileName, "// Bootstrapped by sqlkitgen; maintained by hand.\n\n")
 }
 
-func renderDesignTable(sb *strings.Builder, trailers *[]string, table meta.Table, owner string, tableVars map[string]string, dialect string) {
+func renderCatalogTable(sb *strings.Builder, trailers *[]string, table meta.Table, owner string, tableVars map[string]string, dialect string) {
 	varName := tableVars[table.Name]
 
 	// Single-column foreign keys to another generated table become a
@@ -162,7 +162,7 @@ func renderDesignTable(sb *strings.Builder, trailers *[]string, table meta.Table
 		fmt.Fprintf(sb, "\tsqldef.TableComment(%q),\n", table.Comment)
 	}
 	for _, column := range table.Columns {
-		fmt.Fprintf(sb, "\tsqldef.Column(%q, %s", column.Name, dslTypeExpr(column, dialect))
+		fmt.Fprintf(sb, "\tsqldef.Column(%q, %s", column.Name, sqldefTypeExpr(column, dialect))
 		if column.PrimaryKey {
 			sb.WriteString(", sqldef.PrimaryKey()")
 		}
@@ -205,7 +205,7 @@ func renderDesignTable(sb *strings.Builder, trailers *[]string, table meta.Table
 		if fk.RefSchema.Name != "" {
 			ref = fk.RefSchema.Name + "." + fk.RefTable
 		}
-		fmt.Fprintf(sb, "\t// NOTE: foreign key %s references %s outside this design and must be declared by hand.\n",
+		fmt.Fprintf(sb, "\t// NOTE: foreign key %s references %s outside this catalog and must be declared by hand.\n",
 			fk.Name, ref)
 	}
 	sb.WriteString(")\n")
@@ -223,10 +223,10 @@ func goStringSlice(items []string) string {
 	return "[]string{" + quotedList(items) + "}"
 }
 
-// dslTypeExpr maps an engine type name back to the sqldef package expression
+// sqldefTypeExpr maps an engine type name back to the sqldef package expression
 // that produces it. Types without a portable name fall back to sqldef.Type,
 // which keeps the engine name verbatim.
-func dslTypeExpr(column meta.Column, dialect string) string {
+func sqldefTypeExpr(column meta.Column, dialect string) string {
 	engine, _ := column.Type.Engine(dialect)
 	dataType := strings.ToLower(strings.TrimSpace(engine.Name))
 	if dialect == "mysql" {

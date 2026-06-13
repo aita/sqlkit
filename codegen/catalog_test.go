@@ -7,18 +7,18 @@ import (
 	"github.com/aita/sqlkit/meta"
 )
 
-func TestGenerateDesign(t *testing.T) {
-	file, err := GenerateDesign(meta.Meta{Tables: fixtureTables()}, DesignOptions{PackageName: "design"})
+func TestGenerateCatalog(t *testing.T) {
+	file, err := GenerateCatalog(meta.Meta{Tables: fixtureTables()}, CatalogOptions{PackageName: "schema"})
 	if err != nil {
-		t.Fatalf("GenerateDesign() error = %v", err)
+		t.Fatalf("GenerateCatalog() error = %v", err)
 	}
-	if file.Name != "design.go" {
-		t.Errorf("file name = %q, want design.go", file.Name)
+	if file.Name != "schema.go" {
+		t.Errorf("file name = %q, want schema.go", file.Name)
 	}
-	checkGolden(t, "design.go.golden", file.Content)
+	checkGolden(t, "schema.go.golden", file.Content)
 }
 
-func TestGenerateDesignMySQL(t *testing.T) {
+func TestGenerateCatalogMySQL(t *testing.T) {
 	tables := []meta.Table{
 		{
 			Schema: meta.Schema{Name: "app"},
@@ -33,9 +33,9 @@ func TestGenerateDesignMySQL(t *testing.T) {
 			},
 		},
 	}
-	file, err := GenerateDesign(meta.Meta{Tables: tables}, DesignOptions{PackageName: "design", Dialect: "mysql"})
+	file, err := GenerateCatalog(meta.Meta{Tables: tables}, CatalogOptions{PackageName: "schema", Dialect: "mysql"})
 	if err != nil {
-		t.Fatalf("GenerateDesign() error = %v", err)
+		t.Fatalf("GenerateCatalog() error = %v", err)
 	}
 	got := string(file.Content)
 	for _, want := range []string{
@@ -55,7 +55,7 @@ func TestGenerateDesignMySQL(t *testing.T) {
 	}
 }
 
-func TestGenerateDesignForeignKeys(t *testing.T) {
+func TestGenerateCatalogForeignKeys(t *testing.T) {
 	tables := []meta.Table{
 		{
 			Schema: meta.Schema{Name: "public"},
@@ -82,16 +82,16 @@ func TestGenerateDesignForeignKeys(t *testing.T) {
 			},
 		},
 	}
-	file, err := GenerateDesign(meta.Meta{Tables: tables}, DesignOptions{PackageName: "design"})
+	file, err := GenerateCatalog(meta.Meta{Tables: tables}, CatalogOptions{PackageName: "schema"})
 	if err != nil {
-		t.Fatalf("GenerateDesign() error = %v", err)
+		t.Fatalf("GenerateCatalog() error = %v", err)
 	}
 	got := string(file.Content)
 	for _, want := range []string{
 		`var Public = Catalog.Schema("public")`,
 		`sqldef.ForeignKey([]string{"order_region", "order_number"}, Orders, []string{"region", "number"}),`,
 		`var _ = Catalog.AddForeignKey(OrderLines, []string{"parent_id"}, OrderLines, []string{"id"})`,
-		`foreign key fk_other_schema references audit.events outside this design`,
+		`foreign key fk_other_schema references audit.events outside this catalog`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("generated design missing %q\n%s", want, got)
@@ -99,7 +99,7 @@ func TestGenerateDesignForeignKeys(t *testing.T) {
 	}
 }
 
-func TestGenerateDesignIndexesChecksComments(t *testing.T) {
+func TestGenerateCatalogIndexesChecksComments(t *testing.T) {
 	tables := []meta.Table{
 		{
 			Schema:  meta.Schema{Name: "public"},
@@ -122,9 +122,9 @@ func TestGenerateDesignIndexesChecksComments(t *testing.T) {
 			},
 		},
 	}
-	file, err := GenerateDesign(meta.Meta{Tables: tables}, DesignOptions{PackageName: "design"})
+	file, err := GenerateCatalog(meta.Meta{Tables: tables}, CatalogOptions{PackageName: "schema"})
 	if err != nil {
-		t.Fatalf("GenerateDesign() error = %v", err)
+		t.Fatalf("GenerateCatalog() error = %v", err)
 	}
 	got := string(file.Content)
 	for _, want := range []string{
@@ -140,11 +140,11 @@ func TestGenerateDesignIndexesChecksComments(t *testing.T) {
 	}
 }
 
-func TestGenerateDesignErrors(t *testing.T) {
-	if _, err := GenerateDesign(meta.Meta{Tables: fixtureTables()}, DesignOptions{}); err == nil {
-		t.Error("GenerateDesign() without package name: expected error")
+func TestGenerateCatalogErrors(t *testing.T) {
+	if _, err := GenerateCatalog(meta.Meta{Tables: fixtureTables()}, CatalogOptions{}); err == nil {
+		t.Error("GenerateCatalog() without package name: expected error")
 	}
-	if _, err := GenerateDesign(meta.Meta{}, DesignOptions{PackageName: "design"}); err == nil {
-		t.Error("GenerateDesign() without tables: expected error")
+	if _, err := GenerateCatalog(meta.Meta{}, CatalogOptions{PackageName: "schema"}); err == nil {
+		t.Error("GenerateCatalog() without tables: expected error")
 	}
 }

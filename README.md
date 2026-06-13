@@ -207,7 +207,7 @@ name on the chosen dialect is reported by `Generate`/`DDL`.
 [the flow](#the-flow-a-schema-design-generates-the-bindings) above), so an
 existing database can be converted once and maintained as Go code from then
 on. The same conversion is available as a library via
-`codegen.GenerateDesign(catalog, codegen.DesignOptions{...})`. Once you have a
+`codegen.GenerateCatalog(catalog, codegen.CatalogOptions{...})`. Once you have a
 design, `Catalog.DDL("postgres")` renders the schema as CREATE TABLE
 statements.
 
