@@ -18,11 +18,23 @@ CREATE TABLE "public"."posts" (
     CONSTRAINT "ck_posts_1" CHECK (title <> '')
 );
 
+CREATE TABLE "public"."profiles" (
+    "id" bigserial,
+    "user_id" bigint NOT NULL,
+    "bio" text,
+    "public" boolean NOT NULL DEFAULT false,
+    PRIMARY KEY ("id")
+);
+
 CREATE UNIQUE INDEX "uq_users_email" ON "public"."users" ("email");
 
 CREATE INDEX "idx_posts_user_id" ON "public"."posts" ("user_id");
 
+CREATE UNIQUE INDEX "uq_profiles_user_id" ON "public"."profiles" ("user_id");
+
 ALTER TABLE "public"."posts" ADD CONSTRAINT "fk_posts_user_id" FOREIGN KEY ("user_id") REFERENCES "public"."users" ("id");
+
+ALTER TABLE "public"."profiles" ADD CONSTRAINT "fk_profiles_user_id" FOREIGN KEY ("user_id") REFERENCES "public"."users" ("id");
 
 COMMENT ON TABLE "public"."users" IS 'Registered blog authors';
 COMMENT ON COLUMN "public"."users"."email" IS 'Unique login address';

@@ -33,3 +33,12 @@ var Posts = Public.Table("posts",
 	sqldef.Index("user_id"),
 	sqldef.Check(sql.Raw("title <> ''")),
 )
+
+// Profiles hold one optional profile per user. The unique user_id makes it a
+// has-one relation (Users.Rels.Profile), while Posts above is has-many.
+var Profiles = Public.Table("profiles",
+	sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+	sqldef.Column("user_id", sqldef.BigInt, sqldef.References(Users, "id"), sqldef.Unique()),
+	sqldef.Column("bio", sqldef.Text, sqldef.Nullable()),
+	sqldef.Column("public", sqldef.Bool, sqldef.Default(sql.Raw("false"))),
+)
