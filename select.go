@@ -2,6 +2,7 @@ package sqlkit
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/aita/sqlkit/sql"
 )
@@ -24,7 +25,10 @@ type SelectQuery struct {
 	ex         Executor
 	selections []sql.Selection
 	hasCols    bool
+	base       Table      // the From table, when the source is one; powers Filter/Get
+	preloads   []Relation // relations eager-loaded at Scan after the base rows
 	query      sql.SelectQuery
+	err        error // deferred build error (e.g. from Filter), surfaced at the terminal
 }
 
 // Select starts an unbound SELECT builder for use as a subquery (FromSelect,
@@ -45,6 +49,18 @@ func (q SelectQuery) From(source sql.Source) SelectQuery {
 		selections = allColumnsOf(source)
 	}
 	q.query = sql.Select(selections...).From(source)
+	if t, ok := source.(Table); ok {
+		q.base = t // remembered so Filter and Get can reach its columns / primary key
+	}
+	return q
+}
+
+// fail records a deferred build error, keeping the first one. It surfaces at the
+// terminal (All, Get, ToSQL, …), matching how the typed builders defer errors.
+func (q SelectQuery) fail(err error) SelectQuery {
+	if q.err == nil {
+		q.err = err
+	}
 	return q
 }
 
@@ -66,6 +82,99 @@ func (q SelectQuery) Join(source sql.Source, on Predicate) SelectQuery {
 func (q SelectQuery) LeftJoin(source sql.Source, on Predicate) SelectQuery {
 	q.query = q.query.LeftJoin(source, on.Expression())
 	return q
+}
+
+// JoinRel adds an INNER JOIN to a relation's target on its foreign-key
+// condition, so callers never spell out the ON clause:
+//
+//	db.Select().From(Users).JoinRel(Users.Rels.Posts)
+func (q SelectQuery) JoinRel(rel Relation) SelectQuery {
+	return q.Join(rel.Target(), rel.JoinOn())
+}
+
+// LeftJoinRel adds a LEFT JOIN to a relation's target on its foreign-key
+// condition.
+func (q SelectQuery) LeftJoinRel(rel Relation) SelectQuery {
+	return q.LeftJoin(rel.Target(), rel.JoinOn())
+}
+
+// Preload registers related tables to eager-load. Each target is resolved to
+// the From table's relation reaching it, so callers pass the target binding
+// rather than the relation: Preload(Posts), not Preload(Users.Rels.Posts). The
+// load is not a join; when a terminal's Scan runs, each relation is fetched in
+// one batched follow-up query and assigned onto the scanned destination by
+// reflection (matched to a field by the relation name or a `preload:"…"` tag),
+// avoiding the N+1:
+//
+//	db.Select().From(Users).Preload(Posts).All(ctx).Scan(&users)
+//
+// Resolution errors (no From table, the base exposes no relations, or no/ambiguous
+// relation to a target) are deferred to the terminal. When more than one relation
+// reaches the same table (e.g. a self-reference's Manager and Reports), pick one
+// explicitly with PreloadRel.
+func (q SelectQuery) Preload(targets ...Table) SelectQuery {
+	preloads := append([]Relation(nil), q.preloads...)
+	for _, target := range targets {
+		rel, err := q.resolveRelation(target)
+		if err != nil {
+			return q.fail(err)
+		}
+		preloads = append(preloads, rel)
+	}
+	q.preloads = preloads
+	return q
+}
+
+// PreloadRel registers relations to eager-load by value, for when Preload's
+// target-table lookup is ambiguous (several relations reach the same table) or a
+// hand-built relation is used. It behaves like Preload otherwise.
+func (q SelectQuery) PreloadRel(rels ...Relation) SelectQuery {
+	q.preloads = append(append([]Relation(nil), q.preloads...), rels...)
+	return q
+}
+
+// resolveRelation finds the base table's relation whose target is t.
+func (q SelectQuery) resolveRelation(t Table) (Relation, error) {
+	if q.base == nil {
+		return nil, fmt.Errorf("sqlkit: Preload requires From to be a table")
+	}
+	src, ok := q.base.(RelationSource)
+	if !ok {
+		return nil, fmt.Errorf("sqlkit: Preload: %s exposes no relations", q.base.Info().QualifiedName())
+	}
+	want := t.Info()
+	var found Relation
+	matches := 0
+	for _, rel := range src.Relations() {
+		if got := rel.Target().Info(); got.Schema == want.Schema && got.Name == want.Name {
+			found, matches = rel, matches+1
+		}
+	}
+	switch matches {
+	case 0:
+		return nil, fmt.Errorf("sqlkit: Preload: %s has no relation to %s",
+			q.base.Info().QualifiedName(), want.QualifiedName())
+	case 1:
+		return found, nil
+	default:
+		return nil, fmt.Errorf("sqlkit: Preload: %s has %d relations to %s; pick one with PreloadRel",
+			q.base.Info().QualifiedName(), matches, want.QualifiedName())
+	}
+}
+
+// Filter applies a reusable filter bundle against the From table's columns:
+// either a Predicate, or a struct whose set fields map to columns by name and
+// hold FilterTerm values (sqlkit.Le(20), …) or predicates. A mapping error is
+// deferred to the terminal. It requires a From table (set Filter after From).
+func (q SelectQuery) Filter(filter any) SelectQuery {
+	if q.base == nil {
+		return q.fail(fmt.Errorf("sqlkit: Filter requires From to be a table"))
+	}
+	predicates, err := buildFilter(q.base, filter)
+	if err != nil {
+		return q.fail(err)
+	}
+	return q.Where(predicates...)
 }
 
 // GroupBy adds GROUP BY expressions (columns or sql expressions).
@@ -123,6 +232,9 @@ func (q SelectQuery) SQLSource() SourceExpression { return q.query.SQLSource() }
 
 // ToSQL compiles the query.
 func (q SelectQuery) ToSQL(dialect sql.Dialect) (string, []any, error) {
+	if q.err != nil {
+		return "", nil, q.err
+	}
 	return q.query.ToSQL(dialect)
 }
 
@@ -130,14 +242,27 @@ func (q SelectQuery) ToSQL(dialect sql.Dialect) (string, []any, error) {
 // built from. The query runs when Scan is called; build and execution errors
 // surface there.
 func (q SelectQuery) All(ctx context.Context) Rows {
-	return newRows(ctx, q.ex, q.query)
+	if q.err != nil {
+		return ErrRows(q.err)
+	}
+	return q.withPreloads(newRows(ctx, q.ex, q.query))
+}
+
+// withPreloads attaches the registered preloads to a Rows so Scan eager-loads
+// them after materializing the base rows.
+func (q SelectQuery) withPreloads(rows Rows) Rows {
+	rows.preloads = q.preloads
+	return rows
 }
 
 // First is All limited to the first row: LIMIT 1 is pushed into the query,
 // and Scan into a struct or scalar yields that row, or ErrNoRows when the
 // result is empty.
 func (q SelectQuery) First(ctx context.Context) Rows {
-	return newRows(ctx, q.ex, q.query.Limit(1))
+	if q.err != nil {
+		return ErrRows(q.err)
+	}
+	return q.withPreloads(newRows(ctx, q.ex, q.query.Limit(1)))
 }
 
 // One is All restricted to exactly one row: Scan yields the row when the
@@ -145,9 +270,12 @@ func (q SelectQuery) First(ctx context.Context) Rows {
 // when there are more. LIMIT 2 is pushed into the query, so detecting the
 // excess row never reads past the second.
 func (q SelectQuery) One(ctx context.Context) Rows {
+	if q.err != nil {
+		return ErrRows(q.err)
+	}
 	rows := newRows(ctx, q.ex, q.query.Limit(2))
 	rows.exactlyOne = true
-	return rows
+	return q.withPreloads(rows)
 }
 
 // Page is All over a LIMIT/OFFSET window: it pushes LIMIT limit OFFSET
@@ -156,16 +284,47 @@ func (q SelectQuery) One(ctx context.Context) Rows {
 //
 //	db.Select().From(Users).OrderBy(Users.ID.Asc()).Page(ctx, 20, 40).Scan(&users)
 func (q SelectQuery) Page(ctx context.Context, limit, offset int) Rows {
-	return newRows(ctx, q.ex, q.query.Limit(limit).Offset(offset))
+	if q.err != nil {
+		return ErrRows(q.err)
+	}
+	return q.withPreloads(newRows(ctx, q.ex, q.query.Limit(limit).Offset(offset)))
 }
 
 // Count runs SELECT COUNT(*) over this query (as a subquery, so joins,
 // grouping, and predicates apply) and returns the number of matching rows.
 func (q SelectQuery) Count(ctx context.Context) (int64, error) {
+	if q.err != nil {
+		return 0, q.err
+	}
 	count := sql.Select(sql.CountAll()).From(sql.Alias(q.query, "q"))
 	var n int64
 	err := newRows(ctx, q.ex, count).Scan(&n)
 	return n, err
+}
+
+// Get fetches the row matching the From table's primary key and returns the
+// first result. Pass one value per primary-key column, in declaration order. It
+// requires a From table (set it before Get).
+func (q SelectQuery) Get(ctx context.Context, pk ...any) Rows {
+	if q.err != nil {
+		return ErrRows(q.err)
+	}
+	if q.base == nil {
+		return ErrRows(fmt.Errorf("sqlkit: Get requires From to be a table"))
+	}
+	key := q.base.PrimaryKey()
+	if len(key) == 0 {
+		return ErrRows(fmt.Errorf("sqlkit: Get on %s, which has no primary key", q.base.Info().QualifiedName()))
+	}
+	if len(pk) != len(key) {
+		return ErrRows(fmt.Errorf("sqlkit: Get on %s expects %d primary-key value(s), got %d",
+			q.base.Info().QualifiedName(), len(key), len(pk)))
+	}
+	predicates := make([]Predicate, len(key))
+	for i, col := range key {
+		predicates[i] = Cond(sql.Eq(col, sql.Val(pk[i])))
+	}
+	return q.Where(predicates...).First(ctx)
 }
 
 // Union combines this query with another using UNION. The result stays bound

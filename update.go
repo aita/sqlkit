@@ -58,6 +58,13 @@ func (q UpdateQuery) LeftJoin(source sql.Source, on Predicate) UpdateQuery {
 	return q
 }
 
+// JoinRel correlates the UPDATE to a relation's target on its foreign-key
+// condition (PostgreSQL UPDATE ... FROM / MySQL inline JOIN), so callers never
+// spell out the ON clause.
+func (q UpdateQuery) JoinRel(rel Relation) UpdateQuery {
+	return q.Join(rel.Target(), rel.JoinOn())
+}
+
 // Where adds predicates, combined with AND.
 func (q UpdateQuery) Where(predicates ...Predicate) UpdateQuery {
 	if expr := combineWhere(predicates); expr != nil {

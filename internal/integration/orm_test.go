@@ -7,13 +7,12 @@ import (
 
 	"github.com/aita/sqlkit"
 	"github.com/aita/sqlkit/examples/blog/blogdb"
-	"github.com/aita/sqlkit/orm"
 )
 
-// These tests exercise the generated relation-aware ORM layer (the QuerySet
-// reached through blogdb.Users.Q(db) / .Queryer(db)) end to end against the real
-// engines. The rest of the suite drives the same bindings through the typed
-// builder (db.Select/Insert/…); here the entry point is the generated ORM and
+// These tests exercise the generated relation-aware surface (the SelectQuery
+// reached through blogdb.Users.Q(db) / .Queryer(db), plus JoinRel/Filter) end to
+// end against the real engines. The rest of the suite drives the same bindings
+// through the typed builder; here the entry point is the generated Q sugar and
 // its relation metadata, which nothing else in the suite executes.
 
 // profileRow is a test-defined DTO for the profiles table; like userRow/postRow
@@ -105,11 +104,11 @@ func TestORMQuerySetFilter(t *testing.T) {
 		seedBlog(t, db, eng)
 
 		// Filter bundle: a struct whose set fields map to columns by name and hold
-		// FilterTerm values. A bool field carries orm.Eq so a false comparison is
+		// FilterTerm values. A bool field carries sqlkit.Eq so a false comparison is
 		// not skipped as a zero value.
 		publishedFilter := struct {
-			Published orm.FilterTerm
-		}{Published: orm.Eq(true)}
+			Published sqlkit.FilterTerm
+		}{Published: sqlkit.Eq(true)}
 		published, err := blogdb.Posts.Q(db).Filter(publishedFilter).Count(ctx)
 		if err != nil {
 			t.Fatalf("Filter(struct).Count(): %v", err)
@@ -138,7 +137,7 @@ func TestORMQuerySetJoins(t *testing.T) {
 		// the caller filters on the joined table without writing it.
 		var alicePosts []postRow
 		if err := blogdb.Posts.Q(db).
-			Join(blogdb.Posts.Rels.User).
+			JoinRel(blogdb.Posts.Rels.User).
 			Where(blogdb.Posts.Rels.User.Email.Eq("alice@example.com")).
 			OrderBy(blogdb.Posts.Title.Asc()).
 			All(ctx).Scan(&alicePosts); err != nil {
@@ -150,7 +149,7 @@ func TestORMQuerySetJoins(t *testing.T) {
 
 		// has-many INNER JOIN counted through a subquery.
 		publishedAuthors, err := blogdb.Users.Q(db).
-			Join(blogdb.Users.Rels.Posts).
+			JoinRel(blogdb.Users.Rels.Posts).
 			Where(blogdb.Users.Rels.Posts.Published.Eq(true)).
 			Count(ctx)
 		if err != nil {
@@ -163,7 +162,7 @@ func TestORMQuerySetJoins(t *testing.T) {
 		// DISTINCT collapses the duplicate base rows a has-many join produces:
 		// both seeded users have at least one post.
 		distinctAuthors, err := blogdb.Users.Q(db).
-			Join(blogdb.Users.Rels.Posts).
+			JoinRel(blogdb.Users.Rels.Posts).
 			Distinct().
 			Count(ctx)
 		if err != nil {
@@ -179,7 +178,7 @@ func TestORMQuerySetJoins(t *testing.T) {
 		// INNER JOIN on the to-one relation, filtered on the joined table.
 		var publicAuthor userRow
 		if err := blogdb.Users.Q(db).
-			Join(blogdb.Users.Rels.Profile).
+			JoinRel(blogdb.Users.Rels.Profile).
 			Where(blogdb.Users.Rels.Profile.Public.Eq(true)).
 			One(ctx).Scan(&publicAuthor); err != nil {
 			t.Fatalf("to-one Join().One(): %v", err)
@@ -190,7 +189,7 @@ func TestORMQuerySetJoins(t *testing.T) {
 
 		// LEFT JOIN keeps users without a profile (bob), so all users remain.
 		withProfile, err := blogdb.Users.Q(db).
-			LeftJoin(blogdb.Users.Rels.Profile).
+			LeftJoinRel(blogdb.Users.Rels.Profile).
 			Count(ctx)
 		if err != nil {
 			t.Fatalf("LeftJoin().Count(): %v", err)
@@ -206,12 +205,11 @@ func TestORMQuerySetWrite(t *testing.T) {
 		ctx := context.Background()
 		aliceID, _ := seedBlog(t, db, eng)
 
-		// Insert through the QuerySet entry point (database-defaulted id/created_at
-		// are omitted just as with db.Insert).
-		if _, err := blogdb.Users.Q(db).Insert().
+		// Insert (database-defaulted id/created_at are omitted automatically).
+		if _, err := db.Insert(blogdb.Users).
 			Values(userRow{Email: "eve@example.com"}).
 			Exec(ctx); err != nil {
-			t.Fatalf("Q().Insert(): %v", err)
+			t.Fatalf("Insert(): %v", err)
 		}
 		total, err := blogdb.Users.Q(db).Count(ctx)
 		if err != nil {
@@ -221,12 +219,12 @@ func TestORMQuerySetWrite(t *testing.T) {
 			t.Fatalf("user count after insert = %d, want 3", total)
 		}
 
-		// Update through the QuerySet entry point, then reload via Get.
-		if _, err := blogdb.Users.Q(db).Update().
+		// Update, then reload via Get.
+		if _, err := db.Update(blogdb.Users).
 			Set(blogdb.Users.Name.Set(ptr("Updated"))).
 			Where(blogdb.Users.ID.Eq(aliceID)).
 			Exec(ctx); err != nil {
-			t.Fatalf("Q().Update(): %v", err)
+			t.Fatalf("Update(): %v", err)
 		}
 		var reloaded userRow
 		if err := blogdb.Users.Q(db).Get(ctx, aliceID).Scan(&reloaded); err != nil {
@@ -236,11 +234,11 @@ func TestORMQuerySetWrite(t *testing.T) {
 			t.Fatalf("after update = %#v", reloaded)
 		}
 
-		// Delete the drafts through the QuerySet entry point.
-		if _, err := blogdb.Posts.Q(db).Delete().
+		// Delete the drafts.
+		if _, err := db.Delete(blogdb.Posts).
 			Where(blogdb.Posts.Published.Eq(false)).
 			Exec(ctx); err != nil {
-			t.Fatalf("Q().Delete(): %v", err)
+			t.Fatalf("Delete(): %v", err)
 		}
 		remaining, err := blogdb.Posts.Q(db).Count(ctx)
 		if err != nil {

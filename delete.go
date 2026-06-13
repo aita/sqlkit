@@ -43,6 +43,13 @@ func (q DeleteQuery) LeftJoin(source sql.Source, on Predicate) DeleteQuery {
 	return q
 }
 
+// UsingRel correlates the DELETE to a relation's target on its foreign-key
+// condition (PostgreSQL DELETE ... USING / MySQL multi-table DELETE), so callers
+// never spell out the ON clause.
+func (q DeleteQuery) UsingRel(rel Relation) DeleteQuery {
+	return q.Join(rel.Target(), rel.JoinOn())
+}
+
 // Where adds predicates, combined with AND.
 func (q DeleteQuery) Where(predicates ...Predicate) DeleteQuery {
 	if expr := combineWhere(predicates); expr != nil {

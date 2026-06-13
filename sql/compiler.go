@@ -757,6 +757,9 @@ func (c *Compiler) CompileUpdate(q UpdateQuery) (string, []any, error) {
 
 	where := q.where
 	if !inline {
+		if err := rejectOuterJoins(q.joins); err != nil {
+			return "", nil, err
+		}
 		if sources := joinSources(q.from, q.joins); len(sources) > 0 {
 			sb.WriteString(" FROM ")
 			if err := c.writeCommaSources(&sb, &args, sources); err != nil {
@@ -823,6 +826,9 @@ func (c *Compiler) CompileDelete(q DeleteQuery) (string, []any, error) {
 			args = append(args, joinArgs...)
 		}
 	} else {
+		if err := rejectOuterJoins(q.joins); err != nil {
+			return "", nil, err
+		}
 		sb.WriteString("DELETE FROM ")
 		sb.WriteString(target)
 		if hasSources {
@@ -860,6 +866,21 @@ func joinSources(sources []Source, joins []JoinClause) []Source {
 		out = append(out, join.Source)
 	}
 	return out
+}
+
+// rejectOuterJoins errors on any non-inner join, for the standard FROM/USING
+// form (PostgreSQL) that folds join ON predicates into WHERE. That folding is
+// correct only for inner joins: a LEFT JOIN flattened this way would silently
+// become an inner join (e.g. an "outer row with no match" predicate turns
+// unsatisfiable), so reject it rather than emit wrong-set-of-rows SQL.
+func rejectOuterJoins(joins []JoinClause) error {
+	for _, join := range joins {
+		if join.Kind != "JOIN" {
+			return fmt.Errorf("sqlkit/sql: %s in a multi-table UPDATE/DELETE is unsupported for this dialect "+
+				"(its ON would fold into WHERE, collapsing the outer join to an inner one); use an inner Join", join.Kind)
+		}
+	}
+	return nil
 }
 
 // foldJoinOns ANDs each join's ON predicate into where, used by the standard

@@ -70,16 +70,18 @@ func buildRelations(tables []meta.Table) map[string][]relationModel {
 					RelType:       childVar + fwdName + "Rel",
 					TargetColumns: childVar + "Columns",
 					TargetCtor:    childCtor,
-					Cardinality:   "orm.ToOne",
+					Cardinality:   "sqlkit.ToOne",
 					Alias:         selfAlias(fwdName, child.Name),
 					JoinOn:        joinOn(fk.RefColumns, childCtor, fk.Columns),
+					TargetKeys:    fk.RefColumns,
+					BaseKeys:      fk.Columns,
 				})
 
 				var revBase, revCard string
 				if uniqueFK(child, fk.Columns) {
-					revBase, revCard = goName(singular(child.Name)), "orm.ToOne"
+					revBase, revCard = goName(singular(child.Name)), "sqlkit.ToOne"
 				} else {
-					revBase, revCard = goName(child.Name), "orm.ToMany"
+					revBase, revCard = goName(child.Name), "sqlkit.ToMany"
 				}
 				revName := uniqueName(reserved[childQual], revBase, fwdName+"Reverse")
 				out[childQual] = append(out[childQual], relationModel{
@@ -90,6 +92,8 @@ func buildRelations(tables []meta.Table) map[string][]relationModel {
 					Cardinality:   revCard,
 					Alias:         selfAlias(revName, child.Name),
 					JoinOn:        joinOn(fk.Columns, childCtor, fk.RefColumns),
+					TargetKeys:    fk.Columns,
+					BaseKeys:      fk.RefColumns,
 				})
 				continue
 			}
@@ -103,17 +107,19 @@ func buildRelations(tables []meta.Table) map[string][]relationModel {
 				RelType:       childVar + fwdName + "Rel",
 				TargetColumns: parentVar + "Columns",
 				TargetCtor:    parentCtor,
-				Cardinality:   "orm.ToOne",
+				Cardinality:   "sqlkit.ToOne",
 				JoinOn:        joinOn(fk.RefColumns, childCtor, fk.Columns),
+				TargetKeys:    fk.RefColumns,
+				BaseKeys:      fk.Columns,
 			})
 
 			// Reverse on parent, target = child. The relation embeds the child
 			// columns, so JoinOn equates r.<fk> = parent.<ref>.
 			var revBase, card string
 			if uniqueFK(child, fk.Columns) {
-				revBase, card = goName(singular(child.Name)), "orm.ToOne"
+				revBase, card = goName(singular(child.Name)), "sqlkit.ToOne"
 			} else {
-				revBase, card = goName(child.Name), "orm.ToMany"
+				revBase, card = goName(child.Name), "sqlkit.ToMany"
 			}
 			revName := uniqueName(reserved[parentQual], revBase, fkDerivedName(fk.Columns))
 			out[parentQual] = append(out[parentQual], relationModel{
@@ -123,6 +129,8 @@ func buildRelations(tables []meta.Table) map[string][]relationModel {
 				TargetCtor:    childCtor,
 				Cardinality:   card,
 				JoinOn:        joinOn(fk.Columns, parentCtor, fk.RefColumns),
+				TargetKeys:    fk.Columns,
+				BaseKeys:      fk.RefColumns,
 			})
 		}
 	}

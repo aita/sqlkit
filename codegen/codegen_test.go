@@ -110,25 +110,25 @@ func TestGenerateRelationsGolden(t *testing.T) {
 
 	body := string(got)
 	for _, want := range []string{
-		"func (t UsersTable) Queryer(ex sqlkit.Executor) orm.QuerySet",
-		"func (t UsersTable) Q(ex sqlkit.Executor) orm.QuerySet",
+		"func (t UsersTable) Queryer(ex sqlkit.Executor) sqlkit.SelectQuery",
+		"func (t UsersTable) Q(ex sqlkit.Executor) sqlkit.SelectQuery",
 		"type UsersColumns struct",
 		"func newUsersColumns() UsersColumns",
 		"Profile UsersProfileRel", // has-one (unique FK)
 		"Posts   UsersPostsRel",   // has-many
 		"User PostsUserRel",       // belongs-to
-		"return orm.ToOne",
-		"return orm.ToMany",
+		"return sqlkit.ToOne",
+		"return sqlkit.ToMany",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("relations golden missing %q", want)
 		}
 	}
 	// Profile is has-one, Posts is has-many.
-	if !strings.Contains(body, "func (r UsersProfileRel) Cardinality() orm.Cardinality { return orm.ToOne }") {
+	if !strings.Contains(body, "func (r UsersProfileRel) Cardinality() sqlkit.Cardinality { return sqlkit.ToOne }") {
 		t.Errorf("Profile relation should be ToOne (unique FK)\n%s", body)
 	}
-	if !strings.Contains(body, "func (r UsersPostsRel) Cardinality() orm.Cardinality { return orm.ToMany }") {
+	if !strings.Contains(body, "func (r UsersPostsRel) Cardinality() sqlkit.Cardinality { return sqlkit.ToMany }") {
 		t.Errorf("Posts relation should be ToMany\n%s", body)
 	}
 }
@@ -152,11 +152,11 @@ func TestGenerateSelfReferentialRelations(t *testing.T) {
 		// Forward belongs-to "Manager" with the target aliased "manager".
 		"type EmployeesManagerRel struct{ EmployeesColumns }",
 		`EmployeesColumns: newEmployeesColumns().As("manager")`,
-		"func (r EmployeesManagerRel) Cardinality() orm.Cardinality { return orm.ToOne }",
+		"func (r EmployeesManagerRel) Cardinality() sqlkit.Cardinality { return sqlkit.ToOne }",
 		// JoinOn equates the aliased target id to the base manager_id.
 		"sqlkit.Cond(sql.Eq(r.ID, newEmployeesColumns().ManagerID))",
 		// Reverse has-many; alias suffixed to avoid colliding with the table name.
-		"func (r EmployeesEmployeesRel) Cardinality() orm.Cardinality { return orm.ToMany }",
+		"func (r EmployeesEmployeesRel) Cardinality() sqlkit.Cardinality { return sqlkit.ToMany }",
 		`As("employees_ref")`,
 		"sqlkit.Cond(sql.Eq(r.ManagerID, newEmployeesColumns().ID))",
 	} {
@@ -167,13 +167,10 @@ func TestGenerateSelfReferentialRelations(t *testing.T) {
 }
 
 func TestGenerateRelationsNoForeignKeysOmitsSQLImport(t *testing.T) {
-	// A relation-aware binding for a table without foreign keys still emits the
-	// Queryer surface (orm import) but no JoinOn expressions, so it must not
-	// import sql — an unused import would make the generated file uncompilable.
+	// A relation-aware binding for a table without foreign keys emits the
+	// Queryer surface but no JoinOn expressions, so it must not import sql — an
+	// unused import would make the generated file uncompilable.
 	got := string(generateSingle(t, fixtureTables()[:1], Options{PackageName: "blogdb", EmitRelations: true}))
-	if !strings.Contains(got, `"github.com/aita/sqlkit/orm"`) {
-		t.Errorf("relation-aware binding should import orm\n%s", got)
-	}
 	if strings.Contains(got, `"github.com/aita/sqlkit/sql"`) {
 		t.Errorf("binding without relations must not import sql (unused)\n%s", got)
 	}

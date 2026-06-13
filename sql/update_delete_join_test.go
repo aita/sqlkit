@@ -77,3 +77,28 @@ func TestUpdateDeleteWithoutJoinUnchanged(t *testing.T) {
 		`DELETE FROM "public"."users" WHERE ("id" = $1)`,
 		[]any{1})
 }
+
+// PostgreSQL's FROM/USING form folds join ON into WHERE, which is only correct
+// for inner joins; a LEFT JOIN must be rejected rather than silently collapsed
+// to an inner join. MySQL's inline form renders it natively, so it is accepted.
+func TestUpdateLeftJoinRejectedOnPostgres(t *testing.T) {
+	query := Update(users).
+		Set(Set("name", Val("x"))).
+		LeftJoin(orgs, joinOn())
+	if _, _, err := query.ToSQL(PostgreSQLDialect{}); err == nil {
+		t.Fatal("ToSQL(postgres) error = nil, want LEFT JOIN rejection")
+	}
+	assertMySQL(t, query,
+		"UPDATE `public`.`users` LEFT JOIN `orgs` ON (`public`.`users`.`org_id` = `orgs`.`id`) SET `name` = ?",
+		[]any{"x"})
+}
+
+func TestDeleteLeftJoinRejectedOnPostgres(t *testing.T) {
+	query := DeleteFrom(users).LeftJoin(orgs, joinOn())
+	if _, _, err := query.ToSQL(PostgreSQLDialect{}); err == nil {
+		t.Fatal("ToSQL(postgres) error = nil, want LEFT JOIN rejection")
+	}
+	assertMySQL(t, query,
+		"DELETE `public`.`users` FROM `public`.`users` LEFT JOIN `orgs` ON (`public`.`users`.`org_id` = `orgs`.`id`)",
+		nil)
+}

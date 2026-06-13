@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/aita/sqlkit/internal/reflectmap"
 	"github.com/aita/sqlkit/sql"
 )
 
@@ -153,7 +154,7 @@ func (q InsertQuery) mapRows() ([]string, [][]any, error) {
 		}
 		p, ok := plans[rv.Type()]
 		if !ok {
-			fields := fieldsByColumn(rv.Type())
+			fields := reflectmap.FieldsByColumn(rv.Type())
 			for _, name := range q.def.Columns {
 				if path, found := fields[strings.ToLower(name)]; found {
 					p.names = append(p.names, name)

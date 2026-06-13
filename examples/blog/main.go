@@ -135,13 +135,13 @@ func run(ctx context.Context, db *sqlkit.Database) error {
 			fmt.Printf("#%d %s: %d posts\n", s.Rank, s.Email, s.PostCount)
 		}
 
-		// Relation-aware read with the generated QuerySet ORM layer: Join takes
-		// the Profile relation and derives the ON clause from the foreign key, so
-		// the caller never writes the join condition. The terminal returns
-		// sqlkit.Rows, scanned into a caller-defined DTO.
+		// Relation-aware read: JoinRel takes the Profile relation and derives the
+		// ON clause from the foreign key, so the caller never writes the join
+		// condition. The terminal returns sqlkit.Rows, scanned into a
+		// caller-defined DTO.
 		var publicAuthors []User
 		if err := blogdb.Users.Q(session).
-			Join(blogdb.Users.Rels.Profile).
+			JoinRel(blogdb.Users.Rels.Profile).
 			Where(blogdb.Users.Rels.Profile.Public.Eq(true)).
 			OrderBy(blogdb.Users.CreatedAt.Desc()).
 			Limit(50).

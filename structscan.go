@@ -5,9 +5,8 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
-	"time"
 
-	"github.com/aita/sqlkit/internal/names"
+	"github.com/aita/sqlkit/internal/reflectmap"
 	"github.com/aita/sqlkit/sql"
 )
 
@@ -94,7 +93,7 @@ func structScanOne(rows *stdsql.Rows, dest any) (bool, error) {
 // rowScanner returns a function that scans the current row into a value of
 // the given type, mapping columns to struct fields when the type is a struct.
 func rowScanner(rows *stdsql.Rows, t reflect.Type) (func(reflect.Value) error, error) {
-	if !mapsAsStruct(t) {
+	if !reflectmap.MapsAsStruct(t) {
 		return func(v reflect.Value) error {
 			return rows.Scan(v.Addr().Interface())
 		}, nil
@@ -103,7 +102,7 @@ func rowScanner(rows *stdsql.Rows, t reflect.Type) (func(reflect.Value) error, e
 	if err != nil {
 		return nil, err
 	}
-	fields := fieldsByColumn(t)
+	fields := reflectmap.FieldsByColumn(t)
 	paths := make([][]int, len(columns))
 	for i, column := range columns {
 		path, ok := fields[strings.ToLower(column)]
@@ -119,78 +118,4 @@ func rowScanner(rows *stdsql.Rows, t reflect.Type) (func(reflect.Value) error, e
 		}
 		return rows.Scan(dests...)
 	}, nil
-}
-
-var (
-	scannerType = reflect.TypeOf((*stdsql.Scanner)(nil)).Elem()
-	timeType    = reflect.TypeOf(time.Time{})
-)
-
-// mapsAsStruct reports whether values of t are filled field-by-field rather
-// than scanned as a single column.
-func mapsAsStruct(t reflect.Type) bool {
-	if t.Kind() != reflect.Struct {
-		return false
-	}
-	if t == timeType {
-		return false
-	}
-	if t.Implements(scannerType) || reflect.PointerTo(t).Implements(scannerType) {
-		return false
-	}
-	return true
-}
-
-// fieldsByColumn maps lowercased column names to field index paths. Fields
-// register under their `sqlkit` tag when present, otherwise under both the
-// lowercased and snake_case forms of the field name. Embedded structs are
-// flattened (except types that scan as a single column, such as time.Time
-// and sql.Scanner implementations); shallower fields win conflicts.
-func fieldsByColumn(t reflect.Type) map[string][]int {
-	out := map[string][]int{}
-	collectFields(t, nil, out)
-	return out
-}
-
-func collectFields(t reflect.Type, prefix []int, out map[string][]int) {
-	for i := 0; i < t.NumField(); i++ {
-		field := t.Field(i)
-		path := append(append([]int(nil), prefix...), i)
-		tag := fieldTag(field)
-		if tag == "-" {
-			continue
-		}
-		// Embedded structs are flattened; exported fields promoted through
-		// an unexported embedded type remain settable.
-		if tag == "" && field.Anonymous && mapsAsStruct(field.Type) {
-			collectFields(field.Type, path, out)
-			continue
-		}
-		if field.PkgPath != "" {
-			continue
-		}
-		if tag != "" {
-			register(out, strings.ToLower(tag), path)
-			continue
-		}
-		register(out, strings.ToLower(field.Name), path)
-		register(out, names.SnakeCase(field.Name), path)
-	}
-}
-
-func register(out map[string][]int, key string, path []int) {
-	if existing, ok := out[key]; ok && len(existing) <= len(path) {
-		return
-	}
-	out[key] = path
-}
-
-func fieldTag(field reflect.StructField) string {
-	if tag, ok := field.Tag.Lookup("sqlkit"); ok {
-		name := strings.Split(tag, ",")[0]
-		if name != "" {
-			return name
-		}
-	}
-	return ""
 }
