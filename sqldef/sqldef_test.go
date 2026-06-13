@@ -242,6 +242,31 @@ func TestSharedElementsReuse(t *testing.T) {
 	}
 }
 
+// TestBlankDefaultIsAbsent: a blank Default expression (an empty sql.Raw) is
+// normalized to absent, so an integer primary key still renders as serial
+// rather than emitting an invalid empty DEFAULT clause.
+func TestBlankDefaultIsAbsent(t *testing.T) {
+	catalog := sqldef.NewCatalog()
+	catalog.Table("items",
+		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default(querysql.Raw(""))),
+	)
+	got := buildCatalog(t, catalog)
+	col := got.Tables[0].Columns[0]
+	if !col.HasDefault || col.DefaultExpr != nil {
+		t.Fatalf("blank default: HasDefault=%v DefaultExpr=%v, want true and nil", col.HasDefault, col.DefaultExpr)
+	}
+	sql, err := got.CreateSQL(querysql.PostgreSQLDialect{})
+	if err != nil {
+		t.Fatalf("CreateSQL() error = %v", err)
+	}
+	if !strings.Contains(sql, `"id" bigserial`) {
+		t.Errorf("blank default on integer PK should render serial:\n%s", sql)
+	}
+	if strings.Contains(sql, "DEFAULT ,") || strings.Contains(sql, "DEFAULT \n") {
+		t.Errorf("blank default must not emit an empty DEFAULT clause:\n%s", sql)
+	}
+}
+
 // TestSchemalessDatabase covers MySQL/SQLite-style databases without a schema
 // namespace: Catalog.Table declares into the unnamed default schema, so tables
 // carry an empty schema and generate unqualified DDL.

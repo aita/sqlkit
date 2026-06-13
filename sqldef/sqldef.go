@@ -404,15 +404,18 @@ func Nullable() ColumnOption {
 // bindings report it in Defaulted and inserts can omit it. The optional
 // expression is used by the DDL generator: Default(sql.Raw("now()")) renders as
 // DEFAULT now(), while a bare Default() on an integer primary key renders as a
-// serial/auto-increment column. The expression must not bind values; wrap
-// literals in sql.Raw to inline them.
+// serial/auto-increment column. A blank expression (nil or an empty sql.Raw) is
+// treated as absent, equivalent to a bare Default(). The expression must not
+// bind values; wrap literals in sql.Raw to inline them.
 func Default(expr ...sql.Expression) ColumnOption {
 	return func(c *columnDef) {
 		c.hasDefault = true
 		switch len(expr) {
 		case 0:
 		case 1:
-			c.defaultExpr = expr[0]
+			if !isBlankExpr(expr[0]) {
+				c.defaultExpr = expr[0]
+			}
 		default:
 			c.errs = append(c.errs, fmt.Errorf("Default takes at most one expression"))
 		}
