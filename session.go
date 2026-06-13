@@ -94,6 +94,38 @@ func (s *Session) Select(selections ...sql.Selection) SelectQuery {
 	return q
 }
 
+// Union combines two or more SELECT queries with UNION, bound to this
+// session's transaction. It mirrors the package-level Union but binds the
+// result to this session regardless of the operands' own executors.
+func (s *Session) Union(first, second SelectQuery, rest ...SelectQuery) UnionQuery {
+	q := Union(first, second, rest...)
+	q.ex = s
+	return q
+}
+
+// UnionAll is Union with UNION ALL, keeping duplicate rows.
+func (s *Session) UnionAll(first, second SelectQuery, rest ...SelectQuery) UnionQuery {
+	q := UnionAll(first, second, rest...)
+	q.ex = s
+	return q
+}
+
+// Intersect combines two or more SELECT queries with INTERSECT, bound to this
+// session's transaction.
+func (s *Session) Intersect(first, second SelectQuery, rest ...SelectQuery) UnionQuery {
+	q := Intersect(first, second, rest...)
+	q.ex = s
+	return q
+}
+
+// Except combines two or more SELECT queries with EXCEPT, bound to this
+// session's transaction.
+func (s *Session) Except(first, second SelectQuery, rest ...SelectQuery) UnionQuery {
+	q := Except(first, second, rest...)
+	q.ex = s
+	return q
+}
+
 // Insert starts an INSERT bound to this session's transaction. Feed it rows
 // with Values, or a query with FromSelect.
 func (s *Session) Insert(table Table) InsertQuery {

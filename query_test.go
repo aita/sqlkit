@@ -462,6 +462,23 @@ func TestUnionHelperBindsExecutor(t *testing.T) {
 	}
 }
 
+func TestDatabaseUnionMethod(t *testing.T) {
+	db := sqlkit.WrapDB(usersFake().DB())
+
+	var users []MyUserDTO
+	// Operands carry no executor; db.Union binds the result to db.
+	err := db.UnionAll(
+		sqlkit.Select().From(Users).Where(Users.ID.Eq(1)),
+		sqlkit.Select().From(Users).Where(Users.ID.Eq(2)),
+	).All(context.Background()).Scan(&users)
+	if err != nil {
+		t.Fatalf("db.UnionAll().Scan() error = %v", err)
+	}
+	if len(users) != 2 || users[1].Mail != "b@example.com" {
+		t.Fatalf("users = %#v", users)
+	}
+}
+
 func TestUnionScans(t *testing.T) {
 	db := sqlkit.WrapDB(usersFake().DB())
 

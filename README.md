@@ -392,13 +392,20 @@ err = db.Select(appdb.Users.Email).From(appdb.Users).Where(...).
     OrderBy(sql.Asc(sql.Col("email"))).
     All(ctx).Scan(&emails)
 
-// sqlkit.Union / UnionAll / Intersect / Except are package-level helpers for
-// combining a flat list of SELECTs instead of left-folding the chain by hand.
-// The result binds to the first operand's executor.
+// Union / UnionAll / Intersect / Except combine a flat list of SELECTs instead
+// of left-folding the chain by hand. db.Union (and session.Union) bind the
+// result to that handle, so the operands need no executor of their own:
+err = db.Union(
+    sqlkit.Select(appdb.Users.Email).From(appdb.Users).Where(...),
+    sqlkit.Select(appdb.Admins.Email).From(appdb.Admins),
+    sqlkit.Select(appdb.Guests.Email).From(appdb.Guests),
+).OrderBy(sql.Asc(sql.Col("email"))).All(ctx).Scan(&emails)
+
+// The package-level sqlkit.Union is the same but binds to the first operand's
+// executor — handy when the operands are already built from a db or session.
 err = sqlkit.Union(
     db.Select(appdb.Users.Email).From(appdb.Users).Where(...),
     sqlkit.Select(appdb.Admins.Email).From(appdb.Admins),
-    sqlkit.Select(appdb.Guests.Email).From(appdb.Guests),
 ).OrderBy(sql.Asc(sql.Col("email"))).All(ctx).Scan(&emails)
 ```
 
