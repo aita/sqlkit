@@ -2,6 +2,7 @@ package inspector
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
 	"github.com/aita/sqlkit/meta"
@@ -12,7 +13,8 @@ SELECT c.TABLE_NAME,
        c.COLUMN_NAME,
        c.DATA_TYPE,
        c.IS_NULLABLE = 'YES',
-       (c.COLUMN_DEFAULT IS NOT NULL OR c.EXTRA LIKE '%auto_increment%'),
+       c.COLUMN_DEFAULT,
+       c.EXTRA LIKE '%auto_increment%',
        c.COLUMN_KEY = 'PRI',
        COALESCE(c.CHARACTER_MAXIMUM_LENGTH, 0),
        COALESCE(c.NUMERIC_PRECISION, 0),
@@ -83,12 +85,15 @@ func inspectMySQL(ctx context.Context, db Querier, schemaName string) ([]meta.Ta
 	tableIndex := map[string]int{}
 	for rows.Next() {
 		var tableName, tableComment, dataType string
+		var colDefault sql.NullString
+		var autoIncrement bool
 		var length, precision, scale int
 		var column meta.Column
-		if err := rows.Scan(&tableName, &column.Name, &dataType, &column.Nullable, &column.HasDefault, &column.PrimaryKey, &length, &precision, &scale, &column.Comment, &tableComment); err != nil {
+		if err := rows.Scan(&tableName, &column.Name, &dataType, &column.Nullable, &colDefault, &autoIncrement, &column.PrimaryKey, &length, &precision, &scale, &column.Comment, &tableComment); err != nil {
 			return nil, fmt.Errorf("inspector: scan column: %w", err)
 		}
 		column.Type = columnType("mysql", dataType, length, precision, scale)
+		column.HasDefault, column.DefaultExpr = columnDefault(colDefault, autoIncrement)
 		index, ok := tableIndex[tableName]
 		if !ok {
 			index = len(tables)

@@ -47,6 +47,25 @@ var decimalTypes = map[string]bool{
 	"decimal": true,
 }
 
+// columnDefault derives a column's HasDefault flag and default expression from
+// its raw default and whether it is a sequence/identity ("serial") column.
+// Serial defaults — identity, auto_increment, and PostgreSQL nextval()
+// sequence defaults — leave the expression empty so the DDL generator can
+// render them as serial/AUTO_INCREMENT; other defaults keep their expression
+// so it is preserved across a round-trip.
+func columnDefault(def sql.NullString, serial bool) (bool, string) {
+	if serial {
+		return true, ""
+	}
+	if !def.Valid {
+		return false, ""
+	}
+	if strings.HasPrefix(def.String, "nextval(") {
+		return true, ""
+	}
+	return true, def.String
+}
+
 // columnType builds the column's portable type from the single dialect the
 // inspector read it on, clearing precision/scale on non-decimal types.
 func columnType(dialect, name string, length, precision, scale int) meta.Type {

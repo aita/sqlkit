@@ -77,6 +77,8 @@ func GenerateCatalog(catalog meta.Meta, opts CatalogOptions) (File, error) {
 
 	// Assign a Go variable to each table so foreign keys can reference the
 	// table values; names colliding with reserved identifiers get a suffix.
+	// Keyed by schema+name so same-named tables in different schemas don't
+	// collide.
 	tableVars := map[string]string{}
 	for _, table := range tables {
 		name := goName(table.Name)
@@ -84,7 +86,7 @@ func GenerateCatalog(catalog meta.Meta, opts CatalogOptions) (File, error) {
 			name += "Table"
 		}
 		reserved[name] = true
-		tableVars[table.Name] = name
+		tableVars[tableVarKey(table.Schema.Name, table.Name)] = name
 	}
 
 	var sb strings.Builder
@@ -116,7 +118,7 @@ func GenerateCatalog(catalog meta.Meta, opts CatalogOptions) (File, error) {
 }
 
 func renderCatalogTable(sb *strings.Builder, trailers *[]string, table meta.Table, owner string, tableVars map[string]string, dialect string) {
-	varName := tableVars[table.Name]
+	varName := tableVars[tableVarKey(table.Schema.Name, table.Name)]
 
 	// Single-column foreign keys to another generated table become a
 	// References option on their column; composite ones become ForeignKey
@@ -127,11 +129,11 @@ func renderCatalogTable(sb *strings.Builder, trailers *[]string, table meta.Tabl
 	refs := map[string]meta.ForeignKey{}
 	var elements, foreign []meta.ForeignKey
 	for _, fk := range table.ForeignKeys {
-		refVar, ok := tableVars[fk.RefTable]
+		refVar, ok := tableVars[tableVarKey(fk.RefSchema.Name, fk.RefTable)]
 		switch {
 		case !ok:
 			foreign = append(foreign, fk)
-		case fk.RefTable == table.Name:
+		case fk.RefTable == table.Name && fk.RefSchema.Name == table.Schema.Name:
 			*trailers = append(*trailers, fmt.Sprintf("var _ = Catalog.AddForeignKey(%s, %s, %s, %s)",
 				varName, goStringSlice(fk.Columns), refVar, goStringSlice(fk.RefColumns)))
 		case len(fk.Columns) == 1 && len(fk.RefColumns) == 1:
@@ -180,7 +182,7 @@ func renderCatalogTable(sb *strings.Builder, trailers *[]string, table meta.Tabl
 			sb.WriteString(", sqldef.Unique()")
 		}
 		if fk, ok := refs[column.Name]; ok {
-			fmt.Fprintf(sb, ", sqldef.References(%s, %q)", tableVars[fk.RefTable], fk.RefColumns[0])
+			fmt.Fprintf(sb, ", sqldef.References(%s, %q)", tableVars[tableVarKey(fk.RefSchema.Name, fk.RefTable)], fk.RefColumns[0])
 		}
 		if column.Comment != "" {
 			fmt.Fprintf(sb, ", sqldef.Comment(%q)", column.Comment)
@@ -188,7 +190,7 @@ func renderCatalogTable(sb *strings.Builder, trailers *[]string, table meta.Tabl
 		sb.WriteString("),\n")
 	}
 	for _, fk := range elements {
-		fmt.Fprintf(sb, "\tsqldef.ForeignKey(%s, %s, %s),\n", goStringSlice(fk.Columns), tableVars[fk.RefTable], goStringSlice(fk.RefColumns))
+		fmt.Fprintf(sb, "\tsqldef.ForeignKey(%s, %s, %s),\n", goStringSlice(fk.Columns), tableVars[tableVarKey(fk.RefSchema.Name, fk.RefTable)], goStringSlice(fk.RefColumns))
 	}
 	for _, ix := range indexes {
 		call := "sqldef.Index"
@@ -222,6 +224,10 @@ func quotedList(items []string) string {
 func goStringSlice(items []string) string {
 	return "[]string{" + quotedList(items) + "}"
 }
+
+// tableVarKey keys the table-variable map by schema and name so same-named
+// tables in different schemas get distinct entries.
+func tableVarKey(schema, name string) string { return schema + "\x00" + name }
 
 // sqldefTypeExpr maps an engine type name back to the sqldef package expression
 // that produces it. Types without a portable name fall back to sqldef.Type,

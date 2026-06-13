@@ -61,13 +61,13 @@ func TestInspectPostgres(t *testing.T) {
 				}, nil
 			default:
 				return sqltest.Result{
-					Columns: []string{"table_name", "column_name", "udt_name", "nullable", "has_default", "length", "precision", "scale"},
+					Columns: []string{"table_name", "column_name", "udt_name", "nullable", "column_default", "is_identity", "length", "precision", "scale"},
 					Rows: [][]driver.Value{
-						{"users", "id", "int8", false, true, 0, 64, 0},
-						{"users", "email", "varchar", false, false, 255, 0, 0},
-						{"users", "balance", "numeric", false, false, 0, 10, 2},
-						{"posts", "id", "int8", false, true, 0, 64, 0},
-						{"posts", "user_id", "int8", false, false, 0, 64, 0},
+						{"users", "id", "int8", false, "nextval('users_id_seq'::regclass)", false, 0, 64, 0},
+						{"users", "email", "varchar", false, nil, false, 255, 0, 0},
+						{"users", "balance", "numeric", false, "0", false, 0, 10, 2},
+						{"posts", "id", "int8", false, "nextval('posts_id_seq'::regclass)", false, 0, 64, 0},
+						{"posts", "user_id", "int8", false, nil, false, 0, 64, 0},
 					},
 				}, nil
 			}
@@ -87,7 +87,7 @@ func TestInspectPostgres(t *testing.T) {
 			Columns: []meta.Column{
 				{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), HasDefault: true, PrimaryKey: true},
 				{Name: "email", Type: meta.Of("postgres", "varchar", 255, 0, 0), Comment: "Unique login address"},
-				{Name: "balance", Type: meta.Of("postgres", "numeric", 0, 10, 2)},
+				{Name: "balance", Type: meta.Of("postgres", "numeric", 0, 10, 2), HasDefault: true, DefaultExpr: "0"},
 			},
 			Indexes: []meta.Index{
 				{Name: "users_email_key", Columns: []string{"email"}, Unique: true},
@@ -153,13 +153,13 @@ func TestInspectMySQL(t *testing.T) {
 				}, nil
 			default:
 				return sqltest.Result{
-					Columns: []string{"table_name", "column_name", "data_type", "nullable", "has_default", "is_pk", "length", "precision", "scale", "column_comment", "table_comment"},
+					Columns: []string{"table_name", "column_name", "data_type", "nullable", "column_default", "auto_increment", "is_pk", "length", "precision", "scale", "column_comment", "table_comment"},
 					Rows: [][]driver.Value{
-						{"users", "id", "bigint", false, true, true, 0, 19, 0, "", "Registered accounts"},
-						{"users", "email", "varchar", false, false, false, 255, 0, 0, "Unique login address", "Registered accounts"},
-						{"users", "balance", "decimal", false, false, false, 0, 10, 2, "", "Registered accounts"},
-						{"posts", "id", "bigint", false, true, true, 0, 19, 0, "", ""},
-						{"posts", "user_id", "bigint", false, false, false, 0, 19, 0, "", ""},
+						{"users", "id", "bigint", false, nil, true, true, 0, 19, 0, "", "Registered accounts"},
+						{"users", "email", "varchar", false, nil, false, false, 255, 0, 0, "Unique login address", "Registered accounts"},
+						{"users", "balance", "decimal", false, "0.00", false, false, 0, 10, 2, "", "Registered accounts"},
+						{"posts", "id", "bigint", false, nil, true, true, 0, 19, 0, "", ""},
+						{"posts", "user_id", "bigint", false, nil, false, false, 0, 19, 0, "", ""},
 					},
 				}, nil
 			}
@@ -179,7 +179,7 @@ func TestInspectMySQL(t *testing.T) {
 			Columns: []meta.Column{
 				{Name: "id", Type: meta.Of("mysql", "bigint", 0, 0, 0), HasDefault: true, PrimaryKey: true},
 				{Name: "email", Type: meta.Of("mysql", "varchar", 255, 0, 0), Comment: "Unique login address"},
-				{Name: "balance", Type: meta.Of("mysql", "decimal", 0, 10, 2)},
+				{Name: "balance", Type: meta.Of("mysql", "decimal", 0, 10, 2), HasDefault: true, DefaultExpr: "0.00"},
 			},
 			Indexes: []meta.Index{
 				{Name: "uq_users_email", Columns: []string{"email"}, Unique: true},

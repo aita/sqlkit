@@ -140,6 +140,51 @@ func TestGenerateCatalogIndexesChecksComments(t *testing.T) {
 	}
 }
 
+// TestGenerateCatalogSameNameDifferentSchemas: the same table name in two
+// schemas must get distinct variables and correctly-scoped foreign keys.
+func TestGenerateCatalogSameNameDifferentSchemas(t *testing.T) {
+	tables := []meta.Table{
+		{
+			Schema:  meta.Schema{Name: "public"},
+			Name:    "users",
+			Columns: []meta.Column{{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true}},
+		},
+		{
+			Schema: meta.Schema{Name: "audit"},
+			Name:   "users",
+			Columns: []meta.Column{
+				{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true},
+				{Name: "public_user_id", Type: meta.Of("postgres", "int8", 0, 0, 0)},
+			},
+			ForeignKeys: []meta.ForeignKey{
+				{Name: "fk", Columns: []string{"public_user_id"}, RefSchema: meta.Schema{Name: "public"}, RefTable: "users", RefColumns: []string{"id"}},
+			},
+		},
+	}
+	got := string(mustGenerateCatalog(t, tables))
+	for _, want := range []string{
+		"var Users = Public.Table(\"users\",",     // public.users
+		"var UsersTable = Audit.Table(\"users\",", // audit.users gets a distinct var
+		"sqldef.References(Users, \"id\")",        // audit.users FK targets public.users
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated catalog missing %q\n%s", want, got)
+		}
+	}
+	if strings.Count(got, "var Users ") != 1 || strings.Count(got, "var UsersTable ") != 1 {
+		t.Errorf("expected one Users and one UsersTable declaration:\n%s", got)
+	}
+}
+
+func mustGenerateCatalog(t *testing.T, tables []meta.Table) []byte {
+	t.Helper()
+	file, err := GenerateCatalog(meta.Meta{Tables: tables}, CatalogOptions{PackageName: "schema"})
+	if err != nil {
+		t.Fatalf("GenerateCatalog() error = %v", err)
+	}
+	return file.Content
+}
+
 func TestGenerateCatalogErrors(t *testing.T) {
 	if _, err := GenerateCatalog(meta.Meta{Tables: fixtureTables()}, CatalogOptions{}); err == nil {
 		t.Error("GenerateCatalog() without package name: expected error")

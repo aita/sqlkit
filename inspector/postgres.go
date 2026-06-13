@@ -2,6 +2,7 @@ package inspector
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
 	"github.com/aita/sqlkit/meta"
@@ -12,7 +13,8 @@ SELECT c.table_name,
        c.column_name,
        c.udt_name,
        c.is_nullable = 'YES',
-       c.column_default IS NOT NULL OR c.is_identity = 'YES',
+       c.column_default,
+       c.is_identity = 'YES',
        COALESCE(c.character_maximum_length, 0),
        COALESCE(c.numeric_precision, 0),
        COALESCE(c.numeric_scale, 0)
@@ -51,8 +53,11 @@ WHERE tc.table_schema = $1 AND tc.constraint_type = 'FOREIGN KEY'
 ORDER BY tc.constraint_name, kcu.ordinal_position`
 
 // pgIndexesQuery reads secondary indexes (the primary key index is implied by
-// Column.PrimaryKey) with their columns in index order. Expression indexes are
-// skipped; they have no column list to express.
+// Column.PrimaryKey) with their key columns in index order. Index forms the
+// schema model cannot represent are skipped so they are never imported as a
+// plain index: expression indexes (indexprs) and partial indexes (indpred).
+// INCLUDE columns are dropped (k.ord > indnkeyatts) so only the key columns
+// remain.
 const pgIndexesQuery = `
 SELECT t.relname,
        i.relname,
@@ -64,7 +69,8 @@ JOIN pg_class i ON i.oid = ix.indexrelid
 JOIN pg_namespace n ON n.oid = t.relnamespace
 JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord) ON true
 JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
-WHERE n.nspname = $1 AND t.relkind = 'r' AND NOT ix.indisprimary AND ix.indexprs IS NULL
+WHERE n.nspname = $1 AND t.relkind = 'r' AND NOT ix.indisprimary
+  AND ix.indexprs IS NULL AND ix.indpred IS NULL AND k.ord <= ix.indnkeyatts
 ORDER BY t.relname, i.relname, k.ord`
 
 // pgChecksQuery reads CHECK constraints; pg_get_constraintdef renders the
@@ -102,12 +108,15 @@ func inspectPostgres(ctx context.Context, db Querier, schemaName string) ([]meta
 	tableIndex := map[string]int{}
 	for rows.Next() {
 		var tableName, udt string
+		var colDefault sql.NullString
+		var isIdentity bool
 		var length, precision, scale int
 		var column meta.Column
-		if err := rows.Scan(&tableName, &column.Name, &udt, &column.Nullable, &column.HasDefault, &length, &precision, &scale); err != nil {
+		if err := rows.Scan(&tableName, &column.Name, &udt, &column.Nullable, &colDefault, &isIdentity, &length, &precision, &scale); err != nil {
 			return nil, fmt.Errorf("inspector: scan column: %w", err)
 		}
 		column.Type = columnType("postgres", udt, length, precision, scale)
+		column.HasDefault, column.DefaultExpr = columnDefault(colDefault, isIdentity)
 		index, ok := tableIndex[tableName]
 		if !ok {
 			index = len(tables)
