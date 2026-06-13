@@ -124,7 +124,7 @@ func (q SelectQuery) WithCTE(ctes ...sql.CTE) SelectQuery {
 //
 //	sub := sqlkit.Select(Users.ID).From(Users).Where(Users.Active.Eq(true)).As("sub")
 //	db.Select(sub.Col("id")).From(sub).All(ctx).Scan(&ids)
-func (q SelectQuery) As(alias string) sql.Subquery {
+func (q SelectQuery) As(alias string) sql.DerivedTable {
 	return q.query.As(alias)
 }
 

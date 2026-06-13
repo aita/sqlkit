@@ -110,7 +110,7 @@ func (q UnionQuery) CTE(name string, opts ...sql.CTEOption) sql.CTE {
 
 // As wraps this set-operation query as an aliased subquery (derived table), for
 // use as a FROM/JOIN source and column handle; see SelectQuery.As.
-func (q UnionQuery) As(alias string) sql.Subquery {
+func (q UnionQuery) As(alias string) sql.DerivedTable {
 	return q.query.As(alias)
 }
 
