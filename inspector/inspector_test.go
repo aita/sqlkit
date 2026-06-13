@@ -24,9 +24,9 @@ func TestInspectPostgres(t *testing.T) {
 			switch {
 			case strings.Contains(sql, "FOREIGN KEY"):
 				return sqltest.Result{
-					Columns: []string{"constraint_name", "table_name", "column_name", "ref_schema", "ref_table", "ref_column"},
+					Columns: []string{"constraint_name", "table_name", "column_name", "ref_schema", "ref_table", "ref_column", "delete_rule", "update_rule"},
 					Rows: [][]driver.Value{
-						{"posts_user_id_fkey", "posts", "user_id", "public", "users", "id"},
+						{"posts_user_id_fkey", "posts", "user_id", "public", "users", "id", "CASCADE", "NO ACTION"},
 					},
 				}, nil
 			case strings.Contains(sql, "PRIMARY KEY"):
@@ -105,7 +105,7 @@ func TestInspectPostgres(t *testing.T) {
 				{Name: "user_id", Type: meta.Of("postgres", "int8", 0, 0, 0)},
 			},
 			ForeignKeys: []meta.ForeignKey{
-				{Name: "posts_user_id_fkey", Columns: []string{"user_id"}, RefSchema: meta.Schema{Name: "public"}, RefTable: "users", RefColumns: []string{"id"}},
+				{Name: "posts_user_id_fkey", Columns: []string{"user_id"}, RefSchema: meta.Schema{Name: "public"}, RefTable: "users", RefColumns: []string{"id"}, OnDelete: meta.Cascade},
 			},
 			Indexes: []meta.Index{
 				{Name: "idx_posts_user_id", Columns: []string{"user_id"}},
@@ -133,9 +133,9 @@ func TestInspectMySQL(t *testing.T) {
 			switch {
 			case strings.Contains(sql, "REFERENCED_TABLE_NAME"):
 				return sqltest.Result{
-					Columns: []string{"constraint_name", "table_name", "column_name", "ref_schema", "ref_table", "ref_column"},
+					Columns: []string{"constraint_name", "table_name", "column_name", "ref_schema", "ref_table", "ref_column", "delete_rule", "update_rule"},
 					Rows: [][]driver.Value{
-						{"fk_posts_user", "posts", "user_id", "app", "users", "id"},
+						{"fk_posts_user", "posts", "user_id", "app", "users", "id", "CASCADE", "NO ACTION"},
 					},
 				}, nil
 			case strings.Contains(sql, "STATISTICS"):
@@ -197,7 +197,7 @@ func TestInspectMySQL(t *testing.T) {
 				{Name: "user_id", Type: meta.Of("mysql", "bigint", 0, 0, 0)},
 			},
 			ForeignKeys: []meta.ForeignKey{
-				{Name: "fk_posts_user", Columns: []string{"user_id"}, RefSchema: meta.Schema{Name: "app"}, RefTable: "users", RefColumns: []string{"id"}},
+				{Name: "fk_posts_user", Columns: []string{"user_id"}, RefSchema: meta.Schema{Name: "app"}, RefTable: "users", RefColumns: []string{"id"}, OnDelete: meta.Cascade},
 			},
 		},
 	}}

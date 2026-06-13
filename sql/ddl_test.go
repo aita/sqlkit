@@ -231,3 +231,45 @@ func TestStatementsRender(t *testing.T) {
 		t.Errorf("Render() =\n%s\nwant\n%s", out, want)
 	}
 }
+
+func TestForeignKeyWithActions(t *testing.T) {
+	stmt := sql.AlterTable(sql.Table{Schema: "public", Name: "posts"}).
+		AddForeignKey(sql.ForeignKeyConstraint{
+			Name: "fk_posts_user_id", Columns: []string{"user_id"},
+			RefSchema: "public", RefTable: "users", RefColumns: []string{"id"},
+			OnDelete: "CASCADE", OnUpdate: "RESTRICT",
+		})
+	got := mustDDL(t, stmt, "postgres")
+	want := `ALTER TABLE "public"."posts" ADD CONSTRAINT "fk_posts_user_id" FOREIGN KEY ("user_id") REFERENCES "public"."users" ("id") ON DELETE CASCADE ON UPDATE RESTRICT;`
+	if got != want {
+		t.Errorf("AddForeignKey() =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestRestateColumn(t *testing.T) {
+	col := sql.ColumnDef{Name: "name", Type: sql.EngineType{Name: "text"}, Default: sql.Raw("''")}
+	stmt := sql.AlterTable(sql.Table{Name: "users"}).RestateColumn(col)
+
+	if got, want := mustDDL(t, stmt, "mysql"), "ALTER TABLE `users` MODIFY COLUMN `name` text DEFAULT '';"; got != want {
+		t.Errorf("RestateColumn(mysql) =\n%s\nwant\n%s", got, want)
+	}
+	got := mustDDL(t, stmt, "postgres")
+	want := `ALTER TABLE "users" ALTER COLUMN "name" TYPE text, ALTER COLUMN "name" DROP NOT NULL, ALTER COLUMN "name" SET DEFAULT '';`
+	if got != want {
+		t.Errorf("RestateColumn(postgres) =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestPrimaryKeyAlterations(t *testing.T) {
+	add := sql.AlterTable(sql.Table{Name: "t"}).AddPrimaryKey("a", "b")
+	if got, want := mustDDL(t, add, "postgres"), `ALTER TABLE "t" ADD PRIMARY KEY ("a", "b");`; got != want {
+		t.Errorf("AddPrimaryKey =\n%s\nwant\n%s", got, want)
+	}
+	drop := sql.AlterTable(sql.Table{Name: "t"}).DropPrimaryKey()
+	if got, want := mustDDL(t, drop, "mysql"), "ALTER TABLE `t` DROP PRIMARY KEY;"; got != want {
+		t.Errorf("DropPrimaryKey(mysql) =\n%s\nwant\n%s", got, want)
+	}
+	if got, want := mustDDL(t, drop, "postgres"), `ALTER TABLE "t" DROP CONSTRAINT "t_pkey";`; got != want {
+		t.Errorf("DropPrimaryKey(postgres) =\n%s\nwant\n%s", got, want)
+	}
+}

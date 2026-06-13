@@ -209,6 +209,8 @@ func (fk ForeignKey) AddStatement(table Table) sql.AlterTableStmt {
 		RefSchema:  fk.RefSchema.Name,
 		RefTable:   fk.RefTable,
 		RefColumns: fk.RefColumns,
+		OnDelete:   string(fk.OnDelete),
+		OnUpdate:   string(fk.OnUpdate),
 	})
 }
 

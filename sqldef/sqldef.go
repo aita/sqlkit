@@ -162,14 +162,18 @@ func (d *Catalog) schemaNamesAdd(name string) {
 //
 //	var Employees = Catalog.Table("employees", ...)
 //	var _ = Catalog.AddForeignKey(Employees, []string{"manager_id"}, Employees, []string{"id"})
-func (d *Catalog) AddForeignKey(table meta.Table, columns []string, ref meta.Table, refColumns []string) meta.Table {
+func (d *Catalog) AddForeignKey(table meta.Table, columns []string, ref meta.Table, refColumns []string, opts ...FKOption) meta.Table {
 	key := tableKey(table.Schema.Name, table.Name)
 	for i := range d.tables {
 		t := &d.tables[i]
 		if tableKey(t.Schema.Name, t.Name) != key {
 			continue
 		}
-		if fk, ok := d.resolveFK(t.Name, t.Columns, fkDef{columns: columns, ref: ref, refColumns: refColumns}); ok {
+		def := fkDef{columns: columns, ref: ref, refColumns: refColumns}
+		for _, opt := range opts {
+			opt(&def)
+		}
+		if fk, ok := d.resolveFK(t.Name, t.Columns, def); ok {
 			t.ForeignKeys = append(t.ForeignKeys, fk)
 		}
 		return *t
@@ -291,6 +295,34 @@ type fkDef struct {
 	columns    []string
 	ref        meta.Table
 	refColumns []string
+	onDelete   meta.ReferentialAction
+	onUpdate   meta.ReferentialAction
+}
+
+// ReferentialAction is a foreign-key ON DELETE / ON UPDATE action, re-exported
+// from the meta model so a catalog declares them without importing meta.
+type ReferentialAction = meta.ReferentialAction
+
+// The referential actions a foreign key may take, for use with OnDelete/OnUpdate.
+const (
+	NoAction   = meta.NoAction
+	Restrict   = meta.Restrict
+	Cascade    = meta.Cascade
+	SetNull    = meta.SetNull
+	SetDefault = meta.SetDefault
+)
+
+// FKOption customizes a foreign key declared with References or ForeignKey.
+type FKOption func(*fkDef)
+
+// OnDelete sets the foreign key's ON DELETE referential action.
+func OnDelete(action ReferentialAction) FKOption {
+	return func(f *fkDef) { f.onDelete = action }
+}
+
+// OnUpdate sets the foreign key's ON UPDATE referential action.
+func OnUpdate(action ReferentialAction) FKOption {
+	return func(f *fkDef) { f.onUpdate = action }
 }
 
 // indexDef is an Index or UniqueIndex declaration.
@@ -339,9 +371,13 @@ func Column(name string, typ DataType, opts ...ColumnOption) TableElement {
 // columns reference refColumns of the ref table. For the common single-column
 // case the References column option is more convenient; for a self-referencing
 // key use Catalog.AddForeignKey.
-func ForeignKey(columns []string, ref meta.Table, refColumns []string) TableElement {
+func ForeignKey(columns []string, ref meta.Table, refColumns []string, opts ...FKOption) TableElement {
 	return tableElement(func(b *tableBuilder) {
-		b.foreignKeys = append(b.foreignKeys, fkDef{columns: columns, ref: ref, refColumns: refColumns})
+		fk := fkDef{columns: columns, ref: ref, refColumns: refColumns}
+		for _, opt := range opts {
+			opt(&fk)
+		}
+		b.foreignKeys = append(b.foreignKeys, fk)
 	})
 }
 
@@ -444,12 +480,16 @@ func Comment(text string) ColumnOption {
 
 // References declares the column a foreign key to column refColumn of the ref
 // table. Composite keys use the table-level ForeignKey instead.
-func References(ref meta.Table, refColumn string) ColumnOption {
+func References(ref meta.Table, refColumn string, opts ...FKOption) ColumnOption {
 	return func(c *columnDef) {
 		if c.ref != nil {
 			c.errs = append(c.errs, fmt.Errorf("References is declared twice"))
 			return
 		}
-		c.ref = &fkDef{ref: ref, refColumns: []string{refColumn}}
+		fk := &fkDef{ref: ref, refColumns: []string{refColumn}}
+		for _, opt := range opts {
+			opt(fk)
+		}
+		c.ref = fk
 	}
 }

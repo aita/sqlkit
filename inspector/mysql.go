@@ -52,15 +52,20 @@ WHERE tc.TABLE_SCHEMA = ? AND tc.CONSTRAINT_TYPE = 'CHECK'
 ORDER BY tc.TABLE_NAME, cc.CONSTRAINT_NAME`
 
 const mysqlForeignKeysQuery = `
-SELECT CONSTRAINT_NAME,
-       TABLE_NAME,
-       COLUMN_NAME,
-       REFERENCED_TABLE_SCHEMA,
-       REFERENCED_TABLE_NAME,
-       REFERENCED_COLUMN_NAME
-FROM information_schema.KEY_COLUMN_USAGE
-WHERE TABLE_SCHEMA = ? AND REFERENCED_TABLE_NAME IS NOT NULL
-ORDER BY CONSTRAINT_NAME, ORDINAL_POSITION`
+SELECT kcu.CONSTRAINT_NAME,
+       kcu.TABLE_NAME,
+       kcu.COLUMN_NAME,
+       kcu.REFERENCED_TABLE_SCHEMA,
+       kcu.REFERENCED_TABLE_NAME,
+       kcu.REFERENCED_COLUMN_NAME,
+       rc.DELETE_RULE,
+       rc.UPDATE_RULE
+FROM information_schema.KEY_COLUMN_USAGE kcu
+JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
+  ON rc.CONSTRAINT_SCHEMA = kcu.CONSTRAINT_SCHEMA
+ AND rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+WHERE kcu.TABLE_SCHEMA = ? AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
+ORDER BY kcu.CONSTRAINT_NAME, kcu.ORDINAL_POSITION`
 
 // inspectMySQL reads the schema from MySQL's information_schema. An empty schema
 // resolves to the connection's current database via DATABASE().
@@ -114,7 +119,7 @@ func inspectMySQL(ctx context.Context, db Querier, schemaName string) ([]meta.Ta
 	var fks []fkRow
 	for fkRows.Next() {
 		var row fkRow
-		if err := fkRows.Scan(&row.constraint, &row.table, &row.column, &row.refSchema, &row.refTable, &row.refColumn); err != nil {
+		if err := fkRows.Scan(&row.constraint, &row.table, &row.column, &row.refSchema, &row.refTable, &row.refColumn, &row.onDelete, &row.onUpdate); err != nil {
 			return nil, fmt.Errorf("inspector: scan foreign key: %w", err)
 		}
 		fks = append(fks, row)
