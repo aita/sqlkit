@@ -35,10 +35,9 @@ err := db.Select().From(appdb.Users).
 | `sqlkit` | Typed query chains, `Database`, `Session`, result scanning, streaming `Records[T]` iteration (module root) |
 | `sql` | SQL AST, dialects, compiler, and all statement generation |
 | `sqldef` | In-code schema declarations: a reusable `Catalog` of tables that feeds the generators |
-| `meta` | Database schema metadata model shared by the tooling (tables, columns, indexes, constraints, comments) |
+| `meta` | Database schema metadata model shared by the tooling (tables, columns, indexes, constraints, comments), plus SQL DDL generation (`CreateSQL`/`DropSQL`) |
 | `inspector` | PostgreSQL/MySQL introspection into the `meta` model |
 | `codegen` | `meta` → Go code generator (library: customizable types, layout, DTOs) |
-| `ddl` | `meta` → SQL DDL generator (CREATE TABLE / INDEX, constraints, comments) |
 | `cmd/sqlkitgen` | CLI wrapper around `inspector` + `codegen` |
 
 ## The flow: a catalog generates the bindings
@@ -109,7 +108,7 @@ catalog, so `go generate ./...` rebuilds the bindings and the DDL — see
 A catalog is a runtime Go value (foreign keys reference the `meta.Table` values
 that `Table` returns), so it can't be read statically. Both commands write a
 throwaway generator program that imports the catalog package and runs
-`codegen.Generate`/`codegen.Write` (or `ddl.Generate`) via `go run`, then
+`codegen.Generate`/`codegen.Write` (or `meta.Metadata.CreateSQL`) via `go run`, then
 remove it. For full control over the type mapping or DTO naming, write that
 program yourself against the `codegen` library below.
 
@@ -123,7 +122,7 @@ structs you scan into and insert from, and fields map by name.
 
 ### Using codegen as a library
 
-The `codegen` package is the generator's public API. Build a `meta.Meta`
+The `codegen` package is the generator's public API. Build a `meta.Metadata`
 with the `sqldef` package, by hand, or with `inspector.Inspect`, customize the
 SQL→Go type mapping, and choose what to emit:
 
@@ -233,23 +232,32 @@ you; under the hood it is just the `codegen` and `ddl` libraries, which you can
 also call directly when you need full control:
 
 ```go
-catalog, err := schema.Catalog.Build() // dialect-agnostic meta.Meta
+md, err := schema.Catalog.Build() // dialect-agnostic meta.Metadata
 if err != nil { ... }
 
-files, err := codegen.Generate(catalog, codegen.Options{PackageName: "blogdb"})
+files, err := codegen.Generate(md, codegen.Options{PackageName: "blogdb"})
 if err != nil { ... }
 err = codegen.Write("blogdb", files)
 
-sql, err := ddl.Generate(catalog, "postgres") // CREATE TABLE / INDEX / COMMENT ...
+d, _ := sql.DialectByName("postgres")
+sqlText, err := md.CreateSQL(d)  // CREATE TABLE / INDEX / COMMENT ...
+dropText := md.DropSQL(d)        // ALTER ... DROP / DROP TABLE (the inverse)
 ```
 
-`sqldef` is purely the schema DSL: `Build()` returns the raw `meta.Meta`
-(dialect-agnostic) that the `codegen` and `ddl` generators — and any other
-tooling — consume directly. `codegen.Generate` accepts the full
-`codegen.Options` surface (DTOs, file layout, type overrides). Mistakes —
-duplicate names, dangling foreign keys, references into another catalog — are
-collected and reported by `Build`; a type with no name on the chosen dialect
-is reported by `codegen.Generate`/`ddl.Generate`.
+These methods only build SQL text; they never touch a database. DDL also
+renders per element — `Table.CreateSQL(d)` / `Table.DropSQL(d)` and
+`Index.CreateSQL(t, d)` / `Index.DropSQL(t, d)` — and `sqlkitgen ddl --drop`
+prepends the teardown statements so the generated `schema.sql` recreates
+cleanly.
+
+`sqldef` is purely the schema DSL: `Build()` returns the raw `meta.Metadata`
+(dialect-agnostic) that the `codegen` generator and the DDL renderer
+(`meta.Metadata.CreateSQL`) — and any other tooling — consume directly.
+`codegen.Generate` accepts the full `codegen.Options` surface (DTOs, file
+layout, type overrides). Mistakes — duplicate names, dangling foreign keys,
+references into another catalog — are collected and reported by `Build`; a type
+with no name on the chosen dialect is reported by `codegen.Generate` /
+`meta.Metadata.CreateSQL`.
 
 ### Bootstrapping a catalog from an existing database
 
@@ -258,8 +266,9 @@ is reported by `codegen.Generate`/`ddl.Generate`.
 existing database can be converted once and maintained as Go code from then
 on. The same conversion is available as a library via
 `codegen.GenerateCatalog(catalog, codegen.CatalogOptions{...})`. Once you have a
-catalog, `ddl.Generate(meta, "postgres")` (with `meta` from `Catalog.Build`)
-renders the schema as CREATE TABLE statements.
+catalog, `md.CreateSQL(d)` (with `md` from `Catalog.Build` and a dialect `d`
+from `sql.DialectByName("postgres")`) renders the schema as CREATE TABLE
+statements.
 
 ## Querying and scanning
 
@@ -533,9 +542,12 @@ sqlText, args, err := sqlkit.Select(userID, userEmail).
 
 ## Dialects
 
-PostgreSQL is the default and the most exercised dialect. The compiler is
-dialect-driven (`sql.Dialect`: identifier quoting, placeholders, capability
-flags), and a `MySQLDialect` is included: the whole query builder compiles
+PostgreSQL is the default and the most exercised dialect. `sql.Dialect` is the
+single point where engine differences are resolved — identifier quoting,
+placeholders, capability flags, and DDL rendering (column types, serial /
+AUTO_INCREMENT keys, comments) — so both the query compiler and the schema
+model's `CreateSQL` / `DropSQL` methods run through it. A `MySQLDialect`
+is included: the whole query builder compiles
 for MySQL (backtick quoting, `?` placeholders), `Open` infers the dialect
 from the driver name (`"mysql"` → MySQL, otherwise PostgreSQL; override with
 `WithDialect`), and `Returning(...)` fails at compile time with a pointer to

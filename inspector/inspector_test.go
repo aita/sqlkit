@@ -79,7 +79,7 @@ func TestInspectPostgres(t *testing.T) {
 		t.Fatalf("Inspect() error = %v", err)
 	}
 
-	want := meta.Meta{Tables: []meta.Table{
+	want := meta.Metadata{Tables: []meta.Table{
 		{
 			Schema:  meta.Schema{Name: "public"},
 			Name:    "users",
@@ -171,7 +171,7 @@ func TestInspectMySQL(t *testing.T) {
 		t.Fatalf("Inspect() error = %v", err)
 	}
 
-	want := meta.Meta{Tables: []meta.Table{
+	want := meta.Metadata{Tables: []meta.Table{
 		{
 			Schema:  meta.Schema{Name: "app"},
 			Name:    "users",

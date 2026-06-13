@@ -1,26 +1,25 @@
 // Package meta is the database schema metadata model: the flat, value-only
 // abstraction of tables and columns that sqlkit's SQL generators consume. The
 // sqldef package builds it from in-code catalogs and the inspector introspects
-// a live database into it (for the initial bootstrap); the codegen and ddl
-// generators take it from there. It is a pure data model with no database,
-// dialect, or generation dependencies — the dialect is supplied to the
-// generators at call time, not stored on the model.
+// a live database into it (for the initial bootstrap); the codegen generator
+// takes it from there, and the model renders its own DDL (see ddl.go). The
+// dialect is supplied to the generators at call time, not stored on the model.
 //
 // Everything is a value type with no back-references, so a catalog may be split
 // across packages: each exposes the []Table it owns and the generators run
 // over the concatenation.
 package meta
 
-// Meta is a resolved set of tables — the dialect-agnostic value that a sqldef
-// catalog builds into and that the codegen and ddl generators consume. It is
-// the meta-level hand-off type: sqldef.Catalog.Build returns one, and the
-// generators take it (plus the target dialect) from there.
-type Meta struct {
+// Metadata is a resolved set of tables — the dialect-agnostic value that a
+// sqldef catalog builds into and that the codegen generator and the DDL
+// renderer consume. It is the meta-level hand-off type: sqldef.Catalog.Build
+// returns one, and the generators take it (plus the target dialect) from there.
+type Metadata struct {
 	Tables []Table
 }
 
 // Schemas returns the distinct schemas of the tables, in first-seen order.
-func (m Meta) Schemas() []Schema {
+func (m Metadata) Schemas() []Schema {
 	var out []Schema
 	seen := map[string]bool{}
 	for _, t := range m.Tables {

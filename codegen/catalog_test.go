@@ -8,7 +8,7 @@ import (
 )
 
 func TestGenerateCatalog(t *testing.T) {
-	file, err := GenerateCatalog(meta.Meta{Tables: fixtureTables()}, CatalogOptions{PackageName: "schema"})
+	file, err := GenerateCatalog(meta.Metadata{Tables: fixtureTables()}, CatalogOptions{PackageName: "schema"})
 	if err != nil {
 		t.Fatalf("GenerateCatalog() error = %v", err)
 	}
@@ -33,7 +33,7 @@ func TestGenerateCatalogMySQL(t *testing.T) {
 			},
 		},
 	}
-	file, err := GenerateCatalog(meta.Meta{Tables: tables}, CatalogOptions{PackageName: "schema", Dialect: "mysql"})
+	file, err := GenerateCatalog(meta.Metadata{Tables: tables}, CatalogOptions{PackageName: "schema", Dialect: "mysql"})
 	if err != nil {
 		t.Fatalf("GenerateCatalog() error = %v", err)
 	}
@@ -82,7 +82,7 @@ func TestGenerateCatalogForeignKeys(t *testing.T) {
 			},
 		},
 	}
-	file, err := GenerateCatalog(meta.Meta{Tables: tables}, CatalogOptions{PackageName: "schema"})
+	file, err := GenerateCatalog(meta.Metadata{Tables: tables}, CatalogOptions{PackageName: "schema"})
 	if err != nil {
 		t.Fatalf("GenerateCatalog() error = %v", err)
 	}
@@ -122,7 +122,7 @@ func TestGenerateCatalogIndexesChecksComments(t *testing.T) {
 			},
 		},
 	}
-	file, err := GenerateCatalog(meta.Meta{Tables: tables}, CatalogOptions{PackageName: "schema"})
+	file, err := GenerateCatalog(meta.Metadata{Tables: tables}, CatalogOptions{PackageName: "schema"})
 	if err != nil {
 		t.Fatalf("GenerateCatalog() error = %v", err)
 	}
@@ -178,7 +178,7 @@ func TestGenerateCatalogSameNameDifferentSchemas(t *testing.T) {
 
 func mustGenerateCatalog(t *testing.T, tables []meta.Table) []byte {
 	t.Helper()
-	file, err := GenerateCatalog(meta.Meta{Tables: tables}, CatalogOptions{PackageName: "schema"})
+	file, err := GenerateCatalog(meta.Metadata{Tables: tables}, CatalogOptions{PackageName: "schema"})
 	if err != nil {
 		t.Fatalf("GenerateCatalog() error = %v", err)
 	}
@@ -186,10 +186,10 @@ func mustGenerateCatalog(t *testing.T, tables []meta.Table) []byte {
 }
 
 func TestGenerateCatalogErrors(t *testing.T) {
-	if _, err := GenerateCatalog(meta.Meta{Tables: fixtureTables()}, CatalogOptions{}); err == nil {
+	if _, err := GenerateCatalog(meta.Metadata{Tables: fixtureTables()}, CatalogOptions{}); err == nil {
 		t.Error("GenerateCatalog() without package name: expected error")
 	}
-	if _, err := GenerateCatalog(meta.Meta{}, CatalogOptions{PackageName: "schema"}); err == nil {
+	if _, err := GenerateCatalog(meta.Metadata{}, CatalogOptions{PackageName: "schema"}); err == nil {
 		t.Error("GenerateCatalog() without tables: expected error")
 	}
 }

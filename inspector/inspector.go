@@ -18,11 +18,11 @@ type Querier interface {
 }
 
 // Inspect reads all base tables of a schema for the given dialect ("postgres"
-// or "mysql"; an empty dialect defaults to PostgreSQL) into a meta.Meta.
+// or "mysql"; an empty dialect defaults to PostgreSQL) into a meta.Metadata.
 // Each table carries its schema in Table.Schema. Introspection is meant for
 // the initial bootstrap; afterwards the schema is maintained as a sqldef
 // catalog.
-func Inspect(ctx context.Context, db Querier, dialect, schemaName string) (meta.Meta, error) {
+func Inspect(ctx context.Context, db Querier, dialect, schemaName string) (meta.Metadata, error) {
 	var tables []meta.Table
 	var err error
 	switch dialect {
@@ -31,12 +31,12 @@ func Inspect(ctx context.Context, db Querier, dialect, schemaName string) (meta.
 	case "mysql":
 		tables, err = inspectMySQL(ctx, db, schemaName)
 	default:
-		return meta.Meta{}, fmt.Errorf("inspector: unsupported dialect %q", dialect)
+		return meta.Metadata{}, fmt.Errorf("inspector: unsupported dialect %q", dialect)
 	}
 	if err != nil {
-		return meta.Meta{}, err
+		return meta.Metadata{}, err
 	}
-	return meta.Meta{Tables: tables}, nil
+	return meta.Metadata{Tables: tables}, nil
 }
 
 // decimalTypes are the SQL types for which a precision/scale is meaningful.

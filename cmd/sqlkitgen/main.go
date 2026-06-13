@@ -4,7 +4,8 @@
 // schema as code. Its generate and ddl subcommands turn a catalog package back
 // into the typed table bindings and the SQL DDL without hand-writing a
 // generator program: point them at the package that declares the
-// *sqldef.Catalog and they call codegen.Generate / ddl.Generate for you.
+// *sqldef.Catalog and they call codegen.Generate / meta.Metadata.CreateSQL
+// for you.
 //
 // Usage:
 //
@@ -14,7 +15,7 @@
 //	sqlkitgen generate github.com/me/app/schema --var Catalog --name appdb --out appdb --emit-dto
 //	sqlkitgen ddl ./schema --dialect postgres --out schema.sql
 //
-// The codegen, ddl, and inspector packages are the library entry points behind
+// The codegen, meta, and inspector packages are the library entry points behind
 // this command; import them directly to customize the conversion.
 package main
 
