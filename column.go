@@ -3,7 +3,7 @@
 // into caller-defined structs.
 //
 // Table bindings are normally generated from a live PostgreSQL schema with
-// the sqlkitgen command; the generated code implements the Table interface
+// the sqlkit command; the generated code implements the Table interface
 // and exposes one Column[T] per database column. Queries are built from those
 // bindings and materialized into a destination of your choosing:
 //

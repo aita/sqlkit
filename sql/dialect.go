@@ -288,7 +288,7 @@ func (PostgreSQLDialect) JSONAccess(operand string, path []any, asText bool) (st
 // MySQLDialect implements MySQL identifier quoting, placeholders, and DDL
 // rendering. The query builders compile against it; RETURNING is rejected at
 // compile time (MySQL has no RETURNING — read generated keys via
-// Result.LastInsertId). sqlkitgen's schema loading is PostgreSQL-only for now.
+// Result.LastInsertId). sqlkit's schema loading is PostgreSQL-only for now.
 type MySQLDialect struct{}
 
 // Name identifies the dialect.

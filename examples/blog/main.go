@@ -1,7 +1,7 @@
 // Command blog demonstrates the typed query builder and DTO scanning against
 // the bindings generated from the catalog in schema/. The go:generate
 // directives below regenerate the blogdb bindings and schema.sql from that
-// catalog with the sqlkitgen generate and ddl commands (no hand-written
+// catalog with the sqlkit generate and ddl commands (no hand-written
 // generator program); run them with `go generate ./...` from this directory.
 //
 // Run against a real database:
@@ -10,8 +10,8 @@
 //	DATABASE_URL=postgres://localhost/blog go run .
 package main
 
-//go:generate go run github.com/aita/sqlkit/cmd/sqlkitgen generate ./schema --name blogdb --out blogdb --relations
-//go:generate go run github.com/aita/sqlkit/cmd/sqlkitgen ddl ./schema --out schema.sql
+//go:generate go run github.com/aita/sqlkit/cmd/sqlkit generate ./schema --name blogdb --out blogdb --relations
+//go:generate go run github.com/aita/sqlkit/cmd/sqlkit ddl ./schema --out schema.sql
 
 import (
 	"context"
@@ -41,7 +41,7 @@ func main() {
 	}
 }
 
-// User and Post are caller-defined DTOs; sqlkitgen generates only the table
+// User and Post are caller-defined DTOs; sqlkit generates only the table
 // bindings (blogdb.Users, blogdb.Posts), and fields map by name.
 type User struct {
 	ID        int64

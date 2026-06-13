@@ -72,7 +72,7 @@ func mainModuleDir() (string, error) {
 	}
 	gomod := strings.TrimSpace(string(out))
 	if gomod == "" || gomod == os.DevNull {
-		return "", fmt.Errorf("sqlkitgen must be run inside a Go module")
+		return "", fmt.Errorf("sqlkit must be run inside a Go module")
 	}
 	return filepath.Dir(gomod), nil
 }
@@ -85,7 +85,7 @@ func runShim(src []byte, desc string) error {
 	if err != nil {
 		return err
 	}
-	shimDir, err := os.MkdirTemp(moduleDir, "sqlkitgen-shim-")
+	shimDir, err := os.MkdirTemp(moduleDir, "sqlkit-shim-")
 	if err != nil {
 		return err
 	}
