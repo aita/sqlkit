@@ -104,6 +104,24 @@ func TestAddValueBatchesIntoOneInsert(t *testing.T) {
 	}
 }
 
+func TestWithBatchSizeSplitsValueInserts(t *testing.T) {
+	fake := &sqltest.Fake{}
+	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()), uow.WithBatchSize(2))
+	if err := scope.Add(newUsers(),
+		userRow{Email: "a@x"}, userRow{Email: "b@x"},
+		userRow{Email: "c@x"}, userRow{Email: "d@x"},
+		userRow{Email: "e@x"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := scope.Flush(ctx()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	// 5 rows in batches of 2 => 3 INSERT statements (2, 2, 1).
+	if got := len(fake.Execs()); got != 3 {
+		t.Fatalf("got %d execs, want 3 batched inserts: %v", got, fake.Statements())
+	}
+}
+
 func TestAddPointerWritesBackViaReturning(t *testing.T) {
 	fake := &sqltest.Fake{QueryFunc: usersResult(99, "c@x", "")}
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB())) // postgres default => RETURNING
