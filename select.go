@@ -118,6 +118,16 @@ func (q SelectQuery) WithCTE(ctes ...sql.CTE) SelectQuery {
 	return q
 }
 
+// As wraps this SELECT as an aliased subquery (derived table), for use as a
+// FROM/JOIN source and column handle. Reference its output columns with the
+// returned handle's Col, which qualifies them by the alias:
+//
+//	sub := sqlkit.Select(Users.ID).From(Users).Where(Users.Active.Eq(true)).As("sub")
+//	db.Select(sub.Col("id")).From(sub).All(ctx).Scan(&ids)
+func (q SelectQuery) As(alias string) sql.Subquery {
+	return q.query.As(alias)
+}
+
 // SQLSource marks the query as a subquery source.
 func (q SelectQuery) SQLSource() SourceExpression { return q.query.SQLSource() }
 

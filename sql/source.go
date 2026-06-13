@@ -49,7 +49,3 @@ func SourceAlias(source Source, alias string) SourceExpression {
 	expr.Alias = alias
 	return expr
 }
-
-// Subquery creates a FROM/JOIN source from a query and alias.
-// Deprecated: use Alias(query, alias) or pass query directly when no alias is needed.
-func Subquery(query Query, alias string) SourceExpression { return Alias(query, alias) }

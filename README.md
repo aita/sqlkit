@@ -732,6 +732,34 @@ err = db.Select(tree.Col("id")).
 // WITH "doomed" AS (...) DELETE FROM "users" WHERE "org_id" IN (SELECT ... FROM "doomed")
 ```
 
+## Subqueries in FROM/JOIN (derived tables)
+
+`As(alias)` turns a query into an aliased subquery (derived table). Like a CTE
+the returned value doubles as a FROM/JOIN source and a handle for its output
+columns (`Col`), but it is inlined as a parenthesized query at its use site
+rather than declared in a leading `WITH`. Reference its columns through the
+handle, not the original table columns — the outer query sees the derived
+table's alias, not the inner table.
+
+```go
+// SELECT "sub"."id" FROM (SELECT ... FROM "users" WHERE ...) AS "sub"
+sub := db.Select(appdb.Users.ID).From(appdb.Users).
+    Where(appdb.Users.Active.Eq(true)).
+    As("sub")
+
+var ids []int64
+err := db.Select(sub.Col("id")).From(sub).All(ctx).Scan(&ids)
+
+// A set operation works as a subquery source too.
+ids2 := db.Select(appdb.Users.ID).From(appdb.Users).
+    UnionAll(db.Select(appdb.Admins.ID).From(appdb.Admins)).
+    As("ids")
+err = db.Select(ids2.Col("id")).From(ids2).All(ctx).Scan(&dst)
+```
+
+Pass a query directly to `From` when you don't need to reference its columns by
+alias, or use `sql.Alias(query, alias)` for an ad-hoc aliased source.
+
 `Coalesce`, `NullIf`, `Greatest`, `Least`, `Sum`, `Avg`, `Min`, `Max`,
 `Rank`, `DenseRank`, `Lag`, `Lead`, and generic `sql.Func(name, args...)` are
 available. For JSON, `sql.JSONArray(...)`, `sql.JSONObject(key, val, ...)`,

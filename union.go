@@ -108,6 +108,12 @@ func (q UnionQuery) CTE(name string, opts ...sql.CTEOption) sql.CTE {
 	return q.query.CTE(name, opts...)
 }
 
+// As wraps this set-operation query as an aliased subquery (derived table), for
+// use as a FROM/JOIN source and column handle; see SelectQuery.As.
+func (q UnionQuery) As(alias string) sql.Subquery {
+	return q.query.As(alias)
+}
+
 // ToSQL compiles the query.
 func (q UnionQuery) ToSQL(dialect sql.Dialect) (string, []any, error) {
 	return q.query.ToSQL(dialect)
