@@ -559,9 +559,9 @@ from the driver name (`"mysql"` → MySQL, otherwise PostgreSQL; override with
 `Result.LastInsertId`, since MySQL has no RETURNING.
 
 `sqlkitgen` introspects both PostgreSQL and MySQL schemas (`inspector`'s
-dialect switch is the extension point). MySQL integration tests are not yet
-included; exercise the generated MySQL bindings before relying on them in
-production.
+dialect switch is the extension point). The integration suite runs the full
+stack — builder, scanner, DDL generator, and inspector — against both engines
+(see [Testing](#testing)).
 
 ## Compile-time guarantees
 
@@ -583,20 +583,42 @@ SQL fragments).
 Unit tests use a scriptable in-memory `database/sql` driver
 (`internal/sqltest`), so `go test ./...` needs no database.
 
-Integration tests run the full stack against a real PostgreSQL started with
-[testcontainers](https://golang.testcontainers.org/). They live in their own
-module (`internal/integration`) so the testcontainers dependency tree stays
-out of the root module that library consumers import — run them from that
-directory:
+Integration tests run the full stack against real PostgreSQL **and** MySQL
+servers — the same tests execute on both engines, so the query builder, the
+scanner, the DDL generator, and the inspector are all verified against the
+databases they target. They live in their own module (`internal/integration`)
+so the testcontainers dependency tree stays out of the root module that
+library consumers import — run them from that directory:
 
 ```sh
 cd internal/integration && go test ./...
 ```
 
-They require a Docker daemon and registry access. To avoid Docker Hub's
-anonymous pull rate limit, point at a mirror:
+Each engine connects one of two ways:
 
-```sh
-SQLKIT_TEST_POSTGRES_IMAGE=mirror.gcr.io/library/postgres:16-alpine \
-  go test ./...
-```
+- **Testcontainers (default).** With no DSN set, the suite boots a throwaway
+  container per engine with [testcontainers](https://golang.testcontainers.org/),
+  which needs a Docker daemon and registry access. When neither a DSN nor
+  Docker is available, that engine's tests skip rather than fail. To avoid
+  Docker Hub's anonymous pull rate limit, point at a mirror with
+  `SQLKIT_TEST_POSTGRES_IMAGE` / `SQLKIT_TEST_MYSQL_IMAGE`.
+- **An existing server.** Set `SQLKIT_TEST_POSTGRES_DSN` and/or
+  `SQLKIT_TEST_MYSQL_DSN` to connect directly — this is how CI targets service
+  containers without a Docker socket. The MySQL DSN must enable `parseTime`
+  (so DATETIME scans into `time.Time`) and select a database named `public`,
+  because the shared blog bindings qualify tables with the `public` schema (a
+  PostgreSQL schema maps to a MySQL database):
+
+  ```sh
+  SQLKIT_TEST_MYSQL_DSN='sqlkit:sqlkit@tcp(127.0.0.1:3306)/public?parseTime=true' \
+    go test ./...
+  ```
+
+## Continuous integration
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every branch
+push (testing the branch's own commit). The `unit test` job builds, vets,
+`gofmt`-checks, and runs `go test -race ./...` on the root module (no database
+needed), and builds and vets the integration module. The `integration` job
+starts PostgreSQL and MySQL service containers, points the suite at them via
+the `SQLKIT_TEST_*_DSN` variables, and runs the integration tests against both.
