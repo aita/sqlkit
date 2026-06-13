@@ -47,15 +47,20 @@ package sqldef
 
 import "fmt"
 
-// Design is the root a schema design hangs off: a catalog of tables under
-// construction. Create one with Catalog and declare tables on it; the
-// generators consume the resolved meta.Catalog it Builds.
+// Design is a thin builder over meta: the root a schema design hangs off,
+// accumulating portable, dialect-independent table declarations as you call
+// Table/Column/... on it. It holds no resolved metadata itself — Build is the
+// single assembly point that turns the declarations into a meta.Catalog for a
+// given dialect (resolving column types to engine names and assigning the
+// constraint index/check/foreign-key names). The generators consume that
+// meta.Catalog, never the builder.
 type Design struct {
 	schemas []*Schema
 	errs    []error
 }
 
-// Catalog returns an empty design to declare tables on.
+// Catalog returns an empty design to declare tables on. It is the entry point
+// of the DSL: var Catalog = sqldef.Catalog().
 func Catalog() *Design { return &Design{} }
 
 // Schema returns the named schema (PostgreSQL schema / MySQL database),

@@ -12,11 +12,13 @@ import (
 	"github.com/aita/sqlkit/meta"
 )
 
-// Build resolves the design into a meta.Catalog for the dialect ("postgres"
-// or "mysql"; empty defaults to "postgres"), validating it along the way.
-// Each table carries its schema in Table.Schema, in declaration order grouped
-// by schema. The returned meta.Catalog is the dialect-agnostic value the
-// codegen and ddl generators consume.
+// Build is the design's single assembly point: it resolves the portable
+// declarations into a meta.Catalog for the dialect ("postgres" or "mysql";
+// empty defaults to "postgres"), validating along the way. Column types
+// resolve to engine names here, constraint names are assigned here, and each
+// table carries its schema in Table.Schema (in declaration order, grouped by
+// schema). The returned meta.Catalog is the dialect-agnostic value the codegen
+// and ddl generators consume — they never see the builder.
 func (c *Design) Build(dialect string) (meta.Catalog, error) {
 	if dialect == "" {
 		dialect = "postgres"
