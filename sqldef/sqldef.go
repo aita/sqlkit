@@ -1,9 +1,10 @@
-// Package sqldef declares database schemas as plain Go values. A design
-// (sqldef.Catalog) is the reusable root: tables are declared as values hanging
-// off it, so designs can reference each other (foreign keys take the *Table
-// they point at), be split across files or packages, and Build into a
-// meta.Catalog that every generator — the typed table bindings (codegen) and
-// the DDL (ddl) — consumes.
+// Package sqldef declares database schemas as plain Go values that build
+// directly into the meta model. A design (sqldef.Catalog) is the reusable
+// root: each Table call assembles and returns a meta.Table immediately, so
+// foreign keys reference those values (References(Users, "id")), designs can
+// be split across files or packages, and the design Builds into a meta.Catalog
+// that every generator — the typed table bindings (codegen) and the DDL (ddl)
+// — consumes.
 //
 // A design package conventionally takes the name schema and imports this
 // package for the building blocks:
@@ -29,7 +30,10 @@
 //		sqldef.Check("title <> ''"),
 //	)
 //
-// A small generator program turns the catalog into Go source and DDL:
+// Catalog.Table returns a meta.Table, so Users and Posts are meta.Table
+// values. Column types are portable (meta.Type carries both dialects), so the
+// table is dialect-agnostic; the generators resolve the type when you choose a
+// dialect. A small generator program turns the catalog into Go source and DDL:
 //
 //	files, err := schema.Catalog.Generate(codegen.Options{PackageName: "appdb"})
 //	if err != nil { ... }
@@ -37,89 +41,121 @@
 //	sql, err := schema.Catalog.DDL("postgres")
 //
 // Tables declared with Catalog.Table live in the unnamed default schema and
-// generate unqualified names; Catalog.Schema("public").Table(...) qualifies
-// them. Columns are NOT NULL unless marked Nullable. Declarations are plain
-// values, so they compose: a shared []sqldef.TableElement (say, audit
-// columns) can be appended into any table, and mistakes — duplicate names,
-// dangling foreign keys — are collected and reported by Build, Generate, and
-// DDL.
+// generate unqualified names (use this for schemaless engines like MySQL or
+// SQLite); Catalog.Schema("public").Table(...) qualifies them. Columns are NOT
+// NULL unless marked Nullable. Mistakes — duplicate names, dangling foreign
+// keys — are collected and reported by Build/Generate/DDL.
 package sqldef
 
-import "fmt"
+import (
+	"fmt"
 
-// Design is a thin builder over meta: the root a schema design hangs off,
-// accumulating portable, dialect-independent table declarations as you call
-// Table/Column/... on it. It holds no resolved metadata itself — Build is the
-// single assembly point that turns the declarations into a meta.Catalog for a
-// given dialect (resolving column types to engine names and assigning the
-// constraint index/check/foreign-key names). The generators consume that
-// meta.Catalog, never the builder.
+	"github.com/aita/sqlkit/meta"
+)
+
+// Design is the root a schema design hangs off: it accumulates the meta.Tables
+// declared on it, plus any declaration errors, and Builds them into a
+// meta.Catalog. Create one with Catalog.
 type Design struct {
-	schemas []*Schema
-	errs    []error
+	schemaNames []string // distinct schema names in first-seen order
+	tables      []meta.Table
+	registered  map[string]bool // schema\x00name -> declared, for FK target checks
+	errs        []error
 }
 
 // Catalog returns an empty design to declare tables on. It is the entry point
 // of the DSL: var Catalog = sqldef.Catalog().
-func Catalog() *Design { return &Design{} }
+func Catalog() *Design { return &Design{registered: map[string]bool{}} }
 
-// Schema returns the named schema (PostgreSQL schema / MySQL database),
-// creating it on first use.
-func (c *Design) Schema(name string) *Schema {
-	for _, s := range c.schemas {
-		if s.name == name {
-			return s
-		}
-	}
-	s := &Schema{design: c, name: name}
-	c.schemas = append(c.schemas, s)
-	return s
+func tableKey(schema, name string) string { return schema + "\x00" + name }
+
+func (d *Design) fail(format string, args ...any) {
+	d.errs = append(d.errs, fmt.Errorf(format, args...))
 }
 
-// Table declares a table in the catalog's unnamed default schema. Use
-// Catalog.Schema("public").Table(...) to qualify tables with a schema name.
-func (c *Design) Table(name string, elements ...TableElement) *Table {
-	return c.Schema("").Table(name, elements...)
+// Schema returns a handle for the named schema (PostgreSQL schema / MySQL
+// database). Declaring tables through it qualifies them with the schema name.
+func (d *Design) Schema(name string) *Schema {
+	return &Schema{design: d, name: name}
 }
 
-func (c *Design) fail(format string, args ...any) {
-	c.errs = append(c.errs, fmt.Errorf(format, args...))
+// Table declares a table in the catalog's unnamed default schema and returns
+// the assembled meta.Table. Use Catalog.Schema("public").Table(...) to qualify
+// tables with a schema name.
+func (d *Design) Table(name string, elements ...TableElement) meta.Table {
+	return d.Schema("").Table(name, elements...)
 }
 
-// Schema is a named schema within a catalog.
+// Schema is a handle for declaring tables in a named schema of a design.
 type Schema struct {
 	design *Design
 	name   string
-	tables []*Table
 }
 
 // Name returns the schema name ("" for the default schema).
 func (s *Schema) Name() string { return s.name }
 
-// Table declares a table in the schema and returns it; the returned value is
-// what foreign keys in other tables reference.
-func (s *Schema) Table(name string, elements ...TableElement) *Table {
-	t := &Table{schema: s, name: name}
+// Table declares a table in the schema and returns the assembled meta.Table —
+// the value foreign keys in other tables reference.
+func (s *Schema) Table(name string, elements ...TableElement) meta.Table {
+	d := s.design
+	b := &tableBuilder{design: d, schema: s.name, name: name}
 	if name == "" {
-		s.design.fail("Table requires a name")
-		return t
+		d.fail("Table requires a name")
+	} else if d.registered[tableKey(s.name, name)] {
+		d.fail("table %q is declared twice in schema %q", name, s.name)
 	}
-	for _, existing := range s.tables {
-		if existing.name == name {
-			s.design.fail("table %q is declared twice in schema %q", name, s.name)
-		}
-	}
-	s.tables = append(s.tables, t)
 	for _, element := range elements {
-		element.applyTable(t)
+		element.applyTable(b)
 	}
-	return t
+	table := b.build()
+	if name != "" {
+		if !d.registered[tableKey(s.name, name)] {
+			d.schemaNamesAdd(s.name)
+		}
+		d.registered[tableKey(s.name, name)] = true
+	}
+	d.tables = append(d.tables, table)
+	return table
 }
 
-// Table is a declared table. Its value is the reusable handle: pass it to
-// References/ForeignKey in other declarations.
-type Table struct {
-	schema      *Schema
+func (d *Design) schemaNamesAdd(name string) {
+	for _, n := range d.schemaNames {
+		if n == name {
+			return
+		}
+	}
+	d.schemaNames = append(d.schemaNames, name)
+}
+
+// AddForeignKey declares a (possibly self-referencing) foreign key on an
+// already-declared table, returning the updated table. It is the way to
+// declare a self-reference, which cannot mention the table's own variable
+// inside its Table(...) call:
+//
+//	var Employees = Catalog.Table("employees", ...)
+//	var _ = Catalog.AddForeignKey(Employees, []string{"manager_id"}, Employees, []string{"id"})
+func (d *Design) AddForeignKey(table meta.Table, columns []string, ref meta.Table, refColumns []string) meta.Table {
+	key := tableKey(table.Schema.Name, table.Name)
+	for i := range d.tables {
+		t := &d.tables[i]
+		if tableKey(t.Schema.Name, t.Name) != key {
+			continue
+		}
+		if fk, ok := d.resolveFK(t.Name, t.Columns, fkDef{columns: columns, ref: ref, refColumns: refColumns}); ok {
+			t.ForeignKeys = append(t.ForeignKeys, fk)
+		}
+		return *t
+	}
+	d.fail("AddForeignKey: table %q is not declared in this catalog", table.Name)
+	return table
+}
+
+// tableBuilder is the mutable scratch a Table's elements write into before it
+// is finalized into a meta.Table.
+type tableBuilder struct {
+	design      *Design
+	schema      string
 	name        string
 	comment     string
 	columns     []*columnDef
@@ -128,27 +164,79 @@ type Table struct {
 	checks      []string
 }
 
-// Name returns the table name.
-func (t *Table) Name() string { return t.name }
-
-// Schema returns the schema the table was declared in.
-func (t *Table) Schema() *Schema { return t.schema }
-
-// ForeignKey declares a (possibly composite) foreign-key constraint after the
-// fact and returns the table for chaining. It is the way to declare a
-// self-referencing key, which cannot mention the table's own variable inside
-// its declaration:
-//
-//	var Employees = Catalog.Table("employees", ...)
-//	var _ = Employees.ForeignKey([]string{"manager_id"}, Employees, []string{"id"})
-func (t *Table) ForeignKey(columns []string, ref *Table, refColumns []string) *Table {
-	t.foreignKeys = append(t.foreignKeys, fkDef{columns: columns, ref: ref, refColumns: refColumns})
-	return t
+func (b *tableBuilder) fail(format string, args ...any) {
+	b.design.fail("table %q: "+format, append([]any{b.name}, args...)...)
 }
 
-func (t *Table) fail(format string, args ...any) {
-	args = append([]any{t.name}, args...)
-	t.schema.design.fail("table %q: "+format, args...)
+// build finalizes the scratch into a meta.Table, validating and assigning
+// constraint names. Type resolution is deferred to the generators.
+func (b *tableBuilder) build() meta.Table {
+	d := b.design
+	mt := meta.Table{Schema: meta.Schema{Name: b.schema}, Name: b.name, Comment: b.comment}
+	if b.name != "" && len(b.columns) == 0 {
+		d.fail("table %q declares no columns", b.name)
+	}
+	for _, c := range b.columns {
+		if c.primaryKey && c.nullable {
+			d.fail("table %q: column %q: a primary key column cannot be nullable", b.name, c.name)
+		}
+		mt.Columns = append(mt.Columns, meta.Column{
+			Name:        c.name,
+			Type:        c.typ,
+			Nullable:    c.nullable,
+			HasDefault:  c.hasDefault,
+			DefaultExpr: c.defaultExpr,
+			PrimaryKey:  c.primaryKey,
+			Comment:     c.comment,
+		})
+	}
+
+	for _, fk := range collectForeignKeys(b) {
+		if resolved, ok := d.resolveFK(b.name, mt.Columns, fk); ok {
+			mt.ForeignKeys = append(mt.ForeignKeys, resolved)
+		}
+	}
+
+	indexNames := map[string]bool{}
+	for _, ix := range collectIndexes(b) {
+		if len(ix.columns) == 0 {
+			d.fail("table %q: index declares no columns", b.name)
+			continue
+		}
+		ok := true
+		for _, name := range ix.columns {
+			if !hasMetaColumn(mt.Columns, name) {
+				d.fail("table %q: index references unknown column %q", b.name, name)
+				ok = false
+			}
+		}
+		if !ok {
+			continue
+		}
+		prefix := "idx"
+		if ix.unique {
+			prefix = "uq"
+		}
+		name := fmt.Sprintf("%s_%s_%s", prefix, b.name, joinCols(ix.columns))
+		if indexNames[name] {
+			d.fail("table %q: index %q is declared twice", b.name, name)
+			continue
+		}
+		indexNames[name] = true
+		mt.Indexes = append(mt.Indexes, meta.Index{Name: name, Columns: ix.columns, Unique: ix.unique})
+	}
+
+	for i, expr := range b.checks {
+		if isBlank(expr) {
+			d.fail("table %q: Check requires an expression", b.name)
+			continue
+		}
+		mt.Checks = append(mt.Checks, meta.Check{
+			Name:       fmt.Sprintf("ck_%s_%d", b.name, i+1),
+			Expression: expr,
+		})
+	}
+	return mt
 }
 
 type columnDef struct {
@@ -167,7 +255,7 @@ type columnDef struct {
 // fkDef is a foreign key; column-level References produce single-column ones.
 type fkDef struct {
 	columns    []string
-	ref        *Table
+	ref        meta.Table
 	refColumns []string
 }
 
@@ -180,25 +268,25 @@ type indexDef struct {
 // TableElement is a table declaration item: Column, Index, UniqueIndex,
 // Check, TableComment, and ForeignKey produce them.
 type TableElement interface {
-	applyTable(t *Table)
+	applyTable(b *tableBuilder)
 }
 
-type tableElement func(*Table)
+type tableElement func(*tableBuilder)
 
-func (f tableElement) applyTable(t *Table) { f(t) }
+func (f tableElement) applyTable(b *tableBuilder) { f(b) }
 
 // Column declares a column. Columns are NOT NULL by default; apply options to
 // mark them Nullable, PrimaryKey, Default(ed), Unique, commented, or as a
 // foreign key (References).
 func Column(name string, typ DataType, opts ...ColumnOption) TableElement {
-	return tableElement(func(t *Table) {
+	return tableElement(func(b *tableBuilder) {
 		if name == "" {
-			t.fail("Column requires a name")
+			b.fail("Column requires a name")
 			return
 		}
-		for _, existing := range t.columns {
+		for _, existing := range b.columns {
 			if existing.name == name {
-				t.fail("column %q is declared twice", name)
+				b.fail("column %q is declared twice", name)
 			}
 		}
 		c := &columnDef{name: name, typ: typ}
@@ -206,28 +294,28 @@ func Column(name string, typ DataType, opts ...ColumnOption) TableElement {
 			opt(c)
 		}
 		for _, err := range c.errs {
-			t.fail("column %q: %v", name, err)
+			b.fail("column %q: %v", name, err)
 		}
 		c.errs = nil
-		t.columns = append(t.columns, c)
+		b.columns = append(b.columns, c)
 	})
 }
 
-// ForeignKey declares a (possibly composite) foreign-key constraint: the
-// local columns reference refColumns of the ref table. For the common
-// single-column case the References column option is more convenient; for a
-// self-referencing key use the Table.ForeignKey method.
-func ForeignKey(columns []string, ref *Table, refColumns []string) TableElement {
-	return tableElement(func(t *Table) {
-		t.foreignKeys = append(t.foreignKeys, fkDef{columns: columns, ref: ref, refColumns: refColumns})
+// ForeignKey declares a (possibly composite) foreign-key constraint: the local
+// columns reference refColumns of the ref table. For the common single-column
+// case the References column option is more convenient; for a self-referencing
+// key use Catalog.AddForeignKey.
+func ForeignKey(columns []string, ref meta.Table, refColumns []string) TableElement {
+	return tableElement(func(b *tableBuilder) {
+		b.foreignKeys = append(b.foreignKeys, fkDef{columns: columns, ref: ref, refColumns: refColumns})
 	})
 }
 
 // Index declares a secondary index over the named columns, named
 // idx_<table>_<columns>.
 func Index(columns ...string) TableElement {
-	return tableElement(func(t *Table) {
-		t.indexes = append(t.indexes, indexDef{columns: columns})
+	return tableElement(func(b *tableBuilder) {
+		b.indexes = append(b.indexes, indexDef{columns: columns})
 	})
 }
 
@@ -235,25 +323,24 @@ func Index(columns ...string) TableElement {
 // columns, named uq_<table>_<columns>. For a single column the Unique column
 // option is more convenient.
 func UniqueIndex(columns ...string) TableElement {
-	return tableElement(func(t *Table) {
-		t.indexes = append(t.indexes, indexDef{columns: columns, unique: true})
+	return tableElement(func(b *tableBuilder) {
+		b.indexes = append(b.indexes, indexDef{columns: columns, unique: true})
 	})
 }
 
-// Check declares a CHECK constraint. expr is the bare boolean expression,
-// e.g. "price > 0". Constraints are named ck_<table>_<n> in declaration
-// order.
+// Check declares a CHECK constraint. expr is the bare boolean expression, e.g.
+// "price > 0". Constraints are named ck_<table>_<n> in declaration order.
 func Check(expr string) TableElement {
-	return tableElement(func(t *Table) {
-		t.checks = append(t.checks, expr)
+	return tableElement(func(b *tableBuilder) {
+		b.checks = append(b.checks, expr)
 	})
 }
 
 // TableComment sets the table's comment. Column comments use the Comment
 // option instead.
 func TableComment(text string) TableElement {
-	return tableElement(func(t *Table) {
-		t.comment = text
+	return tableElement(func(b *tableBuilder) {
+		b.comment = text
 	})
 }
 
@@ -266,17 +353,17 @@ func PrimaryKey() ColumnOption {
 	return func(c *columnDef) { c.primaryKey = true }
 }
 
-// Nullable allows NULL values; the code generator maps the column to a
-// pointer type.
+// Nullable allows NULL values; the code generator maps the column to a pointer
+// type.
 func Nullable() ColumnOption {
 	return func(c *columnDef) { c.nullable = true }
 }
 
 // Default marks the column as having a database-side default, so generated
 // bindings report it in Defaulted and inserts can omit it. The optional
-// expression is used by the DDL generator: Default("now()") renders as
-// DEFAULT now(), while a bare Default() on an integer primary key renders as
-// a serial/auto-increment column.
+// expression is used by the DDL generator: Default("now()") renders as DEFAULT
+// now(), while a bare Default() on an integer primary key renders as a
+// serial/auto-increment column.
 func Default(expr ...string) ColumnOption {
 	return func(c *columnDef) {
 		c.hasDefault = true
@@ -304,9 +391,8 @@ func Comment(text string) ColumnOption {
 }
 
 // References declares the column a foreign key to column refColumn of the ref
-// table, which may live in any schema of the same catalog. Composite keys use
-// the table-level ForeignKey instead.
-func References(ref *Table, refColumn string) ColumnOption {
+// table. Composite keys use the table-level ForeignKey instead.
+func References(ref meta.Table, refColumn string) ColumnOption {
 	return func(c *columnDef) {
 		if c.ref != nil {
 			c.errs = append(c.errs, fmt.Errorf("References is declared twice"))

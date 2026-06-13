@@ -30,39 +30,41 @@ func blogCatalog() *sqldef.Design {
 	return catalog
 }
 
-func buildOne(t *testing.T, design *sqldef.Design, dialect string) meta.Catalog {
+func buildCatalog(t *testing.T, design *sqldef.Design) meta.Catalog {
 	t.Helper()
-	catalog, err := design.Build(dialect)
+	catalog, err := design.Build()
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
 	return catalog
 }
 
-func TestBuildPostgres(t *testing.T) {
-	got := buildOne(t, blogCatalog(), "postgres")
+func TestBuild(t *testing.T) {
+	got := buildCatalog(t, blogCatalog())
 
+	// Column types stay portable (the sqldef constructors are meta.Type values),
+	// resolved to an engine name only by the generators.
 	want := meta.Catalog{
 		Tables: []meta.Table{
 			{
 				Schema: meta.Schema{Name: "public"},
 				Name:   "users",
 				Columns: []meta.Column{
-					{Name: "id", DataType: "int8", PrimaryKey: true, HasDefault: true},
-					{Name: "email", DataType: "varchar", Length: 255},
-					{Name: "name", DataType: "text", Nullable: true},
-					{Name: "created_at", DataType: "timestamptz", HasDefault: true, DefaultExpr: "now()"},
+					{Name: "id", Type: sqldef.BigInt, PrimaryKey: true, HasDefault: true},
+					{Name: "email", Type: sqldef.VarChar(255)},
+					{Name: "name", Type: sqldef.Text, Nullable: true},
+					{Name: "created_at", Type: sqldef.Timestamp, HasDefault: true, DefaultExpr: "now()"},
 				},
 			},
 			{
 				Schema: meta.Schema{Name: "public"},
 				Name:   "posts",
 				Columns: []meta.Column{
-					{Name: "id", DataType: "int8", PrimaryKey: true, HasDefault: true},
-					{Name: "user_id", DataType: "int8"},
-					{Name: "title", DataType: "text"},
-					{Name: "body", DataType: "text", Nullable: true},
-					{Name: "published", DataType: "bool", HasDefault: true, DefaultExpr: "false"},
+					{Name: "id", Type: sqldef.BigInt, PrimaryKey: true, HasDefault: true},
+					{Name: "user_id", Type: sqldef.BigInt},
+					{Name: "title", Type: sqldef.Text},
+					{Name: "body", Type: sqldef.Text, Nullable: true},
+					{Name: "published", Type: sqldef.Bool, HasDefault: true, DefaultExpr: "false"},
 				},
 				ForeignKeys: []meta.ForeignKey{
 					{Name: "fk_posts_user_id", Columns: []string{"user_id"}, RefSchema: meta.Schema{Name: "public"}, RefTable: "users", RefColumns: []string{"id"}},
@@ -75,7 +77,7 @@ func TestBuildPostgres(t *testing.T) {
 	}
 }
 
-func TestBuildMySQL(t *testing.T) {
+func TestBuildPortableTypes(t *testing.T) {
 	catalog := sqldef.Catalog()
 	catalog.Table("items",
 		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
@@ -83,26 +85,24 @@ func TestBuildMySQL(t *testing.T) {
 		sqldef.Column("price", sqldef.Decimal(10, 2)),
 		sqldef.Column("created_at", sqldef.Timestamp),
 	)
-	got := buildOne(t, catalog, "mysql")
-	want := []meta.Column{
-		{Name: "id", DataType: "bigint", PrimaryKey: true, HasDefault: true},
-		{Name: "sku", DataType: "char", Length: 36},
-		{Name: "price", DataType: "decimal", Precision: 10, Scale: 2},
-		{Name: "created_at", DataType: "datetime"},
+	got := buildCatalog(t, catalog)
+	cols := got.Tables[0].Columns
+	// UUID is postgres uuid but mysql char(36): the portable type keeps both.
+	if eng, _ := cols[1].Type.Engine("postgres"); eng != "uuid" {
+		t.Errorf("sku postgres type = %q, want uuid", eng)
 	}
-	if !reflect.DeepEqual(got.Tables[0].Columns, want) {
-		t.Errorf("Build() columns = %+v\nwant %+v", got.Tables[0].Columns, want)
+	if eng, _ := cols[1].Type.Engine("mysql"); eng != "char" || cols[1].Type.Length != 36 {
+		t.Errorf("sku mysql type = %q(%d), want char(36)", eng, cols[1].Type.Length)
+	}
+	// id resolves per dialect from one portable declaration.
+	if eng, _ := cols[0].Type.Engine("postgres"); eng != "int8" {
+		t.Errorf("id postgres type = %q, want int8", eng)
+	}
+	if eng, _ := cols[0].Type.Engine("mysql"); eng != "bigint" {
+		t.Errorf("id mysql type = %q, want bigint", eng)
 	}
 	if got.Tables[0].Schema.Name != "" {
 		t.Errorf("Build() table schema = %q, want unnamed default", got.Tables[0].Schema.Name)
-	}
-}
-
-func TestBuildDefaultsToPostgres(t *testing.T) {
-	got := buildOne(t, blogCatalog(), "")
-	// BigInt resolves to the PostgreSQL engine name int8 by default.
-	if dt := got.Tables[0].Columns[0].DataType; dt != "int8" {
-		t.Errorf("Build(\"\") id type = %q, want int8 (postgres default)", dt)
 	}
 }
 
@@ -123,9 +123,9 @@ func TestCompositeAndSelfForeignKeys(t *testing.T) {
 		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey()),
 		sqldef.Column("manager_id", sqldef.BigInt, sqldef.Nullable()),
 	)
-	employees.ForeignKey([]string{"manager_id"}, employees, []string{"id"})
+	catalog.AddForeignKey(employees, []string{"manager_id"}, employees, []string{"id"})
 
-	got := buildOne(t, catalog, "postgres")
+	got := buildCatalog(t, catalog)
 	wantLines := []meta.ForeignKey{{
 		Name:       "fk_order_lines_order_region_order_number",
 		Columns:    []string{"order_region", "order_number"},
@@ -157,7 +157,7 @@ func TestCrossSchemaReference(t *testing.T) {
 		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey()),
 		sqldef.Column("event_id", sqldef.BigInt, sqldef.References(audit, "id")),
 	)
-	got, err := catalog.Build("postgres")
+	got, err := catalog.Build()
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
@@ -184,7 +184,7 @@ func TestIndexesChecksComments(t *testing.T) {
 		sqldef.UniqueIndex("vendor", "name"),
 		sqldef.Check("price > 0"),
 	)
-	got := buildOne(t, catalog, "postgres")
+	got := buildCatalog(t, catalog)
 	table := got.Tables[0]
 	if table.Comment != "Sellable products" {
 		t.Errorf("table comment = %q", table.Comment)
@@ -221,7 +221,7 @@ func TestSharedElementsReuse(t *testing.T) {
 		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey()),
 	}, audit...)...)
 
-	got := buildOne(t, catalog, "postgres")
+	got := buildCatalog(t, catalog)
 	for _, table := range got.Tables {
 		if len(table.Columns) != 3 || table.Columns[1].Name != "created_at" {
 			t.Errorf("table %s columns = %+v", table.Name, table.Columns)
@@ -238,7 +238,7 @@ func TestSchemalessDatabase(t *testing.T) {
 		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
 		sqldef.Column("name", sqldef.VarChar(100)),
 	)
-	got := buildOne(t, catalog, "mysql")
+	got := buildCatalog(t, catalog)
 	if got.Tables[0].Schema.Name != "" {
 		t.Errorf("schemaless table schema = %q, want empty", got.Tables[0].Schema.Name)
 	}
@@ -296,7 +296,6 @@ func TestBuildErrors(t *testing.T) {
 	tests := []struct {
 		name    string
 		catalog func() *sqldef.Design
-		dialect string
 		want    string
 	}{
 		{
@@ -345,13 +344,13 @@ func TestBuildErrors(t *testing.T) {
 			want: "primary key column cannot be nullable",
 		},
 		{
-			name: "nil reference",
+			name: "zero-value reference",
 			catalog: func() *sqldef.Design {
 				c := sqldef.Catalog()
-				c.Table("posts", sqldef.Column("user_id", sqldef.BigInt, sqldef.References(nil, "id")))
+				c.Table("posts", sqldef.Column("user_id", sqldef.BigInt, sqldef.References(meta.Table{}, "id")))
 				return c
 			},
-			want: "references a nil table",
+			want: "references an unnamed table",
 		},
 		{
 			name: "reference into another catalog",
@@ -362,7 +361,7 @@ func TestBuildErrors(t *testing.T) {
 				c.Table("posts", sqldef.Column("user_id", sqldef.BigInt, sqldef.References(users, "id")))
 				return c
 			},
-			want: "from a different catalog",
+			want: "not declared in this catalog",
 		},
 		{
 			name: "unknown referenced column",
@@ -447,24 +446,10 @@ func TestBuildErrors(t *testing.T) {
 			},
 			want: "Default takes at most one expression",
 		},
-		{
-			name: "type unavailable on dialect",
-			catalog: func() *sqldef.Design {
-				c := sqldef.Catalog()
-				c.Table("users", sqldef.Column("tags", sqldef.TypeFor("citext", "")))
-				return c
-			},
-			dialect: "mysql",
-			want:    "not available on dialect",
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dialect := tt.dialect
-			if dialect == "" {
-				dialect = "postgres"
-			}
-			_, err := tt.catalog().Build(dialect)
+			_, err := tt.catalog().Build()
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Errorf("Build() error = %v, want it to contain %q", err, tt.want)
 			}
@@ -472,9 +457,23 @@ func TestBuildErrors(t *testing.T) {
 	}
 }
 
-func TestBuildUnsupportedDialect(t *testing.T) {
-	_, err := blogCatalog().Build("oracle")
+// TestTypeUnavailableOnDialect: a postgres-only type builds fine (types are
+// portable, resolved late) but errors when a generator targets the dialect it
+// has no engine name for.
+func TestTypeUnavailableOnDialect(t *testing.T) {
+	c := sqldef.Catalog()
+	c.Table("users", sqldef.Column("tags", sqldef.TypeFor("citext", "")))
+	if _, err := c.Build(); err != nil {
+		t.Fatalf("Build() should not resolve types: %v", err)
+	}
+	if _, err := c.DDL("mysql"); err == nil || !strings.Contains(err.Error(), "no type on dialect mysql") {
+		t.Errorf("DDL(mysql) error = %v, want unavailable-type error", err)
+	}
+}
+
+func TestUnsupportedDialect(t *testing.T) {
+	_, err := blogCatalog().DDL("oracle")
 	if err == nil || !strings.Contains(err.Error(), "unsupported dialect") {
-		t.Errorf("Build(oracle) error = %v, want unsupported dialect", err)
+		t.Errorf("DDL(oracle) error = %v, want unsupported dialect", err)
 	}
 }

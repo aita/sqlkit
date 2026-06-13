@@ -40,7 +40,11 @@ type DefaultTypeMapper struct {
 
 // GoTypeFor implements TypeMapper.
 func (m DefaultTypeMapper) GoTypeFor(column meta.Column, dialect string) (meta.GoType, error) {
-	dataType := strings.ToLower(strings.TrimSpace(column.DataType))
+	engine, ok := column.Type.Engine(dialect)
+	if !ok {
+		return meta.GoType{}, fmt.Errorf("codegen: column %q has no type on dialect %s", column.Name, dialect)
+	}
+	dataType := strings.ToLower(strings.TrimSpace(engine))
 	if gt, ok := m.Overrides[dataType]; ok {
 		return applyNullable(gt, column), nil
 	}
@@ -52,7 +56,7 @@ func (m DefaultTypeMapper) GoTypeFor(column meta.Column, dialect string) (meta.G
 	}
 	gt, ok := table[dataType]
 	if !ok {
-		return meta.GoType{}, fmt.Errorf("codegen: unsupported %s type %q (column %q); add a type override via Options.TypeMapper", label, column.DataType, column.Name)
+		return meta.GoType{}, fmt.Errorf("codegen: unsupported %s type %q (column %q); add a type override via Options.TypeMapper", label, engine, column.Name)
 	}
 	return applyNullable(gt, column), nil
 }

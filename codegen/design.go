@@ -132,7 +132,7 @@ func renderDesignTable(sb *strings.Builder, trailers *[]string, table meta.Table
 		case !ok:
 			foreign = append(foreign, fk)
 		case fk.RefTable == table.Name:
-			*trailers = append(*trailers, fmt.Sprintf("var _ = %s.ForeignKey(%s, %s, %s)",
+			*trailers = append(*trailers, fmt.Sprintf("var _ = Catalog.AddForeignKey(%s, %s, %s, %s)",
 				varName, goStringSlice(fk.Columns), refVar, goStringSlice(fk.RefColumns)))
 		case len(fk.Columns) == 1 && len(fk.RefColumns) == 1:
 			if _, dup := refs[fk.Columns[0]]; dup {
@@ -227,7 +227,8 @@ func goStringSlice(items []string) string {
 // that produces it. Types without a portable name fall back to sqldef.Type,
 // which keeps the engine name verbatim.
 func dslTypeExpr(column meta.Column, dialect string) string {
-	dataType := strings.ToLower(strings.TrimSpace(column.DataType))
+	engine, _ := column.Type.Engine(dialect)
+	dataType := strings.ToLower(strings.TrimSpace(engine))
 	if dialect == "mysql" {
 		switch dataType {
 		case "bool", "boolean":
@@ -243,13 +244,13 @@ func dslTypeExpr(column meta.Column, dialect string) string {
 		case "double":
 			return "sqldef.Double"
 		case "decimal":
-			return fmt.Sprintf("sqldef.Decimal(%d, %d)", column.Precision, column.Scale)
+			return fmt.Sprintf("sqldef.Decimal(%d, %d)", column.Type.Precision, column.Type.Scale)
 		case "text":
 			return "sqldef.Text"
 		case "varchar":
-			return fmt.Sprintf("sqldef.VarChar(%d)", column.Length)
+			return fmt.Sprintf("sqldef.VarChar(%d)", column.Type.Length)
 		case "char":
-			return fmt.Sprintf("sqldef.Char(%d)", column.Length)
+			return fmt.Sprintf("sqldef.Char(%d)", column.Type.Length)
 		case "blob":
 			return "sqldef.Bytes"
 		case "json":
@@ -277,13 +278,13 @@ func dslTypeExpr(column meta.Column, dialect string) string {
 	case "float8":
 		return "sqldef.Double"
 	case "numeric":
-		return fmt.Sprintf("sqldef.Decimal(%d, %d)", column.Precision, column.Scale)
+		return fmt.Sprintf("sqldef.Decimal(%d, %d)", column.Type.Precision, column.Type.Scale)
 	case "text":
 		return "sqldef.Text"
 	case "varchar":
-		return fmt.Sprintf("sqldef.VarChar(%d)", column.Length)
+		return fmt.Sprintf("sqldef.VarChar(%d)", column.Type.Length)
 	case "bpchar":
-		return fmt.Sprintf("sqldef.Char(%d)", column.Length)
+		return fmt.Sprintf("sqldef.Char(%d)", column.Type.Length)
 	case "uuid":
 		return "sqldef.UUID"
 	case "bytea":

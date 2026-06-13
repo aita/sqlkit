@@ -47,11 +47,13 @@ var decimalTypes = map[string]bool{
 	"decimal": true,
 }
 
-// normalizeNumeric clears precision/scale on non-decimal columns.
-func normalizeNumeric(column *meta.Column) {
-	if !decimalTypes[column.DataType] {
-		column.Precision = 0
-		column.Scale = 0
+// normalizeNumeric clears precision/scale on non-decimal columns, keying off
+// the engine type name for the given dialect.
+func normalizeNumeric(column *meta.Column, dialect string) {
+	engine, _ := column.Type.Engine(dialect)
+	if !decimalTypes[engine] {
+		column.Type.Precision = 0
+		column.Type.Scale = 0
 	}
 }
 

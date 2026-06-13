@@ -52,10 +52,39 @@ type Table struct {
 	Checks      []Check
 }
 
-// Column is a database column.
+// Type is a portable column type: the engine type name for each supported
+// dialect plus optional length/precision modifiers. The model stores no
+// dialect — a Type carries every dialect it is valid on, so one Catalog
+// targets both. Generators resolve it to a target engine name with Engine.
+type Type struct {
+	Postgres string
+	MySQL    string
+	// Length is the declared type length, e.g. the N of varchar(N) or char(N);
+	// 0 when not applicable.
+	Length int
+	// Precision and Scale describe a numeric/decimal type, e.g. (10, 2) of
+	// decimal(10, 2); 0 when not applicable.
+	Precision int
+	Scale     int
+}
+
+// Engine returns the engine type name for the dialect ("postgres" or "mysql")
+// and whether the type is available on it. An empty engine name reports the
+// type as unavailable on that dialect.
+func (t Type) Engine(dialect string) (string, bool) {
+	switch dialect {
+	case "mysql":
+		return t.MySQL, t.MySQL != ""
+	default:
+		return t.Postgres, t.Postgres != ""
+	}
+}
+
+// Column is a database column. Type is portable; generators resolve it to an
+// engine type name for the target dialect.
 type Column struct {
 	Name       string
-	DataType   string // engine type name (PostgreSQL udt_name / MySQL data_type)
+	Type       Type
 	Nullable   bool
 	HasDefault bool
 	// DefaultExpr is the default's SQL expression when known (designs declare
@@ -64,14 +93,7 @@ type Column struct {
 	// default but no expression as serial/auto-increment columns.
 	DefaultExpr string
 	PrimaryKey  bool
-	// Length is the declared type length, e.g. the N of varchar(N) or char(N);
-	// 0 when not applicable.
-	Length int
-	// Precision and Scale describe a numeric/decimal type, e.g. (10, 2) of
-	// decimal(10, 2); 0 when not applicable.
-	Precision int
-	Scale     int
-	Comment   string
+	Comment     string
 }
 
 // Index is a secondary index over Columns (the primary key index is not

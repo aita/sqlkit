@@ -20,21 +20,21 @@ func fixtureTables() []meta.Table {
 			Schema: meta.Schema{Name: "public"},
 			Name:   "users",
 			Columns: []meta.Column{
-				{Name: "id", DataType: "int8", PrimaryKey: true, HasDefault: true},
-				{Name: "email", DataType: "varchar", Length: 255},
-				{Name: "name", DataType: "text", Nullable: true},
-				{Name: "created_at", DataType: "timestamptz", HasDefault: true},
+				{Name: "id", Type: meta.Type{Postgres: "int8"}, PrimaryKey: true, HasDefault: true},
+				{Name: "email", Type: meta.Type{Postgres: "varchar", Length: 255}},
+				{Name: "name", Type: meta.Type{Postgres: "text"}, Nullable: true},
+				{Name: "created_at", Type: meta.Type{Postgres: "timestamptz"}, HasDefault: true},
 			},
 		},
 		{
 			Schema: meta.Schema{Name: "public"},
 			Name:   "posts",
 			Columns: []meta.Column{
-				{Name: "id", DataType: "int8", PrimaryKey: true, HasDefault: true},
-				{Name: "user_id", DataType: "int8"},
-				{Name: "title", DataType: "text"},
-				{Name: "body", DataType: "text", Nullable: true},
-				{Name: "published", DataType: "bool", HasDefault: true},
+				{Name: "id", Type: meta.Type{Postgres: "int8"}, PrimaryKey: true, HasDefault: true},
+				{Name: "user_id", Type: meta.Type{Postgres: "int8"}},
+				{Name: "title", Type: meta.Type{Postgres: "text"}},
+				{Name: "body", Type: meta.Type{Postgres: "text"}, Nullable: true},
+				{Name: "published", Type: meta.Type{Postgres: "bool"}, HasDefault: true},
 			},
 			ForeignKeys: []meta.ForeignKey{
 				{Name: "posts_user_id_fkey", Columns: []string{"user_id"}, RefSchema: meta.Schema{Name: "public"}, RefTable: "users", RefColumns: []string{"id"}},
@@ -130,7 +130,7 @@ func TestDTONameCollisionForSingularTable(t *testing.T) {
 	tables := []meta.Table{{
 		Schema:  meta.Schema{Name: "public"},
 		Name:    "account",
-		Columns: []meta.Column{{Name: "id", DataType: "int8", PrimaryKey: true}},
+		Columns: []meta.Column{{Name: "id", Type: meta.Type{Postgres: "int8"}, PrimaryKey: true}},
 	}}
 	body := string(generateSingle(t, tables, Options{PackageName: "x", EmitDTO: true}))
 	// var Account (binding) must not collide with the DTO type, which becomes
@@ -156,10 +156,10 @@ func TestMySQLTypeMapping(t *testing.T) {
 		Schema: meta.Schema{Name: "app"},
 		Name:   "items",
 		Columns: []meta.Column{
-			{Name: "id", DataType: "bigint", PrimaryKey: true, HasDefault: true},
-			{Name: "qty", DataType: "int"},
-			{Name: "label", DataType: "varchar"},
-			{Name: "created_at", DataType: "datetime"},
+			{Name: "id", Type: meta.Type{MySQL: "bigint"}, PrimaryKey: true, HasDefault: true},
+			{Name: "qty", Type: meta.Type{MySQL: "int"}},
+			{Name: "label", Type: meta.Type{MySQL: "varchar"}},
+			{Name: "created_at", Type: meta.Type{MySQL: "datetime"}},
 		},
 	}}
 	body := string(generateSingle(t, tables, Options{PackageName: "appdb", Dialect: "mysql"}))
@@ -219,8 +219,8 @@ func TestGenerateComments(t *testing.T) {
 			Name:    "users",
 			Comment: "Registered accounts",
 			Columns: []meta.Column{
-				{Name: "id", DataType: "int8", PrimaryKey: true},
-				{Name: "email", DataType: "varchar", Length: 255, Comment: "Unique login address"},
+				{Name: "id", Type: meta.Type{Postgres: "int8"}, PrimaryKey: true},
+				{Name: "email", Type: meta.Type{Postgres: "varchar", Length: 255}, Comment: "Unique login address"},
 			},
 		},
 	}
@@ -241,7 +241,7 @@ func TestGenerateUnknownTypeFails(t *testing.T) {
 	catalog := meta.Catalog{Tables: []meta.Table{{
 		Schema:  meta.Schema{Name: "public"},
 		Name:    "things",
-		Columns: []meta.Column{{Name: "weird", DataType: "hstore"}},
+		Columns: []meta.Column{{Name: "weird", Type: meta.Type{Postgres: "hstore"}}},
 	}}}
 	if _, err := Generate(catalog, Options{PackageName: "x"}); err == nil {
 		t.Fatal("Generate() with unsupported type succeeded, want error")

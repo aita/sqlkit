@@ -24,12 +24,12 @@ func TestGenerateDesignMySQL(t *testing.T) {
 			Schema: meta.Schema{Name: "app"},
 			Name:   "items",
 			Columns: []meta.Column{
-				{Name: "id", DataType: "bigint", PrimaryKey: true, HasDefault: true},
-				{Name: "name", DataType: "varchar", Length: 100},
-				{Name: "price", DataType: "decimal", Precision: 10, Scale: 2},
-				{Name: "attrs", DataType: "json", Nullable: true},
-				{Name: "created_at", DataType: "datetime", HasDefault: true, DefaultExpr: "now()"},
-				{Name: "point", DataType: "geometry"},
+				{Name: "id", Type: meta.Type{MySQL: "bigint"}, PrimaryKey: true, HasDefault: true},
+				{Name: "name", Type: meta.Type{MySQL: "varchar", Length: 100}},
+				{Name: "price", Type: meta.Type{MySQL: "decimal", Precision: 10, Scale: 2}},
+				{Name: "attrs", Type: meta.Type{MySQL: "json"}, Nullable: true},
+				{Name: "created_at", Type: meta.Type{MySQL: "datetime"}, HasDefault: true, DefaultExpr: "now()"},
+				{Name: "point", Type: meta.Type{MySQL: "geometry"}},
 			},
 		},
 	}
@@ -61,19 +61,19 @@ func TestGenerateDesignForeignKeys(t *testing.T) {
 			Schema: meta.Schema{Name: "public"},
 			Name:   "orders",
 			Columns: []meta.Column{
-				{Name: "region", DataType: "text", PrimaryKey: true},
-				{Name: "number", DataType: "int8", PrimaryKey: true},
+				{Name: "region", Type: meta.Type{Postgres: "text"}, PrimaryKey: true},
+				{Name: "number", Type: meta.Type{Postgres: "int8"}, PrimaryKey: true},
 			},
 		},
 		{
 			Schema: meta.Schema{Name: "public"},
 			Name:   "order_lines",
 			Columns: []meta.Column{
-				{Name: "order_region", DataType: "text"},
-				{Name: "order_number", DataType: "int8"},
-				{Name: "parent_id", DataType: "int8", Nullable: true},
-				{Name: "id", DataType: "int8", PrimaryKey: true},
-				{Name: "audit_id", DataType: "int8"},
+				{Name: "order_region", Type: meta.Type{Postgres: "text"}},
+				{Name: "order_number", Type: meta.Type{Postgres: "int8"}},
+				{Name: "parent_id", Type: meta.Type{Postgres: "int8"}, Nullable: true},
+				{Name: "id", Type: meta.Type{Postgres: "int8"}, PrimaryKey: true},
+				{Name: "audit_id", Type: meta.Type{Postgres: "int8"}},
 			},
 			ForeignKeys: []meta.ForeignKey{
 				{Name: "fk_composite", Columns: []string{"order_region", "order_number"}, RefSchema: meta.Schema{Name: "public"}, RefTable: "orders", RefColumns: []string{"region", "number"}},
@@ -90,7 +90,7 @@ func TestGenerateDesignForeignKeys(t *testing.T) {
 	for _, want := range []string{
 		`var Public = Catalog.Schema("public")`,
 		`sqldef.ForeignKey([]string{"order_region", "order_number"}, Orders, []string{"region", "number"}),`,
-		`var _ = OrderLines.ForeignKey([]string{"parent_id"}, OrderLines, []string{"id"})`,
+		`var _ = Catalog.AddForeignKey(OrderLines, []string{"parent_id"}, OrderLines, []string{"id"})`,
 		`foreign key fk_other_schema references audit.events outside this design`,
 	} {
 		if !strings.Contains(got, want) {
@@ -106,11 +106,11 @@ func TestGenerateDesignIndexesChecksComments(t *testing.T) {
 			Name:    "products",
 			Comment: "Sellable products",
 			Columns: []meta.Column{
-				{Name: "id", DataType: "int8", PrimaryKey: true, HasDefault: true},
-				{Name: "sku", DataType: "varchar", Length: 64, Comment: "Stock keeping unit"},
-				{Name: "vendor", DataType: "text"},
-				{Name: "name", DataType: "text"},
-				{Name: "price", DataType: "numeric", Precision: 10, Scale: 2},
+				{Name: "id", Type: meta.Type{Postgres: "int8"}, PrimaryKey: true, HasDefault: true},
+				{Name: "sku", Type: meta.Type{Postgres: "varchar", Length: 64}, Comment: "Stock keeping unit"},
+				{Name: "vendor", Type: meta.Type{Postgres: "text"}},
+				{Name: "name", Type: meta.Type{Postgres: "text"}},
+				{Name: "price", Type: meta.Type{Postgres: "numeric", Precision: 10, Scale: 2}},
 			},
 			Indexes: []meta.Index{
 				{Name: "products_sku_key", Columns: []string{"sku"}, Unique: true},

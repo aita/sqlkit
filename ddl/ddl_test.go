@@ -7,8 +7,19 @@ import (
 	"github.com/aita/sqlkit/meta"
 )
 
-func fixture(dataTypes map[string]string) meta.Catalog {
-	dt := func(key string) string { return dataTypes[key] }
+// fixture builds the catalog with portable types for the given dialect: the
+// dataTypes map gives the engine name per logical type, set on the dialect's
+// side of meta.Type.
+func fixture(dialect string, dataTypes map[string]string) meta.Catalog {
+	typ := func(key string, length, precision, scale int) meta.Type {
+		t := meta.Type{Length: length, Precision: precision, Scale: scale}
+		if dialect == "mysql" {
+			t.MySQL = dataTypes[key]
+		} else {
+			t.Postgres = dataTypes[key]
+		}
+		return t
+	}
 	public := meta.Schema{Name: "public"}
 	return meta.Catalog{
 		Tables: []meta.Table{
@@ -17,11 +28,11 @@ func fixture(dataTypes map[string]string) meta.Catalog {
 				Name:    "users",
 				Comment: "Registered blog authors",
 				Columns: []meta.Column{
-					{Name: "id", DataType: dt("bigint"), PrimaryKey: true, HasDefault: true},
-					{Name: "email", DataType: dt("varchar"), Length: 255, Comment: "Unique login address"},
-					{Name: "name", DataType: dt("text"), Nullable: true},
-					{Name: "balance", DataType: dt("decimal"), Precision: 10, Scale: 2},
-					{Name: "created_at", DataType: dt("timestamp"), HasDefault: true, DefaultExpr: "now()"},
+					{Name: "id", Type: typ("bigint", 0, 0, 0), PrimaryKey: true, HasDefault: true},
+					{Name: "email", Type: typ("varchar", 255, 0, 0), Comment: "Unique login address"},
+					{Name: "name", Type: typ("text", 0, 0, 0), Nullable: true},
+					{Name: "balance", Type: typ("decimal", 0, 10, 2)},
+					{Name: "created_at", Type: typ("timestamp", 0, 0, 0), HasDefault: true, DefaultExpr: "now()"},
 				},
 				Indexes: []meta.Index{
 					{Name: "uq_users_email", Columns: []string{"email"}, Unique: true},
@@ -34,8 +45,8 @@ func fixture(dataTypes map[string]string) meta.Catalog {
 				Schema: public,
 				Name:   "posts",
 				Columns: []meta.Column{
-					{Name: "id", DataType: dt("bigint"), PrimaryKey: true, HasDefault: true},
-					{Name: "user_id", DataType: dt("bigint")},
+					{Name: "id", Type: typ("bigint", 0, 0, 0), PrimaryKey: true, HasDefault: true},
+					{Name: "user_id", Type: typ("bigint", 0, 0, 0)},
 				},
 				ForeignKeys: []meta.ForeignKey{
 					{Name: "fk_posts_user_id", Columns: []string{"user_id"}, RefSchema: public, RefTable: "users", RefColumns: []string{"id"}},
@@ -49,7 +60,7 @@ func fixture(dataTypes map[string]string) meta.Catalog {
 }
 
 func TestGeneratePostgres(t *testing.T) {
-	catalog := fixture(map[string]string{
+	catalog := fixture("postgres", map[string]string{
 		"bigint":    "int8",
 		"varchar":   "varchar",
 		"text":      "text",
@@ -91,7 +102,7 @@ COMMENT ON COLUMN "public"."users"."email" IS 'Unique login address';
 }
 
 func TestGenerateMySQL(t *testing.T) {
-	catalog := fixture(map[string]string{
+	catalog := fixture("mysql", map[string]string{
 		"bigint":    "bigint",
 		"varchar":   "varchar",
 		"text":      "text",
@@ -121,7 +132,7 @@ func TestGenerateUnqualified(t *testing.T) {
 		Tables: []meta.Table{{
 			Name: "items",
 			Columns: []meta.Column{
-				{Name: "id", DataType: "int8", PrimaryKey: true},
+				{Name: "id", Type: meta.Type{Postgres: "int8"}, PrimaryKey: true},
 			},
 		}},
 	}
@@ -145,7 +156,7 @@ func TestLiteralEscaping(t *testing.T) {
 		Tables: []meta.Table{{
 			Name:    "items",
 			Comment: "it's quoted",
-			Columns: []meta.Column{{Name: "id", DataType: "int8", PrimaryKey: true}},
+			Columns: []meta.Column{{Name: "id", Type: meta.Type{Postgres: "int8"}, PrimaryKey: true}},
 		}},
 	}
 	got, err := Generate(catalog, "postgres")

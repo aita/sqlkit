@@ -1,29 +1,15 @@
 package sqldef
 
-// DataType is a column type in a design. It carries the engine type name for
-// each supported dialect plus optional length/precision modifiers; Build
-// resolves it to the target dialect's name.
-type DataType struct {
-	postgres  string
-	mysql     string
-	length    int
-	precision int
-	scale     int
-}
+import "github.com/aita/sqlkit/meta"
 
-// engineName returns the engine type name for the dialect and whether the
-// type is available on it.
-func (t DataType) engineName(dialect string) (string, bool) {
-	switch dialect {
-	case "mysql":
-		return t.mysql, t.mysql != ""
-	default:
-		return t.postgres, t.postgres != ""
-	}
-}
+// DataType is a portable column type in a design: the engine type name for
+// each supported dialect plus optional length/precision modifiers. It is an
+// alias for meta.Type — the value carried straight into the generated
+// meta.Column — so the generators resolve it to a dialect at render time.
+type DataType = meta.Type
 
-// Portable column types. Each resolves to the matching engine type of the
-// dialect the design is built for.
+// Portable column types. Each carries the engine type name of both dialects;
+// the generators pick the one for the dialect they render.
 var (
 	Bool     = TypeFor("bool", "boolean")
 	SmallInt = TypeFor("int2", "smallint")
@@ -34,7 +20,7 @@ var (
 	Text     = TypeFor("text", "text")
 	Bytes    = TypeFor("bytea", "blob")
 	JSON     = TypeFor("jsonb", "json")
-	UUID     = DataType{postgres: "uuid", mysql: "char", length: 36}
+	UUID     = DataType{Postgres: "uuid", MySQL: "char", Length: 36}
 	Date     = TypeFor("date", "date")
 	Time     = TypeFor("time", "time")
 	// Timestamp is a point in time: timestamptz on PostgreSQL, datetime on
@@ -44,17 +30,17 @@ var (
 
 // VarChar is a variable-length string of at most n characters.
 func VarChar(n int) DataType {
-	return DataType{postgres: "varchar", mysql: "varchar", length: n}
+	return DataType{Postgres: "varchar", MySQL: "varchar", Length: n}
 }
 
 // Char is a fixed-length string of n characters.
 func Char(n int) DataType {
-	return DataType{postgres: "bpchar", mysql: "char", length: n}
+	return DataType{Postgres: "bpchar", MySQL: "char", Length: n}
 }
 
 // Decimal is an exact numeric with the given precision and scale.
 func Decimal(precision, scale int) DataType {
-	return DataType{postgres: "numeric", mysql: "decimal", precision: precision, scale: scale}
+	return DataType{Postgres: "numeric", MySQL: "decimal", Precision: precision, Scale: scale}
 }
 
 // Type declares a column type by its engine type name, used verbatim on every
@@ -65,8 +51,8 @@ func Type(name string) DataType {
 }
 
 // TypeFor declares a column type with a distinct engine type name per
-// dialect. An empty name makes the type unavailable on that dialect, which
-// Build reports as an error.
+// dialect. An empty name makes the type unavailable on that dialect, which the
+// generators report as an error when targeting it.
 func TypeFor(postgres, mysql string) DataType {
-	return DataType{postgres: postgres, mysql: mysql}
+	return DataType{Postgres: postgres, MySQL: mysql}
 }

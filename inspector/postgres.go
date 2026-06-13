@@ -101,12 +101,14 @@ func inspectPostgres(ctx context.Context, db Querier, schemaName string) ([]meta
 	defer rows.Close()
 	tableIndex := map[string]int{}
 	for rows.Next() {
-		var tableName string
+		var tableName, udt string
+		var length, precision, scale int
 		var column meta.Column
-		if err := rows.Scan(&tableName, &column.Name, &column.DataType, &column.Nullable, &column.HasDefault, &column.Length, &column.Precision, &column.Scale); err != nil {
+		if err := rows.Scan(&tableName, &column.Name, &udt, &column.Nullable, &column.HasDefault, &length, &precision, &scale); err != nil {
 			return nil, fmt.Errorf("inspector: scan column: %w", err)
 		}
-		normalizeNumeric(&column)
+		column.Type = meta.Type{Postgres: udt, Length: length, Precision: precision, Scale: scale}
+		normalizeNumeric(&column, "postgres")
 		index, ok := tableIndex[tableName]
 		if !ok {
 			index = len(tables)
