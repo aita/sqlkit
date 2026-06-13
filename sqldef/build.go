@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/aita/sqlkit/ddl"
 	"github.com/aita/sqlkit/meta"
 )
 
@@ -102,13 +101,3 @@ func hasMetaColumn(columns []meta.Column, name string) bool {
 func joinCols(columns []string) string { return strings.Join(columns, "_") }
 
 func isBlank(s string) bool { return strings.TrimSpace(s) == "" }
-
-// DDL builds the catalog and renders its tables as CREATE TABLE / CREATE INDEX
-// / comment statements for the dialect (default postgres).
-func (d *Catalog) DDL(dialect string) (string, error) {
-	catalog, err := d.Build()
-	if err != nil {
-		return "", err
-	}
-	return ddl.Generate(catalog, dialect)
-}

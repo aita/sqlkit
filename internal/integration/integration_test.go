@@ -134,10 +134,9 @@ func TestLoaderReadsRealSchema(t *testing.T) {
 		t.Fatal("users.email should be NOT NULL")
 	}
 
-	// The catalog generated from the live schema must compile (gofmt + parse);
-	// this is the inspect path sqlkitgen drives.
-	if _, err := codegen.GenerateCatalog(model, codegen.CatalogOptions{PackageName: "schema", Dialect: "postgres"}); err != nil {
-		t.Fatalf("codegen.GenerateCatalog against live schema: %v", err)
+	// The generated code for the live schema must compile (gofmt + parse).
+	if _, err := codegen.Generate(model, codegen.Options{PackageName: "blogdb"}); err != nil {
+		t.Fatalf("codegen.Generate against live schema: %v", err)
 	}
 }
 

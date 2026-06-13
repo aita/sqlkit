@@ -33,18 +33,21 @@
 // Catalog.Table returns a meta.Table, so Users and Posts are meta.Table
 // values. Column types are portable (meta.Type carries both dialects), so the
 // table is dialect-agnostic; the generators resolve the type when you choose a
-// dialect. A small generator program turns the catalog into Go source and DDL:
+// dialect. sqldef is purely the schema DSL: Build assembles the meta.Meta and
+// the generators consume it directly. A small generator program turns the
+// catalog into Go source and DDL:
 //
-//	files, err := codegen.Generate(schema.Catalog, codegen.Options{PackageName: "appdb"})
+//	catalog, err := schema.Catalog.Build()
 //	if err != nil { ... }
+//	files, err := codegen.Generate(catalog, codegen.Options{PackageName: "appdb"})
 //	err = codegen.Write("appdb", files)
-//	sql, err := schema.Catalog.DDL("postgres")
+//	sql, err := ddl.Generate(catalog, "postgres")
 //
 // Tables declared with Catalog.Table live in the unnamed default schema and
 // generate unqualified names (use this for schemaless engines like MySQL or
 // SQLite); Catalog.Schema("public").Table(...) qualifies them. Columns are NOT
 // NULL unless marked Nullable. Mistakes — duplicate names, dangling foreign
-// keys — are collected and reported by Build/DDL.
+// keys — are collected and reported by Build.
 package sqldef
 
 import (

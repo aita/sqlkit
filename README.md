@@ -52,19 +52,19 @@ below for authoring, and `examples/blog/gen` for a generator program.
 To bootstrap a catalog from a live **PostgreSQL or MySQL** schema:
 
 ```sh
-go run github.com/aita/sqlkit/cmd/sqlkitgen \
-  -dsn "$DATABASE_URL" -schema public -package schema -out schema/schema.go
+go run github.com/aita/sqlkit/cmd/sqlkitgen inspect \
+  --dsn "$DATABASE_URL" --schema public --package schema --out schema/schema.go
 ```
 
-| `sqlkitgen` flag | Purpose |
+| `sqlkitgen inspect` flag | Purpose |
 |---|---|
-| `-dsn` | database connection string (required) |
-| `-driver` | `pgx` (default) or `mysql` |
-| `-dialect` | override the schema dialect (`postgres`/`mysql`); inferred from `-driver` |
-| `-schema` | schema/database to read (default `public` for postgres, current DB for mysql) |
-| `-package` | package name of the generated catalog file (required) |
-| `-tables` | comma-separated subset of tables to include |
-| `-out` | output file or directory; stdout if empty |
+| `--dsn` | database connection string (required) |
+| `--driver` | `pgx` (default) or `mysql` |
+| `--dialect` | override the schema dialect (`postgres`/`mysql`); inferred from `--driver` |
+| `--schema` | schema/database to read (default `public` for postgres, current DB for mysql) |
+| `--package` | package name of the generated catalog file (required) |
+| `--tables` | comma-separated subset of tables to include |
+| `--out` | output file or directory; stdout if empty |
 
 The bootstrapped catalog is a starting point meant to be edited (it carries no
 `DO NOT EDIT` marker); from then on the schema lives in code.
@@ -188,18 +188,23 @@ A small generator program turns the catalog into code and DDL — see
 `examples/blog/gen`, which regenerates both `blogdb` and `schema.sql`:
 
 ```go
-files, err := schema.Catalog.Generate(codegen.Options{PackageName: "blogdb"})
+catalog, err := schema.Catalog.Build() // dialect-agnostic meta.Meta
 if err != nil { ... }
-err = sqldef.Write("blogdb", files)
 
-ddl, err := schema.Catalog.DDL("postgres") // CREATE TABLE / INDEX / COMMENT ...
+files, err := codegen.Generate(catalog, codegen.Options{PackageName: "blogdb"})
+if err != nil { ... }
+err = codegen.Write("blogdb", files)
+
+sql, err := ddl.Generate(catalog, "postgres") // CREATE TABLE / INDEX / COMMENT ...
 ```
 
-`Generate` accepts the full `codegen.Options` surface (DTOs, file layout, type
-overrides); `Build()` returns the raw `meta.Meta` (dialect-agnostic) for
-other tooling. Mistakes — duplicate names, dangling foreign keys, references
-into another catalog — are collected and reported by `Build`; a type with no
-name on the chosen dialect is reported by `Generate`/`DDL`.
+`sqldef` is purely the schema DSL: `Build()` returns the raw `meta.Meta`
+(dialect-agnostic) that the `codegen` and `ddl` generators — and any other
+tooling — consume directly. `codegen.Generate` accepts the full
+`codegen.Options` surface (DTOs, file layout, type overrides). Mistakes —
+duplicate names, dangling foreign keys, references into another catalog — are
+collected and reported by `Build`; a type with no name on the chosen dialect
+is reported by `codegen.Generate`/`ddl.Generate`.
 
 ### Bootstrapping a catalog from an existing database
 
@@ -208,8 +213,8 @@ name on the chosen dialect is reported by `Generate`/`DDL`.
 existing database can be converted once and maintained as Go code from then
 on. The same conversion is available as a library via
 `codegen.GenerateCatalog(catalog, codegen.CatalogOptions{...})`. Once you have a
-catalog, `Catalog.DDL("postgres")` renders the schema as CREATE TABLE
-statements.
+catalog, `ddl.Generate(meta, "postgres")` (with `meta` from `Catalog.Build`)
+renders the schema as CREATE TABLE statements.
 
 ## Querying and scanning
 

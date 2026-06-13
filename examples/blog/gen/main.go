@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/aita/sqlkit/codegen"
+	"github.com/aita/sqlkit/ddl"
 	"github.com/aita/sqlkit/examples/blog/schema"
 )
 
@@ -19,7 +20,12 @@ const sqlHeader = `-- Generated from schema/schema.go by 'go run ./gen'. Apply w
 `
 
 func main() {
-	files, err := codegen.Generate(schema.Catalog, codegen.Options{PackageName: "blogdb"})
+	catalog, err := schema.Catalog.Build()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	files, err := codegen.Generate(catalog, codegen.Options{PackageName: "blogdb"})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -27,11 +33,11 @@ func main() {
 		log.Fatal(err)
 	}
 
-	ddl, err := schema.Catalog.DDL("postgres")
+	sql, err := ddl.Generate(catalog, "postgres")
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := os.WriteFile("schema.sql", []byte(sqlHeader+ddl), 0o644); err != nil {
+	if err := os.WriteFile("schema.sql", []byte(sqlHeader+sql), 0o644); err != nil {
 		log.Fatal(err)
 	}
 }

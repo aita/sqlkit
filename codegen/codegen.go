@@ -11,7 +11,6 @@ import (
 	"text/template"
 
 	"github.com/aita/sqlkit/meta"
-	"github.com/aita/sqlkit/sqldef"
 )
 
 // File is a single generated source file: a suggested name and its formatted
@@ -97,22 +96,12 @@ type tableModel struct {
 	Doc []string
 }
 
-// Generate builds the catalog and renders its tables into one or more Go
-// source files according to opts, returning their formatted contents. The
-// dialect (opts.Dialect, default postgres) selects the default SQL→Go type
-// table.
-func Generate(catalog *sqldef.Catalog, opts Options) ([]File, error) {
-	model, err := catalog.Build()
-	if err != nil {
-		return nil, err
-	}
-	return generate(model, opts)
-}
-
-// generate renders an already-built schema model — the shared core behind
-// Generate, with the model passed directly so the package's own tests can
-// exercise it without the sqldef DSL.
-func generate(model meta.Meta, opts Options) ([]File, error) {
+// Generate renders the catalog into one or more Go source files according to
+// opts and returns their formatted contents. The catalog is the built schema
+// model (meta.Meta) — produce it with sqldef's Catalog.Build, the inspector,
+// or by hand. The dialect (opts.Dialect, default postgres) selects the default
+// SQL→Go type table.
+func Generate(catalog meta.Meta, opts Options) ([]File, error) {
 	if opts.PackageName == "" {
 		return nil, fmt.Errorf("codegen: package name is required")
 	}
@@ -129,7 +118,7 @@ func generate(model meta.Meta, opts Options) ([]File, error) {
 		dtoName = defaultDTOName
 	}
 
-	tables := filterTables(model.Tables, opts.Tables)
+	tables := filterTables(catalog.Tables, opts.Tables)
 	if len(tables) == 0 {
 		return nil, fmt.Errorf("codegen: no tables to generate")
 	}
