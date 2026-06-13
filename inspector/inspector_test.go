@@ -9,6 +9,7 @@ import (
 
 	"github.com/aita/sqlkit/internal/sqltest"
 	"github.com/aita/sqlkit/meta"
+	"github.com/aita/sqlkit/sql"
 )
 
 func TestInspectRejectsUnsupportedDialects(t *testing.T) {
@@ -87,13 +88,13 @@ func TestInspectPostgres(t *testing.T) {
 			Columns: []meta.Column{
 				{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), HasDefault: true, PrimaryKey: true},
 				{Name: "email", Type: meta.Of("postgres", "varchar", 255, 0, 0), Comment: "Unique login address"},
-				{Name: "balance", Type: meta.Of("postgres", "numeric", 0, 10, 2), HasDefault: true, DefaultExpr: "0"},
+				{Name: "balance", Type: meta.Of("postgres", "numeric", 0, 10, 2), HasDefault: true, DefaultExpr: sql.Raw("0")},
 			},
 			Indexes: []meta.Index{
 				{Name: "users_email_key", Columns: []string{"email"}, Unique: true},
 			},
 			Checks: []meta.Check{
-				{Name: "users_balance_check", Expression: "balance >= (0)::numeric"},
+				{Name: "users_balance_check", Expression: sql.Raw("balance >= (0)::numeric")},
 			},
 		},
 		{
@@ -179,13 +180,13 @@ func TestInspectMySQL(t *testing.T) {
 			Columns: []meta.Column{
 				{Name: "id", Type: meta.Of("mysql", "bigint", 0, 0, 0), HasDefault: true, PrimaryKey: true},
 				{Name: "email", Type: meta.Of("mysql", "varchar", 255, 0, 0), Comment: "Unique login address"},
-				{Name: "balance", Type: meta.Of("mysql", "decimal", 0, 10, 2), HasDefault: true, DefaultExpr: "0.00"},
+				{Name: "balance", Type: meta.Of("mysql", "decimal", 0, 10, 2), HasDefault: true, DefaultExpr: sql.Raw("0.00")},
 			},
 			Indexes: []meta.Index{
 				{Name: "uq_users_email", Columns: []string{"email"}, Unique: true},
 			},
 			Checks: []meta.Check{
-				{Name: "users_chk_1", Expression: "`balance` >= 0"},
+				{Name: "users_chk_1", Expression: sql.Raw("`balance` >= 0")},
 			},
 		},
 		{

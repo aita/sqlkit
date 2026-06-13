@@ -11,7 +11,10 @@
 //
 //	package schema
 //
-//	import "github.com/aita/sqlkit/sqldef"
+//	import (
+//		"github.com/aita/sqlkit/sql"
+//		"github.com/aita/sqlkit/sqldef"
+//	)
 //
 //	var Catalog = sqldef.NewCatalog()
 //
@@ -19,7 +22,7 @@
 //		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
 //		sqldef.Column("email", sqldef.VarChar(255), sqldef.Unique()),
 //		sqldef.Column("name", sqldef.Text, sqldef.Nullable()),
-//		sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default("now()")),
+//		sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default(sql.Raw("now()"))),
 //	)
 //
 //	var Posts = Catalog.Table("posts",
@@ -27,7 +30,7 @@
 //		sqldef.Column("user_id", sqldef.BigInt, sqldef.References(Users, "id")),
 //		sqldef.Column("title", sqldef.Text),
 //		sqldef.Index("user_id"),
-//		sqldef.Check("title <> ''"),
+//		sqldef.Check(sql.Raw("title <> ''")),
 //	)
 //
 // Catalog.Table returns a meta.Table, so Users and Posts are meta.Table
@@ -53,8 +56,10 @@ package sqldef
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/aita/sqlkit/meta"
+	"github.com/aita/sqlkit/sql"
 )
 
 // Catalog is the root the tables hang off: it accumulates the
@@ -183,7 +188,7 @@ type tableBuilder struct {
 	columns     []*columnDef
 	foreignKeys []fkDef
 	indexes     []indexDef
-	checks      []string
+	checks      []sql.Expression
 }
 
 func (b *tableBuilder) fail(format string, args ...any) {
@@ -249,7 +254,7 @@ func (b *tableBuilder) build() meta.Table {
 	}
 
 	for i, expr := range b.checks {
-		if isBlank(expr) {
+		if isBlankExpr(expr) {
 			d.fail("table %q: Check requires an expression", b.name)
 			continue
 		}
@@ -267,7 +272,7 @@ type columnDef struct {
 	comment     string
 	nullable    bool
 	hasDefault  bool
-	defaultExpr string
+	defaultExpr sql.Expression
 	primaryKey  bool
 	unique      bool
 	ref         *fkDef
@@ -351,11 +356,25 @@ func UniqueIndex(columns ...string) TableElement {
 }
 
 // Check declares a CHECK constraint. expr is the bare boolean expression, e.g.
-// "price > 0". Constraints are named ck_<table>_<n> in declaration order.
-func Check(expr string) TableElement {
+// sql.Raw("price > 0") or sql.Gt(sql.Col("price"), sql.Raw("0")). Constraints
+// are named ck_<table>_<n> in declaration order. The expression must not bind
+// values; wrap literals in sql.Raw to inline them.
+func Check(expr sql.Expression) TableElement {
 	return tableElement(func(b *tableBuilder) {
 		b.checks = append(b.checks, expr)
 	})
+}
+
+// isBlankExpr reports whether a declared default/check expression is missing —
+// nil, or a Raw fragment that is empty or whitespace.
+func isBlankExpr(expr sql.Expression) bool {
+	if expr == nil {
+		return true
+	}
+	if raw, ok := expr.(sql.RawExpression); ok {
+		return strings.TrimSpace(string(raw)) == ""
+	}
+	return false
 }
 
 // TableComment sets the table's comment. Column comments use the Comment
@@ -383,10 +402,11 @@ func Nullable() ColumnOption {
 
 // Default marks the column as having a database-side default, so generated
 // bindings report it in Defaulted and inserts can omit it. The optional
-// expression is used by the DDL generator: Default("now()") renders as DEFAULT
-// now(), while a bare Default() on an integer primary key renders as a
-// serial/auto-increment column.
-func Default(expr ...string) ColumnOption {
+// expression is used by the DDL generator: Default(sql.Raw("now()")) renders as
+// DEFAULT now(), while a bare Default() on an integer primary key renders as a
+// serial/auto-increment column. The expression must not bind values; wrap
+// literals in sql.Raw to inline them.
+func Default(expr ...sql.Expression) ColumnOption {
 	return func(c *columnDef) {
 		c.hasDefault = true
 		switch len(expr) {

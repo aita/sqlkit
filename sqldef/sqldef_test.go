@@ -19,14 +19,14 @@ func blogCatalog() *sqldef.Catalog {
 		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
 		sqldef.Column("email", sqldef.VarChar(255)),
 		sqldef.Column("name", sqldef.Text, sqldef.Nullable()),
-		sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default("now()")),
+		sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default(querysql.Raw("now()"))),
 	)
 	public.Table("posts",
 		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
 		sqldef.Column("user_id", sqldef.BigInt, sqldef.References(users, "id")),
 		sqldef.Column("title", sqldef.Text),
 		sqldef.Column("body", sqldef.Text, sqldef.Nullable()),
-		sqldef.Column("published", sqldef.Bool, sqldef.Default("false")),
+		sqldef.Column("published", sqldef.Bool, sqldef.Default(querysql.Raw("false"))),
 	)
 	return catalog
 }
@@ -54,7 +54,7 @@ func TestBuild(t *testing.T) {
 					{Name: "id", Type: sqldef.BigInt, PrimaryKey: true, HasDefault: true},
 					{Name: "email", Type: sqldef.VarChar(255)},
 					{Name: "name", Type: sqldef.Text, Nullable: true},
-					{Name: "created_at", Type: sqldef.Timestamp, HasDefault: true, DefaultExpr: "now()"},
+					{Name: "created_at", Type: sqldef.Timestamp, HasDefault: true, DefaultExpr: querysql.Raw("now()")},
 				},
 			},
 			{
@@ -65,7 +65,7 @@ func TestBuild(t *testing.T) {
 					{Name: "user_id", Type: sqldef.BigInt},
 					{Name: "title", Type: sqldef.Text},
 					{Name: "body", Type: sqldef.Text, Nullable: true},
-					{Name: "published", Type: sqldef.Bool, HasDefault: true, DefaultExpr: "false"},
+					{Name: "published", Type: sqldef.Bool, HasDefault: true, DefaultExpr: querysql.Raw("false")},
 				},
 				ForeignKeys: []meta.ForeignKey{
 					{Name: "fk_posts_user_id", Columns: []string{"user_id"}, RefSchema: meta.Schema{Name: "public"}, RefTable: "users", RefColumns: []string{"id"}},
@@ -195,7 +195,7 @@ func TestIndexesChecksComments(t *testing.T) {
 		sqldef.Column("price", sqldef.Decimal(10, 2)),
 		sqldef.Index("name"),
 		sqldef.UniqueIndex("vendor", "name"),
-		sqldef.Check("price > 0"),
+		sqldef.Check(querysql.Raw("price > 0")),
 	)
 	got := buildCatalog(t, catalog)
 	table := got.Tables[0]
@@ -214,7 +214,7 @@ func TestIndexesChecksComments(t *testing.T) {
 		t.Errorf("indexes = %+v\nwant %+v", table.Indexes, wantIndexes)
 	}
 	wantChecks := []meta.Check{
-		{Name: "ck_products_1", Expression: "price > 0"},
+		{Name: "ck_products_1", Expression: querysql.Raw("price > 0")},
 	}
 	if !reflect.DeepEqual(table.Checks, wantChecks) {
 		t.Errorf("checks = %+v\nwant %+v", table.Checks, wantChecks)
@@ -223,7 +223,7 @@ func TestIndexesChecksComments(t *testing.T) {
 
 func TestSharedElementsReuse(t *testing.T) {
 	audit := []sqldef.TableElement{
-		sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default("now()")),
+		sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default(querysql.Raw("now()"))),
 		sqldef.Column("updated_at", sqldef.Timestamp, sqldef.Nullable()),
 	}
 	catalog := sqldef.NewCatalog()
@@ -445,7 +445,7 @@ func TestBuildErrors(t *testing.T) {
 			name: "empty check",
 			catalog: func() *sqldef.Catalog {
 				c := sqldef.NewCatalog()
-				c.Table("users", sqldef.Column("id", sqldef.BigInt), sqldef.Check("  "))
+				c.Table("users", sqldef.Column("id", sqldef.BigInt), sqldef.Check(querysql.Raw("  ")))
 				return c
 			},
 			want: "Check requires an expression",
@@ -454,7 +454,7 @@ func TestBuildErrors(t *testing.T) {
 			name: "default with two expressions",
 			catalog: func() *sqldef.Catalog {
 				c := sqldef.NewCatalog()
-				c.Table("users", sqldef.Column("id", sqldef.BigInt, sqldef.Default("a", "b")))
+				c.Table("users", sqldef.Column("id", sqldef.BigInt, sqldef.Default(querysql.Raw("a"), querysql.Raw("b"))))
 				return c
 			},
 			want: "Default takes at most one expression",

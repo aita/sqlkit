@@ -22,6 +22,24 @@ func NewCompiler(dialect Dialect) *Compiler {
 	return &Compiler{Dialect: dialect}
 }
 
+// CompileStatic compiles an expression that binds no values into SQL text, for
+// static contexts such as DDL DEFAULT and CHECK clauses where bind placeholders
+// are not allowed. It errors if expr is nil or produces bind values; wrap
+// literals in Raw to inline them.
+func CompileStatic(dialect Dialect, expr Expression) (string, error) {
+	if expr == nil {
+		return "", fmt.Errorf("sqlkit/sql: nil expression")
+	}
+	text, args, err := NewCompiler(dialect).CompileExpression(expr)
+	if err != nil {
+		return "", err
+	}
+	if len(args) > 0 {
+		return "", fmt.Errorf("sqlkit/sql: static expression must not bind values; use Raw to inline literals")
+	}
+	return text, nil
+}
+
 // CompileExpression compiles an expression fragment.
 func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 	switch e := expr.(type) {

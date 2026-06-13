@@ -2,13 +2,17 @@
 // abstraction of tables and columns that sqlkit's SQL generators consume. The
 // sqldef package builds it from in-code catalogs and the inspector introspects
 // a live database into it (for the initial bootstrap); the codegen generator
-// takes it from there, and the model renders its own DDL (see ddl.go). The
-// dialect is supplied to the generators at call time, not stored on the model.
+// takes it from there, and the model renders its own DDL (see ddl.go). Default
+// and check expressions are carried as dialect-agnostic sql.Expression AST
+// nodes; the dialect is supplied to the generators at call time, not stored on
+// the model.
 //
 // Everything is a value type with no back-references, so a catalog may be split
 // across packages: each exposes the []Table it owns and the generators run
 // over the concatenation.
 package meta
+
+import "github.com/aita/sqlkit/sql"
 
 // Metadata is a resolved set of tables — the dialect-agnostic value that a
 // sqldef catalog builds into and that the codegen generator and the DDL
@@ -100,10 +104,11 @@ type Column struct {
 	Nullable   bool
 	HasDefault bool
 	// DefaultExpr is the default's SQL expression when known (catalogs declare
-	// it with Default("now()")); HasDefault may be set without it, e.g. by the
-	// inspector. The DDL generator renders integer primary keys that have a
-	// default but no expression as serial/auto-increment columns.
-	DefaultExpr string
+	// it with Default(sql.Raw("now()"))); it is nil when HasDefault is set
+	// without one, e.g. by the inspector. The DDL generator renders integer
+	// primary keys that have a default but no expression as serial/auto-increment
+	// columns, and compiles the expression for the target dialect otherwise.
+	DefaultExpr sql.Expression
 	PrimaryKey  bool
 	Comment     string
 }
@@ -118,10 +123,12 @@ type Index struct {
 }
 
 // Check is a CHECK constraint with its bare boolean expression (no CHECK
-// keyword or outer parentheses).
+// keyword or outer parentheses). The DDL generator compiles Expression for the
+// target dialect; the inspector supplies it as a sql.Raw of the introspected
+// clause.
 type Check struct {
 	Name       string
-	Expression string
+	Expression sql.Expression
 }
 
 // ForeignKey describes a foreign-key constraint: the local Columns reference

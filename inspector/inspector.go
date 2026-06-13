@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/aita/sqlkit/meta"
+	sqlast "github.com/aita/sqlkit/sql"
 )
 
 // Querier is the subset of *sql.DB used by the inspector.
@@ -50,20 +51,20 @@ var decimalTypes = map[string]bool{
 // columnDefault derives a column's HasDefault flag and default expression from
 // its raw default and whether it is a sequence/identity ("serial") column.
 // Serial defaults — identity, auto_increment, and PostgreSQL nextval()
-// sequence defaults — leave the expression empty so the DDL generator can
-// render them as serial/AUTO_INCREMENT; other defaults keep their expression
-// so it is preserved across a round-trip.
-func columnDefault(def sql.NullString, serial bool) (bool, string) {
+// sequence defaults — leave the expression nil so the DDL generator can render
+// them as serial/AUTO_INCREMENT; other defaults keep their raw clause (as a
+// sql.Raw) so it is preserved across a round-trip.
+func columnDefault(def sql.NullString, serial bool) (bool, sqlast.Expression) {
 	if serial {
-		return true, ""
+		return true, nil
 	}
 	if !def.Valid {
-		return false, ""
+		return false, nil
 	}
 	if strings.HasPrefix(def.String, "nextval(") {
-		return true, ""
+		return true, nil
 	}
-	return true, def.String
+	return true, sqlast.Raw(def.String)
 }
 
 // columnType builds the column's portable type from the single dialect the
@@ -161,7 +162,7 @@ func attachCheck(tables []meta.Table, tableName, constraint, clause string) {
 		}
 		tables[i].Checks = append(tables[i].Checks, meta.Check{
 			Name:       constraint,
-			Expression: normalizeCheckClause(clause),
+			Expression: sqlast.Raw(normalizeCheckClause(clause)),
 		})
 		return
 	}

@@ -15,9 +15,10 @@ import (
 // read by the inspector both feed it through the same model.
 //
 // Default expressions render only when the model carries them (Column.DefaultExpr,
-// declared as sqldef.Default("now()")); an integer primary key with a default
-// but no expression renders as a serial (PostgreSQL) or AUTO_INCREMENT (MySQL)
-// column. It returns an error if a column has no type on the dialect.
+// declared as sqldef.Default(sql.Raw("now()"))), compiled for the dialect; an
+// integer primary key with a default but no expression renders as a serial
+// (PostgreSQL) or AUTO_INCREMENT (MySQL) column. It returns an error if a column
+// has no type on the dialect or a default/check expression cannot be compiled.
 func (md Metadata) CreateSQL(d sql.Dialect) (string, error) {
 	var stmts []string
 	for _, table := range md.Tables {
@@ -78,7 +79,11 @@ func (t Table) CreateSQL(d sql.Dialect) (string, error) {
 		if !ok {
 			return "", fmt.Errorf("meta: table %q column %q has no type on dialect %s", t.Name, column.Name, d.Name())
 		}
-		defs = append(defs, columnDef(column, eng, d))
+		def, err := columnDef(column, eng, d)
+		if err != nil {
+			return "", fmt.Errorf("meta: table %q column %q: %w", t.Name, column.Name, err)
+		}
+		defs = append(defs, def)
 		if column.PrimaryKey {
 			pk = append(pk, column.Name)
 		}
@@ -87,7 +92,11 @@ func (t Table) CreateSQL(d sql.Dialect) (string, error) {
 		defs = append(defs, "PRIMARY KEY ("+quoteAll(d, pk)+")")
 	}
 	for _, check := range t.Checks {
-		defs = append(defs, "CONSTRAINT "+d.QuoteName(check.Name)+" CHECK ("+check.Expression+")")
+		expr, err := sql.CompileStatic(d, check.Expression)
+		if err != nil {
+			return "", fmt.Errorf("meta: table %q check %q: %w", t.Name, check.Name, err)
+		}
+		defs = append(defs, "CONSTRAINT "+d.QuoteName(check.Name)+" CHECK ("+expr+")")
 	}
 
 	var sb strings.Builder
@@ -161,20 +170,24 @@ func (t Table) commentStatementsSQL(d sql.Dialect) string {
 }
 
 // columnDef renders a single column definition for the resolved engine type.
-func columnDef(column Column, eng Engine, d sql.Dialect) string {
-	if column.PrimaryKey && column.HasDefault && column.DefaultExpr == "" {
+func columnDef(column Column, eng Engine, d sql.Dialect) (string, error) {
+	if column.PrimaryKey && column.HasDefault && column.DefaultExpr == nil {
 		if clause, ok := d.AutoIncrementColumn(eng.Name, eng.Length, eng.Precision, eng.Scale); ok {
-			return d.QuoteName(column.Name) + " " + clause + d.InlineColumnComment(column.Comment)
+			return d.QuoteName(column.Name) + " " + clause + d.InlineColumnComment(column.Comment), nil
 		}
 	}
 	def := d.QuoteName(column.Name) + " " + d.ColumnType(eng.Name, eng.Length, eng.Precision, eng.Scale)
 	if !column.Nullable {
 		def += " NOT NULL"
 	}
-	if column.DefaultExpr != "" {
-		def += " DEFAULT " + column.DefaultExpr
+	if column.DefaultExpr != nil {
+		expr, err := sql.CompileStatic(d, column.DefaultExpr)
+		if err != nil {
+			return "", err
+		}
+		def += " DEFAULT " + expr
 	}
-	return def + d.InlineColumnComment(column.Comment)
+	return def + d.InlineColumnComment(column.Comment), nil
 }
 
 // qualify renders a schema-qualified identifier, quoting each part; an empty

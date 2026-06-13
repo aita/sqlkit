@@ -3,7 +3,10 @@
 // the blogdb bindings and schema.sql from it via the sqlkitgen generate command.
 package schema
 
-import "github.com/aita/sqlkit/sqldef"
+import (
+	"github.com/aita/sqlkit/sql"
+	"github.com/aita/sqlkit/sqldef"
+)
 
 // Catalog holds the blog catalog.
 var Catalog = sqldef.NewCatalog()
@@ -17,7 +20,7 @@ var Users = Public.Table("users",
 	sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
 	sqldef.Column("email", sqldef.VarChar(255), sqldef.Unique(), sqldef.Comment("Unique login address")),
 	sqldef.Column("name", sqldef.Text, sqldef.Nullable()),
-	sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default("now()")),
+	sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default(sql.Raw("now()"))),
 )
 
 // Posts reference the user that wrote them.
@@ -26,7 +29,7 @@ var Posts = Public.Table("posts",
 	sqldef.Column("user_id", sqldef.BigInt, sqldef.References(Users, "id")),
 	sqldef.Column("title", sqldef.Text),
 	sqldef.Column("body", sqldef.Text, sqldef.Nullable()),
-	sqldef.Column("published", sqldef.Bool, sqldef.Default("false")),
+	sqldef.Column("published", sqldef.Bool, sqldef.Default(sql.Raw("false"))),
 	sqldef.Index("user_id"),
-	sqldef.Check("title <> ''"),
+	sqldef.Check(sql.Raw("title <> ''")),
 )
