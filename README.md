@@ -39,7 +39,7 @@ err := db.Select().From(appdb.Users).
 | `inspector` | PostgreSQL/MySQL introspection into the `meta` model |
 | `codegen` | `meta` → Go code generator (library: customizable types, layout, DTOs) |
 | `ddl` | `meta` → SQL DDL generator (CREATE TABLE / INDEX, constraints, comments) |
-| `cmd/sqlkitgen` | CLI wrapper around `inspector` + `codegen` + `ddl` |
+| `cmd/sqlkitgen` | CLI wrapper around `inspector` + `codegen` |
 
 ## Generating table bindings
 
@@ -85,7 +85,6 @@ var Users = ...
 | `-dto` | also generate a row struct (DTO) per table |
 | `-dto-separate-file` | write DTOs into their own file(s) |
 | `-dsl` | emit a `sqldef`-based design file from the schema instead of table bindings |
-| `-ddl` | emit CREATE TABLE DDL from the schema instead of table bindings |
 
 The generated binding is metadata, not an ORM: no `Get`, no relation
 navigation, no per-column option soup. Foreign keys, indexes, constraints, and
@@ -95,15 +94,16 @@ methods to the query bindings.
 
 ### Using codegen as a library
 
-The `codegen` package is the generator's public API. Build a `meta.Schema`
+The `codegen` package is the generator's public API. Build a `meta.Catalog`
 with the `sqldef` package, by hand, or with `inspector.Inspect`, customize the
 SQL→Go type mapping, and choose what to emit:
 
 ```go
-model, _ := inspector.Inspect(ctx, db, "postgres", "public")
+catalog, _ := inspector.Inspect(ctx, db, "postgres", "public")
 
-files, err := codegen.Generate(model, codegen.Options{
+files, err := codegen.Generate(catalog, codegen.Options{
     PackageName:  "appdb",
+    Dialect:      "postgres",
     FilePerTable: true,
     EmitDTO:      true,
     // Map numeric to a decimal type instead of string.
@@ -114,11 +114,13 @@ files, err := codegen.Generate(model, codegen.Options{
 // files[i].Name / files[i].Content
 ```
 
-Schema metadata — SQL type, length, precision/scale, comments, and the
-primary-key/nullable/default constraints — lives on `meta.Column`, the model
-the generators consume. The runtime binding stays minimal: each column is a
-plain `sqlkit.NewColumn[T](info, "name")` carrying only the table identity,
-column name, and static type `T`.
+Schema metadata — the portable `meta.Type` (per-dialect engine names plus
+length/precision/scale), comments, and the primary-key/nullable/default
+constraints — lives on `meta.Column`, the model the generators consume; the
+dialect is supplied to the generator (`Options.Dialect`), not stored on the
+model. The runtime binding stays minimal: each column is a plain
+`sqlkit.NewColumn[T](info, "name")` carrying only the table identity, column
+name, and static type `T`.
 
 ## Declaring the schema in Go (sqldef package)
 
@@ -129,8 +131,9 @@ truth, lives in version control, and feeds the same `meta` model the rest of
 the tooling consumes. By convention the design package itself is named
 `schema`; it imports `sqldef` for the building blocks.
 
-A `Catalog` is the reusable root. Tables are values: store them in variables,
-reference them from foreign keys, share them across files or packages.
+A `Catalog` is the reusable root, and `Catalog.Table(...)` returns a
+`meta.Table` value: store it in a variable, reference it from foreign keys,
+share it across files or packages.
 
 ```go
 // schema/schema.go
@@ -138,7 +141,7 @@ package schema
 
 import "github.com/aita/sqlkit/sqldef"
 
-var Catalog = sqldef.NewCatalog()
+var Catalog = sqldef.Catalog()
 
 var Public = Catalog.Schema("public")
 
@@ -169,16 +172,18 @@ pointer types, as with introspection). `Default()` marks database-side
 defaults; give it the expression (`Default("now()")`) and the DDL generator
 renders it, while a bare `Default()` on an integer primary key renders as
 serial/auto-increment. `PrimaryKey()` on several columns declares a composite
-key. Types are portable (`BigInt` is `int8` on PostgreSQL and `bigint` on
-MySQL, `Timestamp` is `timestamptz`/`datetime`, ...); `Type("citext")` passes
-an engine type name through verbatim.
+key. Types are portable: `BigInt`, `Timestamp`, ... are `meta.Type` values
+that carry both engines' names (`int8`/`bigint`, `timestamptz`/`datetime`), so
+one design targets PostgreSQL and MySQL and the generators resolve the engine
+name only when you pick a dialect. `Type("citext")` passes an engine type name
+through verbatim.
 
-Foreign keys reference the table values, so the compiler catches typos:
+Foreign keys reference the `meta.Table` values, so the compiler catches typos:
 `References(Users, "id")` for the single-column case,
-`ForeignKey([]string{...}, Orders, []string{...})` for composite keys, and the
-`Table.ForeignKey` method for self-referencing keys
-(`Employees.ForeignKey([]string{"manager_id"}, Employees, []string{"id"})`).
-References may cross schemas within the same catalog.
+`ForeignKey([]string{...}, Orders, []string{...})` for composite keys, and
+`Catalog.AddForeignKey(Employees, ...)` for self-referencing keys (which can't
+mention their own variable inside `Table(...)`). References may cross schemas
+within the same catalog.
 
 Indexes, constraints, and comments round out the design: `Unique()` puts a
 single-column unique index on a column, `Index`/`UniqueIndex` declare
@@ -202,10 +207,10 @@ ddl, err := schema.Catalog.DDL("postgres") // CREATE TABLE / INDEX / COMMENT ...
 ```
 
 `Generate` accepts the full `codegen.Options` surface (DTOs, file layout, type
-overrides); `Build("postgres")` returns the raw `meta.Schema` per declared
-schema for other tooling. Mistakes — duplicate names, dangling foreign keys,
-references into another catalog — are collected and reported by
-`Build`/`Generate`/`DDL`.
+overrides); `Build()` returns the raw `meta.Catalog` (dialect-agnostic) for
+other tooling. Mistakes — duplicate names, dangling foreign keys, references
+into another catalog — are collected and reported by `Build`; a type with no
+name on the chosen dialect is reported by `Generate`/`DDL`.
 
 ### Bootstrapping a design from an existing database
 
@@ -220,8 +225,9 @@ go run github.com/aita/sqlkit/cmd/sqlkitgen \
 
 The emitted file is a starting point meant to be edited (it carries no
 `DO NOT EDIT` marker). The same conversion is available as a library via
-`codegen.GenerateDesign(model, codegen.DesignOptions{...})`, and `-ddl` emits
-the introspected schema as CREATE TABLE statements instead.
+`codegen.GenerateDesign(catalog, codegen.DesignOptions{...})`. Once you have a
+design, `Catalog.DDL("postgres")` renders the schema as CREATE TABLE
+statements.
 
 ## Querying and scanning
 
