@@ -148,6 +148,18 @@ func TestCompositeAndSelfForeignKeys(t *testing.T) {
 	}
 }
 
+func TestDefaultSchema(t *testing.T) {
+	catalog := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
+	users := catalog.Table("users", sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey()))
+	if users.Schema.Name != "public" {
+		t.Errorf("default schema = %q, want public", users.Schema.Name)
+	}
+	got := buildCatalog(t, catalog)
+	if got.Tables[0].Schema.Name != "public" {
+		t.Errorf("built table schema = %q, want public", got.Tables[0].Schema.Name)
+	}
+}
+
 func TestCrossSchemaReference(t *testing.T) {
 	catalog := sqldef.NewCatalog()
 	audit := catalog.Schema("audit").Table("events",
@@ -300,7 +312,7 @@ func TestBuildErrors(t *testing.T) {
 	}{
 		{
 			name:    "no tables",
-			catalog: sqldef.NewCatalog,
+			catalog: func() *sqldef.Catalog { return sqldef.NewCatalog() },
 			want:    "declares no tables",
 		},
 		{

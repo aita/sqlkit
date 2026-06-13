@@ -57,15 +57,33 @@ import (
 // meta.Tables declared on it, plus any declaration errors, and Builds them
 // into a meta.Meta. Create one with NewCatalog.
 type Catalog struct {
-	schemaNames []string // distinct schema names in first-seen order
-	tables      []meta.Table
-	registered  map[string]bool // schema\x00name -> declared, for FK target checks
-	errs        []error
+	defaultSchema string   // schema Catalog.Table declares into ("" = unnamed)
+	schemaNames   []string // distinct schema names in first-seen order
+	tables        []meta.Table
+	registered    map[string]bool // schema\x00name -> declared, for FK target checks
+	errs          []error
+}
+
+// CatalogOption configures a Catalog at construction.
+type CatalogOption func(*Catalog)
+
+// DefaultSchema sets the schema that Catalog.Table (and any table declared
+// without an explicit Schema handle) lands in. Without it the default schema
+// is unnamed, which generates unqualified names.
+func DefaultSchema(name string) CatalogOption {
+	return func(c *Catalog) { c.defaultSchema = name }
 }
 
 // NewCatalog returns an empty catalog to declare tables on. It is the entry
-// point of the DSL: var Catalog = sqldef.NewCatalog().
-func NewCatalog() *Catalog { return &Catalog{registered: map[string]bool{}} }
+// point of the DSL: var Catalog = sqldef.NewCatalog(). Options configure
+// catalog-wide defaults such as DefaultSchema.
+func NewCatalog(opts ...CatalogOption) *Catalog {
+	c := &Catalog{registered: map[string]bool{}}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
+}
 
 func tableKey(schema, name string) string { return schema + "\x00" + name }
 
@@ -79,11 +97,11 @@ func (d *Catalog) Schema(name string) *Schema {
 	return &Schema{catalog: d, name: name}
 }
 
-// Table declares a table in the catalog's unnamed default schema and returns
-// the assembled meta.Table. Use Catalog.Schema("public").Table(...) to qualify
-// tables with a schema name.
+// Table declares a table in the catalog's default schema (unnamed unless set
+// with DefaultSchema) and returns the assembled meta.Table. Use
+// Catalog.Schema("other").Table(...) to place a table in a different schema.
 func (d *Catalog) Table(name string, elements ...TableElement) meta.Table {
-	return d.Schema("").Table(name, elements...)
+	return d.Schema(d.defaultSchema).Table(name, elements...)
 }
 
 // Schema is a handle for declaring tables in a named schema of a design.

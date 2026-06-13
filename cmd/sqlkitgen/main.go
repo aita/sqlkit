@@ -1,19 +1,16 @@
-// Command sqlkitgen generates typed sqlkit table bindings (and, optionally, row
-// DTOs) from a live PostgreSQL or MySQL schema.
+// Command sqlkitgen bootstraps a sqldef schema design from a live PostgreSQL
+// or MySQL database. It introspects the schema once and emits a Go design file
+// built on the sqldef package; from then on you maintain the schema as code
+// and generate the typed table bindings and DDL from the catalog
+// (sqldef.Catalog.Generate / Catalog.DDL — see examples/blog/gen).
 //
 // Usage:
 //
-//	sqlkitgen -dsn postgres://user:pass@localhost/app -schema public -package appdb -out appdb/tables.go
-//	sqlkitgen -driver mysql -dsn 'user:pass@tcp(localhost:3306)/app' -package appdb -out appdb -file-per-table -dto
-//	sqlkitgen -dsn postgres://user:pass@localhost/app -schema public -dsl -package schema -out schema/schema.go
-//
-// With -dsl the schema is emitted as a design file built on the sqldef
-// package instead of table bindings: introspect once, then maintain the
-// schema as Go code and generate the bindings and DDL from the catalog
-// (sqldef.Catalog.Generate / Catalog.DDL).
+//	sqlkitgen -dsn postgres://user:pass@localhost/app -schema public -package schema -out schema/schema.go
+//	sqlkitgen -driver mysql -dsn 'user:pass@tcp(localhost:3306)/app' -package schema -out schema/
 //
 // The codegen and inspector packages are the library entry points behind this
-// command; import them directly to customize type mapping and generation.
+// command; import them directly to customize the conversion.
 package main
 
 import (
@@ -44,23 +41,11 @@ func run() error {
 	driver := flag.String("driver", "pgx", "database/sql driver name (pgx or mysql)")
 	dialect := flag.String("dialect", "", "schema dialect override (postgres or mysql); inferred from -driver by default")
 	schema := flag.String("schema", "", "database schema/database to load (default: public for postgres, current DB for mysql)")
-	packageName := flag.String("package", "", "package name of the generated files (required)")
-	out := flag.String("out", "", "output file (single-file mode) or directory (multi-file mode); default stdout")
-	tables := flag.String("tables", "", "comma-separated list of tables to generate (default: all)")
-	filePerTable := flag.Bool("file-per-table", false, "write one file per table")
-	fileName := flag.String("file-name", "tables.go", "single-file output name (used when -out is a directory)")
-	dto := flag.Bool("dto", false, "also generate a row struct (DTO) per table")
-	dtoSeparate := flag.Bool("dto-separate-file", false, "write DTOs into their own file(s)")
-	dslDesign := flag.Bool("dsl", false, "generate a sqldef-based design file from the schema instead of table bindings")
+	packageName := flag.String("package", "", "package name of the generated design file (required)")
+	out := flag.String("out", "", "output file or directory; stdout if empty")
+	tables := flag.String("tables", "", "comma-separated list of tables to include (default: all)")
 	version := flag.Bool("version", false, "print sqlkitgen version")
 	flag.Parse()
-
-	fileNameSet := false
-	flag.Visit(func(f *flag.Flag) {
-		if f.Name == "file-name" {
-			fileNameSet = true
-		}
-	})
 
 	if *version {
 		fmt.Println("sqlkitgen dev")
@@ -93,37 +78,15 @@ func run() error {
 		return fmt.Errorf("schema %q contains no tables", *schema)
 	}
 
-	if *dslDesign {
-		designOpts := codegen.DesignOptions{
-			PackageName: *packageName,
-			Tables:      splitList(*tables),
-			Dialect:     resolvedDialect,
-		}
-		if fileNameSet {
-			designOpts.FileName = *fileName
-		}
-		file, err := codegen.GenerateDesign(inspected, designOpts)
-		if err != nil {
-			return err
-		}
-		return writeFiles([]codegen.File{file}, *out)
-	}
-
-	opts := codegen.Options{
-		PackageName:     *packageName,
-		Tables:          splitList(*tables),
-		Dialect:         resolvedDialect,
-		FilePerTable:    *filePerTable,
-		FileName:        *fileName,
-		EmitDTO:         *dto,
-		DTOSeparateFile: *dtoSeparate,
-	}
-	files, err := codegen.Generate(inspected, opts)
+	file, err := codegen.GenerateDesign(inspected, codegen.DesignOptions{
+		PackageName: *packageName,
+		Tables:      splitList(*tables),
+		Dialect:     resolvedDialect,
+	})
 	if err != nil {
 		return err
 	}
-
-	return writeFiles(files, *out)
+	return writeFiles([]codegen.File{file}, *out)
 }
 
 // writeFiles emits the generated files. With no -out, files go to stdout. A
