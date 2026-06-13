@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/aita/sqlkit/schema"
+	"github.com/aita/sqlkit/meta"
 )
 
 // DesignOptions configures GenerateDesign.
@@ -12,8 +12,10 @@ type DesignOptions struct {
 	// PackageName is the package of the generated design file. Required.
 	PackageName string
 
-	// VarName is the exported variable holding the design. Defaults to the
-	// schema name as a Go identifier, or "Design" when the schema is unnamed.
+	// VarName is the exported variable holding the schema handle (the result
+	// of Catalog.Schema). Defaults to the schema name as a Go identifier; it
+	// is unused when the schema is unnamed, in which case tables hang off the
+	// catalog directly.
 	VarName string
 
 	// FileName is the output file name (default "design.go").
@@ -23,33 +25,24 @@ type DesignOptions struct {
 	Tables []string
 
 	// Dialect overrides Schema.Dialect ("postgres" or "mysql"); it selects how
-	// engine type names map back to DSL types.
+	// engine type names map back to schema package types.
 	Dialect string
 }
 
-const dslImport = "github.com/aita/sqlkit/dsl"
+const schemaImport = "github.com/aita/sqlkit/schema"
 
-// GenerateDesign renders the schema as a dsl design source file — the inverse
-// of the dsl package: introspect a live database once, then maintain the
-// schema as Go code and generate bindings from it. The dsl package is
-// dot-imported, goa-style, so the design reads as bare Schema/Table/Column
-// calls. Unlike binding generation the result is a starting point meant to be
-// edited, so it carries no DO NOT EDIT marker.
-func GenerateDesign(model schema.Schema, opts DesignOptions) (File, error) {
+// GenerateDesign renders the schema as a design source file built on the
+// schema package — the inverse of that package: introspect a live database
+// once, then maintain the schema as Go code and generate bindings and DDL
+// from it. Unlike binding generation the result is a starting point meant to
+// be edited, so it carries no DO NOT EDIT marker.
+func GenerateDesign(model meta.Schema, opts DesignOptions) (File, error) {
 	if opts.PackageName == "" {
 		return File{}, fmt.Errorf("codegen: package name is required")
 	}
 	dialect := opts.Dialect
 	if dialect == "" {
 		dialect = model.Dialect
-	}
-	varName := opts.VarName
-	if varName == "" {
-		if model.Name != "" {
-			varName = goName(model.Name)
-		} else {
-			varName = "Design"
-		}
 	}
 	fileName := opts.FileName
 	if fileName == "" {
@@ -61,49 +54,93 @@ func GenerateDesign(model schema.Schema, opts DesignOptions) (File, error) {
 		return File{}, fmt.Errorf("codegen: no tables to generate")
 	}
 
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "// %s is the design of schema %q, bootstrapped from a live database;\n", varName, model.Name)
-	sb.WriteString("// edit it and regenerate the bindings from it.\n")
-	fmt.Fprintf(&sb, "var %s = Schema(%q, func() {\n", varName, model.Name)
-	for i, table := range tables {
-		if i > 0 {
-			sb.WriteString("\n")
+	schemaVar := ""
+	if model.Name != "" {
+		schemaVar = opts.VarName
+		if schemaVar == "" {
+			schemaVar = goName(model.Name)
 		}
-		renderDesignTable(&sb, table, dialect)
 	}
-	sb.WriteString("})\n")
+
+	// Assign a Go variable to each table so foreign keys can reference the
+	// table values; names colliding with the fixed variables get a suffix.
+	reserved := map[string]bool{"Catalog": true}
+	if schemaVar != "" {
+		reserved[schemaVar] = true
+	}
+	tableVars := map[string]string{}
+	for _, table := range tables {
+		name := goName(table.Name)
+		for reserved[name] {
+			name += "Table"
+		}
+		reserved[name] = true
+		tableVars[table.Name] = name
+	}
+
+	owner := "Catalog"
+	if schemaVar != "" {
+		owner = schemaVar
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "// Catalog holds the design of schema %q, bootstrapped from a live\n", model.Name)
+	sb.WriteString("// database; edit it and regenerate the bindings from it.\n")
+	sb.WriteString("var Catalog = schema.NewCatalog()\n")
+	if schemaVar != "" {
+		fmt.Fprintf(&sb, "\n// %s is schema %q of the catalog.\nvar %s = Catalog.Schema(%q)\n", schemaVar, model.Name, schemaVar, model.Name)
+	}
+	var trailers []string
+	for _, table := range tables {
+		sb.WriteString("\n")
+		renderDesignTable(&sb, &trailers, table, owner, tableVars, dialect)
+	}
+	if len(trailers) > 0 {
+		sb.WriteString("\n")
+		for _, line := range trailers {
+			sb.WriteString(line + "\n")
+		}
+	}
 
 	fb := newFileBuf()
-	fb.add(". " + dslImport)
+	fb.add(schemaImport)
 	fb.write(sb.String())
 	return fb.fileWithHeader(opts.PackageName, fileName, "// Bootstrapped by sqlkitgen; maintained by hand.\n\n")
 }
 
-func renderDesignTable(sb *strings.Builder, table schema.Table, dialect string) {
-	// Single-column foreign keys become a References option on their column;
-	// the rest are table-level ForeignKey calls. Foreign keys into another
-	// schema are not expressible in the DSL and are flagged instead.
-	refs := map[string]schema.ForeignKey{}
-	var rest, foreign []schema.ForeignKey
+func renderDesignTable(sb *strings.Builder, trailers *[]string, table meta.Table, owner string, tableVars map[string]string, dialect string) {
+	varName := tableVars[table.Name]
+
+	// Single-column foreign keys to another generated table become a
+	// References option on their column; composite ones become ForeignKey
+	// elements. Self-referencing keys cannot mention the table's own variable
+	// inside its declaration and trail behind as method calls; keys into
+	// tables outside the generated set are flagged.
+	refs := map[string]meta.ForeignKey{}
+	var elements, foreign []meta.ForeignKey
 	for _, fk := range table.ForeignKeys {
+		refVar, ok := tableVars[fk.RefTable]
 		switch {
-		case fk.RefSchema != "" && fk.RefSchema != table.Schema:
+		case !ok || (fk.RefSchema != "" && fk.RefSchema != table.Schema):
 			foreign = append(foreign, fk)
+		case fk.RefTable == table.Name:
+			*trailers = append(*trailers, fmt.Sprintf("var _ = %s.ForeignKey(%s, %s, %s)",
+				varName, goStringSlice(fk.Columns), refVar, goStringSlice(fk.RefColumns)))
 		case len(fk.Columns) == 1 && len(fk.RefColumns) == 1:
 			if _, dup := refs[fk.Columns[0]]; dup {
-				rest = append(rest, fk)
+				elements = append(elements, fk)
 			} else {
 				refs[fk.Columns[0]] = fk
 			}
 		default:
-			rest = append(rest, fk)
+			elements = append(elements, fk)
 		}
 	}
 
 	// Single-column unique indexes likewise become a Unique option on their
 	// column; the rest stay table-level Index/UniqueIndex declarations.
 	uniques := map[string]bool{}
-	var indexes []schema.Index
+	var indexes []meta.Index
 	for _, ix := range table.Indexes {
 		if ix.Unique && len(ix.Columns) == 1 && !uniques[ix.Columns[0]] {
 			uniques[ix.Columns[0]] = true
@@ -112,50 +149,54 @@ func renderDesignTable(sb *strings.Builder, table schema.Table, dialect string) 
 		}
 	}
 
-	fmt.Fprintf(sb, "\tTable(%q, func() {\n", table.Name)
+	fmt.Fprintf(sb, "var %s = %s.Table(%q,\n", varName, owner, table.Name)
 	if table.Comment != "" {
-		fmt.Fprintf(sb, "\t\tTableComment(%q)\n", table.Comment)
+		fmt.Fprintf(sb, "\tschema.TableComment(%q),\n", table.Comment)
 	}
 	for _, column := range table.Columns {
-		fmt.Fprintf(sb, "\t\tColumn(%q, %s", column.Name, dslTypeExpr(column, dialect))
+		fmt.Fprintf(sb, "\tschema.Column(%q, %s", column.Name, dslTypeExpr(column, dialect))
 		if column.PrimaryKey {
-			sb.WriteString(", PrimaryKey()")
+			sb.WriteString(", schema.PrimaryKey()")
 		}
 		if column.HasDefault {
-			sb.WriteString(", Default()")
+			if column.DefaultExpr != "" {
+				fmt.Fprintf(sb, ", schema.Default(%q)", column.DefaultExpr)
+			} else {
+				sb.WriteString(", schema.Default()")
+			}
 		}
 		if column.Nullable {
-			sb.WriteString(", Nullable()")
+			sb.WriteString(", schema.Nullable()")
 		}
 		if uniques[column.Name] {
-			sb.WriteString(", Unique()")
+			sb.WriteString(", schema.Unique()")
 		}
 		if fk, ok := refs[column.Name]; ok {
-			fmt.Fprintf(sb, ", References(%q, %q)", fk.RefTable, fk.RefColumns[0])
+			fmt.Fprintf(sb, ", schema.References(%s, %q)", tableVars[fk.RefTable], fk.RefColumns[0])
 		}
 		if column.Comment != "" {
-			fmt.Fprintf(sb, ", Comment(%q)", column.Comment)
+			fmt.Fprintf(sb, ", schema.Comment(%q)", column.Comment)
 		}
-		sb.WriteString(")\n")
+		sb.WriteString("),\n")
 	}
-	for _, fk := range rest {
-		fmt.Fprintf(sb, "\t\tForeignKey(%s, %q, %s)\n", goStringSlice(fk.Columns), fk.RefTable, goStringSlice(fk.RefColumns))
+	for _, fk := range elements {
+		fmt.Fprintf(sb, "\tschema.ForeignKey(%s, %s, %s),\n", goStringSlice(fk.Columns), tableVars[fk.RefTable], goStringSlice(fk.RefColumns))
 	}
 	for _, ix := range indexes {
-		call := "Index"
+		call := "schema.Index"
 		if ix.Unique {
-			call = "UniqueIndex"
+			call = "schema.UniqueIndex"
 		}
-		fmt.Fprintf(sb, "\t\t%s(%s)\n", call, quotedList(ix.Columns))
+		fmt.Fprintf(sb, "\t%s(%s),\n", call, quotedList(ix.Columns))
 	}
 	for _, check := range table.Checks {
-		fmt.Fprintf(sb, "\t\tCheck(%q)\n", check.Expression)
+		fmt.Fprintf(sb, "\tschema.Check(%q),\n", check.Expression)
 	}
 	for _, fk := range foreign {
-		fmt.Fprintf(sb, "\t\t// NOTE: foreign key %s references %s.%s in another schema and cannot be declared in the DSL.\n",
+		fmt.Fprintf(sb, "\t// NOTE: foreign key %s references %s.%s outside this design and must be declared by hand.\n",
 			fk.Name, fk.RefSchema, fk.RefTable)
 	}
-	sb.WriteString("\t})\n")
+	sb.WriteString(")\n")
 }
 
 func quotedList(items []string) string {
@@ -170,79 +211,79 @@ func goStringSlice(items []string) string {
 	return "[]string{" + quotedList(items) + "}"
 }
 
-// dslTypeExpr maps an engine type name back to the DSL expression that
-// produces it. Types without a portable DSL name fall back to Type, which
-// keeps the engine name verbatim.
-func dslTypeExpr(column schema.Column, dialect string) string {
+// dslTypeExpr maps an engine type name back to the schema package expression
+// that produces it. Types without a portable name fall back to schema.Type,
+// which keeps the engine name verbatim.
+func dslTypeExpr(column meta.Column, dialect string) string {
 	dataType := strings.ToLower(strings.TrimSpace(column.DataType))
 	if dialect == "mysql" {
 		switch dataType {
 		case "bool", "boolean":
-			return "Bool"
+			return "schema.Bool"
 		case "smallint":
-			return "SmallInt"
+			return "schema.SmallInt"
 		case "int", "integer":
-			return "Int"
+			return "schema.Int"
 		case "bigint":
-			return "BigInt"
+			return "schema.BigInt"
 		case "float":
-			return "Float"
+			return "schema.Float"
 		case "double":
-			return "Double"
+			return "schema.Double"
 		case "decimal":
-			return fmt.Sprintf("Decimal(%d, %d)", column.Precision, column.Scale)
+			return fmt.Sprintf("schema.Decimal(%d, %d)", column.Precision, column.Scale)
 		case "text":
-			return "Text"
+			return "schema.Text"
 		case "varchar":
-			return fmt.Sprintf("VarChar(%d)", column.Length)
+			return fmt.Sprintf("schema.VarChar(%d)", column.Length)
 		case "char":
-			return fmt.Sprintf("Char(%d)", column.Length)
+			return fmt.Sprintf("schema.Char(%d)", column.Length)
 		case "blob":
-			return "Bytes"
+			return "schema.Bytes"
 		case "json":
-			return "JSON"
+			return "schema.JSON"
 		case "date":
-			return "Date"
+			return "schema.Date"
 		case "time":
-			return "Time"
+			return "schema.Time"
 		case "datetime":
-			return "Timestamp"
+			return "schema.Timestamp"
 		}
-		return fmt.Sprintf("Type(%q)", dataType)
+		return fmt.Sprintf("schema.Type(%q)", dataType)
 	}
 	switch dataType {
 	case "bool":
-		return "Bool"
+		return "schema.Bool"
 	case "int2":
-		return "SmallInt"
+		return "schema.SmallInt"
 	case "int4":
-		return "Int"
+		return "schema.Int"
 	case "int8":
-		return "BigInt"
+		return "schema.BigInt"
 	case "float4":
-		return "Float"
+		return "schema.Float"
 	case "float8":
-		return "Double"
+		return "schema.Double"
 	case "numeric":
-		return fmt.Sprintf("Decimal(%d, %d)", column.Precision, column.Scale)
+		return fmt.Sprintf("schema.Decimal(%d, %d)", column.Precision, column.Scale)
 	case "text":
-		return "Text"
+		return "schema.Text"
 	case "varchar":
-		return fmt.Sprintf("VarChar(%d)", column.Length)
+		return fmt.Sprintf("schema.VarChar(%d)", column.Length)
 	case "bpchar":
-		return fmt.Sprintf("Char(%d)", column.Length)
+		return fmt.Sprintf("schema.Char(%d)", column.Length)
 	case "uuid":
-		return "UUID"
+		return "schema.UUID"
 	case "bytea":
-		return "Bytes"
+		return "schema.Bytes"
 	case "jsonb":
-		return "JSON"
+		return "schema.JSON"
 	case "date":
-		return "Date"
+		return "schema.Date"
 	case "time":
-		return "Time"
+		return "schema.Time"
 	case "timestamptz":
-		return "Timestamp"
+		return "schema.Timestamp"
 	}
-	return fmt.Sprintf("Type(%q)", dataType)
+	return fmt.Sprintf("schema.Type(%q)", dataType)
 }

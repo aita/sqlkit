@@ -1,0 +1,89 @@
+// Package meta is the database schema metadata model shared across sqlkit's
+// tooling: the inspector introspects a live database into it, the schema
+// package builds it from in-code designs, and the codegen and ddl generators
+// consume it. It is a pure data model with no database or generation
+// dependencies.
+package meta
+
+// Schema is a loaded database schema.
+type Schema struct {
+	Name string
+	// Dialect identifies the source database ("postgres" or "mysql"). It
+	// selects the default SQL→Go type table during code generation.
+	Dialect string
+	Tables  []Table
+}
+
+// Table is a database table.
+type Table struct {
+	Schema      string
+	Name        string
+	Comment     string
+	Columns     []Column
+	ForeignKeys []ForeignKey
+	Indexes     []Index
+	Checks      []Check
+}
+
+// Column is a database column.
+type Column struct {
+	Name       string
+	DataType   string // engine type name (PostgreSQL udt_name / MySQL data_type)
+	Nullable   bool
+	HasDefault bool
+	// DefaultExpr is the default's SQL expression when known (designs declare
+	// it with Default("now()")); HasDefault may be set without it, e.g. by the
+	// inspector. The DDL generator renders integer primary keys that have a
+	// default but no expression as serial/auto-increment columns.
+	DefaultExpr string
+	PrimaryKey  bool
+	// Length is the declared type length, e.g. the N of varchar(N) or char(N);
+	// 0 when not applicable.
+	Length int
+	// Precision and Scale describe a numeric/decimal type, e.g. (10, 2) of
+	// decimal(10, 2); 0 when not applicable.
+	Precision int
+	Scale     int
+	Comment   string
+}
+
+// Index is a secondary index over Columns (the primary key index is not
+// listed; it is implied by Column.PrimaryKey). Unique indexes cover both
+// explicit unique indexes and the indexes backing UNIQUE constraints.
+type Index struct {
+	Name    string
+	Columns []string
+	Unique  bool
+}
+
+// Check is a CHECK constraint with its bare boolean expression (no CHECK
+// keyword or outer parentheses).
+type Check struct {
+	Name       string
+	Expression string
+}
+
+// ForeignKey describes a foreign-key constraint: the local Columns reference
+// RefColumns of RefTable (in RefSchema).
+type ForeignKey struct {
+	Name       string
+	Columns    []string
+	RefSchema  string
+	RefTable   string
+	RefColumns []string
+}
+
+// GoType describes a generated Go type and the import it needs, if any.
+type GoType struct {
+	ImportPath string
+	Name       string
+	Pointer    bool
+}
+
+// String renders the type as it appears in Go source.
+func (t GoType) String() string {
+	if t.Pointer {
+		return "*" + t.Name
+	}
+	return t.Name
+}

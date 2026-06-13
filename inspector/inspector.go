@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/aita/sqlkit/schema"
+	"github.com/aita/sqlkit/meta"
 )
 
 // Querier is the subset of *sql.DB used by the inspector.
@@ -19,14 +19,14 @@ type Querier interface {
 
 // Inspect reads all base tables of a schema for the given dialect ("postgres"
 // or "mysql"; an empty dialect defaults to PostgreSQL).
-func Inspect(ctx context.Context, db Querier, dialect, schemaName string) (schema.Schema, error) {
+func Inspect(ctx context.Context, db Querier, dialect, schemaName string) (meta.Schema, error) {
 	switch dialect {
 	case "", "postgres", "postgresql", "pgx":
 		return inspectPostgres(ctx, db, schemaName)
 	case "mysql":
 		return inspectMySQL(ctx, db, schemaName)
 	default:
-		return schema.Schema{}, fmt.Errorf("inspector: unsupported dialect %q", dialect)
+		return meta.Schema{}, fmt.Errorf("inspector: unsupported dialect %q", dialect)
 	}
 }
 
@@ -39,7 +39,7 @@ var decimalTypes = map[string]bool{
 }
 
 // normalizeNumeric clears precision/scale on non-decimal columns.
-func normalizeNumeric(column *schema.Column) {
+func normalizeNumeric(column *meta.Column) {
 	if !decimalTypes[column.DataType] {
 		column.Precision = 0
 		column.Scale = 0
@@ -58,7 +58,7 @@ type fkRow struct {
 
 // attachForeignKeys groups foreign-key rows by (table, constraint) and attaches
 // them to the matching tables, preserving column order.
-func attachForeignKeys(model *schema.Schema, rows []fkRow) {
+func attachForeignKeys(model *meta.Schema, rows []fkRow) {
 	tableIndex := map[string]int{}
 	for i := range model.Tables {
 		tableIndex[model.Tables[i].Name] = i
@@ -75,7 +75,7 @@ func attachForeignKeys(model *schema.Schema, rows []fkRow) {
 		if !ok {
 			fi = len(model.Tables[ti].ForeignKeys)
 			fkIndex[key] = fi
-			model.Tables[ti].ForeignKeys = append(model.Tables[ti].ForeignKeys, schema.ForeignKey{
+			model.Tables[ti].ForeignKeys = append(model.Tables[ti].ForeignKeys, meta.ForeignKey{
 				Name:      row.constraint,
 				RefSchema: row.refSchema,
 				RefTable:  row.refTable,
@@ -97,7 +97,7 @@ type indexRow struct {
 
 // attachIndexes groups index rows by (table, index) and attaches them to the
 // matching tables, preserving column order.
-func attachIndexes(model *schema.Schema, rows []indexRow) {
+func attachIndexes(model *meta.Schema, rows []indexRow) {
 	tableIndex := map[string]int{}
 	for i := range model.Tables {
 		tableIndex[model.Tables[i].Name] = i
@@ -113,7 +113,7 @@ func attachIndexes(model *schema.Schema, rows []indexRow) {
 		if !ok {
 			ii = len(model.Tables[ti].Indexes)
 			ixIndex[key] = ii
-			model.Tables[ti].Indexes = append(model.Tables[ti].Indexes, schema.Index{
+			model.Tables[ti].Indexes = append(model.Tables[ti].Indexes, meta.Index{
 				Name:   row.index,
 				Unique: row.unique,
 			})
@@ -125,12 +125,12 @@ func attachIndexes(model *schema.Schema, rows []indexRow) {
 
 // attachCheck adds a check constraint to its table, normalizing the clause to
 // the bare expression (no CHECK keyword or outer parentheses).
-func attachCheck(model *schema.Schema, tableName, constraint, clause string) {
+func attachCheck(model *meta.Schema, tableName, constraint, clause string) {
 	for i := range model.Tables {
 		if model.Tables[i].Name != tableName {
 			continue
 		}
-		model.Tables[i].Checks = append(model.Tables[i].Checks, schema.Check{
+		model.Tables[i].Checks = append(model.Tables[i].Checks, meta.Check{
 			Name:       constraint,
 			Expression: normalizeCheckClause(clause),
 		})

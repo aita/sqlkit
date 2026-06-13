@@ -34,11 +34,12 @@ err := db.Select().From(appdb.Users).
 |---|---|
 | `sqlkit` | Typed query chains, `Database`, `Session`, result scanning, streaming `Records[T]` iteration (module root) |
 | `sql` | SQL AST, dialects, compiler, and all statement generation |
-| `schema` | Database schema model shared by the tooling (tables, columns, foreign keys) |
-| `inspector` | PostgreSQL/MySQL `information_schema` introspection into the `schema` model |
-| `codegen` | `schema` → Go code generator (library: customizable types, layout, DTOs) |
-| `dsl` | goa-style in-code schema DSL that produces the `schema` model |
-| `cmd/sqlkitgen` | CLI wrapper around `inspector` + `codegen` |
+| `schema` | In-code schema declarations: a reusable `Catalog` of tables that feeds the generators |
+| `meta` | Database schema metadata model shared by the tooling (tables, columns, indexes, constraints, comments) |
+| `inspector` | PostgreSQL/MySQL introspection into the `meta` model |
+| `codegen` | `meta` → Go code generator (library: customizable types, layout, DTOs) |
+| `ddl` | `meta` → SQL DDL generator (CREATE TABLE / INDEX, constraints, comments) |
+| `cmd/sqlkitgen` | CLI wrapper around `inspector` + `codegen` + `ddl` |
 
 ## Generating table bindings
 
@@ -83,19 +84,20 @@ var Users = ...
 | `-file-name` | single-file output name when `-out` is a directory (default `tables.go`) |
 | `-dto` | also generate a row struct (DTO) per table |
 | `-dto-separate-file` | write DTOs into their own file(s) |
-| `-dsl` | emit a `dsl` design file from the schema instead of table bindings |
+| `-dsl` | emit a `schema`-package design file from the schema instead of table bindings |
+| `-ddl` | emit CREATE TABLE DDL from the schema instead of table bindings |
 
 The generated binding is metadata, not an ORM: no `Get`, no relation
-navigation, no per-column option soup. Foreign keys are read into the schema
-model (`schema.Table.ForeignKeys`) for tools that need them — the migration /
-DDL generator that consumes the same model — but they do not add methods to the
-query bindings.
+navigation, no per-column option soup. Foreign keys, indexes, constraints, and
+comments are read into the metadata model (`meta.Table`) for the tools that
+need them — the DDL generator consumes the same model — but they do not add
+methods to the query bindings.
 
 ### Using codegen as a library
 
-The `codegen` package is the generator's public API. Build a `schema.Schema`
-by hand or with `inspector.Inspect`, customize the SQL→Go type mapping, and
-choose what to emit:
+The `codegen` package is the generator's public API. Build a `meta.Schema`
+with the `schema` package, by hand, or with `inspector.Inspect`, customize the
+SQL→Go type mapping, and choose what to emit:
 
 ```go
 model, _ := inspector.Inspect(ctx, db, "postgres", "public")
@@ -112,83 +114,102 @@ files, err := codegen.Generate(model, codegen.Options{
 // files[i].Name / files[i].Content
 ```
 
-Schema metadata — SQL type, length, precision/scale, and the
-primary-key/nullable/default constraints — lives on `schema.Column`, the model
-the generator (and a future DDL/migration generator) consumes. The runtime
-binding stays minimal: each column is a plain
-`sqlkit.NewColumn[T](info, "name")` carrying only the table identity, column
-name, and static type `T`.
+Schema metadata — SQL type, length, precision/scale, comments, and the
+primary-key/nullable/default constraints — lives on `meta.Column`, the model
+the generators consume. The runtime binding stays minimal: each column is a
+plain `sqlkit.NewColumn[T](info, "name")` carrying only the table identity,
+column name, and static type `T`.
 
-## Declaring the schema in Go (DSL)
+## Declaring the schema in Go (schema package)
 
-The `dsl` package is a goa-style alternative to introspection: declare the
-schema as nested function calls in an ordinary Go package, and generate the
-same table bindings from it — no live database required. The design is the
-source of truth, lives in version control, and feeds the same `schema` model
-the rest of the tooling consumes. Designs dot-import the dsl, as goa does, so
-the schema reads as bare calls:
+The `schema` package is an alternative to introspection: declare the schema as
+plain Go values in an ordinary package, and generate the table bindings — and
+the DDL — from it, no live database required. The design is the source of
+truth, lives in version control, and feeds the same `meta` model the rest of
+the tooling consumes.
+
+A `Catalog` is the reusable root. Tables are values: store them in variables,
+reference them from foreign keys, share them across files or packages.
 
 ```go
 // design/design.go
 package design
 
-import . "github.com/aita/sqlkit/dsl"
+import "github.com/aita/sqlkit/schema"
 
-var Blog = Schema("public", func() {
-    Table("users", func() {
-        TableComment("Registered blog authors")
-        Column("id", BigInt, PrimaryKey(), Default())
-        Column("email", VarChar(255), Unique(), Comment("Unique login address"))
-        Column("name", Text, Nullable())
-        Column("created_at", Timestamp, Default())
-    })
-    Table("posts", func() {
-        Column("id", BigInt, PrimaryKey(), Default())
-        Column("user_id", BigInt, References("users", "id"))
-        Column("title", Text)
-        Column("body", Text, Nullable())
-        Column("published", Bool, Default())
-        Index("user_id")
-        Check("title <> ''")
-    })
-})
+var Catalog = schema.NewCatalog()
+
+var Public = Catalog.Schema("public")
+
+var Users = Public.Table("users",
+    schema.TableComment("Registered blog authors"),
+    schema.Column("id", schema.BigInt, schema.PrimaryKey(), schema.Default()),
+    schema.Column("email", schema.VarChar(255), schema.Unique(), schema.Comment("Unique login address")),
+    schema.Column("name", schema.Text, schema.Nullable()),
+    schema.Column("created_at", schema.Timestamp, schema.Default("now()")),
+)
+
+var Posts = Public.Table("posts",
+    schema.Column("id", schema.BigInt, schema.PrimaryKey(), schema.Default()),
+    schema.Column("user_id", schema.BigInt, schema.References(Users, "id")),
+    schema.Column("title", schema.Text),
+    schema.Column("body", schema.Text, schema.Nullable()),
+    schema.Column("published", schema.Bool, schema.Default("false")),
+    schema.Index("user_id"),
+    schema.Check("title <> ''"),
+)
 ```
+
+Single-schema designs can skip the schema handle — `Catalog.Table(...)`
+declares tables with unqualified names.
 
 Columns are NOT NULL unless marked `Nullable()` (nullable columns map to
 pointer types, as with introspection). `Default()` marks database-side
-defaults (serials, `DEFAULT now()`), `PrimaryKey()` on several columns
-declares a composite key, and composite foreign keys use the table-level
-`ForeignKey`. Types are portable (`BigInt` is `int8` on PostgreSQL and
-`bigint` on MySQL, `Timestamp` is `timestamptz`/`datetime`, ...);
-`Type("citext")` passes an engine type name through verbatim.
+defaults; give it the expression (`Default("now()")`) and the DDL generator
+renders it, while a bare `Default()` on an integer primary key renders as
+serial/auto-increment. `PrimaryKey()` on several columns declares a composite
+key. Types are portable (`BigInt` is `int8` on PostgreSQL and `bigint` on
+MySQL, `Timestamp` is `timestamptz`/`datetime`, ...); `Type("citext")` passes
+an engine type name through verbatim.
+
+Foreign keys reference the table values, so the compiler catches typos:
+`References(Users, "id")` for the single-column case,
+`ForeignKey([]string{...}, Orders, []string{...})` for composite keys, and the
+`Table.ForeignKey` method for self-referencing keys
+(`Employees.ForeignKey([]string{"manager_id"}, Employees, []string{"id"})`).
+References may cross schemas within the same catalog.
 
 Indexes, constraints, and comments round out the design: `Unique()` puts a
 single-column unique index on a column, `Index`/`UniqueIndex` declare
-(composite) indexes at the table level, and `Check` adds a CHECK constraint.
-`Comment` on a column and `TableComment` on a table carry through to the
-generated bindings and DTOs as Go doc comments — and the inspector reads the
-same metadata back from live PostgreSQL/MySQL schemas, so `-dsl` bootstraps
-preserve it.
+(composite) indexes, and `Check` adds a CHECK constraint. `Comment` on a
+column and `TableComment` on a table carry through to the generated bindings
+and DTOs as Go doc comments — and the inspector reads the same metadata back
+from live PostgreSQL/MySQL schemas, so `-dsl` bootstraps preserve it.
 
-A small generator program turns the design into code — see
-`examples/blog/gen`:
+Because declarations are values, they compose: a shared
+`[]schema.TableElement` of audit columns can be appended into any table.
+
+A small generator program turns the catalog into code and DDL — see
+`examples/blog/gen`, which regenerates both `blogdb` and `schema.sql`:
 
 ```go
-files, err := design.Blog.Generate(codegen.Options{PackageName: "blogdb"})
+files, err := design.Catalog.Generate(codegen.Options{PackageName: "blogdb"})
 if err != nil { ... }
-err = dsl.Write("blogdb", files)
+err = schema.Write("blogdb", files)
+
+ddl, err := design.Catalog.DDL("postgres") // CREATE TABLE / INDEX / COMMENT ...
 ```
 
 `Generate` accepts the full `codegen.Options` surface (DTOs, file layout, type
-overrides); `Build("postgres")` returns the raw `schema.Schema` for other
-tooling. Misplaced calls (`Column` outside `Table`) panic at package-init
-time; semantic mistakes (duplicate names, dangling foreign keys) are collected
-and reported by `Build`/`Generate`.
+overrides); `Build("postgres")` returns the raw `meta.Schema` per declared
+schema for other tooling. Mistakes — duplicate names, dangling foreign keys,
+references into another catalog — are collected and reported by
+`Build`/`Generate`/`DDL`.
 
 ### Bootstrapping a design from an existing database
 
 `sqlkitgen -dsl` runs the introspection in reverse: it reads a live schema and
-emits the `dsl` design file for it, so an existing database can be converted
+emits the catalog design file for it, so an existing database can be converted
 once and maintained as Go code from then on:
 
 ```sh
@@ -198,7 +219,8 @@ go run github.com/aita/sqlkit/cmd/sqlkitgen \
 
 The emitted file is a starting point meant to be edited (it carries no
 `DO NOT EDIT` marker). The same conversion is available as a library via
-`codegen.GenerateDesign(model, codegen.DesignOptions{...})`.
+`codegen.GenerateDesign(model, codegen.DesignOptions{...})`, and `-ddl` emits
+the introspected schema as CREATE TABLE statements instead.
 
 ## Querying and scanning
 

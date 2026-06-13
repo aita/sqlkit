@@ -1,28 +1,30 @@
--- Schema for the blog example. Apply with psql, then regenerate bindings:
+-- Generated from design/design.go by 'go run ./gen'. Apply with:
 --
 --   psql "$DATABASE_URL" -f schema.sql
---   go run github.com/aita/sqlkit/cmd/sqlkitgen \
---     -dsn "$DATABASE_URL" -schema public -package blogdb -out blogdb/tables.go
---
--- The same schema is also declared in code in design/design.go (see the dsl
--- package); `go run ./gen` regenerates blogdb from it without a database.
 
-CREATE TABLE users (
-    id         bigserial PRIMARY KEY,
-    email      varchar(255) NOT NULL UNIQUE,
-    name       text,
-    created_at timestamptz NOT NULL DEFAULT now()
+CREATE TABLE "public"."users" (
+    "id" bigserial,
+    "email" varchar(255) NOT NULL,
+    "name" text,
+    "created_at" timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY ("id")
 );
 
-COMMENT ON TABLE users IS 'Registered blog authors';
-COMMENT ON COLUMN users.email IS 'Unique login address';
-
-CREATE TABLE posts (
-    id        bigserial PRIMARY KEY,
-    user_id   bigint NOT NULL REFERENCES users (id),
-    title     text NOT NULL CHECK (title <> ''),
-    body      text,
-    published boolean NOT NULL DEFAULT false
+CREATE TABLE "public"."posts" (
+    "id" bigserial,
+    "user_id" bigint NOT NULL,
+    "title" text NOT NULL,
+    "body" text,
+    "published" boolean NOT NULL DEFAULT false,
+    PRIMARY KEY ("id"),
+    CONSTRAINT "ck_posts_1" CHECK (title <> '')
 );
 
-CREATE INDEX idx_posts_user_id ON posts (user_id);
+CREATE UNIQUE INDEX "uq_users_email" ON "public"."users" ("email");
+
+CREATE INDEX "idx_posts_user_id" ON "public"."posts" ("user_id");
+
+ALTER TABLE "public"."posts" ADD CONSTRAINT "fk_posts_user_id" FOREIGN KEY ("user_id") REFERENCES "public"."users" ("id");
+
+COMMENT ON TABLE "public"."users" IS 'Registered blog authors';
+COMMENT ON COLUMN "public"."users"."email" IS 'Unique login address';

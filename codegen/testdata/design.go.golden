@@ -3,24 +3,27 @@
 package design
 
 import (
-	. "github.com/aita/sqlkit/dsl"
+	"github.com/aita/sqlkit/schema"
 )
 
-// Public is the design of schema "public", bootstrapped from a live database;
-// edit it and regenerate the bindings from it.
-var Public = Schema("public", func() {
-	Table("users", func() {
-		Column("id", BigInt, PrimaryKey(), Default())
-		Column("email", VarChar(255))
-		Column("name", Text, Nullable())
-		Column("created_at", Timestamp, Default())
-	})
+// Catalog holds the design of schema "public", bootstrapped from a live
+// database; edit it and regenerate the bindings from it.
+var Catalog = schema.NewCatalog()
 
-	Table("posts", func() {
-		Column("id", BigInt, PrimaryKey(), Default())
-		Column("user_id", BigInt, References("users", "id"))
-		Column("title", Text)
-		Column("body", Text, Nullable())
-		Column("published", Bool, Default())
-	})
-})
+// Public is schema "public" of the catalog.
+var Public = Catalog.Schema("public")
+
+var Users = Public.Table("users",
+	schema.Column("id", schema.BigInt, schema.PrimaryKey(), schema.Default()),
+	schema.Column("email", schema.VarChar(255)),
+	schema.Column("name", schema.Text, schema.Nullable()),
+	schema.Column("created_at", schema.Timestamp, schema.Default()),
+)
+
+var Posts = Public.Table("posts",
+	schema.Column("id", schema.BigInt, schema.PrimaryKey(), schema.Default()),
+	schema.Column("user_id", schema.BigInt, schema.References(Users, "id")),
+	schema.Column("title", schema.Text),
+	schema.Column("body", schema.Text, schema.Nullable()),
+	schema.Column("published", schema.Bool, schema.Default()),
+)

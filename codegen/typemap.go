@@ -4,25 +4,25 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/aita/sqlkit/schema"
+	"github.com/aita/sqlkit/meta"
 )
 
-// GoType is an alias for schema.GoType, re-exported so library users that only
+// GoType is an alias for meta.GoType, re-exported so library users that only
 // import codegen can spell type overrides as codegen.GoType.
-type GoType = schema.GoType
+type GoType = meta.GoType
 
 // TypeMapper resolves the Go type a column's field uses. Implement it (or use
 // DefaultTypeMapper with Overrides) to customize the SQL→Go mapping when using
 // codegen as a library.
 type TypeMapper interface {
-	GoTypeFor(column schema.Column, dialect string) (schema.GoType, error)
+	GoTypeFor(column meta.Column, dialect string) (meta.GoType, error)
 }
 
 // TypeMapperFunc adapts a plain function to the TypeMapper interface.
-type TypeMapperFunc func(column schema.Column, dialect string) (schema.GoType, error)
+type TypeMapperFunc func(column meta.Column, dialect string) (meta.GoType, error)
 
 // GoTypeFor calls f.
-func (f TypeMapperFunc) GoTypeFor(column schema.Column, dialect string) (schema.GoType, error) {
+func (f TypeMapperFunc) GoTypeFor(column meta.Column, dialect string) (meta.GoType, error) {
 	return f(column, dialect)
 }
 
@@ -35,11 +35,11 @@ func (f TypeMapperFunc) GoTypeFor(column schema.Column, dialect string) (schema.
 //		"numeric": {ImportPath: "github.com/shopspring/decimal", Name: "decimal.Decimal"},
 //	}}
 type DefaultTypeMapper struct {
-	Overrides map[string]schema.GoType
+	Overrides map[string]meta.GoType
 }
 
 // GoTypeFor implements TypeMapper.
-func (m DefaultTypeMapper) GoTypeFor(column schema.Column, dialect string) (schema.GoType, error) {
+func (m DefaultTypeMapper) GoTypeFor(column meta.Column, dialect string) (meta.GoType, error) {
 	dataType := strings.ToLower(strings.TrimSpace(column.DataType))
 	if gt, ok := m.Overrides[dataType]; ok {
 		return applyNullable(gt, column), nil
@@ -52,12 +52,12 @@ func (m DefaultTypeMapper) GoTypeFor(column schema.Column, dialect string) (sche
 	}
 	gt, ok := table[dataType]
 	if !ok {
-		return schema.GoType{}, fmt.Errorf("codegen: unsupported %s type %q (column %q); add a type override via Options.TypeMapper", label, column.DataType, column.Name)
+		return meta.GoType{}, fmt.Errorf("codegen: unsupported %s type %q (column %q); add a type override via Options.TypeMapper", label, column.DataType, column.Name)
 	}
 	return applyNullable(gt, column), nil
 }
 
-func applyNullable(gt schema.GoType, column schema.Column) schema.GoType {
+func applyNullable(gt meta.GoType, column meta.Column) meta.GoType {
 	if column.Nullable && !strings.HasPrefix(gt.Name, "[]") {
 		gt.Pointer = true
 	}
@@ -65,7 +65,7 @@ func applyNullable(gt schema.GoType, column schema.Column) schema.GoType {
 }
 
 // pgTypes maps PostgreSQL udt_name values to Go types.
-var pgTypes = map[string]schema.GoType{
+var pgTypes = map[string]meta.GoType{
 	"bool":        {Name: "bool"},
 	"int2":        {Name: "int16"},
 	"int4":        {Name: "int32"},
@@ -96,7 +96,7 @@ var pgTypes = map[string]schema.GoType{
 }
 
 // mysqlTypes maps MySQL information_schema data_type values to Go types.
-var mysqlTypes = map[string]schema.GoType{
+var mysqlTypes = map[string]meta.GoType{
 	"bool":       {Name: "bool"},
 	"boolean":    {Name: "bool"},
 	"tinyint":    {Name: "int8"},

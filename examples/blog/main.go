@@ -1,5 +1,6 @@
 // Command blog demonstrates the typed query builder and DTO scanning against
-// the bindings generated from schema.sql.
+// the bindings generated from the catalog in design/ (which also generates
+// schema.sql; see gen/).
 //
 // Run against a real database:
 //

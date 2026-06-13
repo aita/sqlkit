@@ -7,22 +7,22 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aita/sqlkit/schema"
+	"github.com/aita/sqlkit/meta"
 )
 
 var update = flag.Bool("update", false, "rewrite golden files")
 
 // fixtureSchema mirrors examples/blog/schema.sql: users and posts with a
 // foreign key from posts.user_id to users.id.
-func fixtureSchema() schema.Schema {
-	return schema.Schema{
+func fixtureSchema() meta.Schema {
+	return meta.Schema{
 		Name:    "public",
 		Dialect: "postgres",
-		Tables: []schema.Table{
+		Tables: []meta.Table{
 			{
 				Schema: "public",
 				Name:   "users",
-				Columns: []schema.Column{
+				Columns: []meta.Column{
 					{Name: "id", DataType: "int8", PrimaryKey: true, HasDefault: true},
 					{Name: "email", DataType: "varchar", Length: 255},
 					{Name: "name", DataType: "text", Nullable: true},
@@ -32,14 +32,14 @@ func fixtureSchema() schema.Schema {
 			{
 				Schema: "public",
 				Name:   "posts",
-				Columns: []schema.Column{
+				Columns: []meta.Column{
 					{Name: "id", DataType: "int8", PrimaryKey: true, HasDefault: true},
 					{Name: "user_id", DataType: "int8"},
 					{Name: "title", DataType: "text"},
 					{Name: "body", DataType: "text", Nullable: true},
 					{Name: "published", DataType: "bool", HasDefault: true},
 				},
-				ForeignKeys: []schema.ForeignKey{
+				ForeignKeys: []meta.ForeignKey{
 					{Name: "posts_user_id_fkey", Columns: []string{"user_id"}, RefSchema: "public", RefTable: "users", RefColumns: []string{"id"}},
 				},
 			},
@@ -47,7 +47,7 @@ func fixtureSchema() schema.Schema {
 	}
 }
 
-func generateSingle(t *testing.T, model schema.Schema, opts Options) []byte {
+func generateSingle(t *testing.T, model meta.Schema, opts Options) []byte {
 	t.Helper()
 	files, err := Generate(model, opts)
 	if err != nil {
@@ -131,13 +131,13 @@ func TestBindingsAreNotAnORM(t *testing.T) {
 }
 
 func TestDTONameCollisionForSingularTable(t *testing.T) {
-	model := schema.Schema{
+	model := meta.Schema{
 		Name:    "public",
 		Dialect: "postgres",
-		Tables: []schema.Table{{
+		Tables: []meta.Table{{
 			Schema:  "public",
 			Name:    "account",
-			Columns: []schema.Column{{Name: "id", DataType: "int8", PrimaryKey: true}},
+			Columns: []meta.Column{{Name: "id", DataType: "int8", PrimaryKey: true}},
 		}},
 	}
 	body := string(generateSingle(t, model, Options{PackageName: "x", EmitDTO: true}))
@@ -160,13 +160,13 @@ func TestCustomTypeMapper(t *testing.T) {
 }
 
 func TestMySQLTypeMapping(t *testing.T) {
-	model := schema.Schema{
+	model := meta.Schema{
 		Name:    "app",
 		Dialect: "mysql",
-		Tables: []schema.Table{{
+		Tables: []meta.Table{{
 			Schema: "app",
 			Name:   "items",
-			Columns: []schema.Column{
+			Columns: []meta.Column{
 				{Name: "id", DataType: "bigint", PrimaryKey: true, HasDefault: true},
 				{Name: "qty", DataType: "int"},
 				{Name: "label", DataType: "varchar"},
@@ -225,15 +225,15 @@ func TestNaming(t *testing.T) {
 }
 
 func TestGenerateComments(t *testing.T) {
-	model := schema.Schema{
+	model := meta.Schema{
 		Name:    "public",
 		Dialect: "postgres",
-		Tables: []schema.Table{
+		Tables: []meta.Table{
 			{
 				Schema:  "public",
 				Name:    "users",
 				Comment: "Registered accounts",
-				Columns: []schema.Column{
+				Columns: []meta.Column{
 					{Name: "id", DataType: "int8", PrimaryKey: true},
 					{Name: "email", DataType: "varchar", Length: 255, Comment: "Unique login address"},
 				},
@@ -254,10 +254,10 @@ func TestGenerateComments(t *testing.T) {
 }
 
 func TestGenerateUnknownTypeFails(t *testing.T) {
-	model := schema.Schema{Tables: []schema.Table{{
+	model := meta.Schema{Tables: []meta.Table{{
 		Schema:  "public",
 		Name:    "things",
-		Columns: []schema.Column{{Name: "weird", DataType: "hstore"}},
+		Columns: []meta.Column{{Name: "weird", DataType: "hstore"}},
 	}}}
 	if _, err := Generate(model, Options{PackageName: "x"}); err == nil {
 		t.Fatal("Generate() with unsupported type succeeded, want error")

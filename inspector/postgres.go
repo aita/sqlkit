@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/aita/sqlkit/schema"
+	"github.com/aita/sqlkit/meta"
 )
 
 const pgColumnsQuery = `
@@ -88,46 +88,46 @@ LEFT JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = d.objsubid AND d.o
 WHERE n.nspname = $1 AND c.relkind = 'r' AND d.classoid = 'pg_class'::regclass`
 
 // inspectPostgres reads the schema from PostgreSQL's information_schema.
-func inspectPostgres(ctx context.Context, db Querier, schemaName string) (schema.Schema, error) {
+func inspectPostgres(ctx context.Context, db Querier, schemaName string) (meta.Schema, error) {
 	if schemaName == "" {
 		schemaName = "public"
 	}
-	model := schema.Schema{Name: schemaName, Dialect: "postgres"}
+	model := meta.Schema{Name: schemaName, Dialect: "postgres"}
 
 	rows, err := db.QueryContext(ctx, pgColumnsQuery, schemaName)
 	if err != nil {
-		return schema.Schema{}, fmt.Errorf("inspector: read columns: %w", err)
+		return meta.Schema{}, fmt.Errorf("inspector: read columns: %w", err)
 	}
 	defer rows.Close()
 	tableIndex := map[string]int{}
 	for rows.Next() {
 		var tableName string
-		var column schema.Column
+		var column meta.Column
 		if err := rows.Scan(&tableName, &column.Name, &column.DataType, &column.Nullable, &column.HasDefault, &column.Length, &column.Precision, &column.Scale); err != nil {
-			return schema.Schema{}, fmt.Errorf("inspector: scan column: %w", err)
+			return meta.Schema{}, fmt.Errorf("inspector: scan column: %w", err)
 		}
 		normalizeNumeric(&column)
 		index, ok := tableIndex[tableName]
 		if !ok {
 			index = len(model.Tables)
 			tableIndex[tableName] = index
-			model.Tables = append(model.Tables, schema.Table{Schema: schemaName, Name: tableName})
+			model.Tables = append(model.Tables, meta.Table{Schema: schemaName, Name: tableName})
 		}
 		model.Tables[index].Columns = append(model.Tables[index].Columns, column)
 	}
 	if err := rows.Err(); err != nil {
-		return schema.Schema{}, fmt.Errorf("inspector: read columns: %w", err)
+		return meta.Schema{}, fmt.Errorf("inspector: read columns: %w", err)
 	}
 
 	pkRows, err := db.QueryContext(ctx, pgPrimaryKeysQuery, schemaName)
 	if err != nil {
-		return schema.Schema{}, fmt.Errorf("inspector: read primary keys: %w", err)
+		return meta.Schema{}, fmt.Errorf("inspector: read primary keys: %w", err)
 	}
 	defer pkRows.Close()
 	for pkRows.Next() {
 		var tableName, columnName string
 		if err := pkRows.Scan(&tableName, &columnName); err != nil {
-			return schema.Schema{}, fmt.Errorf("inspector: scan primary key: %w", err)
+			return meta.Schema{}, fmt.Errorf("inspector: scan primary key: %w", err)
 		}
 		index, ok := tableIndex[tableName]
 		if !ok {
@@ -141,70 +141,70 @@ func inspectPostgres(ctx context.Context, db Querier, schemaName string) (schema
 		}
 	}
 	if err := pkRows.Err(); err != nil {
-		return schema.Schema{}, fmt.Errorf("inspector: read primary keys: %w", err)
+		return meta.Schema{}, fmt.Errorf("inspector: read primary keys: %w", err)
 	}
 
 	fkRows, err := db.QueryContext(ctx, pgForeignKeysQuery, schemaName)
 	if err != nil {
-		return schema.Schema{}, fmt.Errorf("inspector: read foreign keys: %w", err)
+		return meta.Schema{}, fmt.Errorf("inspector: read foreign keys: %w", err)
 	}
 	defer fkRows.Close()
 	var fks []fkRow
 	for fkRows.Next() {
 		var row fkRow
 		if err := fkRows.Scan(&row.constraint, &row.table, &row.column, &row.refSchema, &row.refTable, &row.refColumn); err != nil {
-			return schema.Schema{}, fmt.Errorf("inspector: scan foreign key: %w", err)
+			return meta.Schema{}, fmt.Errorf("inspector: scan foreign key: %w", err)
 		}
 		fks = append(fks, row)
 	}
 	if err := fkRows.Err(); err != nil {
-		return schema.Schema{}, fmt.Errorf("inspector: read foreign keys: %w", err)
+		return meta.Schema{}, fmt.Errorf("inspector: read foreign keys: %w", err)
 	}
 	attachForeignKeys(&model, fks)
 
 	ixRows, err := db.QueryContext(ctx, pgIndexesQuery, schemaName)
 	if err != nil {
-		return schema.Schema{}, fmt.Errorf("inspector: read indexes: %w", err)
+		return meta.Schema{}, fmt.Errorf("inspector: read indexes: %w", err)
 	}
 	defer ixRows.Close()
 	var indexes []indexRow
 	for ixRows.Next() {
 		var row indexRow
 		if err := ixRows.Scan(&row.table, &row.index, &row.unique, &row.column); err != nil {
-			return schema.Schema{}, fmt.Errorf("inspector: scan index: %w", err)
+			return meta.Schema{}, fmt.Errorf("inspector: scan index: %w", err)
 		}
 		indexes = append(indexes, row)
 	}
 	if err := ixRows.Err(); err != nil {
-		return schema.Schema{}, fmt.Errorf("inspector: read indexes: %w", err)
+		return meta.Schema{}, fmt.Errorf("inspector: read indexes: %w", err)
 	}
 	attachIndexes(&model, indexes)
 
 	ckRows, err := db.QueryContext(ctx, pgChecksQuery, schemaName)
 	if err != nil {
-		return schema.Schema{}, fmt.Errorf("inspector: read check constraints: %w", err)
+		return meta.Schema{}, fmt.Errorf("inspector: read check constraints: %w", err)
 	}
 	defer ckRows.Close()
 	for ckRows.Next() {
 		var tableName, constraint, clause string
 		if err := ckRows.Scan(&tableName, &constraint, &clause); err != nil {
-			return schema.Schema{}, fmt.Errorf("inspector: scan check constraint: %w", err)
+			return meta.Schema{}, fmt.Errorf("inspector: scan check constraint: %w", err)
 		}
 		attachCheck(&model, tableName, constraint, clause)
 	}
 	if err := ckRows.Err(); err != nil {
-		return schema.Schema{}, fmt.Errorf("inspector: read check constraints: %w", err)
+		return meta.Schema{}, fmt.Errorf("inspector: read check constraints: %w", err)
 	}
 
 	cRows, err := db.QueryContext(ctx, pgCommentsQuery, schemaName)
 	if err != nil {
-		return schema.Schema{}, fmt.Errorf("inspector: read comments: %w", err)
+		return meta.Schema{}, fmt.Errorf("inspector: read comments: %w", err)
 	}
 	defer cRows.Close()
 	for cRows.Next() {
 		var tableName, columnName, comment string
 		if err := cRows.Scan(&tableName, &columnName, &comment); err != nil {
-			return schema.Schema{}, fmt.Errorf("inspector: scan comment: %w", err)
+			return meta.Schema{}, fmt.Errorf("inspector: scan comment: %w", err)
 		}
 		index, ok := tableIndex[tableName]
 		if !ok {
@@ -222,7 +222,7 @@ func inspectPostgres(ctx context.Context, db Querier, schemaName string) (schema
 		}
 	}
 	if err := cRows.Err(); err != nil {
-		return schema.Schema{}, fmt.Errorf("inspector: read comments: %w", err)
+		return meta.Schema{}, fmt.Errorf("inspector: read comments: %w", err)
 	}
 
 	return model, nil

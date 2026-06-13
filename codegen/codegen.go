@@ -8,7 +8,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/aita/sqlkit/schema"
+	"github.com/aita/sqlkit/meta"
 )
 
 // File is a single generated source file: a suggested name and its formatted
@@ -53,7 +53,7 @@ type Options struct {
 	// DTOName derives the DTO type name from a table. Defaults to a singular,
 	// collision-avoiding name (e.g. table "users" -> "User"). When the derived
 	// name collides with a binding identifier, "Row" is appended.
-	DTOName func(table schema.Table) string
+	DTOName func(table meta.Table) string
 }
 
 const sqlkitImport = "github.com/aita/sqlkit"
@@ -83,7 +83,7 @@ type tableModel struct {
 
 // Generate renders the schema into one or more Go source files according to
 // opts and returns their formatted contents.
-func Generate(model schema.Schema, opts Options) ([]File, error) {
+func Generate(model meta.Schema, opts Options) ([]File, error) {
 	if opts.PackageName == "" {
 		return nil, fmt.Errorf("codegen: package name is required")
 	}
@@ -134,7 +134,7 @@ func Generate(model schema.Schema, opts Options) ([]File, error) {
 }
 
 // buildTable builds the binding model for a single table.
-func buildTable(table schema.Table, dialect string, mapper TypeMapper) (*tableModel, error) {
+func buildTable(table meta.Table, dialect string, mapper TypeMapper) (*tableModel, error) {
 	varName := goName(table.Name)
 	tm := &tableModel{
 		TypeName:  varName + "Table",
@@ -176,11 +176,11 @@ func docLines(comment string) []string {
 	return lines
 }
 
-func defaultDTOName(table schema.Table) string {
+func defaultDTOName(table meta.Table) string {
 	return goName(singular(table.Name))
 }
 
-func filterTables(tables []schema.Table, only []string) []schema.Table {
+func filterTables(tables []meta.Table, only []string) []meta.Table {
 	if len(only) == 0 {
 		return tables
 	}
@@ -188,7 +188,7 @@ func filterTables(tables []schema.Table, only []string) []schema.Table {
 	for _, name := range only {
 		want[name] = true
 	}
-	var out []schema.Table
+	var out []meta.Table
 	for _, table := range tables {
 		if want[table.Name] {
 			out = append(out, table)
