@@ -446,6 +446,45 @@ func TestTypedExists(t *testing.T) {
 		[]any{"a@example.com"})
 }
 
+func TestTypedScalarSubqueryProjection(t *testing.T) {
+	// Correlated scalar subquery as a projection: count each user's posts.
+	count := sqlkit.Select(sql.CountAll()).From(Posts).
+		Where(Posts.UserID.EqExpr(Users.ID))
+
+	query := sqlkit.Select(Users.ID, sql.As(sqlkit.SubExpr[int64](count), "post_count")).From(Users)
+
+	assertToSQL(t, query,
+		`SELECT "public"."users"."id", (SELECT COUNT(*) FROM "public"."posts" WHERE ("public"."posts"."user_id" = "public"."users"."id")) AS "post_count" FROM "public"."users"`,
+		nil)
+}
+
+func TestTypedScalarSubqueryComparison(t *testing.T) {
+	// Correlated scalar subquery in a comparison, sharing placeholder numbering.
+	maxID := sqlkit.Select(sql.Max(Posts.ID)).From(Posts).
+		Where(Posts.UserID.EqExpr(Users.ID)).
+		Where(Posts.Title.Ne("draft"))
+
+	query := sqlkit.Select(Users.ID).From(Users).
+		Where(Users.Email.Eq("a@example.com")).
+		Where(Users.ID.GtExpr(sqlkit.SubExpr[int64](maxID)))
+
+	assertToSQL(t, query,
+		`SELECT "public"."users"."id" FROM "public"."users" WHERE (("public"."users"."email" = $1) AND ("public"."users"."id" > (SELECT MAX("public"."posts"."id") FROM "public"."posts" WHERE (("public"."posts"."user_id" = "public"."users"."id") AND ("public"."posts"."title" <> $2)))))`,
+		[]any{"a@example.com", "draft"})
+}
+
+func TestTypedQuantifiedComparison(t *testing.T) {
+	sub := sqlkit.Select(Posts.UserID).From(Posts).Where(Posts.Title.Eq("hot"))
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).Where(Users.ID.GtAll(sub)),
+		`SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" > ALL (SELECT "public"."posts"."user_id" FROM "public"."posts" WHERE ("public"."posts"."title" = $1)))`,
+		[]any{"hot"})
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).Where(Users.ID.LeAny(sub)),
+		`SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" <= ANY (SELECT "public"."posts"."user_id" FROM "public"."posts" WHERE ("public"."posts"."title" = $1)))`,
+		[]any{"hot"})
+}
+
 func TestTypedLikeVariants(t *testing.T) {
 	assertToSQL(t,
 		sqlkit.Select(Users.ID).From(Users).Where(sqlkit.NotLike(Users.Email, "%@spam.com")),

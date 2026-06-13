@@ -563,6 +563,38 @@ err = db.Select().From(appdb.Users).
     All(ctx).Scan(&users)
 ```
 
+### Correlated subqueries
+
+`Exists` / `NotExists` and `InQuery` / `NotInQuery` already accept correlated
+subqueries — the inner query just references an outer column with `EqExpr`.
+Two more forms cover the rest:
+
+- **Scalar subqueries.** `sqlkit.SubExpr[T](sub)` wraps a single-column,
+  single-row subquery as a typed expression of type `T`, usable as a projection
+  (`sql.As(...)`) or in a comparison (`EqExpr`/`NeExpr`/`LtExpr`/`LeExpr`/
+  `GtExpr`/`GeExpr`). It may be correlated.
+- **Quantified comparisons.** `LtAny`/`LeAny`/`GtAny`/`GeAny` and the matching
+  `…All` methods render `column <op> ANY/ALL (subquery)`, generalizing
+  `InQuery` (`= ANY`) and `NotInQuery` (`<> ALL`) to the ordering operators.
+
+```go
+// SELECT id, (SELECT COUNT(*) FROM posts WHERE posts.user_id = users.id) AS post_count
+postCount := sqlkit.Select(sql.CountAll()).From(appdb.Posts).
+    Where(appdb.Posts.UserID.EqExpr(appdb.Users.ID))
+
+err = db.Select(appdb.Users.ID, sql.As(sqlkit.SubExpr[int64](postCount), "post_count")).
+    From(appdb.Users).All(ctx).Scan(&rows)
+
+// WHERE age > (SELECT AVG(age) FROM users)
+avg := sqlkit.Select(sql.Avg(appdb.Users.Age)).From(appdb.Users)
+err = db.Select().From(appdb.Users).
+    Where(appdb.Users.Age.GtExpr(sqlkit.SubExpr[int64](avg))).
+    All(ctx).Scan(&users)
+```
+
+At the untyped `sql` level these are `sql.ScalarSubquery(query)` and
+`sql.Any(left, op, query)` / `sql.All(left, op, query)`.
+
 Joins and the generated primary-key lookup:
 
 ```go

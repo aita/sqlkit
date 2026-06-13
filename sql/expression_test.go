@@ -38,6 +38,63 @@ func TestInQueryAndExists(t *testing.T) {
 		[]any{100})
 }
 
+func TestScalarSubqueryProjection(t *testing.T) {
+	// A correlated scalar subquery in the SELECT list: per-user order count.
+	count := Select(CountAll()).From(Table{Name: "orders"}).
+		Where(Eq(Col("orders.user_id"), Col("users.id")))
+
+	q := Select(Col("users.id"), As(ScalarSubquery(count), "order_count")).
+		From(Table{Name: "users"})
+
+	assertSQL(t, q,
+		`SELECT "users"."id", (SELECT COUNT(*) FROM "orders" WHERE ("orders"."user_id" = "users"."id")) AS "order_count" FROM "users"`,
+		nil)
+}
+
+func TestScalarSubqueryInComparison(t *testing.T) {
+	avg := Select(Avg(Col("salary"))).From(Table{Name: "employees"})
+
+	q := Select(Col("id")).From(Table{Name: "employees"}).
+		Where(Gt(Col("salary"), ScalarSubquery(avg)))
+
+	assertSQL(t, q,
+		`SELECT "id" FROM "employees" WHERE ("salary" > (SELECT AVG("salary") FROM "employees"))`,
+		nil)
+}
+
+func TestScalarSubquerySharesPlaceholderNumbering(t *testing.T) {
+	sub := Select(Max(Col("total"))).From(Table{Name: "orders"}).
+		Where(Eq(Col("orders.user_id"), Col("users.id"))).
+		Where(Gt(Col("total"), Int(10)))
+
+	q := Select(Col("id")).From(Table{Name: "users"}).
+		Where(Eq(Col("active"), Val(true))).
+		Where(Gt(Col("score"), ScalarSubquery(sub)))
+
+	assertSQL(t, q,
+		`SELECT "id" FROM "users" WHERE (("active" = $1) AND ("score" > (SELECT MAX("total") FROM "orders" WHERE (("orders"."user_id" = "users"."id") AND ("total" > $2)))))`,
+		[]any{true, 10})
+}
+
+func TestQuantifiedAnyAll(t *testing.T) {
+	sub := Select(Col("amount")).From(Table{Name: "payments"}).Where(Gt(Col("amount"), Int(0)))
+
+	assertSQL(t, Select(Col("id")).From(Table{Name: "users"}).Where(Any(Col("balance"), ">", sub)),
+		`SELECT "id" FROM "users" WHERE ("balance" > ANY (SELECT "amount" FROM "payments" WHERE ("amount" > $1)))`,
+		[]any{0})
+
+	assertSQL(t, Select(Col("id")).From(Table{Name: "users"}).Where(All(Col("balance"), ">=", sub)),
+		`SELECT "id" FROM "users" WHERE ("balance" >= ALL (SELECT "amount" FROM "payments" WHERE ("amount" > $1)))`,
+		[]any{0})
+}
+
+func TestScalarSubqueryRequiresQuery(t *testing.T) {
+	q := Select(ScalarSubquery(nil)).From(Table{Name: "users"})
+	if _, _, err := q.ToSQL(PostgreSQLDialect{}); err == nil {
+		t.Fatal("ScalarSubquery(nil) compiled, want error")
+	}
+}
+
 func TestNotLikeAndILike(t *testing.T) {
 	assertSQL(t, Select(Col("id")).From(Table{Name: "users"}).Where(NotLike(Col("email"), Val("%@spam.com"))),
 		`SELECT "id" FROM "users" WHERE ("email" NOT LIKE $1)`, []any{"%@spam.com"})

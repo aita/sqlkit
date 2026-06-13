@@ -189,6 +189,29 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 			return "(NOT EXISTS (" + subSQL + "))", args, nil
 		}
 		return "EXISTS (" + subSQL + ")", args, nil
+	case ScalarSubqueryExpression:
+		if e.Query == nil {
+			return "", nil, fmt.Errorf("sqlkit/sql: scalar subquery requires a query")
+		}
+		subSQL, args, err := c.compileSubquery(e.Query)
+		if err != nil {
+			return "", nil, err
+		}
+		return "(" + subSQL + ")", args, nil
+	case QuantifiedExpression:
+		if e.Query == nil {
+			return "", nil, fmt.Errorf("sqlkit/sql: %s comparison requires a subquery", e.Quantifier)
+		}
+		leftSQL, args, err := c.CompileExpression(e.Left)
+		if err != nil {
+			return "", nil, err
+		}
+		subSQL, subArgs, err := c.compileSubquery(e.Query)
+		if err != nil {
+			return "", nil, err
+		}
+		args = append(args, subArgs...)
+		return "(" + leftSQL + " " + e.Operator + " " + e.Quantifier + " (" + subSQL + "))", args, nil
 	case ConcatExpression:
 		if len(e.Operands) == 0 {
 			return "", nil, fmt.Errorf("sqlkit/sql: CONCAT requires at least one operand")

@@ -28,6 +28,14 @@ type TypedExpr[T any] interface {
 	typedExpr(T)
 }
 
+// TypedSelection is a TypedExpr[T] that can also stand as a SELECT-list item,
+// so it works both in typed comparisons and as a projection (via sql.As). It is
+// the static type returned by SubExpr.
+type TypedSelection[T any] interface {
+	TypedExpr[T]
+	sql.Selection
+}
+
 // AnyColumn is the type-erased view of a Column[T], used for table metadata.
 type AnyColumn interface {
 	sql.Expression
@@ -151,6 +159,19 @@ func (c Column[T]) Gt(value T) Predicate { return newPredicate(sql.Gt(c, sql.Val
 // Ge creates a "column >= value" predicate.
 func (c Column[T]) Ge(value T) Predicate { return newPredicate(sql.Ge(c, sql.Val(value))) }
 
+// LtExpr creates a "column < expression" predicate, e.g. comparing against
+// another column or a scalar subquery built with SubExpr.
+func (c Column[T]) LtExpr(other TypedExpr[T]) Predicate { return newPredicate(sql.Lt(c, other)) }
+
+// LeExpr creates a "column <= expression" predicate.
+func (c Column[T]) LeExpr(other TypedExpr[T]) Predicate { return newPredicate(sql.Le(c, other)) }
+
+// GtExpr creates a "column > expression" predicate.
+func (c Column[T]) GtExpr(other TypedExpr[T]) Predicate { return newPredicate(sql.Gt(c, other)) }
+
+// GeExpr creates a "column >= expression" predicate.
+func (c Column[T]) GeExpr(other TypedExpr[T]) Predicate { return newPredicate(sql.Ge(c, other)) }
+
 // In creates a "column IN (values...)" predicate.
 func (c Column[T]) In(values ...T) Predicate {
 	items := make([]any, len(values))
@@ -190,6 +211,52 @@ func (c Column[T]) NotInQuery(subquery Query) Predicate {
 	return newPredicate(sql.NotInQuery(c, unwrapQuery(subquery)))
 }
 
+// Quantified comparisons against a single-column subquery. ANY is true when the
+// comparison holds for at least one returned row; ALL when it holds for every
+// row. "= ANY" and "<> ALL" are spelled InQuery / NotInQuery; these methods
+// cover the ordering operators, e.g. "salary > ALL (subquery)". The subquery's
+// projected type is not statically checked against T.
+
+// LtAny creates a "column < ANY (subquery)" predicate.
+func (c Column[T]) LtAny(subquery Query) Predicate {
+	return newPredicate(sql.Any(c, "<", unwrapQuery(subquery)))
+}
+
+// LeAny creates a "column <= ANY (subquery)" predicate.
+func (c Column[T]) LeAny(subquery Query) Predicate {
+	return newPredicate(sql.Any(c, "<=", unwrapQuery(subquery)))
+}
+
+// GtAny creates a "column > ANY (subquery)" predicate.
+func (c Column[T]) GtAny(subquery Query) Predicate {
+	return newPredicate(sql.Any(c, ">", unwrapQuery(subquery)))
+}
+
+// GeAny creates a "column >= ANY (subquery)" predicate.
+func (c Column[T]) GeAny(subquery Query) Predicate {
+	return newPredicate(sql.Any(c, ">=", unwrapQuery(subquery)))
+}
+
+// LtAll creates a "column < ALL (subquery)" predicate.
+func (c Column[T]) LtAll(subquery Query) Predicate {
+	return newPredicate(sql.All(c, "<", unwrapQuery(subquery)))
+}
+
+// LeAll creates a "column <= ALL (subquery)" predicate.
+func (c Column[T]) LeAll(subquery Query) Predicate {
+	return newPredicate(sql.All(c, "<=", unwrapQuery(subquery)))
+}
+
+// GtAll creates a "column > ALL (subquery)" predicate.
+func (c Column[T]) GtAll(subquery Query) Predicate {
+	return newPredicate(sql.All(c, ">", unwrapQuery(subquery)))
+}
+
+// GeAll creates a "column >= ALL (subquery)" predicate.
+func (c Column[T]) GeAll(subquery Query) Predicate {
+	return newPredicate(sql.All(c, ">=", unwrapQuery(subquery)))
+}
+
 // IsNull creates a "column IS NULL" predicate.
 func (c Column[T]) IsNull() Predicate { return newPredicate(sql.IsNull(c)) }
 
@@ -217,6 +284,26 @@ func (typedValue[T]) typedExpr(T) {}
 
 // UnwrapExpression exposes the underlying value expression to the compiler.
 func (v typedValue[T]) UnwrapExpression() sql.Expression { return v.ValueExpression }
+
+// SubExpr wraps a single-column, single-row subquery as a typed scalar
+// expression of type T. It is the typed handle for a correlated scalar
+// subquery, usable in comparisons (Users.Age.GtExpr(sqlkit.SubExpr[int64](avg)))
+// and as a projection (sql.As(sqlkit.SubExpr[int64](cnt), "order_count")). The
+// subquery may reference the enclosing query's columns; its projected type is
+// not statically checked against T.
+func SubExpr[T any](subquery Query) TypedSelection[T] {
+	return typedScalarSubquery[T]{sql.ScalarSubquery(unwrapQuery(subquery))}
+}
+
+type typedScalarSubquery[T any] struct{ sql.ScalarSubqueryExpression }
+
+func (typedScalarSubquery[T]) typedExpr(T) {}
+
+// UnwrapExpression exposes the underlying scalar subquery to the compiler, which
+// matches by concrete type and does not see through the type wrapper.
+func (v typedScalarSubquery[T]) UnwrapExpression() sql.Expression {
+	return v.ScalarSubqueryExpression
+}
 
 // Like creates a LIKE predicate for string expressions.
 func Like(expr TypedExpr[string], pattern string) Predicate {

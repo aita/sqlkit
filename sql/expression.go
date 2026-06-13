@@ -228,6 +228,50 @@ func Exists(query Query) ExistsExpression { return ExistsExpression{Query: query
 // NotExists creates a "NOT EXISTS (subquery)" expression.
 func NotExists(query Query) ExistsExpression { return ExistsExpression{Query: query, Negate: true} }
 
+// ScalarSubqueryExpression wraps a subquery so it can stand in for a single
+// value — in a SELECT-list projection, a comparison, or anywhere else an
+// Expression is expected. The subquery must project a single column and return
+// at most one row; it may be correlated, referencing columns of the enclosing
+// query. It renders as the parenthesized subquery and shares the outer
+// statement's bind placeholder numbering.
+type ScalarSubqueryExpression struct{ Query Query }
+
+func (ScalarSubqueryExpression) SQLExpression() {}
+func (ScalarSubqueryExpression) SQLSelection()  {}
+
+// ScalarSubquery wraps a subquery as a scalar expression, the form behind a
+// correlated scalar subquery such as
+// SELECT u.id, (SELECT COUNT(*) FROM orders o WHERE o.user_id = u.id) FROM users u.
+func ScalarSubquery(query Query) ScalarSubqueryExpression {
+	return ScalarSubqueryExpression{Query: query}
+}
+
+// QuantifiedExpression compares an operand against the rows of a subquery with a
+// quantifier — ANY (a synonym for SOME) or ALL — as in "x > ALL (subquery)". It
+// generalizes IN/NOT IN, which are "= ANY"/"<> ALL", to the ordering operators.
+type QuantifiedExpression struct {
+	Left       Expression
+	Operator   string // comparison operator, e.g. "=", ">", "<>"
+	Quantifier string // "ANY" or "ALL"
+	Query      Query
+}
+
+func (QuantifiedExpression) SQLExpression() {}
+
+// Any creates a "left <operator> ANY (subquery)" expression: true when the
+// comparison holds for at least one row the subquery returns. A non-expression
+// left operand becomes a bind value.
+func Any(left any, operator string, query Query) QuantifiedExpression {
+	return QuantifiedExpression{Left: Expr(left), Operator: operator, Quantifier: "ANY", Query: query}
+}
+
+// All creates a "left <operator> ALL (subquery)" expression: true when the
+// comparison holds for every row the subquery returns (and, vacuously, when it
+// returns none). A non-expression left operand becomes a bind value.
+func All(left any, operator string, query Query) QuantifiedExpression {
+	return QuantifiedExpression{Left: Expr(left), Operator: operator, Quantifier: "ALL", Query: query}
+}
+
 // NullPredicate tests an expression for IS NULL / IS NOT NULL.
 type NullPredicate struct {
 	Operand Expression
