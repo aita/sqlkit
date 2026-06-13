@@ -29,7 +29,7 @@ type InsertQuery struct {
 //
 //	db.Insert(Users).Values([]User{{...}}).Exec(ctx)
 //	db.Insert(Archive).Columns(...).FromSelect(sqlkit.Select(...).From(Posts)).Exec(ctx)
-func Insert(table TableMeta) InsertQuery {
+func Insert(table Table) InsertQuery {
 	return InsertQuery{def: tableDef(table)}
 }
 
@@ -220,7 +220,7 @@ type UpdateQuery struct {
 // Update creates an unbound UPDATE builder, for ToSQL or tests. Assignments
 // are created with Column.Set, so value types are checked at compile time.
 // Executing it returns an error; start from a Database or Session to run it.
-func Update(table TableMeta) UpdateQuery {
+func Update(table Table) UpdateQuery {
 	def := tableDef(table)
 	return UpdateQuery{def: def, query: sql.Update(def.Table)}
 }
@@ -277,7 +277,7 @@ type DeleteQuery struct {
 
 // Delete creates an unbound DELETE builder, for ToSQL or tests. Executing it
 // returns an error; start from a Database or Session to run it.
-func Delete(table TableMeta) DeleteQuery {
+func Delete(table Table) DeleteQuery {
 	def := tableDef(table)
 	return DeleteQuery{def: def, query: sql.DeleteFrom(def.Table)}
 }

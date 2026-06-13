@@ -4,11 +4,11 @@ import (
 	"github.com/aita/sqlkit/sql"
 )
 
-// TableMeta is implemented by generated table bindings: the table identity
+// Table is implemented by generated table bindings: the table identity
 // and column metadata the builders use to generate statements. Row data flows
 // in through Insert(...).Values (struct fields mapped to columns by name) and
 // out through Scan, so bindings carry no row-type parameter.
-type TableMeta interface {
+type Table interface {
 	sql.Source
 
 	// Info returns the table identity.
@@ -30,7 +30,7 @@ type TableMeta interface {
 // row-oriented SQL generation (INSERT column selection, primary key
 // targeting) lives in sql.TableDef; this package only supplies values and
 // scans results.
-func tableDef(table TableMeta) sql.TableDef {
+func tableDef(table Table) sql.TableDef {
 	return sql.TableDef{
 		Table:      table.Info().sqlTable(),
 		Columns:    columnNames(table.Columns()),

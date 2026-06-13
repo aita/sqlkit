@@ -516,7 +516,7 @@ err = sqlkit.ScanRows(rows, &users)
 ```
 
 Table bindings don't require codegen or a live database. For SELECT, a
-`TableInfo` and typed columns are enough; the full `TableMeta` interface
+`TableInfo` and typed columns are enough; the full `Table` interface
 (what `Insert`/`Update`/`Delete` take, ~30 lines per table — see
 `examples/blog/blogdb` for the shape) can be written by hand too:
 
@@ -553,7 +553,7 @@ What the compiler enforces:
 - comparison and `IN` values match the column's Go type (`Column[T]` methods take `T`),
 - join conditions compare columns of the same type (`EqExpr(TypedExpr[T])`),
 - `SET` assignments match the column type (`Column[T].Set(T)`),
-- every generated binding satisfies `sqlkit.TableMeta` (a `var _` line in the
+- every generated binding satisfies `sqlkit.Table` (a `var _` line in the
   generated file).
 
 What surfaces at runtime: column-to-field mapping — during `Scan` for reads

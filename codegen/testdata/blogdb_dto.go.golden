@@ -49,7 +49,7 @@ func (t UsersTable) Defaulted() []sqlkit.AnyColumn {
 	return []sqlkit.AnyColumn{t.ID, t.CreatedAt}
 }
 
-var _ sqlkit.TableMeta = Users
+var _ sqlkit.Table = Users
 
 // User is a generated row struct for table public.users; any struct
 // following Scan's mapping rules works as a destination or Insert value.
@@ -104,7 +104,7 @@ func (t PostsTable) Defaulted() []sqlkit.AnyColumn {
 	return []sqlkit.AnyColumn{t.ID, t.Published}
 }
 
-var _ sqlkit.TableMeta = Posts
+var _ sqlkit.Table = Posts
 
 // Post is a generated row struct for table public.posts; any struct
 // following Scan's mapping rules works as a destination or Insert value.

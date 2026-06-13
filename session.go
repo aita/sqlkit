@@ -96,21 +96,21 @@ func (s *Session) Select(selections ...sql.Selection) SelectQuery {
 
 // Insert starts an INSERT bound to this session's transaction. Feed it rows
 // with Values, or a query with FromSelect.
-func (s *Session) Insert(table TableMeta) InsertQuery {
+func (s *Session) Insert(table Table) InsertQuery {
 	q := Insert(table)
 	q.ex = s
 	return q
 }
 
 // Update starts an UPDATE bound to this session's transaction.
-func (s *Session) Update(table TableMeta) UpdateQuery {
+func (s *Session) Update(table Table) UpdateQuery {
 	q := Update(table)
 	q.ex = s
 	return q
 }
 
 // Delete starts a DELETE bound to this session's transaction.
-func (s *Session) Delete(table TableMeta) DeleteQuery {
+func (s *Session) Delete(table Table) DeleteQuery {
 	q := Delete(table)
 	q.ex = s
 	return q
