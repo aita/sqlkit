@@ -2,10 +2,14 @@ package codegen
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"go/format"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"text/template"
@@ -79,6 +83,57 @@ type Options struct {
 
 const sqlkitImport = "github.com/aita/sqlkit"
 
+// sqlkitModule is the module path whose version identifies the generator's
+// sqlkit release in the generator fingerprint.
+const sqlkitModule = "github.com/aita/sqlkit"
+
+// formatVersion is the generated-code format version. Bump it when the binding
+// shape or identity scheme changes in a way that should stop bindings generated
+// before the change from reconciling with ones generated after it, even though
+// the templates' hash already moves with their text.
+const formatVersion = "1"
+
+// GeneratorID fingerprints this sqlkit build's code generator: the format
+// version, a hash of the generation templates (the source the emitted bindings
+// are produced from), and the sqlkit module version. codegen bakes it into each
+// binding's TableInfo.Generator. Bindings produced by different sqlkit versions
+// or generator code carry different IDs, so a Unit of Work refuses to reconcile
+// generated code that drifted across packages even when the structure matches.
+func GeneratorID() string {
+	h := sha256.New()
+	for _, src := range []string{bindingTemplateSrc, relationalBindingTemplateSrc, dtoTemplateSrc} {
+		io.WriteString(h, src)
+		h.Write([]byte{0})
+	}
+	templates := hex.EncodeToString(h.Sum(nil))[:12]
+	return fmt.Sprintf("fmt%s+tpl%s+sqlkit%s", formatVersion, templates, sqlkitVersion())
+}
+
+// sqlkitVersion reports the sqlkit module version of the running generator from
+// the build info, falling back to "(devel)" for unversioned builds (a local
+// checkout, go run from the module itself, or a test binary).
+func sqlkitVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "(devel)"
+	}
+	if info.Main.Path == sqlkitModule && info.Main.Version != "" {
+		return info.Main.Version
+	}
+	for _, dep := range info.Deps {
+		if dep.Path != sqlkitModule {
+			continue
+		}
+		if dep.Replace != nil && dep.Replace.Version != "" {
+			return dep.Replace.Version
+		}
+		if dep.Version != "" {
+			return dep.Version
+		}
+	}
+	return "(devel)"
+}
+
 type columnModel struct {
 	Field      string
 	Name       string
@@ -97,6 +152,8 @@ type tableModel struct {
 	Schema    string
 	Name      string
 	Qualified string
+	Checksum  string
+	Generator string
 	Columns   []columnModel
 	// Doc is the table comment as doc-comment lines.
 	Doc []string
@@ -164,12 +221,14 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 		reserved[varName+"Table"] = true
 	}
 
+	generator := GeneratorID()
 	models := make([]*tableModel, 0, len(tables))
 	for _, table := range tables {
 		tm, err := buildTable(table, dialect, mapper)
 		if err != nil {
 			return nil, err
 		}
+		tm.Generator = generator
 		if opts.EmitDTO {
 			name := dtoName(table)
 			for reserved[name] {
@@ -201,6 +260,7 @@ func buildTable(table meta.Table, dialect string, mapper TypeMapper) (*tableMode
 		Schema:      table.Schema.Name,
 		Name:        table.Name,
 		Qualified:   qualified(table.Schema.Name, table.Name),
+		Checksum:    table.Key().Checksum,
 		Doc:         docLines(table.Comment),
 		ColumnsType: varName + "Columns",
 		Ctor:        "new" + varName + "Columns",
@@ -441,7 +501,9 @@ func execute(tmpl *template.Template, tm *tableModel) string {
 	return buf.String()
 }
 
-var bindingTemplate = template.Must(template.New("binding").Parse(`// {{.TypeName}} is the typed binding for table {{.Qualified}}.
+var bindingTemplate = template.Must(template.New("binding").Parse(bindingTemplateSrc))
+
+const bindingTemplateSrc = `// {{.TypeName}} is the typed binding for table {{.Qualified}}.
 {{- range .Doc}}
 // {{.}}
 {{- end}}
@@ -457,7 +519,7 @@ type {{.TypeName}} struct {
 
 // {{.VarName}} provides typed access to table {{.Qualified}}.
 var {{.VarName}} = func() {{.TypeName}} {
-	info := sqlkit.TableInfo{Schema: {{printf "%q" .Schema}}, Name: {{printf "%q" .Name}}}
+	info := sqlkit.TableInfo{Schema: {{printf "%q" .Schema}}, Name: {{printf "%q" .Name}}, Checksum: {{printf "%q" .Checksum}}, Generator: {{printf "%q" .Generator}}}
 	return {{.TypeName}}{
 		info: info,
 {{- range .Columns}}
@@ -500,7 +562,7 @@ func (t {{.TypeName}}) As(alias string) {{.TypeName}} {
 }
 
 var _ sqlkit.Table = {{.VarName}}
-`))
+`
 
 // relationalBindingTemplate emits the relation-aware binding: a columns struct
 // (carrying the Table interface), relation structs and a Rels struct, and a
@@ -509,7 +571,9 @@ var _ sqlkit.Table = {{.VarName}}
 // (so callers reach target columns through the relation) without forming a
 // recursive struct type; building every value from the new*Columns constructors
 // keeps the package-level vars free of initialization cycles.
-var relationalBindingTemplate = template.Must(template.New("relbinding").Parse(`// {{.ColumnsType}} holds the typed column bindings for table {{.Qualified}}.
+var relationalBindingTemplate = template.Must(template.New("relbinding").Parse(relationalBindingTemplateSrc))
+
+const relationalBindingTemplateSrc = `// {{.ColumnsType}} holds the typed column bindings for table {{.Qualified}}.
 type {{.ColumnsType}} struct {
 	info sqlkit.TableInfo
 {{- range .Columns}}
@@ -521,7 +585,7 @@ type {{.ColumnsType}} struct {
 }
 
 func {{.Ctor}}() {{.ColumnsType}} {
-	info := sqlkit.TableInfo{Schema: {{printf "%q" .Schema}}, Name: {{printf "%q" .Name}}}
+	info := sqlkit.TableInfo{Schema: {{printf "%q" .Schema}}, Name: {{printf "%q" .Name}}, Checksum: {{printf "%q" .Checksum}}, Generator: {{printf "%q" .Generator}}}
 	return {{.ColumnsType}}{
 		info: info,
 {{- range .Columns}}
@@ -635,9 +699,11 @@ var {{.VarName}} = {{.TypeName}}{
 }
 
 var _ sqlkit.Table = {{.VarName}}
-`))
+`
 
-var dtoTemplate = template.Must(template.New("dto").Parse("// {{.DTOName}} is a generated row struct for table {{.Qualified}}; any struct\n" +
+var dtoTemplate = template.Must(template.New("dto").Parse(dtoTemplateSrc))
+
+const dtoTemplateSrc = "// {{.DTOName}} is a generated row struct for table {{.Qualified}}; any struct\n" +
 	"// following Scan's mapping rules works as a destination or Insert value.\n" +
 	"{{- range .Doc}}\n" +
 	"// {{.}}\n" +
@@ -649,4 +715,4 @@ var dtoTemplate = template.Must(template.New("dto").Parse("// {{.DTOName}} is a 
 	"{{- end}}\n" +
 	"\t{{.Field}} {{.GoType}} `sqlkit:\"{{.Name}}\"`\n" +
 	"{{- end}}\n" +
-	"}\n"))
+	"}\n"
