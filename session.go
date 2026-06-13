@@ -3,6 +3,7 @@ package sqlkit
 import (
 	"context"
 	stdsql "database/sql"
+	"fmt"
 	"sync"
 
 	"github.com/aita/sqlkit/sql"
@@ -24,6 +25,7 @@ type Session struct {
 	mu     sync.Mutex
 	tx     *stdsql.Tx
 	closed bool
+	spSeq  int
 }
 
 // ensureTx returns the session's transaction, beginning it on first use.
@@ -167,6 +169,41 @@ func (s *Session) Exec(ctx context.Context, query sql.Query) (stdsql.Result, err
 		return nil, nil
 	}
 	return s.execContext(ctx, sqlText, args...)
+}
+
+// Dialect returns the session's SQL dialect. It mirrors Database.Dialect and
+// lets layers above sqlkit (such as the uow package) branch on dialect
+// capabilities like RETURNING support without reaching into the executor.
+func (s *Session) Dialect() sql.Dialect { return s.dialect }
+
+// Savepoint opens a savepoint in the session's transaction and returns its
+// generated name. The transaction begins on first use, so a savepoint may be
+// the first statement. Undo work back to it with RollbackTo, or discard the
+// savepoint with Release; the outer Commit releases any that remain.
+func (s *Session) Savepoint(ctx context.Context) (string, error) {
+	s.mu.Lock()
+	s.spSeq++
+	name := fmt.Sprintf("sp_%d", s.spSeq)
+	s.mu.Unlock()
+	if _, err := s.execContext(ctx, "SAVEPOINT "+name); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+// RollbackTo rolls the transaction back to the named savepoint, undoing every
+// statement since it was opened while leaving the savepoint (and the outer
+// transaction) in place.
+func (s *Session) RollbackTo(ctx context.Context, name string) error {
+	_, err := s.execContext(ctx, "ROLLBACK TO SAVEPOINT "+name)
+	return err
+}
+
+// Release discards the named savepoint, merging its work into the enclosing
+// transaction or savepoint.
+func (s *Session) Release(ctx context.Context, name string) error {
+	_, err := s.execContext(ctx, "RELEASE SAVEPOINT "+name)
+	return err
 }
 
 func (s *Session) sqlDialect() sql.Dialect { return s.dialect }

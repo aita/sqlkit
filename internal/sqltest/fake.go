@@ -39,6 +39,9 @@ type Fake struct {
 	QueryFunc func(sql string, args []any) (Result, error)
 	// ExecFunc serves ExecContext calls. Nil means success.
 	ExecFunc func(sql string, args []any) error
+	// LastInsertID is reported by the Result of every ExecContext call, so the
+	// RETURNING-less write-back path (MySQL-style LastInsertId) is testable.
+	LastInsertID int64
 }
 
 // DB opens a database/sql handle backed by this fake.
@@ -158,8 +161,17 @@ func (c *conn) ExecContext(_ context.Context, query string, args []driver.NamedV
 			return nil, err
 		}
 	}
-	return driver.RowsAffected(1), nil
+	return execResult{lastInsertID: c.f.LastInsertID, rowsAffected: 1}, nil
 }
+
+// execResult is a driver.Result that reports a configurable LastInsertId.
+type execResult struct {
+	lastInsertID int64
+	rowsAffected int64
+}
+
+func (r execResult) LastInsertId() (int64, error) { return r.lastInsertID, nil }
+func (r execResult) RowsAffected() (int64, error) { return r.rowsAffected, nil }
 
 func namedToAny(args []driver.NamedValue) []any {
 	values := make([]any, len(args))
