@@ -131,6 +131,38 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 			operator = "NOT BETWEEN"
 		}
 		return "(" + operandSQL + " " + operator + " " + lowSQL + " AND " + highSQL + ")", args, nil
+	case JSONObjectExpression:
+		if len(e.Pairs)%2 != 0 {
+			return "", nil, fmt.Errorf("sqlkit/sql: JSON_OBJECT requires an even number of key/value arguments")
+		}
+		name := "JSON_OBJECT"
+		if e.Agg {
+			name = "JSON_OBJECTAGG"
+		}
+		compiled := make([]string, len(e.Pairs))
+		var args []any
+		for i, pair := range e.Pairs {
+			pairSQL, pairArgs, err := c.CompileExpression(pair)
+			if err != nil {
+				return "", nil, err
+			}
+			compiled[i] = pairSQL
+			args = append(args, pairArgs...)
+		}
+		pairs := make([][2]string, 0, len(compiled)/2)
+		for i := 0; i+1 < len(compiled); i += 2 {
+			pairs = append(pairs, [2]string{compiled[i], compiled[i+1]})
+		}
+		if r, ok := c.Dialect.(JSONObjectRenderer); ok {
+			return r.JSONObject(name, pairs), args, nil
+		}
+		// SQL/JSON standard "key VALUE value" form (PostgreSQL); MySQL overrides
+		// via JSONObjectRenderer with a flat comma list.
+		parts := make([]string, len(pairs))
+		for i, kv := range pairs {
+			parts[i] = kv[0] + " VALUE " + kv[1]
+		}
+		return name + "(" + strings.Join(parts, ", ") + ")", args, nil
 	case JSONAccessExpression:
 		operandSQL, args, err := c.CompileExpression(e.Operand)
 		if err != nil {

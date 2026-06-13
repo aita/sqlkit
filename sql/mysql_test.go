@@ -33,6 +33,17 @@ func TestMySQLSelect(t *testing.T) {
 		[]any{7, "%@x.com"})
 }
 
+func TestMySQLJSONObject(t *testing.T) {
+	// MySQL uses a flat key, value list (no VALUE separator).
+	assertMySQL(t,
+		Select(As(JSONObject("id", Col("id"), "name", Col("name")), "j")).From(Table{Name: "users"}),
+		"SELECT JSON_OBJECT(?, `id`, ?, `name`) AS `j` FROM `users`", []any{"id", "name"})
+
+	assertMySQL(t,
+		Select(As(JSONObjectAgg(Col("k"), Col("v")), "obj")).From(Table{Name: "kv"}),
+		"SELECT JSON_OBJECTAGG(`k`, `v`) AS `obj` FROM `kv`", nil)
+}
+
 func TestMySQLConcat(t *testing.T) {
 	// MySQL's || is logical OR, so concatenation compiles to CONCAT(...).
 	assertMySQL(t,

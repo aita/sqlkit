@@ -358,20 +358,40 @@ func Max(arg any) FuncExpression { return Func("MAX", arg) }
 // 5.7+); on older PostgreSQL use Func("json_build_array", ...).
 func JSONArray(args ...any) FuncExpression { return Func("JSON_ARRAY", args...) }
 
-// JSONObject creates a JSON_OBJECT(key, value, ...) expression. Arguments
-// alternate keys and values: JSONObject("id", col, "name", other). The name is
-// SQL/JSON standard (PostgreSQL 16+, MySQL 5.7+); on older PostgreSQL use
-// Func("json_build_object", ...).
-func JSONObject(args ...any) FuncExpression { return Func("JSON_OBJECT", args...) }
-
 // JSONArrayAgg creates a JSON_ARRAYAGG(expr) aggregate that collects the
 // grouped values into a JSON array (PostgreSQL 16+, MySQL 5.7.22+; older
 // PostgreSQL has json_agg / jsonb_agg via Func).
 func JSONArrayAgg(arg any) FuncExpression { return Func("JSON_ARRAYAGG", arg) }
 
-// JSONObjectAgg creates a JSON_OBJECTAGG(key, value) aggregate that collects
-// the grouped key/value pairs into a JSON object.
-func JSONObjectAgg(key, value any) FuncExpression { return Func("JSON_OBJECTAGG", key, value) }
+// JSONObjectExpression builds a JSON object from key/value pairs. Its argument
+// syntax diverges by engine — MySQL takes a flat JSON_OBJECT(key, value, ...)
+// list, while the SQL/JSON standard (PostgreSQL 16+) requires a key VALUE value
+// separator — so it renders per dialect rather than through Func. Agg selects
+// the JSON_OBJECTAGG aggregate, which takes a single key/value pair.
+type JSONObjectExpression struct {
+	Pairs []Expression
+	Agg   bool
+}
+
+func (JSONObjectExpression) SQLExpression() {}
+func (JSONObjectExpression) SQLSelection()  {}
+
+// JSONObject creates a JSON_OBJECT expression. Arguments alternate keys and
+// values: JSONObject("id", col, "name", other). Non-expression arguments become
+// bind values.
+func JSONObject(args ...any) JSONObjectExpression {
+	pairs := make([]Expression, len(args))
+	for i, arg := range args {
+		pairs[i] = Expr(arg)
+	}
+	return JSONObjectExpression{Pairs: pairs}
+}
+
+// JSONObjectAgg creates a JSON_OBJECTAGG(key, value) aggregate that collects the
+// grouped key/value pairs into a JSON object.
+func JSONObjectAgg(key, value any) JSONObjectExpression {
+	return JSONObjectExpression{Pairs: []Expression{Expr(key), Expr(value)}, Agg: true}
+}
 
 // JSONAccessExpression extracts the value at a path from a JSON operand. Path
 // steps are object keys (string) or array indices (int) and are rendered as

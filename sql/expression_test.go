@@ -50,9 +50,10 @@ func TestJSONFunctions(t *testing.T) {
 		Select(As(JSONArray(Col("id"), Col("email")), "j")).From(Table{Name: "users"}),
 		`SELECT JSON_ARRAY("id", "email") AS "j" FROM "users"`, nil)
 
+	// PostgreSQL's SQL/JSON JSON_OBJECT requires the "key VALUE value" separator.
 	assertSQL(t,
 		Select(As(JSONObject("id", Col("id"), "name", Col("name")), "j")).From(Table{Name: "users"}),
-		`SELECT JSON_OBJECT($1, "id", $2, "name") AS "j" FROM "users"`, []any{"id", "name"})
+		`SELECT JSON_OBJECT($1 VALUE "id", $2 VALUE "name") AS "j" FROM "users"`, []any{"id", "name"})
 
 	assertSQL(t,
 		Select(As(JSONArrayAgg(Col("id")), "ids")).From(Table{Name: "users"}),
@@ -60,7 +61,22 @@ func TestJSONFunctions(t *testing.T) {
 
 	assertSQL(t,
 		Select(As(JSONObjectAgg(Col("k"), Col("v")), "obj")).From(Table{Name: "kv"}),
-		`SELECT JSON_OBJECTAGG("k", "v") AS "obj" FROM "kv"`, nil)
+		`SELECT JSON_OBJECTAGG("k" VALUE "v") AS "obj" FROM "kv"`, nil)
+}
+
+func TestSetOpPrecedenceMixed(t *testing.T) {
+	a := Select(Col("id")).From(Table{Name: "a"})
+	b := Select(Col("id")).From(Table{Name: "b"})
+	cq := Select(Col("id")).From(Table{Name: "c"})
+
+	// (a UNION b) INTERSECT c must keep the UNION grouped, since INTERSECT binds
+	// tighter; without parens PostgreSQL would read a UNION (b INTERSECT c).
+	assertSQL(t, a.Union(b).Intersect(cq),
+		`((SELECT "id" FROM "a") UNION (SELECT "id" FROM "b")) INTERSECT (SELECT "id" FROM "c")`, nil)
+
+	// Same-operator chains stay unparenthesized.
+	assertSQL(t, a.Union(b).Union(cq),
+		`(SELECT "id" FROM "a") UNION (SELECT "id" FROM "b") UNION (SELECT "id" FROM "c")`, nil)
 }
 
 func TestConcatPostgres(t *testing.T) {

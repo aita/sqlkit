@@ -100,6 +100,16 @@ type Concatenator interface {
 	Concat(operands []string) string
 }
 
+// JSONObjectRenderer is an optional capability for dialects whose JSON object
+// constructor does not use the SQL/JSON standard "key VALUE value" separator
+// (MySQL takes a flat JSON_OBJECT(key, value, ...) list). The compiler detects
+// it with a type assertion, so it is not a breaking change to Dialect; without
+// it the standard VALUE form is used. funcName is JSON_OBJECT or
+// JSON_OBJECTAGG, and pairs are already-compiled {key, value} fragments.
+type JSONObjectRenderer interface {
+	JSONObject(funcName string, pairs [][2]string) string
+}
+
 // DialectByName returns the Dialect for a name ("postgres"/"postgresql" or
 // "mysql"; empty defaults to postgres). It errors on an unknown name.
 func DialectByName(name string) (Dialect, error) {
@@ -348,6 +358,16 @@ func (MySQLDialect) DropIndex(_, quotedIndex, qualifiedTable string) string {
 // Concat renders MySQL string concatenation, whose || operator means logical OR.
 func (MySQLDialect) Concat(operands []string) string {
 	return "CONCAT(" + strings.Join(operands, ", ") + ")"
+}
+
+// JSONObject renders MySQL's flat JSON_OBJECT(key, value, ...) form, which does
+// not use the SQL/JSON standard VALUE separator.
+func (MySQLDialect) JSONObject(funcName string, pairs [][2]string) string {
+	parts := make([]string, 0, len(pairs)*2)
+	for _, kv := range pairs {
+		parts = append(parts, kv[0], kv[1])
+	}
+	return funcName + "(" + strings.Join(parts, ", ") + ")"
 }
 
 // JSONAccess builds a JSON path string ($.a[0].b) and wraps the operand in
