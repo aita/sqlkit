@@ -133,6 +133,19 @@ func TestGenerateRelationsGolden(t *testing.T) {
 	}
 }
 
+func TestGenerateRelationsNoForeignKeysOmitsSQLImport(t *testing.T) {
+	// A relation-aware binding for a table without foreign keys still emits the
+	// Queryer surface (orm import) but no JoinOn expressions, so it must not
+	// import sql — an unused import would make the generated file uncompilable.
+	got := string(generateSingle(t, fixtureTables()[:1], Options{PackageName: "blogdb", EmitRelations: true}))
+	if !strings.Contains(got, `"github.com/aita/sqlkit/orm"`) {
+		t.Errorf("relation-aware binding should import orm\n%s", got)
+	}
+	if strings.Contains(got, `"github.com/aita/sqlkit/sql"`) {
+		t.Errorf("binding without relations must not import sql (unused)\n%s", got)
+	}
+}
+
 func TestGenerateWithDTOGolden(t *testing.T) {
 	got := generateSingle(t, fixtureTables(), Options{PackageName: "blogdb", EmitDTO: true})
 	checkGolden(t, "blogdb_dto.go.golden", got)

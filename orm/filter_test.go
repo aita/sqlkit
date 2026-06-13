@@ -68,6 +68,19 @@ func TestFilterRawPredicateInStructField(t *testing.T) {
 		[]any{20})
 }
 
+func TestFilterPredicateFieldUnderNonColumnName(t *testing.T) {
+	db := newDB()
+	// A predicate field is already complete and ignores its column, so its name
+	// need not match a column: a reusable filter can carry a computed predicate
+	// (here a cross-column OR) under a descriptive name like "Search".
+	qs := Users.Queryer(db).Filter(struct {
+		Search sqlkit.Predicate
+	}{Search: sqlkit.Or(Users.Name.Eq("a"), Users.Age.Le(20))})
+	assertSQL(t, qs,
+		`SELECT "users"."id", "users"."age", "users"."name", "users"."created_at" FROM "users" WHERE (("users"."name" = $1) OR ("users"."age" <= $2))`,
+		[]any{"a", 20})
+}
+
 func TestFilterTagOverride(t *testing.T) {
 	db := newDB()
 	qs := Users.Queryer(db).Filter(struct {

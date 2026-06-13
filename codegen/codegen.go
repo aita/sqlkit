@@ -332,7 +332,12 @@ func assemble(models []*tableModel, opts Options) ([]File, error) {
 func bindingImports(tm *tableModel) []string {
 	imports := []string{sqlkitImport}
 	if tm.Relational {
-		imports = append(imports, ormImport, sqlImport)
+		imports = append(imports, ormImport)
+		// sql is referenced only by the JoinOn expressions, which are emitted
+		// only for tables that actually have relations.
+		if len(tm.Relations) > 0 {
+			imports = append(imports, sqlImport)
+		}
 	}
 	for _, c := range tm.Columns {
 		if c.GoTypeImp != "" {

@@ -108,6 +108,13 @@ func buildFilter(base sqlkit.Table, filter any) ([]sqlkit.Predicate, error) {
 		if fv.IsZero() { // unset filter field
 			continue
 		}
+		// A complete predicate ignores the field's column, so it need not map to
+		// one — this lets reusable filters carry computed predicates (e.g. an OR
+		// across several columns) under a non-column field name.
+		if p, ok := fv.Interface().(sqlkit.Predicate); ok {
+			out = append(out, p)
+			continue
+		}
 		key := columnKey(field)
 		col, ok := cols[key]
 		if !ok {
@@ -115,8 +122,6 @@ func buildFilter(base sqlkit.Table, filter any) ([]sqlkit.Predicate, error) {
 				field.Name, base.Info().QualifiedName())
 		}
 		switch term := fv.Interface().(type) {
-		case sqlkit.Predicate:
-			out = append(out, term)
 		case columnTerm:
 			out = append(out, term.build(col))
 		case FilterTerm:
