@@ -391,6 +391,15 @@ err = db.Select(appdb.Users.Email).From(appdb.Users).Where(...).
     Union(sqlkit.Select(appdb.Users.Email).From(appdb.Users).Where(...)).
     OrderBy(sql.Asc(sql.Col("email"))).
     All(ctx).Scan(&emails)
+
+// sqlkit.Union / UnionAll / Intersect / Except are package-level helpers for
+// combining a flat list of SELECTs instead of left-folding the chain by hand.
+// The result binds to the first operand's executor.
+err = sqlkit.Union(
+    db.Select(appdb.Users.Email).From(appdb.Users).Where(...),
+    sqlkit.Select(appdb.Admins.Email).From(appdb.Admins),
+    sqlkit.Select(appdb.Guests.Email).From(appdb.Guests),
+).OrderBy(sql.Asc(sql.Col("email"))).All(ctx).Scan(&emails)
 ```
 
 `Coalesce`, `NullIf`, `Greatest`, `Least`, `Sum`, `Avg`, `Min`, `Max`,

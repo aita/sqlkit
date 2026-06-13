@@ -146,6 +146,17 @@ func TestIntersectAndExcept(t *testing.T) {
 	assertSQL(t, a.Except(b), `(SELECT "id" FROM "a") EXCEPT (SELECT "id" FROM "b")`, nil)
 }
 
+func TestIntersectAndExceptChained(t *testing.T) {
+	a := Select(Col("id")).From(Table{Name: "a"})
+	b := Select(Col("id")).From(Table{Name: "b"})
+	c := Select(Col("id")).From(Table{Name: "c"})
+
+	assertSQL(t, a.Intersect(b).Intersect(c),
+		`(SELECT "id" FROM "a") INTERSECT (SELECT "id" FROM "b") INTERSECT (SELECT "id" FROM "c")`, nil)
+	assertSQL(t, a.Except(b).Except(c),
+		`(SELECT "id" FROM "a") EXCEPT (SELECT "id" FROM "b") EXCEPT (SELECT "id" FROM "c")`, nil)
+}
+
 func TestUnionAsSubquery(t *testing.T) {
 	a := Select(Col("id")).From(Table{Name: "a"})
 	b := Select(Col("id")).From(Table{Name: "b"})

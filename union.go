@@ -13,6 +13,51 @@ type UnionQuery struct {
 	query sql.CompoundQuery
 }
 
+// Union combines two or more SELECT queries with UNION, flattening what would
+// otherwise be a left-folded chain of SelectQuery.Union calls:
+//
+//	sqlkit.Union(
+//		db.Select(Users.ID).From(Users),
+//		db.Select(Admins.ID).From(Admins),
+//		db.Select(Guests.ID).From(Guests),
+//	).OrderBy(sql.Asc(sql.Col("id"))).All(ctx).Scan(&ids)
+//
+// The result is bound to the first operand's executor, so start the list with a
+// query built from a Database or Session to run it. At least two operands are
+// required, enforced by the signature.
+func Union(first, second SelectQuery, rest ...SelectQuery) UnionQuery {
+	return foldSetOp(first.Union(second), UnionQuery.Union, rest)
+}
+
+// UnionAll is Union with UNION ALL, keeping duplicate rows.
+func UnionAll(first, second SelectQuery, rest ...SelectQuery) UnionQuery {
+	return foldSetOp(first.UnionAll(second), UnionQuery.UnionAll, rest)
+}
+
+// Intersect combines two or more SELECT queries with INTERSECT, keeping rows
+// present in every operand. See Union for operand and executor rules.
+func Intersect(first, second SelectQuery, rest ...SelectQuery) UnionQuery {
+	return foldSetOp(first.Intersect(second), UnionQuery.Intersect, rest)
+}
+
+// Except combines two or more SELECT queries with EXCEPT, keeping rows of the
+// first operand absent from the rest. See Union for operand and executor rules.
+//
+// EXCEPT is left-associative: with operands a, b, c the result is
+// (a EXCEPT b) EXCEPT c.
+func Except(first, second SelectQuery, rest ...SelectQuery) UnionQuery {
+	return foldSetOp(first.Except(second), UnionQuery.Except, rest)
+}
+
+// foldSetOp left-folds the remaining operands into an already-started compound,
+// applying op (one of UnionQuery's set-operation methods) to each in turn.
+func foldSetOp(q UnionQuery, op func(UnionQuery, SelectQuery) UnionQuery, rest []SelectQuery) UnionQuery {
+	for _, r := range rest {
+		q = op(q, r)
+	}
+	return q
+}
+
 // Union appends another UNION operand.
 func (q UnionQuery) Union(other SelectQuery) UnionQuery {
 	return UnionQuery{ex: q.ex, query: q.query.Union(other.query)}
@@ -21,6 +66,16 @@ func (q UnionQuery) Union(other SelectQuery) UnionQuery {
 // UnionAll appends another UNION ALL operand.
 func (q UnionQuery) UnionAll(other SelectQuery) UnionQuery {
 	return UnionQuery{ex: q.ex, query: q.query.UnionAll(other.query)}
+}
+
+// Intersect appends another INTERSECT operand.
+func (q UnionQuery) Intersect(other SelectQuery) UnionQuery {
+	return UnionQuery{ex: q.ex, query: q.query.Intersect(other.query)}
+}
+
+// Except appends another EXCEPT operand.
+func (q UnionQuery) Except(other SelectQuery) UnionQuery {
+	return UnionQuery{ex: q.ex, query: q.query.Except(other.query)}
 }
 
 // OrderBy adds ORDER BY terms applied to the combined result. In a set

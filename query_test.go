@@ -419,6 +419,49 @@ func TestUnionChain(t *testing.T) {
 		[]any{int64(10)})
 }
 
+func TestUnionHelperVariadic(t *testing.T) {
+	query := sqlkit.Union(
+		sqlkit.Select(Users.ID).From(Users).Where(Users.ID.Eq(1)),
+		sqlkit.Select(Users.ID).From(Users).Where(Users.ID.Eq(2)),
+		sqlkit.Select(Users.ID).From(Users).Where(Users.ID.Eq(3)),
+	).OrderBy(sql.Asc(sql.Col("id"))).Limit(10)
+
+	assertToSQL(t, query,
+		`(SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" = $1)) UNION (SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" = $2)) UNION (SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" = $3)) ORDER BY "id" LIMIT 10`,
+		[]any{int64(1), int64(2), int64(3)})
+}
+
+func TestSetOpHelpers(t *testing.T) {
+	a := sqlkit.Select(Users.ID).From(Users)
+	b := sqlkit.Select(Users.ID).From(Users).Where(Users.ID.Lt(10))
+
+	assertToSQL(t, sqlkit.UnionAll(a, b),
+		`(SELECT "public"."users"."id" FROM "public"."users") UNION ALL (SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" < $1))`,
+		[]any{int64(10)})
+	assertToSQL(t, sqlkit.Intersect(a, b),
+		`(SELECT "public"."users"."id" FROM "public"."users") INTERSECT (SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" < $1))`,
+		[]any{int64(10)})
+	assertToSQL(t, sqlkit.Except(a, b),
+		`(SELECT "public"."users"."id" FROM "public"."users") EXCEPT (SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" < $1))`,
+		[]any{int64(10)})
+}
+
+func TestUnionHelperBindsExecutor(t *testing.T) {
+	db := sqlkit.WrapDB(usersFake().DB())
+
+	var users []MyUserDTO
+	err := sqlkit.UnionAll(
+		db.Select().From(Users).Where(Users.ID.Eq(1)),
+		sqlkit.Select().From(Users).Where(Users.ID.Eq(2)),
+	).All(context.Background()).Scan(&users)
+	if err != nil {
+		t.Fatalf("Union helper All().Scan() error = %v", err)
+	}
+	if len(users) != 2 || users[1].Mail != "b@example.com" {
+		t.Fatalf("users = %#v", users)
+	}
+}
+
 func TestUnionScans(t *testing.T) {
 	db := sqlkit.WrapDB(usersFake().DB())
 

@@ -49,6 +49,16 @@ func (q CompoundQuery) UnionAll(other Query) CompoundQuery {
 	return CompoundQuery{left: q, operator: "UNION ALL", right: other}
 }
 
+// Intersect appends another INTERSECT operand.
+func (q CompoundQuery) Intersect(other Query) CompoundQuery {
+	return CompoundQuery{left: q, operator: "INTERSECT", right: other}
+}
+
+// Except appends another EXCEPT operand.
+func (q CompoundQuery) Except(other Query) CompoundQuery {
+	return CompoundQuery{left: q, operator: "EXCEPT", right: other}
+}
+
 // OrderBy adds ORDER BY terms applied to the combined result.
 func (q CompoundQuery) OrderBy(terms ...OrderTerm) CompoundQuery {
 	q.orderBy = append(q.orderBy, terms...)
