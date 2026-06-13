@@ -194,8 +194,9 @@ func NotLike(expr TypedExpr[string], pattern string) Predicate {
 	return newPredicate(sql.NotLike(expr, sql.Val(pattern)))
 }
 
-// ILike creates a case-insensitive ILIKE predicate for string expressions
-// (PostgreSQL only).
+// ILike creates a case-insensitive LIKE predicate for string expressions. It
+// renders as PostgreSQL's native ILIKE and as LOWER(x) LIKE LOWER(pattern) on
+// MySQL, so it is case-insensitive on both regardless of column collation.
 func ILike(expr TypedExpr[string], pattern string) Predicate {
 	return newPredicate(sql.ILike(expr, sql.Val(pattern)))
 }

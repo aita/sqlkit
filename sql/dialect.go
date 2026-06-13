@@ -82,6 +82,15 @@ type JSONAccessor interface {
 	JSONAccess(operand string, path []any, asText bool) (string, error)
 }
 
+// CaseInsensitiveLiker is an optional capability a Dialect implements to render
+// a case-insensitive LIKE (ILikeExpression) with a native operator. The
+// compiler detects it with a type assertion, so it is not a breaking change to
+// Dialect; a dialect without it falls back to LOWER(left) LIKE LOWER(pattern).
+// left and pattern are already-compiled SQL fragments.
+type CaseInsensitiveLiker interface {
+	ILike(left, pattern string) string
+}
+
 // DialectByName returns the Dialect for a name ("postgres"/"postgresql" or
 // "mysql"; empty defaults to postgres). It errors on an unknown name.
 func DialectByName(name string) (Dialect, error) {
@@ -225,6 +234,11 @@ func (PostgreSQLDialect) DropForeignKey(qualifiedTable, quotedConstraint string)
 
 func (PostgreSQLDialect) DropIndex(qualifiedIndex, _, _ string) string {
 	return "DROP INDEX IF EXISTS " + qualifiedIndex + ";"
+}
+
+// ILike renders PostgreSQL's native case-insensitive ILIKE operator.
+func (PostgreSQLDialect) ILike(left, pattern string) string {
+	return "(" + left + " ILIKE " + pattern + ")"
 }
 
 // JSONAccess chains the -> / ->> operators, one per path step (the last uses

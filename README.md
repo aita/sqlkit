@@ -315,7 +315,8 @@ Typed columns carry the predicate vocabulary directly: `Eq`/`Ne`/`Lt`/`Le`/
 `Gt`/`Ge`, `In`/`NotIn` (literal values), `Between`/`NotBetween`,
 `IsNull`/`IsNotNull`, and `InQuery`/`NotInQuery` for an `IN (subquery)`. String
 columns also have the free helpers `sqlkit.Like` / `NotLike` / `ILike`
-(ILIKE is PostgreSQL-only). `sqlkit.Exists` / `NotExists` wrap a subquery as a
+(`ILike` is case-insensitive on both engines: native `ILIKE` on PostgreSQL,
+`LOWER(x) LIKE LOWER(pattern)` on MySQL). `sqlkit.Exists` / `NotExists` wrap a subquery as a
 predicate for semi-joins, and `sqlkit.And` / `Or` / `Not` combine predicates:
 
 ```go

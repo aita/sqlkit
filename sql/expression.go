@@ -82,11 +82,24 @@ func Like(left, pattern any) BinaryExpression { return binary(left, "LIKE", patt
 // NotLike creates a NOT LIKE expression.
 func NotLike(left, pattern any) BinaryExpression { return binary(left, "NOT LIKE", pattern) }
 
-// ILike creates a case-insensitive ILIKE expression (PostgreSQL only).
-func ILike(left, pattern any) BinaryExpression { return binary(left, "ILIKE", pattern) }
-
 func binary(left any, operator string, right any) BinaryExpression {
 	return BinaryExpression{Left: Expr(left), Operator: operator, Right: Expr(right)}
+}
+
+// ILikeExpression is a case-insensitive LIKE. It renders per dialect: native
+// ILIKE on PostgreSQL, and the portable LOWER(left) LIKE LOWER(pattern) on
+// engines without an ILIKE operator (MySQL).
+type ILikeExpression struct {
+	Left    Expression
+	Pattern Expression
+}
+
+func (ILikeExpression) SQLExpression() {}
+
+// ILike creates a case-insensitive LIKE expression. Non-expression operands
+// become bind values.
+func ILike(left, pattern any) ILikeExpression {
+	return ILikeExpression{Left: Expr(left), Pattern: Expr(pattern)}
 }
 
 // BetweenExpression tests whether an operand falls within an inclusive range.

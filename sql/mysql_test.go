@@ -33,6 +33,13 @@ func TestMySQLSelect(t *testing.T) {
 		[]any{7, "%@x.com"})
 }
 
+func TestMySQLILike(t *testing.T) {
+	// MySQL has no ILIKE: it compiles to the portable LOWER ... LIKE LOWER form.
+	assertMySQL(t,
+		Select(Col("id")).From(Table{Name: "users"}).Where(ILike(Col("email"), Val("%@EXAMPLE.com"))),
+		"SELECT `id` FROM `users` WHERE (LOWER(`email`) LIKE LOWER(?))", []any{"%@EXAMPLE.com"})
+}
+
 func TestMySQLJSONAccess(t *testing.T) {
 	assertMySQL(t,
 		Select(As(JSONGet(Col("data"), "name"), "n")).From(Table{Name: "events"}),

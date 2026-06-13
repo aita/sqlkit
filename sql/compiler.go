@@ -157,6 +157,21 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 			return "(NOT EXISTS (" + subSQL + "))", args, nil
 		}
 		return "EXISTS (" + subSQL + ")", args, nil
+	case ILikeExpression:
+		leftSQL, args, err := c.CompileExpression(e.Left)
+		if err != nil {
+			return "", nil, err
+		}
+		patternSQL, patternArgs, err := c.CompileExpression(e.Pattern)
+		if err != nil {
+			return "", nil, err
+		}
+		args = append(args, patternArgs...)
+		if il, ok := c.Dialect.(CaseInsensitiveLiker); ok {
+			return il.ILike(leftSQL, patternSQL), args, nil
+		}
+		// Portable fallback for engines without an ILIKE operator (MySQL).
+		return "(LOWER(" + leftSQL + ") LIKE LOWER(" + patternSQL + "))", args, nil
 	case NullPredicate:
 		operandSQL, args, err := c.CompileExpression(e.Operand)
 		if err != nil {
