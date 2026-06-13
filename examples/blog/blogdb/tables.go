@@ -8,9 +8,11 @@ import (
 )
 
 // UsersTable is the typed binding for table public.users.
+// Registered blog authors
 type UsersTable struct {
-	info      sqlkit.TableInfo
-	ID        sqlkit.Column[int64]
+	info sqlkit.TableInfo
+	ID   sqlkit.Column[int64]
+	// Unique login address
 	Email     sqlkit.Column[string]
 	Name      sqlkit.Column[*string]
 	CreatedAt sqlkit.Column[time.Time]
