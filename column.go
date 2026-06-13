@@ -42,9 +42,16 @@ type AnyColumn interface {
 type TableInfo struct {
 	Schema string
 	Name   string
+	// Alias, when set, is the name an aliased view of the table is referenced
+	// by. It affects only column qualification and the FROM/JOIN source render
+	// ("<table> AS <alias>"); statement targets and FK rendering keep using the
+	// real QualifiedName.
+	Alias string
 }
 
-// QualifiedName returns the table name with an optional schema prefix.
+// QualifiedName returns the real table name with an optional schema prefix. It
+// is the statement target (INSERT/UPDATE/DELETE) and FK reference identity, so
+// it ignores Alias.
 func (t TableInfo) QualifiedName() string {
 	if t.Schema == "" {
 		return t.Name
@@ -52,9 +59,28 @@ func (t TableInfo) QualifiedName() string {
 	return t.Schema + "." + t.Name
 }
 
-// SQLSource marks TableInfo as a sql.Source.
+// refName is the identifier columns qualify by: the alias when set, else the
+// real qualified name.
+func (t TableInfo) refName() string {
+	if t.Alias != "" {
+		return t.Alias
+	}
+	return t.QualifiedName()
+}
+
+// SQLSource marks TableInfo as a sql.Source, rendering "<qualified> AS <alias>"
+// when aliased.
 func (t TableInfo) SQLSource() SourceExpression {
+	if t.Alias != "" {
+		return SourceExpression{Name: t.QualifiedName(), Alias: t.Alias}
+	}
 	return SourceExpression{Name: t.QualifiedName()}
+}
+
+// WithAlias returns a copy of the table identity aliased as alias.
+func (t TableInfo) WithAlias(alias string) TableInfo {
+	t.Alias = alias
+	return t
 }
 
 func (t TableInfo) sqlTable() sql.Table { return sql.Table{Schema: t.Schema, Name: t.Name} }
@@ -78,6 +104,13 @@ func NewColumn[T any](table TableInfo, name string) Column[T] {
 	return Column[T]{table: table, name: name}
 }
 
+// withTable returns a copy of the column bound to a different table identity
+// (same name and static type). It backs aliased table views.
+func (c Column[T]) withTable(table TableInfo) Column[T] {
+	c.table = table
+	return c
+}
+
 func (Column[T]) SQLExpression() {}
 func (Column[T]) SQLSelection()  {}
 func (Column[T]) typedExpr(T)    {}
@@ -85,12 +118,13 @@ func (Column[T]) typedExpr(T)    {}
 // ColumnName returns the bare database column name.
 func (c Column[T]) ColumnName() string { return c.name }
 
-// Reference returns the qualified SQL column reference.
+// Reference returns the qualified SQL column reference, qualified by the
+// table's alias when it has one, else by its real qualified name.
 func (c Column[T]) Reference() string {
-	if c.table.Name == "" {
+	if c.table.Name == "" && c.table.Alias == "" {
 		return c.name
 	}
-	return c.table.QualifiedName() + "." + c.name
+	return c.table.refName() + "." + c.name
 }
 
 // Eq creates a "column = value" predicate.

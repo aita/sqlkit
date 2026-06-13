@@ -483,6 +483,18 @@ func (t {{.TypeName}}) Defaulted() []sqlkit.AnyColumn {
 	return []sqlkit.AnyColumn{ {{- $first := true}}{{range .Columns}}{{if .HasDefault}}{{if not $first}}, {{end}}{{$first = false}}t.{{.Field}}{{end}}{{end -}} }
 }
 
+// As returns a copy of the binding aliased as alias: its columns render
+// qualified by the alias and its source renders "{{.Qualified}} AS <alias>".
+func (t {{.TypeName}}) As(alias string) {{.TypeName}} {
+	info := t.info.WithAlias(alias)
+	return {{.TypeName}}{
+		info: info,
+{{- range .Columns}}
+		{{.Field}}: sqlkit.NewColumn[{{.GoType}}](info, {{printf "%q" .Name}}),
+{{- end}}
+	}
+}
+
 var _ sqlkit.Table = {{.VarName}}
 `))
 
@@ -533,6 +545,18 @@ func (t {{.ColumnsType}}) PrimaryKey() []sqlkit.AnyColumn {
 // Defaulted returns the columns with database-side defaults.
 func (t {{.ColumnsType}}) Defaulted() []sqlkit.AnyColumn {
 	return []sqlkit.AnyColumn{ {{- $first := true}}{{range .Columns}}{{if .HasDefault}}{{if not $first}}, {{end}}{{$first = false}}t.{{.Field}}{{end}}{{end -}} }
+}
+
+// As returns a copy of the binding aliased as alias: its columns render
+// qualified by the alias and its source renders "{{.Qualified}} AS <alias>".
+func (t {{.ColumnsType}}) As(alias string) {{.ColumnsType}} {
+	info := t.info.WithAlias(alias)
+	return {{.ColumnsType}}{
+		info: info,
+{{- range .Columns}}
+		{{.Field}}: sqlkit.NewColumn[{{.GoType}}](info, {{printf "%q" .Name}}),
+{{- end}}
+	}
 }
 {{if .Relations}}
 // {{.RelsType}} are the generated relations of table {{.Qualified}}.

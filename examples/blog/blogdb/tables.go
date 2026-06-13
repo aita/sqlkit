@@ -51,6 +51,19 @@ func (t UsersColumns) Defaulted() []sqlkit.AnyColumn {
 	return []sqlkit.AnyColumn{t.ID, t.CreatedAt}
 }
 
+// As returns a copy of the binding aliased as alias: its columns render
+// qualified by the alias and its source renders "public.users AS <alias>".
+func (t UsersColumns) As(alias string) UsersColumns {
+	info := t.info.WithAlias(alias)
+	return UsersColumns{
+		info:      info,
+		ID:        sqlkit.NewColumn[int64](info, "id"),
+		Email:     sqlkit.NewColumn[string](info, "email"),
+		Name:      sqlkit.NewColumn[*string](info, "name"),
+		CreatedAt: sqlkit.NewColumn[time.Time](info, "created_at"),
+	}
+}
+
 // UsersRels are the generated relations of table public.users.
 type UsersRels struct {
 	Posts   UsersPostsRel
@@ -158,6 +171,20 @@ func (t PostsColumns) Defaulted() []sqlkit.AnyColumn {
 	return []sqlkit.AnyColumn{t.ID, t.Published}
 }
 
+// As returns a copy of the binding aliased as alias: its columns render
+// qualified by the alias and its source renders "public.posts AS <alias>".
+func (t PostsColumns) As(alias string) PostsColumns {
+	info := t.info.WithAlias(alias)
+	return PostsColumns{
+		info:      info,
+		ID:        sqlkit.NewColumn[int64](info, "id"),
+		UserID:    sqlkit.NewColumn[int64](info, "user_id"),
+		Title:     sqlkit.NewColumn[string](info, "title"),
+		Body:      sqlkit.NewColumn[*string](info, "body"),
+		Published: sqlkit.NewColumn[bool](info, "published"),
+	}
+}
+
 // PostsRels are the generated relations of table public.posts.
 type PostsRels struct {
 	User PostsUserRel
@@ -241,6 +268,19 @@ func (t ProfilesColumns) PrimaryKey() []sqlkit.AnyColumn {
 // Defaulted returns the columns with database-side defaults.
 func (t ProfilesColumns) Defaulted() []sqlkit.AnyColumn {
 	return []sqlkit.AnyColumn{t.ID, t.Public}
+}
+
+// As returns a copy of the binding aliased as alias: its columns render
+// qualified by the alias and its source renders "public.profiles AS <alias>".
+func (t ProfilesColumns) As(alias string) ProfilesColumns {
+	info := t.info.WithAlias(alias)
+	return ProfilesColumns{
+		info:   info,
+		ID:     sqlkit.NewColumn[int64](info, "id"),
+		UserID: sqlkit.NewColumn[int64](info, "user_id"),
+		Bio:    sqlkit.NewColumn[*string](info, "bio"),
+		Public: sqlkit.NewColumn[bool](info, "public"),
+	}
 }
 
 // ProfilesRels are the generated relations of table public.profiles.

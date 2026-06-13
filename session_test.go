@@ -56,6 +56,15 @@ func (t UsersTable) Columns() []sqlkit.AnyColumn {
 }
 func (t UsersTable) PrimaryKey() []sqlkit.AnyColumn { return []sqlkit.AnyColumn{t.ID} }
 func (t UsersTable) Defaulted() []sqlkit.AnyColumn  { return []sqlkit.AnyColumn{t.ID} }
+func (t UsersTable) As(alias string) UsersTable {
+	info := t.info.WithAlias(alias)
+	return UsersTable{
+		info:  info,
+		ID:    sqlkit.NewColumn[int64](info, "id"),
+		Email: sqlkit.NewColumn[string](info, "email"),
+		Name:  sqlkit.NewColumn[*string](info, "name"),
+	}
+}
 
 type Post struct {
 	ID     int64
