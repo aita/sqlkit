@@ -63,6 +63,12 @@ func TestJSONFunctions(t *testing.T) {
 		`SELECT JSON_OBJECTAGG("k", "v") AS "obj" FROM "kv"`, nil)
 }
 
+func TestConcatPostgres(t *testing.T) {
+	assertSQL(t,
+		Select(As(Concat(Col("first"), Val(" "), Col("last")), "name")).From(Table{Name: "users"}),
+		`SELECT ("first" || $1 || "last") AS "name" FROM "users"`, []any{" "})
+}
+
 func TestJSONAccessPostgres(t *testing.T) {
 	// Object key, returning json (->).
 	assertSQL(t,

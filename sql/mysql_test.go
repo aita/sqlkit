@@ -33,6 +33,13 @@ func TestMySQLSelect(t *testing.T) {
 		[]any{7, "%@x.com"})
 }
 
+func TestMySQLConcat(t *testing.T) {
+	// MySQL's || is logical OR, so concatenation compiles to CONCAT(...).
+	assertMySQL(t,
+		Select(As(Concat(Col("first"), Val(" "), Col("last")), "name")).From(Table{Name: "users"}),
+		"SELECT CONCAT(`first`, ?, `last`) AS `name` FROM `users`", []any{" "})
+}
+
 func TestMySQLILike(t *testing.T) {
 	// MySQL has no ILIKE: it compiles to the portable LOWER ... LIKE LOWER form.
 	assertMySQL(t,

@@ -157,6 +157,25 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 			return "(NOT EXISTS (" + subSQL + "))", args, nil
 		}
 		return "EXISTS (" + subSQL + ")", args, nil
+	case ConcatExpression:
+		if len(e.Operands) == 0 {
+			return "", nil, fmt.Errorf("sqlkit/sql: CONCAT requires at least one operand")
+		}
+		parts := make([]string, len(e.Operands))
+		var args []any
+		for i, operand := range e.Operands {
+			operandSQL, operandArgs, err := c.CompileExpression(operand)
+			if err != nil {
+				return "", nil, err
+			}
+			parts[i] = operandSQL
+			args = append(args, operandArgs...)
+		}
+		if con, ok := c.Dialect.(Concatenator); ok {
+			return con.Concat(parts), args, nil
+		}
+		// Standard || operator (PostgreSQL); MySQL overrides via Concatenator.
+		return "(" + strings.Join(parts, " || ") + ")", args, nil
 	case ILikeExpression:
 		leftSQL, args, err := c.CompileExpression(e.Left)
 		if err != nil {

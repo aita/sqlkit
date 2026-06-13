@@ -91,6 +91,15 @@ type CaseInsensitiveLiker interface {
 	ILike(left, pattern string) string
 }
 
+// Concatenator is an optional capability for dialects whose string
+// concatenation is not the standard || operator (MySQL, where || is logical OR
+// and CONCAT(...) concatenates). The compiler detects it with a type assertion,
+// so it is not a breaking change to Dialect; a dialect without it falls back to
+// the || operator. operands are already-compiled SQL fragments.
+type Concatenator interface {
+	Concat(operands []string) string
+}
+
 // DialectByName returns the Dialect for a name ("postgres"/"postgresql" or
 // "mysql"; empty defaults to postgres). It errors on an unknown name.
 func DialectByName(name string) (Dialect, error) {
@@ -334,6 +343,11 @@ func (MySQLDialect) DropForeignKey(qualifiedTable, quotedConstraint string) stri
 
 func (MySQLDialect) DropIndex(_, quotedIndex, qualifiedTable string) string {
 	return "DROP INDEX " + quotedIndex + " ON " + qualifiedTable + ";"
+}
+
+// Concat renders MySQL string concatenation, whose || operator means logical OR.
+func (MySQLDialect) Concat(operands []string) string {
+	return "CONCAT(" + strings.Join(operands, ", ") + ")"
 }
 
 // JSONAccess builds a JSON path string ($.a[0].b) and wraps the operand in

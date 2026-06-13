@@ -86,6 +86,26 @@ func binary(left any, operator string, right any) BinaryExpression {
 	return BinaryExpression{Left: Expr(left), Operator: operator, Right: Expr(right)}
 }
 
+// ConcatExpression concatenates strings. It renders per dialect: the standard
+// || operator on PostgreSQL, and CONCAT(...) on MySQL, whose || means logical
+// OR instead.
+type ConcatExpression struct {
+	Operands []Expression
+}
+
+func (ConcatExpression) SQLExpression() {}
+func (ConcatExpression) SQLSelection()  {}
+
+// Concat creates a string concatenation expression. Non-expression operands
+// become bind values.
+func Concat(operands ...any) ConcatExpression {
+	expressions := make([]Expression, len(operands))
+	for i, operand := range operands {
+		expressions[i] = Expr(operand)
+	}
+	return ConcatExpression{Operands: expressions}
+}
+
 // ILikeExpression is a case-insensitive LIKE. It renders per dialect: native
 // ILIKE on PostgreSQL, and the portable LOWER(left) LIKE LOWER(pattern) on
 // engines without an ILIKE operator (MySQL).

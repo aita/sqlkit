@@ -434,6 +434,9 @@ available. For JSON, `sql.JSONArray(...)`, `sql.JSONObject(key, val, ...)`,
 standard functions (PostgreSQL 16+, MySQL 5.7+); older PostgreSQL exposes the
 classic `json_build_array` / `json_agg` names through `sql.Func`.
 
+`sql.Concat(a, b, ...)` concatenates strings portably — the standard `||`
+operator on PostgreSQL, `CONCAT(...)` on MySQL (whose `||` means logical OR).
+
 JSON values are read with `sql.JSONGet(operand, path...)` (→ json) and
 `sql.JSONGetText(operand, path...)` (→ text). Path steps are object keys
 (`string`) or array indices (`int`), and the path is portable: each dialect
