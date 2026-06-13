@@ -94,7 +94,7 @@ methods to the query bindings.
 
 ### Using codegen as a library
 
-The `codegen` package is the generator's public API. Build a `meta.Catalog`
+The `codegen` package is the generator's public API. Build a `meta.Meta`
 with the `sqldef` package, by hand, or with `inspector.Inspect`, customize the
 SQL→Go type mapping, and choose what to emit:
 
@@ -141,7 +141,7 @@ package schema
 
 import "github.com/aita/sqlkit/sqldef"
 
-var Catalog = sqldef.Catalog()
+var Catalog = sqldef.NewCatalog()
 
 var Public = Catalog.Schema("public")
 
@@ -207,7 +207,7 @@ ddl, err := schema.Catalog.DDL("postgres") // CREATE TABLE / INDEX / COMMENT ...
 ```
 
 `Generate` accepts the full `codegen.Options` surface (DTOs, file layout, type
-overrides); `Build()` returns the raw `meta.Catalog` (dialect-agnostic) for
+overrides); `Build()` returns the raw `meta.Meta` (dialect-agnostic) for
 other tooling. Mistakes — duplicate names, dangling foreign keys, references
 into another catalog — are collected and reported by `Build`; a type with no
 name on the chosen dialect is reported by `Generate`/`DDL`.

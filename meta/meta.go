@@ -11,20 +11,19 @@
 // over the concatenation.
 package meta
 
-// Catalog is a resolved set of tables — the dialect-agnostic value that a
-// sqldef design builds into and that the codegen and ddl generators consume.
-// It is the meta-level hand-off type: sqldef.Catalog.Build returns one, and
-// the generators take it (plus the target dialect) from there.
-type Catalog struct {
+// Meta is a resolved set of tables — the dialect-agnostic value that a sqldef
+// catalog builds into and that the codegen and ddl generators consume. It is
+// the meta-level hand-off type: sqldef.Catalog.Build returns one, and the
+// generators take it (plus the target dialect) from there.
+type Meta struct {
 	Tables []Table
 }
 
-// Schemas returns the distinct schemas of the catalog's tables, in first-seen
-// order.
-func (c Catalog) Schemas() []Schema {
+// Schemas returns the distinct schemas of the tables, in first-seen order.
+func (m Meta) Schemas() []Schema {
 	var out []Schema
 	seen := map[string]bool{}
-	for _, t := range c.Tables {
+	for _, t := range m.Tables {
 		if !seen[t.Schema.Name] {
 			seen[t.Schema.Name] = true
 			out = append(out, t.Schema)

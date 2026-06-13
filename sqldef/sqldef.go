@@ -1,8 +1,8 @@
 // Package sqldef declares database schemas as plain Go values that build
-// directly into the meta model. A design (sqldef.Catalog) is the reusable
+// directly into the meta model. A catalog (sqldef.NewCatalog) is the reusable
 // root: each Table call assembles and returns a meta.Table immediately, so
 // foreign keys reference those values (References(Users, "id")), designs can
-// be split across files or packages, and the design Builds into a meta.Catalog
+// be split across files or packages, and the design Builds into a meta.Meta
 // that every generator — the typed table bindings (codegen) and the DDL (ddl)
 // — consumes.
 //
@@ -13,7 +13,7 @@
 //
 //	import "github.com/aita/sqlkit/sqldef"
 //
-//	var Catalog = sqldef.Catalog()
+//	var Catalog = sqldef.NewCatalog()
 //
 //	var Users = Catalog.Table("users",
 //		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
@@ -53,43 +53,43 @@ import (
 	"github.com/aita/sqlkit/meta"
 )
 
-// Design is the root a schema design hangs off: it accumulates the meta.Tables
-// declared on it, plus any declaration errors, and Builds them into a
-// meta.Catalog. Create one with Catalog.
-type Design struct {
+// Catalog is the root a schema design hangs off: it accumulates the
+// meta.Tables declared on it, plus any declaration errors, and Builds them
+// into a meta.Meta. Create one with NewCatalog.
+type Catalog struct {
 	schemaNames []string // distinct schema names in first-seen order
 	tables      []meta.Table
 	registered  map[string]bool // schema\x00name -> declared, for FK target checks
 	errs        []error
 }
 
-// Catalog returns an empty design to declare tables on. It is the entry point
-// of the DSL: var Catalog = sqldef.Catalog().
-func Catalog() *Design { return &Design{registered: map[string]bool{}} }
+// NewCatalog returns an empty catalog to declare tables on. It is the entry
+// point of the DSL: var Catalog = sqldef.NewCatalog().
+func NewCatalog() *Catalog { return &Catalog{registered: map[string]bool{}} }
 
 func tableKey(schema, name string) string { return schema + "\x00" + name }
 
-func (d *Design) fail(format string, args ...any) {
+func (d *Catalog) fail(format string, args ...any) {
 	d.errs = append(d.errs, fmt.Errorf(format, args...))
 }
 
 // Schema returns a handle for the named schema (PostgreSQL schema / MySQL
 // database). Declaring tables through it qualifies them with the schema name.
-func (d *Design) Schema(name string) *Schema {
-	return &Schema{design: d, name: name}
+func (d *Catalog) Schema(name string) *Schema {
+	return &Schema{catalog: d, name: name}
 }
 
 // Table declares a table in the catalog's unnamed default schema and returns
 // the assembled meta.Table. Use Catalog.Schema("public").Table(...) to qualify
 // tables with a schema name.
-func (d *Design) Table(name string, elements ...TableElement) meta.Table {
+func (d *Catalog) Table(name string, elements ...TableElement) meta.Table {
 	return d.Schema("").Table(name, elements...)
 }
 
 // Schema is a handle for declaring tables in a named schema of a design.
 type Schema struct {
-	design *Design
-	name   string
+	catalog *Catalog
+	name    string
 }
 
 // Name returns the schema name ("" for the default schema).
@@ -98,8 +98,8 @@ func (s *Schema) Name() string { return s.name }
 // Table declares a table in the schema and returns the assembled meta.Table —
 // the value foreign keys in other tables reference.
 func (s *Schema) Table(name string, elements ...TableElement) meta.Table {
-	d := s.design
-	b := &tableBuilder{design: d, schema: s.name, name: name}
+	d := s.catalog
+	b := &tableBuilder{catalog: d, schema: s.name, name: name}
 	if name == "" {
 		d.fail("Table requires a name")
 	} else if d.registered[tableKey(s.name, name)] {
@@ -119,7 +119,7 @@ func (s *Schema) Table(name string, elements ...TableElement) meta.Table {
 	return table
 }
 
-func (d *Design) schemaNamesAdd(name string) {
+func (d *Catalog) schemaNamesAdd(name string) {
 	for _, n := range d.schemaNames {
 		if n == name {
 			return
@@ -135,7 +135,7 @@ func (d *Design) schemaNamesAdd(name string) {
 //
 //	var Employees = Catalog.Table("employees", ...)
 //	var _ = Catalog.AddForeignKey(Employees, []string{"manager_id"}, Employees, []string{"id"})
-func (d *Design) AddForeignKey(table meta.Table, columns []string, ref meta.Table, refColumns []string) meta.Table {
+func (d *Catalog) AddForeignKey(table meta.Table, columns []string, ref meta.Table, refColumns []string) meta.Table {
 	key := tableKey(table.Schema.Name, table.Name)
 	for i := range d.tables {
 		t := &d.tables[i]
@@ -154,7 +154,7 @@ func (d *Design) AddForeignKey(table meta.Table, columns []string, ref meta.Tabl
 // tableBuilder is the mutable scratch a Table's elements write into before it
 // is finalized into a meta.Table.
 type tableBuilder struct {
-	design      *Design
+	catalog     *Catalog
 	schema      string
 	name        string
 	comment     string
@@ -165,13 +165,13 @@ type tableBuilder struct {
 }
 
 func (b *tableBuilder) fail(format string, args ...any) {
-	b.design.fail("table %q: "+format, append([]any{b.name}, args...)...)
+	b.catalog.fail("table %q: "+format, append([]any{b.name}, args...)...)
 }
 
 // build finalizes the scratch into a meta.Table, validating and assigning
 // constraint names. Type resolution is deferred to the generators.
 func (b *tableBuilder) build() meta.Table {
-	d := b.design
+	d := b.catalog
 	mt := meta.Table{Schema: meta.Schema{Name: b.schema}, Name: b.name, Comment: b.comment}
 	if b.name != "" && len(b.columns) == 0 {
 		d.fail("table %q declares no columns", b.name)

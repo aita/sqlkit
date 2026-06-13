@@ -30,7 +30,7 @@ const sqldefImport = "github.com/aita/sqlkit/sqldef"
 // maintain the schema as Go code and generate bindings and DDL from it.
 // Unlike binding generation the result is a starting point meant to be
 // edited, so it carries no DO NOT EDIT marker.
-func GenerateDesign(catalog meta.Catalog, opts DesignOptions) (File, error) {
+func GenerateDesign(catalog meta.Meta, opts DesignOptions) (File, error) {
 	if opts.PackageName == "" {
 		return File{}, fmt.Errorf("codegen: package name is required")
 	}
@@ -90,7 +90,7 @@ func GenerateDesign(catalog meta.Catalog, opts DesignOptions) (File, error) {
 	var sb strings.Builder
 	sb.WriteString("// Catalog holds the design bootstrapped from a live database; edit it\n")
 	sb.WriteString("// and regenerate the bindings and DDL from it.\n")
-	sb.WriteString("var Catalog = sqldef.Catalog()\n")
+	sb.WriteString("var Catalog = sqldef.NewCatalog()\n")
 	for _, name := range schemaOrder {
 		if name == "" {
 			continue

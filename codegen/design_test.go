@@ -8,7 +8,7 @@ import (
 )
 
 func TestGenerateDesign(t *testing.T) {
-	file, err := GenerateDesign(meta.Catalog{Tables: fixtureTables()}, DesignOptions{PackageName: "design"})
+	file, err := GenerateDesign(meta.Meta{Tables: fixtureTables()}, DesignOptions{PackageName: "design"})
 	if err != nil {
 		t.Fatalf("GenerateDesign() error = %v", err)
 	}
@@ -33,13 +33,13 @@ func TestGenerateDesignMySQL(t *testing.T) {
 			},
 		},
 	}
-	file, err := GenerateDesign(meta.Catalog{Tables: tables}, DesignOptions{PackageName: "design", Dialect: "mysql"})
+	file, err := GenerateDesign(meta.Meta{Tables: tables}, DesignOptions{PackageName: "design", Dialect: "mysql"})
 	if err != nil {
 		t.Fatalf("GenerateDesign() error = %v", err)
 	}
 	got := string(file.Content)
 	for _, want := range []string{
-		`var Catalog = sqldef.Catalog()`,
+		`var Catalog = sqldef.NewCatalog()`,
 		`var App = Catalog.Schema("app")`,
 		"var Items = App.Table(\"items\",",
 		`sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),`,
@@ -82,7 +82,7 @@ func TestGenerateDesignForeignKeys(t *testing.T) {
 			},
 		},
 	}
-	file, err := GenerateDesign(meta.Catalog{Tables: tables}, DesignOptions{PackageName: "design"})
+	file, err := GenerateDesign(meta.Meta{Tables: tables}, DesignOptions{PackageName: "design"})
 	if err != nil {
 		t.Fatalf("GenerateDesign() error = %v", err)
 	}
@@ -122,7 +122,7 @@ func TestGenerateDesignIndexesChecksComments(t *testing.T) {
 			},
 		},
 	}
-	file, err := GenerateDesign(meta.Catalog{Tables: tables}, DesignOptions{PackageName: "design"})
+	file, err := GenerateDesign(meta.Meta{Tables: tables}, DesignOptions{PackageName: "design"})
 	if err != nil {
 		t.Fatalf("GenerateDesign() error = %v", err)
 	}
@@ -141,10 +141,10 @@ func TestGenerateDesignIndexesChecksComments(t *testing.T) {
 }
 
 func TestGenerateDesignErrors(t *testing.T) {
-	if _, err := GenerateDesign(meta.Catalog{Tables: fixtureTables()}, DesignOptions{}); err == nil {
+	if _, err := GenerateDesign(meta.Meta{Tables: fixtureTables()}, DesignOptions{}); err == nil {
 		t.Error("GenerateDesign() without package name: expected error")
 	}
-	if _, err := GenerateDesign(meta.Catalog{}, DesignOptions{PackageName: "design"}); err == nil {
+	if _, err := GenerateDesign(meta.Meta{}, DesignOptions{PackageName: "design"}); err == nil {
 		t.Error("GenerateDesign() without tables: expected error")
 	}
 }

@@ -84,7 +84,7 @@ type tableModel struct {
 // Generate renders the catalog into one or more Go source files according to
 // opts and returns their formatted contents. The dialect (opts.Dialect,
 // default postgres) selects the default SQL→Go type table.
-func Generate(catalog meta.Catalog, opts Options) ([]File, error) {
+func Generate(catalog meta.Meta, opts Options) ([]File, error) {
 	if opts.PackageName == "" {
 		return nil, fmt.Errorf("codegen: package name is required")
 	}

@@ -12,26 +12,26 @@ import (
 	"github.com/aita/sqlkit/meta"
 )
 
-// Build validates the design and returns the assembled meta.Catalog. Tables
+// Build validates the design and returns the assembled meta.Meta. Tables
 // are already built (Table assembles each one eagerly), so Build only checks
 // for declaration errors; no dialect is needed — column types stay portable
-// and the generators resolve them. The returned meta.Catalog is the
+// and the generators resolve them. The returned meta.Meta is the
 // dialect-agnostic value the codegen and ddl generators consume.
-func (d *Design) Build() (meta.Catalog, error) {
+func (d *Catalog) Build() (meta.Meta, error) {
 	errs := append([]error(nil), d.errs...)
 	if len(d.tables) == 0 {
 		errs = append(errs, errors.New("catalog declares no tables"))
 	}
 	if len(errs) > 0 {
-		return meta.Catalog{}, fmt.Errorf("sqldef: invalid catalog: %w", errors.Join(errs...))
+		return meta.Meta{}, fmt.Errorf("sqldef: invalid catalog: %w", errors.Join(errs...))
 	}
-	return meta.Catalog{Tables: d.tables}, nil
+	return meta.Meta{Tables: d.tables}, nil
 }
 
 // resolveFK validates a foreign key against the local columns and the
 // referenced table, assigns its name, and returns the meta.ForeignKey. It
 // reports failures to the design and returns ok=false on error.
-func (d *Design) resolveFK(table string, columns []meta.Column, fk fkDef) (meta.ForeignKey, bool) {
+func (d *Catalog) resolveFK(table string, columns []meta.Column, fk fkDef) (meta.ForeignKey, bool) {
 	if fk.ref.Name == "" {
 		d.fail("table %q: foreign key references an unnamed table", table)
 		return meta.ForeignKey{}, false
@@ -109,7 +109,7 @@ func isBlank(s string) bool { return strings.TrimSpace(s) == "" }
 // Generate builds the catalog and runs the code generator over its tables,
 // producing the typed table bindings (and whatever else opts requests).
 // opts.Dialect selects the target dialect (default postgres).
-func (d *Design) Generate(opts codegen.Options) ([]codegen.File, error) {
+func (d *Catalog) Generate(opts codegen.Options) ([]codegen.File, error) {
 	catalog, err := d.Build()
 	if err != nil {
 		return nil, err
@@ -119,7 +119,7 @@ func (d *Design) Generate(opts codegen.Options) ([]codegen.File, error) {
 
 // DDL builds the catalog and renders its tables as CREATE TABLE / CREATE INDEX
 // / comment statements for the dialect (default postgres).
-func (d *Design) DDL(dialect string) (string, error) {
+func (d *Catalog) DDL(dialect string) (string, error) {
 	catalog, err := d.Build()
 	if err != nil {
 		return "", err

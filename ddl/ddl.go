@@ -20,7 +20,7 @@ import (
 
 // Generate renders the DDL for the catalog's tables in declaration order, for
 // the dialect ("postgres" or "mysql"; empty defaults to postgres).
-func Generate(catalog meta.Catalog, dialectName string) (string, error) {
+func Generate(catalog meta.Meta, dialectName string) (string, error) {
 	var d dialect
 	switch dialectName {
 	case "", "postgres":

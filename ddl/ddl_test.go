@@ -10,7 +10,7 @@ import (
 // fixture builds the catalog with portable types for the given dialect: the
 // dataTypes map gives the engine name per logical type, set on the dialect's
 // side of meta.Type.
-func fixture(dialect string, dataTypes map[string]string) meta.Catalog {
+func fixture(dialect string, dataTypes map[string]string) meta.Meta {
 	typ := func(key string, length, precision, scale int) meta.Type {
 		t := meta.Type{Length: length, Precision: precision, Scale: scale}
 		if dialect == "mysql" {
@@ -21,7 +21,7 @@ func fixture(dialect string, dataTypes map[string]string) meta.Catalog {
 		return t
 	}
 	public := meta.Schema{Name: "public"}
-	return meta.Catalog{
+	return meta.Meta{
 		Tables: []meta.Table{
 			{
 				Schema:  public,
@@ -128,7 +128,7 @@ func TestGenerateMySQL(t *testing.T) {
 }
 
 func TestGenerateUnqualified(t *testing.T) {
-	catalog := meta.Catalog{
+	catalog := meta.Meta{
 		Tables: []meta.Table{{
 			Name: "items",
 			Columns: []meta.Column{
@@ -146,13 +146,13 @@ func TestGenerateUnqualified(t *testing.T) {
 }
 
 func TestGenerateUnsupportedDialect(t *testing.T) {
-	if _, err := Generate(meta.Catalog{}, "oracle"); err == nil {
+	if _, err := Generate(meta.Meta{}, "oracle"); err == nil {
 		t.Error("Generate(oracle): expected error")
 	}
 }
 
 func TestLiteralEscaping(t *testing.T) {
-	catalog := meta.Catalog{
+	catalog := meta.Meta{
 		Tables: []meta.Table{{
 			Name:    "items",
 			Comment: "it's quoted",
