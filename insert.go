@@ -24,6 +24,7 @@ type InsertQuery struct {
 	conflict     *insertConflict
 	returning    []sql.Selection
 	hasReturning bool
+	batchSize    int
 }
 
 // insertConflict holds a typed upsert action mirroring sql.conflictClause.
@@ -68,6 +69,19 @@ func (q InsertQuery) Values(rows ...any) InsertQuery {
 // table order.
 func (q InsertQuery) Columns(columns ...AnyColumn) InsertQuery {
 	q.columns = columns
+	return q
+}
+
+// BatchSize splits a Values-based INSERT into separate statements of at most n
+// rows each when executed, keeping large bulk inserts within the database's
+// bind-parameter and statement-size limits. n <= 0 (the default) inserts every
+// row in a single statement.
+//
+// It applies to Exec only: ToSQL always compiles the full statement, and it has
+// no effect on FromSelect. Wrap the Exec in a transaction (a Session) if the
+// batches must succeed or fail together.
+func (q InsertQuery) BatchSize(n int) InsertQuery {
+	q.batchSize = n
 	return q
 }
 
@@ -257,7 +271,57 @@ func intersect(names, allowed []string) []string {
 	return out
 }
 
-// Exec runs the INSERT statement and returns the database/sql result.
+// Exec runs the INSERT statement and returns the database/sql result. When
+// BatchSize is set and the rows exceed it, the rows are inserted in several
+// statements and the returned result aggregates them: RowsAffected sums every
+// batch and LastInsertId reports the final batch.
 func (q InsertQuery) Exec(ctx context.Context) (stdsql.Result, error) {
+	if q.batchSize > 0 && len(q.rows) > q.batchSize {
+		return q.execBatched(ctx)
+	}
 	return runExec(ctx, q.ex, q)
+}
+
+// execBatched inserts q.rows in chunks of q.batchSize, one statement per chunk.
+func (q InsertQuery) execBatched(ctx context.Context) (stdsql.Result, error) {
+	if q.ex == nil {
+		return nil, errNoExecutor
+	}
+	result := &batchResult{}
+	for start := 0; start < len(q.rows); start += q.batchSize {
+		batch := q
+		batch.rows = q.rows[start:min(start+q.batchSize, len(q.rows))]
+		res, err := runExec(ctx, q.ex, batch)
+		if err != nil {
+			return nil, err
+		}
+		result.add(res)
+	}
+	return result, nil
+}
+
+// batchResult aggregates the per-batch results of a BatchSize INSERT: it sums
+// RowsAffected across batches and reports LastInsertId from the final batch.
+type batchResult struct {
+	last         stdsql.Result
+	rowsAffected int64
+	rowsErr      error
+}
+
+func (r *batchResult) add(res stdsql.Result) {
+	r.last = res
+	if n, err := res.RowsAffected(); err != nil {
+		r.rowsErr = err
+	} else {
+		r.rowsAffected += n
+	}
+}
+
+func (r *batchResult) LastInsertId() (int64, error) { return r.last.LastInsertId() }
+
+func (r *batchResult) RowsAffected() (int64, error) {
+	if r.rowsErr != nil {
+		return 0, r.rowsErr
+	}
+	return r.rowsAffected, nil
 }

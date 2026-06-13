@@ -176,6 +176,71 @@ func TestInsertExecThroughDatabase(t *testing.T) {
 	}
 }
 
+func TestInsertBatchSizeSplitsExec(t *testing.T) {
+	fake := &sqltest.Fake{}
+	db := sqlkit.WrapDB(fake.DB())
+
+	users := []User{
+		{Email: "a@example.com"},
+		{Email: "b@example.com"},
+		{Email: "c@example.com"},
+		{Email: "d@example.com"},
+		{Email: "e@example.com"},
+	}
+	res, err := db.Insert(Users).Values(users).BatchSize(2).Exec(context.Background())
+	if err != nil {
+		t.Fatalf("Exec() error = %v", err)
+	}
+
+	// 5 rows in batches of 2 → 3 statements (2, 2, 1).
+	execs := fake.Execs()
+	if len(execs) != 3 {
+		t.Fatalf("execs = %d, want 3", len(execs))
+	}
+	if n := strings.Count(execs[0].SQL, "VALUES"); n != 1 {
+		t.Fatalf("execs[0] = %q", execs[0].SQL)
+	}
+	// Users maps to two columns (email, name), so a 2-row batch carries 4 args
+	// and the trailing 1-row batch carries 2.
+	if len(execs[0].Args) != 4 || len(execs[2].Args) != 2 {
+		t.Fatalf("batch arg counts = %d, %d; want 4 and 2", len(execs[0].Args), len(execs[2].Args))
+	}
+
+	// RowsAffected sums the per-batch results (the fake reports 1 per Exec).
+	if n, err := res.RowsAffected(); err != nil || n != 3 {
+		t.Fatalf("RowsAffected() = %d, %v; want 3, nil", n, err)
+	}
+}
+
+func TestInsertBatchSizeSingleStatementWhenNotExceeded(t *testing.T) {
+	fake := &sqltest.Fake{}
+	db := sqlkit.WrapDB(fake.DB())
+
+	users := []User{{Email: "a@example.com"}, {Email: "b@example.com"}}
+	// batchSize >= rows, and batchSize <= 0, both run as a single statement.
+	for _, size := range []int{2, 5, 0, -1} {
+		fake = &sqltest.Fake{}
+		db = sqlkit.WrapDB(fake.DB())
+		if _, err := db.Insert(Users).Values(users).BatchSize(size).Exec(context.Background()); err != nil {
+			t.Fatalf("BatchSize(%d) Exec() error = %v", size, err)
+		}
+		if n := len(fake.Execs()); n != 1 {
+			t.Fatalf("BatchSize(%d) execs = %d, want 1", size, n)
+		}
+	}
+}
+
+func TestInsertBatchSizeIgnoredByToSQL(t *testing.T) {
+	// ToSQL always compiles the full statement regardless of BatchSize.
+	insert := sqlkit.Insert(Users).Values(
+		User{Email: "a@example.com"},
+		User{Email: "b@example.com"},
+	).BatchSize(1)
+	assertToSQL(t, insert,
+		`INSERT INTO "public"."users" ("email", "name") VALUES ($1, $2), ($3, $4)`,
+		[]any{"a@example.com", (*string)(nil), "b@example.com", (*string)(nil)})
+}
+
 func TestDeleteExecThroughDatabase(t *testing.T) {
 	fake := &sqltest.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
