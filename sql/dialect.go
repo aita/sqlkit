@@ -72,6 +72,16 @@ type Dialect interface {
 	DropIndex(qualifiedIndex, quotedIndex, qualifiedTable string) string
 }
 
+// JSONAccessor is an optional capability a Dialect implements to render JSON
+// path extraction (JSONAccessExpression) in its native syntax. The compiler
+// detects it with a type assertion, so adding it is not a breaking change to
+// Dialect; a dialect that does not implement it rejects JSON access at compile
+// time. operand is the already-compiled JSON expression, path steps are object
+// keys (string) or array indices (int), and asText selects the text form.
+type JSONAccessor interface {
+	JSONAccess(operand string, path []any, asText bool) (string, error)
+}
+
 // DialectByName returns the Dialect for a name ("postgres"/"postgresql" or
 // "mysql"; empty defaults to postgres). It errors on an unknown name.
 func DialectByName(name string) (Dialect, error) {
@@ -100,6 +110,36 @@ func typeWithArgs(name string, length, precision, scale int, lengthTypes, decima
 // literal renders a single-quoted SQL string literal.
 func literal(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+// jsonPathStep renders one JSON path step into the dialect-neutral parts a
+// JSONAccessor needs: ok reports a valid step, key/index carry the value.
+func jsonPathStep(index int, step any) (isKey bool, key string, idx int, err error) {
+	switch s := step.(type) {
+	case string:
+		return true, s, 0, nil
+	case int:
+		return false, "", s, nil
+	default:
+		return false, "", 0, fmt.Errorf("sql: JSON path step %d must be a string key or int index, got %T", index, step)
+	}
+}
+
+// isSimpleJSONKey reports whether a key needs no quoting inside a MySQL JSON
+// path (a leading letter/underscore followed by letters, digits, underscores).
+func isSimpleJSONKey(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z'):
+		case i > 0 && r >= '0' && r <= '9':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // PostgreSQLDialect implements PostgreSQL identifier quoting, placeholders, and
@@ -187,6 +227,31 @@ func (PostgreSQLDialect) DropIndex(qualifiedIndex, _, _ string) string {
 	return "DROP INDEX IF EXISTS " + qualifiedIndex + ";"
 }
 
+// JSONAccess chains the -> / ->> operators, one per path step (the last uses
+// ->> when asText), e.g. (("data" -> 'a') -> 0) ->> 'b'.
+func (PostgreSQLDialect) JSONAccess(operand string, path []any, asText bool) (string, error) {
+	if len(path) == 0 {
+		return "", fmt.Errorf("sql: JSON access requires at least one path step")
+	}
+	expr := operand
+	for i, step := range path {
+		isKey, key, idx, err := jsonPathStep(i, step)
+		if err != nil {
+			return "", err
+		}
+		operator := "->"
+		if asText && i == len(path)-1 {
+			operator = "->>"
+		}
+		operand := strconv.Itoa(idx)
+		if isKey {
+			operand = literal(key)
+		}
+		expr = "(" + expr + " " + operator + " " + operand + ")"
+	}
+	return expr, nil
+}
+
 // MySQLDialect implements MySQL identifier quoting, placeholders, and DDL
 // rendering. The query builders compile against it; RETURNING is rejected at
 // compile time (MySQL has no RETURNING — read generated keys via
@@ -255,4 +320,37 @@ func (MySQLDialect) DropForeignKey(qualifiedTable, quotedConstraint string) stri
 
 func (MySQLDialect) DropIndex(_, quotedIndex, qualifiedTable string) string {
 	return "DROP INDEX " + quotedIndex + " ON " + qualifiedTable + ";"
+}
+
+// JSONAccess builds a JSON path string ($.a[0].b) and wraps the operand in
+// JSON_EXTRACT, adding JSON_UNQUOTE for the text form.
+func (MySQLDialect) JSONAccess(operand string, path []any, asText bool) (string, error) {
+	if len(path) == 0 {
+		return "", fmt.Errorf("sql: JSON access requires at least one path step")
+	}
+	var p strings.Builder
+	p.WriteString("$")
+	for i, step := range path {
+		isKey, key, idx, err := jsonPathStep(i, step)
+		if err != nil {
+			return "", err
+		}
+		if !isKey {
+			p.WriteString("[")
+			p.WriteString(strconv.Itoa(idx))
+			p.WriteString("]")
+			continue
+		}
+		p.WriteString(".")
+		if isSimpleJSONKey(key) {
+			p.WriteString(key)
+		} else {
+			p.WriteString(`"` + strings.ReplaceAll(key, `"`, `\"`) + `"`)
+		}
+	}
+	extract := "JSON_EXTRACT(" + operand + ", " + literal(p.String()) + ")"
+	if asText {
+		return "JSON_UNQUOTE(" + extract + ")", nil
+	}
+	return extract, nil
 }

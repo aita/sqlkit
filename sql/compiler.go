@@ -131,6 +131,20 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 			operator = "NOT BETWEEN"
 		}
 		return "(" + operandSQL + " " + operator + " " + lowSQL + " AND " + highSQL + ")", args, nil
+	case JSONAccessExpression:
+		operandSQL, args, err := c.CompileExpression(e.Operand)
+		if err != nil {
+			return "", nil, err
+		}
+		accessor, ok := c.Dialect.(JSONAccessor)
+		if !ok {
+			return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support JSON access", c.Dialect.Name())
+		}
+		out, err := accessor.JSONAccess(operandSQL, e.Path, e.AsText)
+		if err != nil {
+			return "", nil, err
+		}
+		return out, args, nil
 	case ExistsExpression:
 		if e.Query == nil {
 			return "", nil, fmt.Errorf("sqlkit/sql: EXISTS requires a subquery")

@@ -33,6 +33,21 @@ func TestMySQLSelect(t *testing.T) {
 		[]any{7, "%@x.com"})
 }
 
+func TestMySQLJSONAccess(t *testing.T) {
+	assertMySQL(t,
+		Select(As(JSONGet(Col("data"), "name"), "n")).From(Table{Name: "events"}),
+		"SELECT JSON_EXTRACT(`data`, '$.name') AS `n` FROM `events`", nil)
+
+	assertMySQL(t,
+		Select(As(JSONGetText(Col("data"), "items", 0, "id"), "id")).From(Table{Name: "events"}),
+		"SELECT JSON_UNQUOTE(JSON_EXTRACT(`data`, '$.items[0].id')) AS `id` FROM `events`", nil)
+
+	// A key needing quoting in the path.
+	assertMySQL(t,
+		Select(JSONGet(Col("data"), "first name")).From(Table{Name: "events"}),
+		"SELECT JSON_EXTRACT(`data`, '$.\"first name\"') FROM `events`", nil)
+}
+
 func TestMySQLInsertUpdateDelete(t *testing.T) {
 	insert := InsertInto(Table{Name: "users"}).Columns("email").Values("a@x.com")
 	assertMySQL(t, insert, "INSERT INTO `users` (`email`) VALUES (?)", []any{"a@x.com"})

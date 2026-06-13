@@ -340,6 +340,33 @@ func JSONArrayAgg(arg any) FuncExpression { return Func("JSON_ARRAYAGG", arg) }
 // the grouped key/value pairs into a JSON object.
 func JSONObjectAgg(key, value any) FuncExpression { return Func("JSON_OBJECTAGG", key, value) }
 
+// JSONAccessExpression extracts the value at a path from a JSON operand. Path
+// steps are object keys (string) or array indices (int) and are rendered as
+// static path literals, not bind parameters. AsText selects the text-returning
+// form. The path is portable: each dialect (a JSONAccessor) renders it in its
+// native syntax (PostgreSQL -> / ->>, MySQL JSON_EXTRACT / JSON_UNQUOTE).
+type JSONAccessExpression struct {
+	Operand Expression
+	Path    []any
+	AsText  bool
+}
+
+func (JSONAccessExpression) SQLExpression() {}
+func (JSONAccessExpression) SQLSelection()  {}
+
+// JSONGet extracts the JSON value at path from a JSON operand, e.g.
+// JSONGet(Col("data"), "address", "city") or JSONGet(Col("tags"), 0). Path
+// steps are object keys (string) or array indices (int).
+func JSONGet(operand any, path ...any) JSONAccessExpression {
+	return JSONAccessExpression{Operand: Expr(operand), Path: path}
+}
+
+// JSONGetText is JSONGet returning the extracted value as text (PostgreSQL ->>,
+// MySQL JSON_UNQUOTE(JSON_EXTRACT(...))), so it compares against string values.
+func JSONGetText(operand any, path ...any) JSONAccessExpression {
+	return JSONAccessExpression{Operand: Expr(operand), Path: path, AsText: true}
+}
+
 // RowNumber creates the ROW_NUMBER() window function.
 func RowNumber() FuncExpression { return Func("ROW_NUMBER") }
 

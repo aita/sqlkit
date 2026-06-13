@@ -63,6 +63,31 @@ func TestJSONFunctions(t *testing.T) {
 		`SELECT JSON_OBJECTAGG("k", "v") AS "obj" FROM "kv"`, nil)
 }
 
+func TestJSONAccessPostgres(t *testing.T) {
+	// Object key, returning json (->).
+	assertSQL(t,
+		Select(As(JSONGet(Col("data"), "name"), "n")).From(Table{Name: "events"}),
+		`SELECT ("data" -> 'name') AS "n" FROM "events"`, nil)
+
+	// Nested path with an array index, text form (->> on the last step).
+	assertSQL(t,
+		Select(As(JSONGetText(Col("data"), "items", 0, "id"), "id")).From(Table{Name: "events"}),
+		`SELECT ((("data" -> 'items') -> 0) ->> 'id') AS "id" FROM "events"`, nil)
+
+	// As text it composes with a string comparison.
+	assertSQL(t,
+		Select(Col("id")).From(Table{Name: "events"}).
+			Where(Eq(JSONGetText(Col("data"), "type"), Val("click"))),
+		`SELECT "id" FROM "events" WHERE (("data" ->> 'type') = $1)`, []any{"click"})
+}
+
+func TestJSONAccessRejectsBadStep(t *testing.T) {
+	_, _, err := Select(JSONGet(Col("data"), 1.5)).From(Table{Name: "events"}).ToSQL(PostgreSQLDialect{})
+	if err == nil {
+		t.Fatal("expected error for non-string/int path step")
+	}
+}
+
 func TestCaseExpression(t *testing.T) {
 	query := Select(
 		As(Case().

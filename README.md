@@ -433,6 +433,22 @@ available. For JSON, `sql.JSONArray(...)`, `sql.JSONObject(key, val, ...)`,
 standard functions (PostgreSQL 16+, MySQL 5.7+); older PostgreSQL exposes the
 classic `json_build_array` / `json_agg` names through `sql.Func`.
 
+JSON values are read with `sql.JSONGet(operand, path...)` (→ json) and
+`sql.JSONGetText(operand, path...)` (→ text). Path steps are object keys
+(`string`) or array indices (`int`), and the path is portable: each dialect
+renders it natively — PostgreSQL chains `->` / `->>`, MySQL emits
+`JSON_EXTRACT` / `JSON_UNQUOTE`.
+
+```go
+// PostgreSQL: ("data" -> 'address') ->> 'city'   MySQL: JSON_UNQUOTE(JSON_EXTRACT(`data`, '$.address.city'))
+city := sql.JSONGetText(appdb.Events.Data, "address", "city")
+err = db.Select(appdb.Events.ID).From(appdb.Events).
+    Where(sqlkit.Cond(sql.Eq(city, sql.Val("Tokyo")))). // text form compares to strings
+    All(ctx).Scan(&ids)
+
+firstTag := sql.JSONGet(appdb.Events.Data, "tags", 0) // -> json
+```
+
 ## Transactions
 
 `WithSession` runs a callback in one transaction — commit on nil return,
