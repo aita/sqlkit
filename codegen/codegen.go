@@ -433,7 +433,7 @@ func (t {{.TypeName}}) Defaulted() []sqlkit.AnyColumn {
 	return []sqlkit.AnyColumn{ {{- $first := true}}{{range .Columns}}{{if .HasDefault}}{{if not $first}}, {{end}}{{$first = false}}t.{{.Field}}{{end}}{{end -}} }
 }
 
-var _ sqlkit.TableMeta = {{.VarName}}
+var _ sqlkit.Table = {{.VarName}}
 `))
 
 var dtoTemplate = template.Must(template.New("dto").Parse("// {{.DTOName}} is a generated row struct for table {{.Qualified}}; any struct\n" +

@@ -59,21 +59,21 @@ func (d *Database) Select(selections ...sql.Selection) SelectQuery {
 
 // Insert starts an INSERT builder for a table, mirroring Select. Feed it
 // rows with Values, or a query with FromSelect.
-func (d *Database) Insert(table TableMeta) InsertQuery {
+func (d *Database) Insert(table Table) InsertQuery {
 	q := Insert(table)
 	q.ex = d
 	return q
 }
 
 // Update starts an UPDATE builder for a table, mirroring Select.
-func (d *Database) Update(table TableMeta) UpdateQuery {
+func (d *Database) Update(table Table) UpdateQuery {
 	q := Update(table)
 	q.ex = d
 	return q
 }
 
 // Delete starts a DELETE builder for a table, mirroring Select.
-func (d *Database) Delete(table TableMeta) DeleteQuery {
+func (d *Database) Delete(table Table) DeleteQuery {
 	q := Delete(table)
 	q.ex = d
 	return q

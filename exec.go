@@ -24,13 +24,13 @@ type Executor interface {
 
 	// Insert starts an INSERT bound to this executor. Feed it rows with
 	// Values, or a query with FromSelect.
-	Insert(table TableMeta) InsertQuery
+	Insert(table Table) InsertQuery
 
 	// Update starts an UPDATE bound to this executor.
-	Update(table TableMeta) UpdateQuery
+	Update(table Table) UpdateQuery
 
 	// Delete starts a DELETE bound to this executor.
-	Delete(table TableMeta) DeleteQuery
+	Delete(table Table) DeleteQuery
 
 	// RawSQL prepares a hand-written SQL string (with args) or a built
 	// sql.Query; materialize it with Scan.

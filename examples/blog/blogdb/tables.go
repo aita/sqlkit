@@ -51,7 +51,7 @@ func (t UsersTable) Defaulted() []sqlkit.AnyColumn {
 	return []sqlkit.AnyColumn{t.ID, t.CreatedAt}
 }
 
-var _ sqlkit.TableMeta = Users
+var _ sqlkit.Table = Users
 
 // PostsTable is the typed binding for table public.posts.
 type PostsTable struct {
@@ -97,4 +97,4 @@ func (t PostsTable) Defaulted() []sqlkit.AnyColumn {
 	return []sqlkit.AnyColumn{t.ID, t.Published}
 }
 
-var _ sqlkit.TableMeta = Posts
+var _ sqlkit.Table = Posts
