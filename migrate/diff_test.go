@@ -205,3 +205,60 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+func TestDiffColumnChangeMySQL(t *testing.T) {
+	d, err := sql.DialectByName("mysql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := meta.Metadata{Tables: []meta.Table{{Schema: meta.Schema{Name: "app"}, Name: "users", Columns: []meta.Column{
+		{Name: "name", Type: meta.Of("mysql", "varchar", 100, 0, 0)},
+	}}}}
+	next := meta.Metadata{Tables: []meta.Table{{Schema: meta.Schema{Name: "app"}, Name: "users", Columns: []meta.Column{
+		{Name: "name", Type: meta.Of("mysql", "text", 0, 0, 0), Nullable: true},
+	}}}}
+	stmts, err := migrate.Diff(old, next, d)
+	if err != nil {
+		t.Fatalf("Diff error = %v", err)
+	}
+	if len(stmts) != 1 {
+		t.Fatalf("want 1 statement, got %d", len(stmts))
+	}
+	text, _, _ := stmts[0].ToSQL(d)
+	want := "ALTER TABLE `app`.`users` MODIFY COLUMN `name` text;"
+	if text != want {
+		t.Errorf("MySQL column change =\n%s\nwant\n%s", text, want)
+	}
+}
+
+func TestDiffForeignKeyActionChange(t *testing.T) {
+	mk := func(action meta.ReferentialAction) meta.Metadata {
+		return md(meta.Table{Schema: meta.Schema{Name: "public"}, Name: "posts",
+			Columns:     []meta.Column{col("user_id", "int8")},
+			ForeignKeys: []meta.ForeignKey{{Name: "fk", Columns: []string{"user_id"}, RefSchema: meta.Schema{Name: "public"}, RefTable: "users", RefColumns: []string{"id"}, OnDelete: action}},
+		})
+	}
+	got := diff(t, mk(meta.Restrict), mk(meta.Cascade))
+	joined := strings.Join(got, "\n")
+	if !strings.Contains(joined, `DROP CONSTRAINT IF EXISTS "fk"`) {
+		t.Errorf("expected FK drop for action change, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "ON DELETE CASCADE") {
+		t.Errorf("expected FK re-added with new action, got:\n%s", joined)
+	}
+}
+
+func TestDiffPrimaryKeyChange(t *testing.T) {
+	old := md(meta.Table{Schema: meta.Schema{Name: "public"}, Name: "t", Columns: []meta.Column{
+		{Name: "a", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true},
+		{Name: "b", Type: meta.Of("postgres", "int8", 0, 0, 0)},
+	}})
+	next := md(meta.Table{Schema: meta.Schema{Name: "public"}, Name: "t", Columns: []meta.Column{
+		{Name: "a", Type: meta.Of("postgres", "int8", 0, 0, 0)},
+		{Name: "b", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true},
+	}})
+	joined := strings.Join(diff(t, old, next), "\n")
+	if !strings.Contains(joined, `DROP CONSTRAINT "t_pkey"`) || !strings.Contains(joined, `ADD PRIMARY KEY ("b")`) {
+		t.Errorf("expected PK drop+add, got:\n%s", joined)
+	}
+}

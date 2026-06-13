@@ -131,14 +131,44 @@ type Check struct {
 	Expression sql.Expression
 }
 
+// ReferentialAction is a foreign-key ON DELETE / ON UPDATE action. The empty
+// value means none was declared (the engine default, NO ACTION) and renders
+// nothing; the named values render their clause.
+type ReferentialAction string
+
+// The referential actions a foreign key may take on delete/update. NoAction is
+// the explicit form of the default; the empty ReferentialAction renders nothing.
+const (
+	NoAction   ReferentialAction = "NO ACTION"
+	Restrict   ReferentialAction = "RESTRICT"
+	Cascade    ReferentialAction = "CASCADE"
+	SetNull    ReferentialAction = "SET NULL"
+	SetDefault ReferentialAction = "SET DEFAULT"
+)
+
 // ForeignKey describes a foreign-key constraint: the local Columns reference
-// RefColumns of RefTable (in RefSchema).
+// RefColumns of RefTable (in RefSchema). OnDelete/OnUpdate carry the referential
+// actions; an empty action is the engine default and renders nothing.
 type ForeignKey struct {
 	Name       string
 	Columns    []string
 	RefSchema  Schema
 	RefTable   string
 	RefColumns []string
+	OnDelete   ReferentialAction
+	OnUpdate   ReferentialAction
+}
+
+// PrimaryKeyColumns returns the names of the table's primary-key columns, in
+// column order.
+func (t Table) PrimaryKeyColumns() []string {
+	var pk []string
+	for _, c := range t.Columns {
+		if c.PrimaryKey {
+			pk = append(pk, c.Name)
+		}
+	}
+	return pk
 }
 
 // GoType describes a generated Go type and the import it needs, if any.

@@ -99,6 +99,8 @@ func (d *Catalog) resolveFK(table string, columns []meta.Column, fk fkDef) (meta
 		RefSchema:  fk.ref.Schema,
 		RefTable:   fk.ref.Name,
 		RefColumns: fk.refColumns,
+		OnDelete:   fk.onDelete,
+		OnUpdate:   fk.onUpdate,
 	}, true
 }
 
@@ -112,6 +114,8 @@ func collectForeignKeys(b *tableBuilder) []fkDef {
 				columns:    []string{c.name},
 				ref:        c.ref.ref,
 				refColumns: c.ref.refColumns,
+				onDelete:   c.ref.onDelete,
+				onUpdate:   c.ref.onUpdate,
 			})
 		}
 	}

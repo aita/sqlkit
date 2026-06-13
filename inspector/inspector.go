@@ -84,6 +84,29 @@ type fkRow struct {
 	refSchema  string
 	refTable   string
 	refColumn  string
+	onDelete   string
+	onUpdate   string
+}
+
+// referentialAction normalizes an information_schema rule ("CASCADE",
+// "SET NULL", "NO ACTION", …) into a meta.ReferentialAction. "NO ACTION" and the
+// empty string map to the empty action (the engine default, which renders
+// nothing) so a foreign key declared without actions round-trips cleanly.
+func referentialAction(rule string) meta.ReferentialAction {
+	switch strings.ToUpper(strings.TrimSpace(rule)) {
+	case "", "NO ACTION":
+		return ""
+	case "RESTRICT":
+		return meta.Restrict
+	case "CASCADE":
+		return meta.Cascade
+	case "SET NULL":
+		return meta.SetNull
+	case "SET DEFAULT":
+		return meta.SetDefault
+	default:
+		return meta.ReferentialAction(strings.ToUpper(strings.TrimSpace(rule)))
+	}
 }
 
 // attachForeignKeys groups foreign-key rows by (table, constraint) and attaches
@@ -109,6 +132,8 @@ func attachForeignKeys(tables []meta.Table, rows []fkRow) {
 				Name:      row.constraint,
 				RefSchema: meta.Schema{Name: row.refSchema},
 				RefTable:  row.refTable,
+				OnDelete:  referentialAction(row.onDelete),
+				OnUpdate:  referentialAction(row.onUpdate),
 			})
 		}
 		fk := &tables[ti].ForeignKeys[fi]

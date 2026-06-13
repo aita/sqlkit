@@ -117,13 +117,16 @@ type TableCheck struct {
 
 // ForeignKeyConstraint describes a foreign-key constraint added with
 // AlterTable.AddForeignKey: the local Columns reference RefColumns of RefTable
-// (in RefSchema).
+// (in RefSchema). OnDelete/OnUpdate are the referential-action clauses (e.g.
+// "CASCADE", "SET NULL"); an empty string renders nothing (the engine default).
 type ForeignKeyConstraint struct {
 	Name       string
 	Columns    []string
 	RefSchema  string
 	RefTable   string
 	RefColumns []string
+	OnDelete   string
+	OnUpdate   string
 }
 
 // CreateTableStmt builds a CREATE TABLE statement.
@@ -399,6 +402,27 @@ func (s AlterTableStmt) DropDefault(name string) AlterTableStmt {
 	return s.with(defaultAlt{name: name, expr: nil})
 }
 
+// RestateColumn appends an action that restates a column's full definition
+// (type, NOT NULL, DEFAULT). It renders the dialect's spelling at compile time:
+// MySQL's single MODIFY COLUMN, or PostgreSQL's separate ALTER COLUMN TYPE /
+// SET|DROP NOT NULL / SET|DROP DEFAULT actions. It is the dialect-agnostic way a
+// migration changes a column's properties at once.
+func (s AlterTableStmt) RestateColumn(c ColumnDef) AlterTableStmt {
+	return s.with(restateColumnAlt{col: c})
+}
+
+// AddPrimaryKey appends an ADD PRIMARY KEY action over the columns.
+func (s AlterTableStmt) AddPrimaryKey(columns ...string) AlterTableStmt {
+	return s.with(addPrimaryKeyAlt{columns: columns})
+}
+
+// DropPrimaryKey appends a DROP PRIMARY KEY action. MySQL spells it
+// "DROP PRIMARY KEY"; PostgreSQL drops the constraint by its conventional
+// "<table>_pkey" name.
+func (s AlterTableStmt) DropPrimaryKey() AlterTableStmt {
+	return s.with(dropPrimaryKeyAlt{})
+}
+
 // RenameColumn appends a RENAME COLUMN action.
 func (s AlterTableStmt) RenameColumn(from, to string) AlterTableStmt {
 	return s.with(renameColumnAlt{from: from, to: to})
@@ -441,6 +465,9 @@ type defaultAlt struct {
 }
 type renameColumnAlt struct{ from, to string }
 type renameTableAlt struct{ name string }
+type restateColumnAlt struct{ col ColumnDef }
+type addPrimaryKeyAlt struct{ columns []string }
+type dropPrimaryKeyAlt struct{}
 
 func (addColumnAlt) alteration()       {}
 func (dropColumnAlt) alteration()      {}
@@ -452,6 +479,9 @@ func (notNullAlt) alteration()         {}
 func (defaultAlt) alteration()         {}
 func (renameColumnAlt) alteration()    {}
 func (renameTableAlt) alteration()     {}
+func (restateColumnAlt) alteration()   {}
+func (addPrimaryKeyAlt) alteration()   {}
+func (dropPrimaryKeyAlt) alteration()  {}
 
 // Compile-time checks that every DDL node is a Statement (and therefore a
 // Query, so it runs through Database.Exec / Session.Exec).

@@ -148,8 +148,8 @@ func renderCatalogTable(sb *strings.Builder, trailers *[]string, table meta.Tabl
 		case !ok:
 			foreign = append(foreign, fk)
 		case fk.RefTable == table.Name && fk.RefSchema.Name == table.Schema.Name:
-			*trailers = append(*trailers, fmt.Sprintf("var _ = Catalog.AddForeignKey(%s, %s, %s, %s)",
-				varName, goStringSlice(fk.Columns), refVar, goStringSlice(fk.RefColumns)))
+			*trailers = append(*trailers, fmt.Sprintf("var _ = Catalog.AddForeignKey(%s, %s, %s, %s%s)",
+				varName, goStringSlice(fk.Columns), refVar, goStringSlice(fk.RefColumns), fkActionArgs(fk)))
 		case len(fk.Columns) == 1 && len(fk.RefColumns) == 1:
 			if _, dup := refs[fk.Columns[0]]; dup {
 				elements = append(elements, fk)
@@ -178,7 +178,7 @@ func renderCatalogTable(sb *strings.Builder, trailers *[]string, table meta.Tabl
 		fmt.Fprintf(sb, "\tsqldef.TableComment(%q),\n", table.Comment)
 	}
 	for _, column := range table.Columns {
-		fmt.Fprintf(sb, "\tsqldef.Column(%q, %s", column.Name, sqldefTypeExpr(column, dialect))
+		fmt.Fprintf(sb, "\tsqldef.Column(%q, %s", column.Name, SqldefTypeExpr(column, dialect))
 		if column.PrimaryKey {
 			sb.WriteString(", sqldef.PrimaryKey()")
 		}
@@ -201,7 +201,7 @@ func renderCatalogTable(sb *strings.Builder, trailers *[]string, table meta.Tabl
 			sb.WriteString(", sqldef.Unique()")
 		}
 		if fk, ok := refs[column.Name]; ok {
-			fmt.Fprintf(sb, ", sqldef.References(%s, %q)", tableVars[tableVarKey(fk.RefSchema.Name, fk.RefTable)], fk.RefColumns[0])
+			fmt.Fprintf(sb, ", sqldef.References(%s, %q%s)", tableVars[tableVarKey(fk.RefSchema.Name, fk.RefTable)], fk.RefColumns[0], fkActionArgs(fk))
 		}
 		if column.Comment != "" {
 			fmt.Fprintf(sb, ", sqldef.Comment(%q)", column.Comment)
@@ -209,7 +209,7 @@ func renderCatalogTable(sb *strings.Builder, trailers *[]string, table meta.Tabl
 		sb.WriteString("),\n")
 	}
 	for _, fk := range elements {
-		fmt.Fprintf(sb, "\tsqldef.ForeignKey(%s, %s, %s),\n", goStringSlice(fk.Columns), tableVars[tableVarKey(fk.RefSchema.Name, fk.RefTable)], goStringSlice(fk.RefColumns))
+		fmt.Fprintf(sb, "\tsqldef.ForeignKey(%s, %s, %s%s),\n", goStringSlice(fk.Columns), tableVars[tableVarKey(fk.RefSchema.Name, fk.RefTable)], goStringSlice(fk.RefColumns), fkActionArgs(fk))
 	}
 	for _, ix := range indexes {
 		call := "sqldef.Index"
@@ -254,10 +254,47 @@ func goStringSlice(items []string) string {
 // tables in different schemas get distinct entries.
 func tableVarKey(schema, name string) string { return schema + "\x00" + name }
 
-// sqldefTypeExpr maps an engine type name back to the sqldef package expression
+// ReferentialActionExpr renders a foreign-key referential action as the sqldef
+// package constant that produces it (e.g. "sqldef.Cascade"), or "" when the
+// action is empty (the engine default). It is shared with the migration
+// autogenerator, which emits the same sqldef vocabulary.
+func ReferentialActionExpr(action meta.ReferentialAction) string {
+	switch action {
+	case "":
+		return ""
+	case meta.NoAction:
+		return "sqldef.NoAction"
+	case meta.Restrict:
+		return "sqldef.Restrict"
+	case meta.Cascade:
+		return "sqldef.Cascade"
+	case meta.SetNull:
+		return "sqldef.SetNull"
+	case meta.SetDefault:
+		return "sqldef.SetDefault"
+	default:
+		return fmt.Sprintf("sqldef.ReferentialAction(%q)", string(action))
+	}
+}
+
+// fkActionArgs renders the trailing OnDelete/OnUpdate FK options for a foreign
+// key, e.g. ", sqldef.OnDelete(sqldef.Cascade)", or "" when both are default.
+func fkActionArgs(fk meta.ForeignKey) string {
+	var s string
+	if expr := ReferentialActionExpr(fk.OnDelete); expr != "" {
+		s += ", sqldef.OnDelete(" + expr + ")"
+	}
+	if expr := ReferentialActionExpr(fk.OnUpdate); expr != "" {
+		s += ", sqldef.OnUpdate(" + expr + ")"
+	}
+	return s
+}
+
+// SqldefTypeExpr maps an engine type name back to the sqldef package expression
 // that produces it. Types without a portable name fall back to sqldef.Type,
-// which keeps the engine name verbatim.
-func sqldefTypeExpr(column meta.Column, dialect string) string {
+// which keeps the engine name verbatim. It is exported for reuse by the
+// migration autogenerator, which renders the same sqldef vocabulary.
+func SqldefTypeExpr(column meta.Column, dialect string) string {
 	engine, _ := column.Type.Engine(dialect)
 	dataType := strings.ToLower(strings.TrimSpace(engine.Name))
 	if dialect == "mysql" {

@@ -5,7 +5,8 @@ package main
 // fly and dispatches to migrate.RunCLI inside it — see bridge.go. "new" only
 // reads the migration set to scaffold a file, so it does not touch the database.
 type migrateCmd struct {
-	New migrateNewCmd `cmd:"" help:"Scaffold a new migration file whose DownRevision is the current head."`
+	New          migrateNewCmd   `cmd:"" help:"Scaffold a new migration file whose DownRevision is the current head."`
+	Autogenerate autogenerateCmd `cmd:"" help:"Generate a migration by diffing a source schema (a live DB or a git revision) against the target catalog."`
 
 	Up      migrateUpCmd      `cmd:"" help:"Apply migrations up to a target (default head)."`
 	Down    migrateDownCmd    `cmd:"" help:"Roll back migrations to a target (default the most recent)."`

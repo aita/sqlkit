@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"go/format"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -85,6 +86,29 @@ func runShim(src []byte, desc string) error {
 	if err != nil {
 		return err
 	}
+	return runShimInDir(moduleDir, src, desc, os.Stdout)
+}
+
+// runShimCapture runs a shim in the main module and returns its stdout, for
+// shims that emit data (a schema snapshot, the migration heads) rather than
+// write files themselves.
+func runShimCapture(src []byte, desc string) ([]byte, error) {
+	moduleDir, err := mainModuleDir()
+	if err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	if err := runShimInDir(moduleDir, src, desc, &buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// runShimInDir writes src as a throwaway main package inside moduleDir (a Go
+// module directory), runs it with `go run`, directs its stdout to out, and
+// removes it afterward. moduleDir lets a shim run inside a git worktree to build
+// an older revision of a catalog.
+func runShimInDir(moduleDir string, src []byte, desc string, out io.Writer) error {
 	shimDir, err := os.MkdirTemp(moduleDir, "sqlkit-shim-")
 	if err != nil {
 		return err
@@ -97,7 +121,7 @@ func runShim(src []byte, desc string) error {
 
 	run := exec.Command("go", "run", ".")
 	run.Dir = shimDir
-	run.Stdout = os.Stdout
+	run.Stdout = out
 	run.Stderr = os.Stderr
 	if err := run.Run(); err != nil {
 		return fmt.Errorf("%s: %w", desc, err)

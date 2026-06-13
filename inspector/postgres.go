@@ -41,7 +41,9 @@ SELECT tc.constraint_name,
        kcu.column_name,
        ccu.table_schema,
        ccu.table_name,
-       ccu.column_name
+       ccu.column_name,
+       rc.delete_rule,
+       rc.update_rule
 FROM information_schema.table_constraints tc
 JOIN information_schema.key_column_usage kcu
   ON kcu.constraint_name = tc.constraint_name
@@ -49,6 +51,9 @@ JOIN information_schema.key_column_usage kcu
 JOIN information_schema.constraint_column_usage ccu
   ON ccu.constraint_name = tc.constraint_name
  AND ccu.constraint_schema = tc.constraint_schema
+JOIN information_schema.referential_constraints rc
+  ON rc.constraint_name = tc.constraint_name
+ AND rc.constraint_schema = tc.constraint_schema
 WHERE tc.table_schema = $1 AND tc.constraint_type = 'FOREIGN KEY'
 ORDER BY tc.constraint_name, kcu.ordinal_position`
 
@@ -162,7 +167,7 @@ func inspectPostgres(ctx context.Context, db Querier, schemaName string) ([]meta
 	var fks []fkRow
 	for fkRows.Next() {
 		var row fkRow
-		if err := fkRows.Scan(&row.constraint, &row.table, &row.column, &row.refSchema, &row.refTable, &row.refColumn); err != nil {
+		if err := fkRows.Scan(&row.constraint, &row.table, &row.column, &row.refSchema, &row.refTable, &row.refColumn, &row.onDelete, &row.onUpdate); err != nil {
 			return nil, fmt.Errorf("inspector: scan foreign key: %w", err)
 		}
 		fks = append(fks, row)

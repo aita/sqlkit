@@ -80,6 +80,43 @@ func (c *Compiler) compileColumnDef(col ColumnDef) (string, error) {
 	return def + c.Dialect.InlineColumnComment(col.Comment), nil
 }
 
+// compileRestateColumn renders an action that restates a column's full
+// definition: MySQL's single MODIFY COLUMN, or PostgreSQL's comma-separated
+// ALTER COLUMN TYPE / SET|DROP NOT NULL / SET|DROP DEFAULT actions.
+func (c *Compiler) compileRestateColumn(col ColumnDef) (string, error) {
+	if col.Type == nil {
+		return "", fmt.Errorf("sqlkit/sql: column %q has no type", col.Name)
+	}
+	if c.Dialect.Name() == "mysql" {
+		def, err := c.compileColumnDef(col)
+		if err != nil {
+			return "", err
+		}
+		return "MODIFY COLUMN " + def, nil
+	}
+	name := c.Dialect.QuoteName(col.Name)
+	typeClause, err := col.Type.RenderType(c.Dialect)
+	if err != nil {
+		return "", err
+	}
+	clauses := []string{"ALTER COLUMN " + name + " TYPE " + typeClause}
+	if col.NotNull {
+		clauses = append(clauses, "ALTER COLUMN "+name+" SET NOT NULL")
+	} else {
+		clauses = append(clauses, "ALTER COLUMN "+name+" DROP NOT NULL")
+	}
+	if col.Default != nil {
+		expr, err := CompileStatic(c.Dialect, col.Default)
+		if err != nil {
+			return "", err
+		}
+		clauses = append(clauses, "ALTER COLUMN "+name+" SET DEFAULT "+expr)
+	} else {
+		clauses = append(clauses, "ALTER COLUMN "+name+" DROP DEFAULT")
+	}
+	return strings.Join(clauses, ", "), nil
+}
+
 // CompileDropTable renders a DROP TABLE statement.
 func (c *Compiler) CompileDropTable(s DropTableStmt) (string, error) {
 	var sb strings.Builder
@@ -141,7 +178,7 @@ func (c *Compiler) CompileAlterTable(s AlterTableStmt) (string, error) {
 	}
 	clauses := make([]string, len(s.alterations))
 	for i, a := range s.alterations {
-		clause, err := c.compileAlteration(a)
+		clause, err := c.compileAlteration(s.table, a)
 		if err != nil {
 			return "", err
 		}
@@ -150,7 +187,7 @@ func (c *Compiler) CompileAlterTable(s AlterTableStmt) (string, error) {
 	return "ALTER TABLE " + c.qualify(s.table) + " " + strings.Join(clauses, ", ") + ";", nil
 }
 
-func (c *Compiler) compileAlteration(a alteration) (string, error) {
+func (c *Compiler) compileAlteration(table Table, a alteration) (string, error) {
 	switch v := a.(type) {
 	case addColumnAlt:
 		def, err := c.compileColumnDef(v.col)
@@ -160,6 +197,17 @@ func (c *Compiler) compileAlteration(a alteration) (string, error) {
 		return "ADD COLUMN " + def, nil
 	case dropColumnAlt:
 		return "DROP COLUMN " + c.Dialect.QuoteName(v.name), nil
+	case restateColumnAlt:
+		return c.compileRestateColumn(v.col)
+	case addPrimaryKeyAlt:
+		return "ADD PRIMARY KEY (" + c.quoteAll(v.columns) + ")", nil
+	case dropPrimaryKeyAlt:
+		if c.Dialect.Name() == "mysql" {
+			return "DROP PRIMARY KEY", nil
+		}
+		// PostgreSQL has no DROP PRIMARY KEY; drop the constraint by its
+		// conventional "<table>_pkey" name.
+		return "DROP CONSTRAINT " + c.Dialect.QuoteName(table.Name+"_pkey"), nil
 	case addForeignKeyAlt:
 		return c.foreignKeyClause(v.fk), nil
 	case addCheckAlt:
@@ -221,10 +269,17 @@ func (c *Compiler) requireColumnModify(op string) error {
 }
 
 func (c *Compiler) foreignKeyClause(fk ForeignKeyConstraint) string {
-	return "ADD CONSTRAINT " + c.Dialect.QuoteName(fk.Name) +
+	clause := "ADD CONSTRAINT " + c.Dialect.QuoteName(fk.Name) +
 		" FOREIGN KEY (" + c.quoteAll(fk.Columns) + ")" +
 		" REFERENCES " + c.qualifyName(fk.RefSchema, fk.RefTable) +
 		" (" + c.quoteAll(fk.RefColumns) + ")"
+	if fk.OnDelete != "" {
+		clause += " ON DELETE " + fk.OnDelete
+	}
+	if fk.OnUpdate != "" {
+		clause += " ON UPDATE " + fk.OnUpdate
+	}
+	return clause
 }
 
 // qualify renders a schema-qualified table identifier for DDL, quoting each

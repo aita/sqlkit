@@ -228,7 +228,8 @@ Foreign keys reference the `meta.Table` values, so the compiler catches typos:
 `ForeignKey([]string{...}, Orders, []string{...})` for composite keys, and
 `Catalog.AddForeignKey(Employees, ...)` for self-referencing keys (which can't
 mention their own variable inside `Table(...)`). References may cross schemas
-within the same catalog.
+within the same catalog. Add referential actions with `OnDelete`/`OnUpdate`
+options, e.g. `References(Users, "id", sqldef.OnDelete(sqldef.Cascade))`.
 
 Indexes, constraints, and comments round out the catalog: `Unique()` puts a
 single-column unique index on a column, `Index`/`UniqueIndex` declare
@@ -446,6 +447,7 @@ sqlkit migrate history  --migrations ./migrations   # the apply/rollback timelin
 sqlkit migrate stamp head --migrations ./migrations # mark applied without running
 sqlkit migrate sql up base head --migrations ./migrations  # render SQL for a range without running it
 sqlkit migrate new "add tags"   --migrations ./migrations  # scaffold a new migration file
+sqlkit migrate autogenerate "sync" --catalog ./schema --from-db --migrations ./migrations  # diff a source against the catalog
 ```
 
 Every command compiles the migrations package, so it needs the Go toolchain and
@@ -472,10 +474,41 @@ func main() {
 
 `migrate.Diff(old, new, dialect)` generates the forward DDL (`[]sql.Statement`)
 between two `meta.Metadata` snapshots — added/dropped tables and columns,
-type/nullability/default changes, and index/foreign-key/check/comment changes,
-ordered for safety (drop foreign keys and tables first, add foreign keys last).
-Renames are reported as drop+add, and the `Down` direction is authored by hand.
+type/nullability/default changes (rendered for both PostgreSQL and MySQL),
+primary-key membership changes, and index/foreign-key (including
+`ON DELETE`/`ON UPDATE`)/check/comment changes, ordered for safety (drop foreign
+keys and tables first, add foreign keys last). Renames are reported as drop+add.
 Feed its output to a migration with `op.Execute`.
+
+### Autogenerating a migration
+
+`sqlkit migrate autogenerate` writes a migration for you by diffing a **source**
+schema against the **target** catalog (the desired state) and rendering the
+difference as `Operator` DSL in the new file's `Up` (and a best-effort reverse
+`Down`). The source is selectable:
+
+```sh
+# Source = a live database (bring the DB up to the catalog — like Alembic's autogenerate)
+sqlkit migrate autogenerate "sync schema" \
+  --catalog ./schema --from-db --dsn "$DATABASE_URL" \
+  --migrations ./migrations
+
+# Source = the catalog as it stood at a git revision (what changed since then)
+sqlkit migrate autogenerate "add tags" \
+  --catalog ./schema --from-git HEAD~1 --migrations ./migrations
+
+# Preview without writing a file
+sqlkit migrate autogenerate "add tags" --catalog ./schema --from-git HEAD --dry-run
+```
+
+The generated file links onto the current head (or `--parent`/`--merge`) just
+like `migrate new`. A drop+add that is really a rename keeps its data when you
+say so: `--rename users.name:full_name` emits `op.RenameColumn`, and
+`--rename-table old:new` emits `op.RenameTable`; unhinted single drop/add pairs
+of the same type get a `// possible rename` suggestion. `--from-git` builds the
+catalog at that revision in a temporary worktree, so the revision must contain a
+buildable catalog. As with any autogenerator, **review the result before
+applying** — data backfills and risky renames still need a human.
 
 ## Querying and scanning
 
