@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/aita/sqlkit/meta"
+	"github.com/aita/sqlkit/sql"
 )
 
 // CatalogOptions configures GenerateCatalog.
@@ -23,7 +24,10 @@ type CatalogOptions struct {
 	Dialect string
 }
 
-const sqldefImport = "github.com/aita/sqlkit/sqldef"
+const (
+	sqldefImport = "github.com/aita/sqlkit/sqldef"
+	sqlImport    = "github.com/aita/sqlkit/sql"
+)
 
 // GenerateCatalog renders the schema as sqldef catalog source — the inverse of
 // building a catalog: introspect a live database once, then maintain the
@@ -37,6 +41,10 @@ func GenerateCatalog(md meta.Metadata, opts CatalogOptions) (File, error) {
 	dialect := opts.Dialect
 	if dialect == "" {
 		dialect = "postgres"
+	}
+	sqlDialect, err := sql.DialectByName(dialect)
+	if err != nil {
+		return File{}, err
 	}
 	fileName := opts.FileName
 	if fileName == "" {
@@ -100,9 +108,12 @@ func GenerateCatalog(md meta.Metadata, opts CatalogOptions) (File, error) {
 		fmt.Fprintf(&sb, "\n// %s is schema %q of the catalog.\nvar %s = Catalog.Schema(%q)\n", schemaVars[name], name, schemaVars[name], name)
 	}
 	var trailers []string
+	var usedSQL bool
 	for _, table := range tables {
 		sb.WriteString("\n")
-		renderCatalogTable(&sb, &trailers, table, schemaVars[table.Schema.Name], tableVars, dialect)
+		if err := renderCatalogTable(&sb, &trailers, table, schemaVars[table.Schema.Name], tableVars, dialect, sqlDialect, &usedSQL); err != nil {
+			return File{}, err
+		}
 	}
 	if len(trailers) > 0 {
 		sb.WriteString("\n")
@@ -113,11 +124,14 @@ func GenerateCatalog(md meta.Metadata, opts CatalogOptions) (File, error) {
 
 	fb := newFileBuf()
 	fb.add(sqldefImport)
+	if usedSQL {
+		fb.add(sqlImport)
+	}
 	fb.write(sb.String())
 	return fb.fileWithHeader(opts.PackageName, fileName, "// Bootstrapped by sqlkitgen; maintained by hand.\n\n")
 }
 
-func renderCatalogTable(sb *strings.Builder, trailers *[]string, table meta.Table, owner string, tableVars map[string]string, dialect string) {
+func renderCatalogTable(sb *strings.Builder, trailers *[]string, table meta.Table, owner string, tableVars map[string]string, dialect string, sqlDialect sql.Dialect, usedSQL *bool) error {
 	varName := tableVars[tableVarKey(table.Schema.Name, table.Name)]
 
 	// Single-column foreign keys to another generated table become a
@@ -169,8 +183,13 @@ func renderCatalogTable(sb *strings.Builder, trailers *[]string, table meta.Tabl
 			sb.WriteString(", sqldef.PrimaryKey()")
 		}
 		if column.HasDefault {
-			if column.DefaultExpr != "" {
-				fmt.Fprintf(sb, ", sqldef.Default(%q)", column.DefaultExpr)
+			if column.DefaultExpr != nil {
+				text, err := sql.CompileStatic(sqlDialect, column.DefaultExpr)
+				if err != nil {
+					return fmt.Errorf("codegen: table %q column %q default: %w", table.Name, column.Name, err)
+				}
+				fmt.Fprintf(sb, ", sqldef.Default(sql.Raw(%q))", text)
+				*usedSQL = true
 			} else {
 				sb.WriteString(", sqldef.Default()")
 			}
@@ -200,7 +219,12 @@ func renderCatalogTable(sb *strings.Builder, trailers *[]string, table meta.Tabl
 		fmt.Fprintf(sb, "\t%s(%s),\n", call, quotedList(ix.Columns))
 	}
 	for _, check := range table.Checks {
-		fmt.Fprintf(sb, "\tsqldef.Check(%q),\n", check.Expression)
+		text, err := sql.CompileStatic(sqlDialect, check.Expression)
+		if err != nil {
+			return fmt.Errorf("codegen: table %q check %q: %w", table.Name, check.Name, err)
+		}
+		fmt.Fprintf(sb, "\tsqldef.Check(sql.Raw(%q)),\n", text)
+		*usedSQL = true
 	}
 	for _, fk := range foreign {
 		ref := fk.RefTable
@@ -211,6 +235,7 @@ func renderCatalogTable(sb *strings.Builder, trailers *[]string, table meta.Tabl
 			fk.Name, ref)
 	}
 	sb.WriteString(")\n")
+	return nil
 }
 
 func quotedList(items []string) string {

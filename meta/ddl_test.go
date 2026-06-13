@@ -26,13 +26,13 @@ func fixture(dialect string, dataTypes map[string]string) meta.Metadata {
 					{Name: "email", Type: typ("varchar", 255, 0, 0), Comment: "Unique login address"},
 					{Name: "name", Type: typ("text", 0, 0, 0), Nullable: true},
 					{Name: "balance", Type: typ("decimal", 0, 10, 2)},
-					{Name: "created_at", Type: typ("timestamp", 0, 0, 0), HasDefault: true, DefaultExpr: "now()"},
+					{Name: "created_at", Type: typ("timestamp", 0, 0, 0), HasDefault: true, DefaultExpr: sql.Raw("now()")},
 				},
 				Indexes: []meta.Index{
 					{Name: "uq_users_email", Columns: []string{"email"}, Unique: true},
 				},
 				Checks: []meta.Check{
-					{Name: "ck_users_1", Expression: "balance >= 0"},
+					{Name: "ck_users_1", Expression: sql.Raw("balance >= 0")},
 				},
 			},
 			{

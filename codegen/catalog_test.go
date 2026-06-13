@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit/meta"
+	"github.com/aita/sqlkit/sql"
 )
 
 func TestGenerateCatalog(t *testing.T) {
@@ -28,7 +29,7 @@ func TestGenerateCatalogMySQL(t *testing.T) {
 				{Name: "name", Type: meta.Of("mysql", "varchar", 100, 0, 0)},
 				{Name: "price", Type: meta.Of("mysql", "decimal", 0, 10, 2)},
 				{Name: "attrs", Type: meta.Of("mysql", "json", 0, 0, 0), Nullable: true},
-				{Name: "created_at", Type: meta.Of("mysql", "datetime", 0, 0, 0), HasDefault: true, DefaultExpr: "now()"},
+				{Name: "created_at", Type: meta.Of("mysql", "datetime", 0, 0, 0), HasDefault: true, DefaultExpr: sql.Raw("now()")},
 				{Name: "point", Type: meta.Of("mysql", "geometry", 0, 0, 0)},
 			},
 		},
@@ -46,7 +47,7 @@ func TestGenerateCatalogMySQL(t *testing.T) {
 		`sqldef.Column("name", sqldef.VarChar(100)),`,
 		`sqldef.Column("price", sqldef.Decimal(10, 2)),`,
 		`sqldef.Column("attrs", sqldef.JSON, sqldef.Nullable()),`,
-		`sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default("now()")),`,
+		`sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default(sql.Raw("now()"))),`,
 		`sqldef.Column("point", sqldef.Type("geometry")),`,
 	} {
 		if !strings.Contains(got, want) {
@@ -118,7 +119,7 @@ func TestGenerateCatalogIndexesChecksComments(t *testing.T) {
 				{Name: "uq_products_vendor_name", Columns: []string{"vendor", "name"}, Unique: true},
 			},
 			Checks: []meta.Check{
-				{Name: "products_price_check", Expression: "price > 0"},
+				{Name: "products_price_check", Expression: sql.Raw("price > 0")},
 			},
 		},
 	}
@@ -132,7 +133,7 @@ func TestGenerateCatalogIndexesChecksComments(t *testing.T) {
 		`sqldef.Column("sku", sqldef.VarChar(64), sqldef.Unique(), sqldef.Comment("Stock keeping unit")),`,
 		`sqldef.Index("name"),`,
 		`sqldef.UniqueIndex("vendor", "name"),`,
-		`sqldef.Check("price > 0"),`,
+		`sqldef.Check(sql.Raw("price > 0")),`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("generated catalog missing %q\n%s", want, got)

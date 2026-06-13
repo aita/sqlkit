@@ -169,7 +169,10 @@ share it across files or packages.
 // schema/schema.go
 package schema
 
-import "github.com/aita/sqlkit/sqldef"
+import (
+    "github.com/aita/sqlkit/sql"
+    "github.com/aita/sqlkit/sqldef"
+)
 
 var Catalog = sqldef.NewCatalog()
 
@@ -180,7 +183,7 @@ var Users = Public.Table("users",
     sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
     sqldef.Column("email", sqldef.VarChar(255), sqldef.Unique(), sqldef.Comment("Unique login address")),
     sqldef.Column("name", sqldef.Text, sqldef.Nullable()),
-    sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default("now()")),
+    sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default(sql.Raw("now()"))),
 )
 
 var Posts = Public.Table("posts",
@@ -188,9 +191,9 @@ var Posts = Public.Table("posts",
     sqldef.Column("user_id", sqldef.BigInt, sqldef.References(Users, "id")),
     sqldef.Column("title", sqldef.Text),
     sqldef.Column("body", sqldef.Text, sqldef.Nullable()),
-    sqldef.Column("published", sqldef.Bool, sqldef.Default("false")),
+    sqldef.Column("published", sqldef.Bool, sqldef.Default(sql.Raw("false"))),
     sqldef.Index("user_id"),
-    sqldef.Check("title <> ''"),
+    sqldef.Check(sql.Raw("title <> ''")),
 )
 ```
 
@@ -201,9 +204,11 @@ default a named schema.
 
 Columns are NOT NULL unless marked `Nullable()` (nullable columns map to
 pointer types, as with introspection). `Default()` marks database-side
-defaults; give it the expression (`Default("now()")`) and the DDL generator
-renders it, while a bare `Default()` on an integer primary key renders as
-serial/auto-increment. `PrimaryKey()` on several columns declares a composite
+defaults; give it a `sql.Expression` (`Default(sql.Raw("now()"))`) and the DDL
+generator compiles it for the target dialect, while a bare `Default()` on an
+integer primary key renders as serial/auto-increment. `Check` likewise takes a
+`sql.Expression` (`Check(sql.Raw("price > 0"))`); both reject bind values, so
+wrap literals in `sql.Raw`. `PrimaryKey()` on several columns declares a composite
 key. Types are portable: `BigInt`, `Timestamp`, ... are `meta.Type` values
 that carry both engines' names (`int8`/`bigint`, `timestamptz`/`datetime`), so
 one catalog targets PostgreSQL and MySQL and the generators resolve the engine

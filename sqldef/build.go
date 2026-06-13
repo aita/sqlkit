@@ -99,5 +99,3 @@ func hasMetaColumn(columns []meta.Column, name string) bool {
 }
 
 func joinCols(columns []string) string { return strings.Join(columns, "_") }
-
-func isBlank(s string) bool { return strings.TrimSpace(s) == "" }

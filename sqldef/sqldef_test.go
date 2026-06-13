@@ -19,14 +19,14 @@ func blogCatalog() *sqldef.Catalog {
 		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
 		sqldef.Column("email", sqldef.VarChar(255)),
 		sqldef.Column("name", sqldef.Text, sqldef.Nullable()),
-		sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default("now()")),
+		sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default(querysql.Raw("now()"))),
 	)
 	public.Table("posts",
 		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
 		sqldef.Column("user_id", sqldef.BigInt, sqldef.References(users, "id")),
 		sqldef.Column("title", sqldef.Text),
 		sqldef.Column("body", sqldef.Text, sqldef.Nullable()),
-		sqldef.Column("published", sqldef.Bool, sqldef.Default("false")),
+		sqldef.Column("published", sqldef.Bool, sqldef.Default(querysql.Raw("false"))),
 	)
 	return catalog
 }
@@ -54,7 +54,7 @@ func TestBuild(t *testing.T) {
 					{Name: "id", Type: sqldef.BigInt, PrimaryKey: true, HasDefault: true},
 					{Name: "email", Type: sqldef.VarChar(255)},
 					{Name: "name", Type: sqldef.Text, Nullable: true},
-					{Name: "created_at", Type: sqldef.Timestamp, HasDefault: true, DefaultExpr: "now()"},
+					{Name: "created_at", Type: sqldef.Timestamp, HasDefault: true, DefaultExpr: querysql.Raw("now()")},
 				},
 			},
 			{
@@ -65,7 +65,7 @@ func TestBuild(t *testing.T) {
 					{Name: "user_id", Type: sqldef.BigInt},
 					{Name: "title", Type: sqldef.Text},
 					{Name: "body", Type: sqldef.Text, Nullable: true},
-					{Name: "published", Type: sqldef.Bool, HasDefault: true, DefaultExpr: "false"},
+					{Name: "published", Type: sqldef.Bool, HasDefault: true, DefaultExpr: querysql.Raw("false")},
 				},
 				ForeignKeys: []meta.ForeignKey{
 					{Name: "fk_posts_user_id", Columns: []string{"user_id"}, RefSchema: meta.Schema{Name: "public"}, RefTable: "users", RefColumns: []string{"id"}},
@@ -195,7 +195,7 @@ func TestIndexesChecksComments(t *testing.T) {
 		sqldef.Column("price", sqldef.Decimal(10, 2)),
 		sqldef.Index("name"),
 		sqldef.UniqueIndex("vendor", "name"),
-		sqldef.Check("price > 0"),
+		sqldef.Check(querysql.Raw("price > 0")),
 	)
 	got := buildCatalog(t, catalog)
 	table := got.Tables[0]
@@ -214,7 +214,7 @@ func TestIndexesChecksComments(t *testing.T) {
 		t.Errorf("indexes = %+v\nwant %+v", table.Indexes, wantIndexes)
 	}
 	wantChecks := []meta.Check{
-		{Name: "ck_products_1", Expression: "price > 0"},
+		{Name: "ck_products_1", Expression: querysql.Raw("price > 0")},
 	}
 	if !reflect.DeepEqual(table.Checks, wantChecks) {
 		t.Errorf("checks = %+v\nwant %+v", table.Checks, wantChecks)
@@ -223,7 +223,7 @@ func TestIndexesChecksComments(t *testing.T) {
 
 func TestSharedElementsReuse(t *testing.T) {
 	audit := []sqldef.TableElement{
-		sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default("now()")),
+		sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default(querysql.Raw("now()"))),
 		sqldef.Column("updated_at", sqldef.Timestamp, sqldef.Nullable()),
 	}
 	catalog := sqldef.NewCatalog()
@@ -239,6 +239,31 @@ func TestSharedElementsReuse(t *testing.T) {
 		if len(table.Columns) != 3 || table.Columns[1].Name != "created_at" {
 			t.Errorf("table %s columns = %+v", table.Name, table.Columns)
 		}
+	}
+}
+
+// TestBlankDefaultIsAbsent: a blank Default expression (an empty sql.Raw) is
+// normalized to absent, so an integer primary key still renders as serial
+// rather than emitting an invalid empty DEFAULT clause.
+func TestBlankDefaultIsAbsent(t *testing.T) {
+	catalog := sqldef.NewCatalog()
+	catalog.Table("items",
+		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default(querysql.Raw(""))),
+	)
+	got := buildCatalog(t, catalog)
+	col := got.Tables[0].Columns[0]
+	if !col.HasDefault || col.DefaultExpr != nil {
+		t.Fatalf("blank default: HasDefault=%v DefaultExpr=%v, want true and nil", col.HasDefault, col.DefaultExpr)
+	}
+	sql, err := got.CreateSQL(querysql.PostgreSQLDialect{})
+	if err != nil {
+		t.Fatalf("CreateSQL() error = %v", err)
+	}
+	if !strings.Contains(sql, `"id" bigserial`) {
+		t.Errorf("blank default on integer PK should render serial:\n%s", sql)
+	}
+	if strings.Contains(sql, "DEFAULT ,") || strings.Contains(sql, "DEFAULT \n") {
+		t.Errorf("blank default must not emit an empty DEFAULT clause:\n%s", sql)
 	}
 }
 
@@ -445,7 +470,7 @@ func TestBuildErrors(t *testing.T) {
 			name: "empty check",
 			catalog: func() *sqldef.Catalog {
 				c := sqldef.NewCatalog()
-				c.Table("users", sqldef.Column("id", sqldef.BigInt), sqldef.Check("  "))
+				c.Table("users", sqldef.Column("id", sqldef.BigInt), sqldef.Check(querysql.Raw("  ")))
 				return c
 			},
 			want: "Check requires an expression",
@@ -454,7 +479,7 @@ func TestBuildErrors(t *testing.T) {
 			name: "default with two expressions",
 			catalog: func() *sqldef.Catalog {
 				c := sqldef.NewCatalog()
-				c.Table("users", sqldef.Column("id", sqldef.BigInt, sqldef.Default("a", "b")))
+				c.Table("users", sqldef.Column("id", sqldef.BigInt, sqldef.Default(querysql.Raw("a"), querysql.Raw("b"))))
 				return c
 			},
 			want: "Default takes at most one expression",
