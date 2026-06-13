@@ -311,6 +311,23 @@ err = db.Select(appdb.Users.ID).From(appdb.Users).All(ctx).Scan(&ids)
 n, err := db.Select().From(appdb.Users).Where(...).Count(ctx)
 ```
 
+Typed columns carry the predicate vocabulary directly: `Eq`/`Ne`/`Lt`/`Le`/
+`Gt`/`Ge`, `In`/`NotIn` (literal values), `Between`/`NotBetween`,
+`IsNull`/`IsNotNull`, and `InQuery`/`NotInQuery` for an `IN (subquery)`. String
+columns also have the free helpers `sqlkit.Like` / `NotLike` / `ILike`
+(ILIKE is PostgreSQL-only). `sqlkit.Exists` / `NotExists` wrap a subquery as a
+predicate for semi-joins, and `sqlkit.And` / `Or` / `Not` combine predicates:
+
+```go
+err = db.Select().From(appdb.Users).
+    Where(
+        appdb.Users.Age.Between(18, 65),
+        sqlkit.Exists(sqlkit.Select(appdb.Posts.ID).From(appdb.Posts).
+            Where(appdb.Posts.UserID.EqExpr(appdb.Users.ID))),
+    ).
+    All(ctx).Scan(&users)
+```
+
 Joins and the generated primary-key lookup:
 
 ```go
@@ -411,7 +428,10 @@ err = sqlkit.Union(
 
 `Coalesce`, `NullIf`, `Greatest`, `Least`, `Sum`, `Avg`, `Min`, `Max`,
 `Rank`, `DenseRank`, `Lag`, `Lead`, and generic `sql.Func(name, args...)` are
-available.
+available. For JSON, `sql.JSONArray(...)`, `sql.JSONObject(key, val, ...)`,
+`sql.JSONArrayAgg(expr)`, and `sql.JSONObjectAgg(key, val)` build the SQL/JSON
+standard functions (PostgreSQL 16+, MySQL 5.7+); older PostgreSQL exposes the
+classic `json_build_array` / `json_agg` names through `sql.Func`.
 
 ## Transactions
 
