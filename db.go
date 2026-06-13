@@ -168,11 +168,18 @@ func WithTxOptions(options TxOptions) SessionOption {
 	return func(o *sessionOptions) { o.tx = options.ToSQL() }
 }
 
-// Exec compiles and runs a statement outside a session (auto-commit).
+// Exec compiles and runs a statement outside a session (auto-commit). It
+// accepts any sql.Query, including the DDL statements built with the sql package
+// (sql.CreateTable, sql.AlterTable, ...), since those are Query values too. A
+// statement that renders empty for the dialect (e.g. a standalone comment on a
+// dialect that comments inline) is a no-op and returns a nil result.
 func (d *Database) Exec(ctx context.Context, query sql.Query) (stdsql.Result, error) {
 	sqlText, args, err := query.ToSQL(d.dialect)
 	if err != nil {
 		return nil, err
+	}
+	if sqlText == "" {
+		return nil, nil
 	}
 	return d.db.ExecContext(ctx, sqlText, args...)
 }

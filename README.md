@@ -1,17 +1,23 @@
 # sqlkit
 
-A typed SQL toolkit for Go:
+A typed SQL toolkit for Go. You write SQL as Go — the **SQL DSL** — and the same
+notation and compiler cover both queries (DML) and schema changes (DDL):
 
 - **Typed query builder** — table bindings expose `Column[T]` fields, so
   predicates, assignments, and join conditions are checked by the Go compiler.
   `Users.ID.Eq("foo")` is a compile error, not a runtime SQL error.
+- **Versioned migrations** — the `migrate` package runs revision-linked
+  (DAG) up/down migrations whose `Up`/`Down` callbacks call `op.CreateTable`,
+  `op.AddColumn`, `op.CreateForeignKey`, … with columns declared in the `sqldef`
+  DSL. Every apply and rollback is recorded in an append-only history table, and
+  `migrate.Diff` generates the DDL for a schema change. See [Migrations](#migrations).
 - **Results into your own structs** — build a typed query, then `Scan` the
   result into any destination you define (`sqlkit` tag / snake_case mapping,
   `sql.Scanner` support). The query shape and the DTO are decoupled.
 - **Full SQL surface** — joins, GROUP BY / HAVING, ORDER BY, DISTINCT,
   UNION / INTERSECT / EXCEPT, aggregates, CASE / IF, and window functions
   (`OVER (PARTITION BY ...)`).
-- **Code generation from PostgreSQL** — `sqlkitgen` introspects a live schema
+- **Code generation from PostgreSQL** — `sqlkit` introspects a live schema
   (`information_schema`) and generates the row structs and typed bindings.
 - **Standalone builder** — every chain also compiles unbound with
   `ToSQL(dialect)` to SQL text + args, ready for pgx, sqlx, or `database/sql`;
@@ -34,18 +40,19 @@ err := db.Select().From(appdb.Users).
 |---|---|
 | `sqlkit` | Typed query chains, `Database`, `Session`, result scanning, streaming `Records[T]` iteration (module root) |
 | `orm` | Relation-aware `QuerySet` (Django/SQLAlchemy-style) over the bindings: FK-driven joins, reusable `Filter` bundles, CRUD shortcuts |
-| `sql` | SQL AST, dialects, compiler, and all statement generation |
+| `sql` | SQL AST, dialects, compiler, and all statement generation — DML query builders and DDL statement builders (the SQL DSL) |
 | `sqldef` | In-code schema declarations: a reusable `Catalog` of tables that feeds the generators |
-| `meta` | Database schema metadata model shared by the tooling (tables, columns, indexes, constraints, comments), plus SQL DDL generation (`CreateSQL`/`DropSQL`) |
+| `meta` | Database schema metadata model shared by the tooling (tables, columns, indexes, constraints, comments), plus SQL DDL generation (`CreateSQL`/`DropSQL`) built on the `sql` DDL builders |
+| `migrate` | Versioned up/down migrations (operations authored with `sqldef`), applied with full history recorded in a `schema_migrations` table; `migrate.Diff` generates DDL from two schema snapshots |
 | `inspector` | PostgreSQL/MySQL introspection into the `meta` model |
 | `codegen` | `meta` → Go code generator (library: customizable types, layout, DTOs) |
-| `cmd/sqlkitgen` | CLI wrapper around `inspector` + `codegen` |
+| `cmd/sqlkit` | CLI wrapper around `inspector` + `codegen` |
 
 ## The flow: a catalog generates the bindings
 
 You author the schema as a sqldef catalog (or bootstrap one from an existing
-database with `sqlkitgen`), then generate the typed table bindings — and the
-DDL — from it. The catalog is the source of truth; `sqlkitgen` only bootstraps
+database with `sqlkit`), then generate the typed table bindings — and the
+DDL — from it. The catalog is the source of truth; `sqlkit` only bootstraps
 it. See [Declaring the schema in Go](#declaring-the-schema-in-go-sqldef-package)
 below for authoring, and `examples/blog` for `go:generate` directives that
 drive the bindings and DDL from the catalog.
@@ -53,11 +60,11 @@ drive the bindings and DDL from the catalog.
 To bootstrap a catalog from a live **PostgreSQL or MySQL** schema:
 
 ```sh
-go run github.com/aita/sqlkit/cmd/sqlkitgen inspect \
+go run github.com/aita/sqlkit/cmd/sqlkit inspect \
   --dsn "$DATABASE_URL" --schema public --package schema --out schema/schema.go
 ```
 
-| `sqlkitgen inspect` flag | Purpose |
+| `sqlkit inspect` flag | Purpose |
 |---|---|
 | `--dsn` | database connection string (required) |
 | `--driver` | `pgx` (default) or `mysql` |
@@ -71,11 +78,11 @@ The bootstrapped catalog is a starting point meant to be edited (it carries no
 `DO NOT EDIT` marker); from then on the schema lives in code.
 
 Once the catalog lives in a package, generate the typed bindings straight from
-it — no hand-written generator program required. Point `sqlkitgen generate` at
+it — no hand-written generator program required. Point `sqlkit generate` at
 the package that declares the `*sqldef.Catalog`:
 
 ```sh
-go run github.com/aita/sqlkit/cmd/sqlkitgen generate ./schema -name appdb -out appdb
+go run github.com/aita/sqlkit/cmd/sqlkit generate ./schema -name appdb -out appdb
 ```
 
 | `generate` flag | Purpose |
@@ -89,12 +96,12 @@ go run github.com/aita/sqlkit/cmd/sqlkitgen generate ./schema -name appdb -out a
 | `-file-per-table` | one file per table instead of a single `tables.go` |
 | `-emit-dto` | also generate a row struct (DTO) per table |
 
-The DDL is a separate concern: `sqlkitgen ddl` renders the catalog's
+The DDL is a separate concern: `sqlkit ddl` renders the catalog's
 `CREATE TABLE`/`INDEX`/constraint statements (to a file with `-out`, else
 stdout) for a `-dialect`.
 
 ```sh
-go run github.com/aita/sqlkit/cmd/sqlkitgen ddl ./schema -out schema.sql
+go run github.com/aita/sqlkit/cmd/sqlkit ddl ./schema -out schema.sql
 ```
 
 The natural home for both is a pair of `go:generate` directives next to the
@@ -102,8 +109,8 @@ catalog, so `go generate ./...` rebuilds the bindings and the DDL — see
 `examples/blog`:
 
 ```go
-//go:generate go run github.com/aita/sqlkit/cmd/sqlkitgen generate ./schema --name blogdb --out blogdb
-//go:generate go run github.com/aita/sqlkit/cmd/sqlkitgen ddl ./schema --out schema.sql
+//go:generate go run github.com/aita/sqlkit/cmd/sqlkit generate ./schema --name blogdb --out blogdb
+//go:generate go run github.com/aita/sqlkit/cmd/sqlkit ddl ./schema --out schema.sql
 ```
 
 A catalog is a runtime Go value (foreign keys reference the `meta.Table` values
@@ -228,12 +235,12 @@ single-column unique index on a column, `Index`/`UniqueIndex` declare
 (composite) indexes, and `Check` adds a CHECK constraint. `Comment` on a
 column and `TableComment` on a table carry through to the generated bindings
 and DTOs as Go doc comments — and the inspector reads the same metadata back
-from live PostgreSQL/MySQL schemas, so `sqlkitgen` bootstraps preserve it.
+from live PostgreSQL/MySQL schemas, so `sqlkit` bootstraps preserve it.
 
 Because declarations are values, they compose: a shared
 `[]sqldef.TableElement` of audit columns can be appended into any table.
 
-The `sqlkitgen generate` command above turns the catalog into code and DDL for
+The `sqlkit generate` command above turns the catalog into code and DDL for
 you; under the hood it is just the `codegen` and `ddl` libraries, which you can
 also call directly when you need full control:
 
@@ -252,7 +259,7 @@ dropText := md.DropSQL(d)        // ALTER ... DROP / DROP TABLE (the inverse)
 
 These methods only build SQL text; they never touch a database. DDL also
 renders per element — `Table.CreateSQL(d)` / `Table.DropSQL(d)` and
-`Index.CreateSQL(t, d)` / `Index.DropSQL(t, d)` — and `sqlkitgen ddl --drop`
+`Index.CreateSQL(t, d)` / `Index.DropSQL(t, d)` — and `sqlkit ddl --drop`
 prepends the teardown statements so the generated `schema.sql` recreates
 cleanly.
 
@@ -267,7 +274,7 @@ with no name on the chosen dialect is reported by `codegen.Generate` /
 
 ### Bootstrapping a catalog from an existing database
 
-`sqlkitgen` reads a live schema and emits the catalog source for it (see
+`sqlkit` reads a live schema and emits the catalog source for it (see
 [the flow](#the-flow-a-catalog-generates-the-bindings) above), so an
 existing database can be converted once and maintained as Go code from then
 on. The same conversion is available as a library via
@@ -275,6 +282,200 @@ on. The same conversion is available as a library via
 catalog, `md.CreateSQL(d)` (with `md` from `Catalog.Build` and a dialect `d`
 from `sql.DialectByName("postgres")`) renders the schema as CREATE TABLE
 statements.
+
+## Migrations
+
+The `migrate` package runs schema migrations: each migration's
+`Up` and `Down` are callbacks that receive an `Operator` and perform the change
+with operations like `op.CreateTable`, `op.AddColumn`, `op.DropColumn`,
+`op.CreateIndex`, and `op.CreateForeignKey`. Columns are declared with the
+`sqldef` DSL (portable types `sqldef.BigInt` / `sqldef.VarChar(n)` …, options
+`Nullable` / `Default` / `PrimaryKey` / `Unique`); tables and foreign-key targets
+are referenced by name. Migrations are self-contained — they don't import your
+schema catalog — and target PostgreSQL or MySQL through the same code.
+
+Migrations form a **DAG**: each carries a `Revision` id and the `DownRevision`
+it builds on (`""` for the first), and the apply order is resolved from those
+links — not from declaration or filename order. Branches off a shared parent
+coexist as separate heads, and `migrate.NewRevision()` mints collision-resistant
+ids.
+
+```go
+import (
+    "github.com/aita/sqlkit/migrate"
+    "github.com/aita/sqlkit/sqldef"
+)
+
+var migrations = []migrate.Migration{
+    {
+        Revision:     "0001", // unique id; migrate.NewRevision() generates one
+        DownRevision: "",     // builds on nothing — the first migration
+        Name:         "create_tags",
+        Up: func(op *migrate.Operator) {
+            op.CreateTable("tags",
+                sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+                sqldef.Column("name", sqldef.VarChar(64), sqldef.Unique()),
+            )
+        },
+        Down: func(op *migrate.Operator) { op.DropTable("tags") },
+    },
+}
+
+m := migrate.New(db, migrations)
+err := m.Up(ctx)                    // apply all pending, each in its own transaction
+// m.UpTo(ctx, "0001")              // apply a revision and its ancestors
+// m.Down(ctx) / m.DownTo(ctx, rev) // roll back ("" rolls back everything)
+// m.Status(ctx) / m.Pending(ctx)   // inspect state
+// m.History(ctx)                   // the full apply/rollback timeline from the DB
+```
+
+Foreign keys reference their target table by name; create them after the table:
+
+```go
+Up: func(op *migrate.Operator) {
+    op.CreateTable("posts",
+        sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+        sqldef.Column("user_id", sqldef.BigInt),
+        sqldef.Index("user_id"),
+    )
+    op.CreateForeignKey("fk_posts_user_id", "posts",
+        []string{"user_id"}, "users", []string{"id"})
+},
+Down: func(op *migrate.Operator) {
+    op.DropForeignKey("fk_posts_user_id", "posts")
+    op.DropTable("posts")
+},
+```
+
+The operator's other operations include `RenameTable`, `RenameColumn`,
+`AlterColumn(table, col, migrate.TypeTo(...), migrate.SetNullable(...), ...)`,
+`CreateUniqueIndex`, `DropIndex`, `DropConstraint`, and `AddCheck`. For a data
+backfill use `op.Exec(query)`; for a step the operations don't cover, drop to the
+`sql` package with `op.Execute(stmt)`. The first failing operation stops the
+migration and is reported.
+
+**Targets.** `Upgrade`/`Downgrade` take a flexible target:
+
+```go
+m.Upgrade(ctx, "head")   // or "" — every pending migration (all heads)
+m.Upgrade(ctx, "+1")     // the next pending migration
+m.Upgrade(ctx, "8f3a")   // a revision (or unique prefix) and its ancestors
+m.Downgrade(ctx, "-1")   // the most recently applied migration
+m.Downgrade(ctx, "base") // everything
+m.Downgrade(ctx, "8f3a") // down to that revision (its descendants are rolled back)
+```
+
+`Up`/`Down`/`UpTo`/`DownTo` are thin wrappers (`Up` = `Upgrade(ctx, "head")`,
+`Down` = `Downgrade(ctx, "-1")`).
+
+**Branches and merges.** Because each migration names its parent(s), two feature
+branches can add migrations off the same `DownRevision`; that leaves two **heads**
+(`m.Heads()`). Join them with a merge migration that lists both as parents:
+
+```go
+var _ = Registry.Add(migrate.Migration{
+    Revision:      "merge_ab",
+    DownRevisions: []string{"feature_a", "feature_b"},
+    Name:          "merge a and b",
+    // Up/Down often empty for a pure merge
+})
+```
+
+`m.Current(ctx)` reports the revision(s) the database is at; `m.Heads()` the tips
+of the DAG.
+
+**Stamp.** `m.Stamp(ctx, revision)` records the database as being at a revision
+*without running any migration* — for baselining an existing schema. It writes
+history rows so the applied set becomes exactly that revision's ancestors
+(`"head"` stamps everything, `"base"` stamps nothing).
+
+**Offline SQL.** `m.UpgradeSQL(from, to)` / `m.DowngradeSQL(from, to)` render the
+SQL a range would run, without touching the database:
+
+```go
+script, _ := m.UpgradeSQL("base", "head") // CREATE TABLE ...; INSERT INTO schema_migrations ...
+```
+
+**History.** The `schema_migrations` table is **append-only**: applying a
+migration inserts an `up` row, rolling it back inserts a `down` row (the apply is
+not deleted), each with the revision, name, direction, and timestamp. A
+revision's current state is its most recent event, so `Status` reports what is
+applied while `History` returns the full timeline persisted in the database.
+
+**Transactions.** Each migration runs in a transaction so its changes and its
+history row commit together. PostgreSQL DDL is transactional; MySQL commits DDL
+implicitly, so a partly-applied MySQL migration cannot be rolled back
+automatically. Set `Migration.DisableTx` for statements a transaction rejects
+(e.g. PostgreSQL `CREATE INDEX CONCURRENTLY`).
+
+**Splitting migrations across files.** Keep each migration in its own file and
+register it with a shared `migrate.Registry`, so adding a migration is dropping
+in a file rather than editing a central slice (declaration order does not matter —
+`New` resolves the order from the revision DAG):
+
+```go
+// migrations/migrations.go
+var Registry = migrate.NewRegistry()
+
+// migrations/0001_create_users.go — Add returns the registry, so a blank var registers it
+var _ = Registry.Add(migrate.Migration{Revision: "0001", DownRevision: "", Name: "create_users",
+    Up: func(op *migrate.Operator) { op.CreateTable("users" /* , sqldef.Column(...) */) }})
+
+// main.go
+m := migrations.Registry.NewMigrator(db)
+err := m.Up(ctx)
+```
+
+See `examples/migrate` for a runnable example.
+
+**CLI.** The `sqlkit` binary runs your migrations as subcommands of
+`sqlkit migrate`. Because migrations are Go code, it cannot run them directly, so
+it compiles the package you point it at (one that exposes a `Registry`) into a
+throwaway program and runs that — no app code of your own required. Point it at
+your migrations directory with `--migrations` and give it a connection with
+`--dsn` or `DATABASE_URL`:
+
+```sh
+export DATABASE_URL=postgres://localhost/app
+sqlkit migrate up    --migrations ./migrations   # apply all pending (also: up +1, up <revision>)
+sqlkit migrate down  --migrations ./migrations   # roll back the most recent (also: down base, down <rev>)
+sqlkit migrate status   --migrations ./migrations   # each migration's applied state
+sqlkit migrate current  --migrations ./migrations   # the revision(s) the database is at
+sqlkit migrate heads    --migrations ./migrations   # the head revision(s)
+sqlkit migrate history  --migrations ./migrations   # the apply/rollback timeline
+sqlkit migrate stamp head --migrations ./migrations # mark applied without running
+sqlkit migrate sql up base head --migrations ./migrations  # render SQL for a range without running it
+sqlkit migrate new "add tags"   --migrations ./migrations  # scaffold a new migration file
+```
+
+Every command compiles the migrations package, so it needs the Go toolchain and
+your database driver in your module's `go.mod` (`--driver`/`--driver-pkg` default
+to pgx; pass both for another engine). `sqlkit migrate new` is the exception that
+needs no database: it reads the compiled migration set to scaffold a new file (a
+fresh revision with the current head as its `DownRevision`; `--merge` joins all
+heads).
+
+If you would rather ship your own binary, the same command set is available as
+`Migrator.RunCLI(ctx, args)` (a kong CLI under the hood) — build a `Migrator`
+from your registry and hand it `os.Args[1:]`:
+
+```go
+func main() {
+    db, err := sqlkit.Open("pgx", os.Getenv("DATABASE_URL"))
+    if err != nil { log.Fatal(err) }
+    defer db.SQL().Close()
+    if err := migrations.Registry.NewMigrator(db).RunCLI(context.Background(), os.Args[1:]); err != nil {
+        log.Fatal(err)
+    }
+}
+```
+
+`migrate.Diff(old, new, dialect)` generates the forward DDL (`[]sql.Statement`)
+between two `meta.Metadata` snapshots — added/dropped tables and columns,
+type/nullability/default changes, and index/foreign-key/check/comment changes,
+ordered for safety (drop foreign keys and tables first, add foreign keys last).
+Renames are reported as drop+add, and the `Down` direction is authored by hand.
+Feed its output to a migration with `op.Execute`.
 
 ## Querying and scanning
 
@@ -355,7 +556,7 @@ CRUD wrapper: terminals return the same `sqlkit.Rows`, so DTO mapping stays
 yours.
 
 ```sh
-go run github.com/aita/sqlkit/cmd/sqlkitgen generate ./schema \
+go run github.com/aita/sqlkit/cmd/sqlkit generate ./schema \
   --name appdb --out appdb --relations
 ```
 
@@ -671,7 +872,7 @@ from the driver name (`"mysql"` → MySQL, otherwise PostgreSQL; override with
 `WithDialect`), and `Returning(...)` fails at compile time with a pointer to
 `Result.LastInsertId`, since MySQL has no RETURNING.
 
-`sqlkitgen` introspects both PostgreSQL and MySQL schemas (`inspector`'s
+`sqlkit` introspects both PostgreSQL and MySQL schemas (`inspector`'s
 dialect switch is the extension point). The integration suite runs the full
 stack — builder, scanner, DDL generator, and inspector — against both engines
 (see [Testing](#testing)).

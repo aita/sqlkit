@@ -11,7 +11,7 @@ import (
 	"github.com/aita/sqlkit/internal/sqltest"
 )
 
-// The fixtures below mirror what sqlkitgen generates: a typed table binding
+// The fixtures below mirror what sqlkit generates: a typed table binding
 // with a Get accessor. All statements start from the db or session handle
 // (db.Select().From(t), db.Insert(t).Values(...), db.Update(t), ...).
 

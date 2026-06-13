@@ -3,7 +3,7 @@
 //
 // This package is the untyped core of sqlkit. Most applications should use
 // the typed builders in package sqlkit (backed by code generated with
-// sqlkitgen), which compile down to the nodes defined here.
+// sqlkit), which compile down to the nodes defined here.
 package sql
 
 // Expression is a composable SQL AST node.

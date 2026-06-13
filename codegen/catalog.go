@@ -128,7 +128,7 @@ func GenerateCatalog(md meta.Metadata, opts CatalogOptions) (File, error) {
 		fb.add(sqlImport)
 	}
 	fb.write(sb.String())
-	return fb.fileWithHeader(opts.PackageName, fileName, "// Bootstrapped by sqlkitgen; maintained by hand.\n\n")
+	return fb.fileWithHeader(opts.PackageName, fileName, "// Bootstrapped by sqlkit; maintained by hand.\n\n")
 }
 
 func renderCatalogTable(sb *strings.Builder, trailers *[]string, table meta.Table, owner string, tableVars map[string]string, dialect string, sqlDialect sql.Dialect, usedSQL *bool) error {

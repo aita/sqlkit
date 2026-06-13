@@ -161,6 +161,24 @@ func TestDefaultSchema(t *testing.T) {
 	}
 }
 
+// TestBuildColumnDropsTableLevelConstructs checks that BuildColumn (used by
+// ALTER TABLE ADD COLUMN) accepts a column carrying References/Unique — those
+// are table-level constructs and are dropped, not validated against a catalog
+// that has no such table, which is the common "add the FK column, then
+// CreateForeignKey" pattern.
+func TestBuildColumnDropsTableLevelConstructs(t *testing.T) {
+	users := meta.Table{Name: "users", Columns: []meta.Column{{Name: "id"}}}
+	col, err := sqldef.BuildColumn(
+		sqldef.Column("user_id", sqldef.BigInt, sqldef.References(users, "id"), sqldef.Unique()),
+	)
+	if err != nil {
+		t.Fatalf("BuildColumn with References/Unique: %v", err)
+	}
+	if col.Name != "user_id" {
+		t.Errorf("column name = %q, want user_id", col.Name)
+	}
+}
+
 func TestCrossSchemaReference(t *testing.T) {
 	catalog := sqldef.NewCatalog()
 	audit := catalog.Schema("audit").Table("events",

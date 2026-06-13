@@ -207,15 +207,7 @@ func (b *tableBuilder) build() meta.Table {
 		if c.primaryKey && c.nullable {
 			d.fail("table %q: column %q: a primary key column cannot be nullable", b.name, c.name)
 		}
-		mt.Columns = append(mt.Columns, meta.Column{
-			Name:        c.name,
-			Type:        c.typ,
-			Nullable:    c.nullable,
-			HasDefault:  c.hasDefault,
-			DefaultExpr: c.defaultExpr,
-			PrimaryKey:  c.primaryKey,
-			Comment:     c.comment,
-		})
+		mt.Columns = append(mt.Columns, c.toMeta())
 	}
 
 	for _, fk := range collectForeignKeys(b) {
@@ -277,6 +269,21 @@ type columnDef struct {
 	unique      bool
 	ref         *fkDef
 	errs        []error
+}
+
+// toMeta assembles the column's meta.Column. Column-level Unique/References are
+// table-level constructs (an index, a foreign key) and are not part of the
+// column itself, so they are left to the table builder.
+func (c *columnDef) toMeta() meta.Column {
+	return meta.Column{
+		Name:        c.name,
+		Type:        c.typ,
+		Nullable:    c.nullable,
+		HasDefault:  c.hasDefault,
+		DefaultExpr: c.defaultExpr,
+		PrimaryKey:  c.primaryKey,
+		Comment:     c.comment,
+	}
 }
 
 // fkDef is a foreign key; column-level References produce single-column ones.

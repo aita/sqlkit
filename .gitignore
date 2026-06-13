@@ -1,5 +1,8 @@
 # build artifacts
 /basic
-/sqlkitgen
+/sqlkit
 *.test
 /blog
+
+# throwaway program "sqlkit migrate" builds to run a project's migrations
+.sqlkit-migrate-*
