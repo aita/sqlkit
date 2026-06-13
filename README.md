@@ -47,7 +47,8 @@ You author the schema as a sqldef catalog (or bootstrap one from an existing
 database with `sqlkitgen`), then generate the typed table bindings — and the
 DDL — from it. The catalog is the source of truth; `sqlkitgen` only bootstraps
 it. See [Declaring the schema in Go](#declaring-the-schema-in-go-sqldef-package)
-below for authoring, and `examples/blog/gen` for a generator program.
+below for authoring, and `examples/blog` for `go:generate` directives that
+drive the bindings and DDL from the catalog.
 
 To bootstrap a catalog from a live **PostgreSQL or MySQL** schema:
 
@@ -68,6 +69,49 @@ go run github.com/aita/sqlkit/cmd/sqlkitgen inspect \
 
 The bootstrapped catalog is a starting point meant to be edited (it carries no
 `DO NOT EDIT` marker); from then on the schema lives in code.
+
+Once the catalog lives in a package, generate the typed bindings straight from
+it — no hand-written generator program required. Point `sqlkitgen generate` at
+the package that declares the `*sqldef.Catalog`:
+
+```sh
+go run github.com/aita/sqlkit/cmd/sqlkitgen generate ./schema -name appdb -out appdb
+```
+
+| `generate` flag | Purpose |
+|---|---|
+| `<package>` | import path or `./dir` of the package that declares the catalog (positional) |
+| `-var` | name of the `*sqldef.Catalog` variable (default `Catalog`) |
+| `-name` | package name of the generated bindings (required) |
+| `-out` | output directory for the generated bindings (required) |
+| `-tables` | comma-separated subset of tables to include |
+| `-dialect` | type-mapping dialect (`postgres`/`mysql`, default `postgres`) |
+| `-file-per-table` | one file per table instead of a single `tables.go` |
+| `-emit-dto` | also generate a row struct (DTO) per table |
+
+The DDL is a separate concern: `sqlkitgen ddl` renders the catalog's
+`CREATE TABLE`/`INDEX`/constraint statements (to a file with `-out`, else
+stdout) for a `-dialect`.
+
+```sh
+go run github.com/aita/sqlkit/cmd/sqlkitgen ddl ./schema -out schema.sql
+```
+
+The natural home for both is a pair of `go:generate` directives next to the
+catalog, so `go generate ./...` rebuilds the bindings and the DDL — see
+`examples/blog`:
+
+```go
+//go:generate go run github.com/aita/sqlkit/cmd/sqlkitgen generate ./schema --name blogdb --out blogdb
+//go:generate go run github.com/aita/sqlkit/cmd/sqlkitgen ddl ./schema --out schema.sql
+```
+
+A catalog is a runtime Go value (foreign keys reference the `meta.Table` values
+that `Table` returns), so it can't be read statically. Both commands write a
+throwaway generator program that imports the catalog package and runs
+`codegen.Generate`/`codegen.Write` (or `ddl.Generate`) via `go run`, then
+remove it. For full control over the type mapping or DTO naming, write that
+program yourself against the `codegen` library below.
 
 The generated binding is metadata, not an ORM: it exposes `Column[T]` fields
 (`Users.ID` is a `sqlkit.Column[int64]`, ...) and the table identity, but no
@@ -184,8 +228,9 @@ from live PostgreSQL/MySQL schemas, so `sqlkitgen` bootstraps preserve it.
 Because declarations are values, they compose: a shared
 `[]sqldef.TableElement` of audit columns can be appended into any table.
 
-A small generator program turns the catalog into code and DDL — see
-`examples/blog/gen`, which regenerates both `blogdb` and `schema.sql`:
+The `sqlkitgen generate` command above turns the catalog into code and DDL for
+you; under the hood it is just the `codegen` and `ddl` libraries, which you can
+also call directly when you need full control:
 
 ```go
 catalog, err := schema.Catalog.Build() // dialect-agnostic meta.Meta

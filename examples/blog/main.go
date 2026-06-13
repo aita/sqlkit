@@ -1,12 +1,17 @@
 // Command blog demonstrates the typed query builder and DTO scanning against
-// the bindings generated from the catalog in schema/ (which also generates
-// schema.sql; see gen/).
+// the bindings generated from the catalog in schema/. The go:generate
+// directives below regenerate the blogdb bindings and schema.sql from that
+// catalog with the sqlkitgen generate and ddl commands (no hand-written
+// generator program); run them with `go generate ./...` from this directory.
 //
 // Run against a real database:
 //
 //	createdb blog && psql blog -f schema.sql
 //	DATABASE_URL=postgres://localhost/blog go run .
 package main
+
+//go:generate go run github.com/aita/sqlkit/cmd/sqlkitgen generate ./schema --name blogdb --out blogdb
+//go:generate go run github.com/aita/sqlkit/cmd/sqlkitgen ddl ./schema --out schema.sql
 
 import (
 	"context"
