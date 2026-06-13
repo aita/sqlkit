@@ -131,6 +131,35 @@ func (o *Operator) AlterColumn(table, column string, changes ...AlterColumnChang
 	o.emit(stmt)
 }
 
+// ModifyColumn restates a column's full definition — type, nullability, and
+// default — from a single sqldef.Column element, the dialect-agnostic way to
+// change those properties at once. MySQL renders one MODIFY COLUMN; PostgreSQL
+// renders the equivalent ALTER COLUMN TYPE / SET|DROP NOT NULL / SET|DROP
+// DEFAULT actions. It is what the migration autogenerator emits for a column
+// change.
+func (o *Operator) ModifyColumn(table string, column sqldef.TableElement) {
+	if o.err != nil {
+		return
+	}
+	col, err := sqldef.BuildColumn(column)
+	if err != nil {
+		o.fail(err)
+		return
+	}
+	o.emit(sql.AlterTable(o.table(table)).RestateColumn(col.ColumnDef()))
+}
+
+// AddPrimaryKey adds a PRIMARY KEY constraint over the columns.
+func (o *Operator) AddPrimaryKey(table string, columns ...string) {
+	o.emit(sql.AlterTable(o.table(table)).AddPrimaryKey(columns...))
+}
+
+// DropPrimaryKey drops a table's primary key (MySQL DROP PRIMARY KEY;
+// PostgreSQL drops the conventional "<table>_pkey" constraint).
+func (o *Operator) DropPrimaryKey(table string) {
+	o.emit(sql.AlterTable(o.table(table)).DropPrimaryKey())
+}
+
 // CreateIndex creates a (non-unique) index.
 func (o *Operator) CreateIndex(name, table string, columns ...string) {
 	o.emit(sql.CreateIndex(name, o.table(table), columns...))
@@ -147,15 +176,33 @@ func (o *Operator) DropIndex(name, table string) {
 }
 
 // CreateForeignKey adds a foreign-key constraint referencing refTable by name
-// (assumed to be in the same schema).
-func (o *Operator) CreateForeignKey(name, table string, columns []string, refTable string, refColumns []string) {
-	o.emit(sql.AlterTable(o.table(table)).AddForeignKey(sql.ForeignKeyConstraint{
+// (assumed to be in the same schema). Pass OnDelete/OnUpdate options to set its
+// referential actions.
+func (o *Operator) CreateForeignKey(name, table string, columns []string, refTable string, refColumns []string, opts ...ForeignKeyOption) {
+	fk := sql.ForeignKeyConstraint{
 		Name:       name,
 		Columns:    columns,
 		RefSchema:  o.schema,
 		RefTable:   refTable,
 		RefColumns: refColumns,
-	}))
+	}
+	for _, opt := range opts {
+		opt(&fk)
+	}
+	o.emit(sql.AlterTable(o.table(table)).AddForeignKey(fk))
+}
+
+// ForeignKeyOption configures a foreign key added with CreateForeignKey.
+type ForeignKeyOption func(*sql.ForeignKeyConstraint)
+
+// OnDelete sets a foreign key's ON DELETE referential action.
+func OnDelete(action meta.ReferentialAction) ForeignKeyOption {
+	return func(fk *sql.ForeignKeyConstraint) { fk.OnDelete = string(action) }
+}
+
+// OnUpdate sets a foreign key's ON UPDATE referential action.
+func OnUpdate(action meta.ReferentialAction) ForeignKeyOption {
+	return func(fk *sql.ForeignKeyConstraint) { fk.OnUpdate = string(action) }
 }
 
 // DropForeignKey drops a foreign-key constraint (dialect-aware).

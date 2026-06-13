@@ -14,18 +14,18 @@ import (
 // dialect-resolved.
 //
 // It detects added/dropped tables; added/dropped columns; column type,
-// nullability, and default changes; added/dropped/changed indexes, foreign
-// keys, and CHECK constraints; and table/column comment changes. Statements are
-// ordered for safety: drop foreign keys, drop indexes, and drop tables first;
-// then create tables, alter columns, create indexes, add foreign keys, and set
-// comments last.
+// nullability, and default changes; primary-key membership changes;
+// added/dropped/changed indexes, foreign keys (including ON DELETE/UPDATE
+// actions), and CHECK constraints; and table/column comment changes. Column
+// modifications render for both PostgreSQL (separate ALTER COLUMN actions) and
+// MySQL (a single MODIFY COLUMN). Statements are ordered for safety: drop
+// foreign keys, drop indexes, and drop tables first; then create tables, alter
+// columns, create indexes, add foreign keys, and set comments last.
 //
-// Out of scope (v1): column and table renames are reported as drop+add (which
-// loses data — author a hand-written migration instead); primary-key membership
-// changes; and foreign-key ON DELETE/UPDATE actions (the meta model does not
-// carry them). Column modifications (type/nullability/default) render
-// PostgreSQL syntax only. Diff produces only the forward plan; author the Down
-// statements by hand.
+// Out of scope: column and table renames are reported as drop+add (which loses
+// data — author a hand-written migration, or use the autogenerator's rename
+// hints). Diff produces only the forward plan; author the Down statements by
+// hand (the autogenerator derives a best-effort Down from the reverse diff).
 func Diff(old, next meta.Metadata, dialect sql.Dialect) ([]sql.Statement, error) {
 	oldByKey := tableMap(old)
 	newByKey := tableMap(next)
@@ -178,6 +178,18 @@ func diffTable(oldT, newT meta.Table, d sql.Dialect) (tableChanges, error) {
 		}
 	}
 
+	// Primary-key membership change: drop the old key, then add the new one.
+	oldPK, newPK := oldT.PrimaryKeyColumns(), newT.PrimaryKeyColumns()
+	if !stringsEqual(oldPK, newPK) {
+		if len(oldPK) > 0 {
+			alter = alter.DropPrimaryKey()
+		}
+		if len(newPK) > 0 {
+			alter = alter.AddPrimaryKey(newPK...)
+		}
+		hasAlter = true
+	}
+
 	// Checks: by name. A changed check (same name, new expression) becomes a
 	// drop + add; the drop must be emitted first so PostgreSQL does not reject
 	// the duplicate constraint name within the same ALTER TABLE. Names are
@@ -220,26 +232,17 @@ func diffTable(oldT, newT meta.Table, d sql.Dialect) (tableChanges, error) {
 }
 
 // columnAlterations appends the type/nullability/default changes for a retained
-// column to alter, reporting whether any were added.
+// column to alter, reporting whether any were added. PostgreSQL emits separate
+// ALTER COLUMN actions (TYPE / SET|DROP NOT NULL / SET|DROP DEFAULT); MySQL,
+// which has no per-property ALTER COLUMN, restates the whole column with a
+// single MODIFY COLUMN.
 func columnAlterations(alter *sql.AlterTableStmt, oc, nc meta.Column, d sql.Dialect) (bool, error) {
-	changed := false
-	typeEq, err := engineEqual(oc, nc, d)
+	typeChanged, err := engineEqual(oc, nc, d)
 	if err != nil {
 		return false, err
 	}
-	if !typeEq {
-		eng, _ := nc.Type.Engine(d.Name())
-		*alter = alter.AlterColumnType(nc.Name, sql.EngineType{Name: eng.Name, Length: eng.Length, Precision: eng.Precision, Scale: eng.Scale})
-		changed = true
-	}
-	if oc.Nullable != nc.Nullable {
-		if nc.Nullable {
-			*alter = alter.DropNotNull(nc.Name)
-		} else {
-			*alter = alter.SetNotNull(nc.Name)
-		}
-		changed = true
-	}
+	typeChanged = !typeChanged
+	nullChanged := oc.Nullable != nc.Nullable
 	oldDefault, err := renderDefault(d, oc)
 	if err != nil {
 		return false, err
@@ -248,15 +251,37 @@ func columnAlterations(alter *sql.AlterTableStmt, oc, nc meta.Column, d sql.Dial
 	if err != nil {
 		return false, err
 	}
-	if oldDefault != newDefault {
+	defaultChanged := oldDefault != newDefault
+	if !typeChanged && !nullChanged && !defaultChanged {
+		return false, nil
+	}
+
+	if d.Name() == "mysql" {
+		// MySQL restates the column in one MODIFY COLUMN; nc.ColumnDef carries the
+		// new type, nullability, and default.
+		*alter = alter.RestateColumn(nc.ColumnDef())
+		return true, nil
+	}
+
+	if typeChanged {
+		eng, _ := nc.Type.Engine(d.Name())
+		*alter = alter.AlterColumnType(nc.Name, sql.EngineType{Name: eng.Name, Length: eng.Length, Precision: eng.Precision, Scale: eng.Scale})
+	}
+	if nullChanged {
+		if nc.Nullable {
+			*alter = alter.DropNotNull(nc.Name)
+		} else {
+			*alter = alter.SetNotNull(nc.Name)
+		}
+	}
+	if defaultChanged {
 		if nc.DefaultExpr != nil {
 			*alter = alter.SetDefault(nc.Name, nc.DefaultExpr)
 		} else {
 			*alter = alter.DropDefault(nc.Name)
 		}
-		changed = true
 	}
-	return changed, nil
+	return true, nil
 }
 
 // renderDefault renders a column's default expression for comparison; "" when
@@ -336,7 +361,8 @@ func indexEqual(a, b meta.Index) bool {
 
 func fkEqual(a, b meta.ForeignKey) bool {
 	return a.RefSchema == b.RefSchema && a.RefTable == b.RefTable &&
-		stringsEqual(a.Columns, b.Columns) && stringsEqual(a.RefColumns, b.RefColumns)
+		stringsEqual(a.Columns, b.Columns) && stringsEqual(a.RefColumns, b.RefColumns) &&
+		a.OnDelete == b.OnDelete && a.OnUpdate == b.OnUpdate
 }
 
 func checkEqual(a, b meta.Check, d sql.Dialect) (bool, error) {
