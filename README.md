@@ -41,15 +41,15 @@ err := db.Select().From(appdb.Users).
 | `ddl` | `meta` → SQL DDL generator (CREATE TABLE / INDEX, constraints, comments) |
 | `cmd/sqlkitgen` | CLI wrapper around `inspector` + `codegen` |
 
-## The flow: a schema design generates the bindings
+## The flow: a catalog generates the bindings
 
-You author the schema as a sqldef design (or bootstrap one from an existing
+You author the schema as a sqldef catalog (or bootstrap one from an existing
 database with `sqlkitgen`), then generate the typed table bindings — and the
-DDL — from it. The design is the source of truth; `sqlkitgen` only bootstraps
+DDL — from it. The catalog is the source of truth; `sqlkitgen` only bootstraps
 it. See [Declaring the schema in Go](#declaring-the-schema-in-go-sqldef-package)
 below for authoring, and `examples/blog/gen` for a generator program.
 
-To bootstrap a design from a live **PostgreSQL or MySQL** schema:
+To bootstrap a catalog from a live **PostgreSQL or MySQL** schema:
 
 ```sh
 go run github.com/aita/sqlkit/cmd/sqlkitgen \
@@ -62,11 +62,11 @@ go run github.com/aita/sqlkit/cmd/sqlkitgen \
 | `-driver` | `pgx` (default) or `mysql` |
 | `-dialect` | override the schema dialect (`postgres`/`mysql`); inferred from `-driver` |
 | `-schema` | schema/database to read (default `public` for postgres, current DB for mysql) |
-| `-package` | package name of the generated design file (required) |
+| `-package` | package name of the generated catalog file (required) |
 | `-tables` | comma-separated subset of tables to include |
 | `-out` | output file or directory; stdout if empty |
 
-The bootstrapped design is a starting point meant to be edited (it carries no
+The bootstrapped catalog is a starting point meant to be edited (it carries no
 `DO NOT EDIT` marker); from then on the schema lives in code.
 
 The generated binding is metadata, not an ORM: it exposes `Column[T]` fields
@@ -113,10 +113,10 @@ name, and static type `T`.
 
 The `sqldef` package is an alternative to introspection: declare the schema as
 plain Go values in an ordinary package, and generate the table bindings — and
-the DDL — from it, no live database required. The design is the source of
+the DDL — from it, no live database required. The catalog is the source of
 truth, lives in version control, and feeds the same `meta` model the rest of
-the tooling consumes. By convention the design package itself is named
-`schema`; it imports `sqldef` for the building blocks.
+the tooling consumes. By convention the package holding it is named `schema`;
+it imports `sqldef` for the building blocks.
 
 A `Catalog` is the reusable root, and `Catalog.Table(...)` returns a
 `meta.Table` value: store it in a variable, reference it from foreign keys,
@@ -151,7 +151,7 @@ var Posts = Public.Table("posts",
 )
 ```
 
-Single-schema designs can skip the schema handle — `Catalog.Table(...)`
+Single-schema catalogs can skip the schema handle — `Catalog.Table(...)`
 declares tables in the catalog's default schema (unnamed, so unqualified
 names). Pass `sqldef.NewCatalog(sqldef.DefaultSchema("public"))` to make that
 default a named schema.
@@ -163,7 +163,7 @@ renders it, while a bare `Default()` on an integer primary key renders as
 serial/auto-increment. `PrimaryKey()` on several columns declares a composite
 key. Types are portable: `BigInt`, `Timestamp`, ... are `meta.Type` values
 that carry both engines' names (`int8`/`bigint`, `timestamptz`/`datetime`), so
-one design targets PostgreSQL and MySQL and the generators resolve the engine
+one catalog targets PostgreSQL and MySQL and the generators resolve the engine
 name only when you pick a dialect. `Type("citext")` passes an engine type name
 through verbatim.
 
@@ -174,7 +174,7 @@ Foreign keys reference the `meta.Table` values, so the compiler catches typos:
 mention their own variable inside `Table(...)`). References may cross schemas
 within the same catalog.
 
-Indexes, constraints, and comments round out the design: `Unique()` puts a
+Indexes, constraints, and comments round out the catalog: `Unique()` puts a
 single-column unique index on a column, `Index`/`UniqueIndex` declare
 (composite) indexes, and `Check` adds a CHECK constraint. `Comment` on a
 column and `TableComment` on a table carry through to the generated bindings
@@ -201,14 +201,14 @@ other tooling. Mistakes — duplicate names, dangling foreign keys, references
 into another catalog — are collected and reported by `Build`; a type with no
 name on the chosen dialect is reported by `Generate`/`DDL`.
 
-### Bootstrapping a design from an existing database
+### Bootstrapping a catalog from an existing database
 
-`sqlkitgen` reads a live schema and emits the catalog design file for it (see
-[the flow](#the-flow-a-schema-design-generates-the-bindings) above), so an
+`sqlkitgen` reads a live schema and emits the catalog source for it (see
+[the flow](#the-flow-a-catalog-generates-the-bindings) above), so an
 existing database can be converted once and maintained as Go code from then
 on. The same conversion is available as a library via
 `codegen.GenerateCatalog(catalog, codegen.CatalogOptions{...})`. Once you have a
-design, `Catalog.DDL("postgres")` renders the schema as CREATE TABLE
+catalog, `Catalog.DDL("postgres")` renders the schema as CREATE TABLE
 statements.
 
 ## Querying and scanning
