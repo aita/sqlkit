@@ -168,6 +168,21 @@ func (qs QuerySet) Update() sqlkit.UpdateQuery { return qs.ex.Update(qs.base) }
 // QuerySet; add one with Where.
 func (qs QuerySet) Delete() sqlkit.DeleteQuery { return qs.ex.Delete(qs.base) }
 
+// UpdateJoin starts an UPDATE of the base table correlated to rel's target on
+// its foreign-key condition (PostgreSQL UPDATE ... FROM / MySQL inline JOIN,
+// chosen by dialect at compile time). Add assignments with Set and narrow with
+// Where; it carries no clauses from the QuerySet.
+func (qs QuerySet) UpdateJoin(rel Relation) sqlkit.UpdateQuery {
+	return qs.ex.Update(qs.base).Join(rel.Target(), rel.JoinOn())
+}
+
+// DeleteUsing starts a DELETE from the base table correlated to rel's target on
+// its foreign-key condition (PostgreSQL DELETE ... USING / MySQL multi-table
+// DELETE). Narrow with Where; it carries no clauses from the QuerySet.
+func (qs QuerySet) DeleteUsing(rel Relation) sqlkit.DeleteQuery {
+	return qs.ex.Delete(qs.base).Join(rel.Target(), rel.JoinOn())
+}
+
 // Get fetches the row matching the primary key and returns the first result.
 // Pass one value per primary-key column, in declaration order.
 func (qs QuerySet) Get(ctx context.Context, pk ...any) sqlkit.Rows {

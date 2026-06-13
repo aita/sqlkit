@@ -98,6 +98,39 @@ func TestQuerySetSelfReferentialJoin(t *testing.T) {
 		nil)
 }
 
+func TestQuerySetUpdateJoinAndDeleteUsing(t *testing.T) {
+	db := newDB()
+
+	upd := Posts.Q(db).UpdateJoin(Posts.Rels.User).
+		Set(Posts.Title.Set("archived")).
+		Where(Posts.Rels.User.Age.Lt(30))
+	gotSQL, gotArgs, err := upd.ToSQL(dialect)
+	if err != nil {
+		t.Fatalf("UpdateJoin ToSQL() error = %v", err)
+	}
+	wantSQL := `UPDATE "posts" SET "title" = $1 FROM "users" WHERE (("users"."age" < $2) AND ("users"."id" = "posts"."user_id"))`
+	if gotSQL != wantSQL {
+		t.Fatalf("UpdateJoin ToSQL()\n got: %s\nwant: %s", gotSQL, wantSQL)
+	}
+	if len(gotArgs) != 2 || gotArgs[0] != "archived" || gotArgs[1] != 30 {
+		t.Fatalf("UpdateJoin args = %v, want [archived 30]", gotArgs)
+	}
+
+	del := Posts.Q(db).DeleteUsing(Posts.Rels.User).
+		Where(Posts.Rels.User.Age.Lt(18))
+	gotSQL, gotArgs, err = del.ToSQL(dialect)
+	if err != nil {
+		t.Fatalf("DeleteUsing ToSQL() error = %v", err)
+	}
+	wantSQL = `DELETE FROM "posts" USING "users" WHERE (("users"."age" < $1) AND ("users"."id" = "posts"."user_id"))`
+	if gotSQL != wantSQL {
+		t.Fatalf("DeleteUsing ToSQL()\n got: %s\nwant: %s", gotSQL, wantSQL)
+	}
+	if len(gotArgs) != 1 || gotArgs[0] != 18 {
+		t.Fatalf("DeleteUsing args = %v, want [18]", gotArgs)
+	}
+}
+
 func TestQuerySetOrderLimitOffsetDistinct(t *testing.T) {
 	db := newDB()
 	qs := Users.Queryer(db).

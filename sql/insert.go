@@ -59,6 +59,8 @@ type UpdateQuery struct {
 	with      []CTE
 	table     Table
 	sets      []Assignment
+	from      []Source
+	joins     []JoinClause
 	where     Expression
 	returning []Selection
 }
@@ -71,6 +73,25 @@ func Update(table Table) UpdateQuery {
 // Set appends SET assignments.
 func (q UpdateQuery) Set(assignments ...Assignment) UpdateQuery {
 	q.sets = append(q.sets, assignments...)
+	return q
+}
+
+// From adds correlated sources to the UPDATE (PostgreSQL UPDATE ... FROM /
+// MySQL multi-table UPDATE). Combine with Where to correlate rows.
+func (q UpdateQuery) From(sources ...Source) UpdateQuery {
+	q.from = append(q.from, sources...)
+	return q
+}
+
+// Join adds an inner join to the UPDATE's source list.
+func (q UpdateQuery) Join(source Source, on Expression) UpdateQuery {
+	q.joins = append(q.joins, JoinClause{Kind: "JOIN", Source: source, On: on})
+	return q
+}
+
+// LeftJoin adds a left join to the UPDATE's source list.
+func (q UpdateQuery) LeftJoin(source Source, on Expression) UpdateQuery {
+	q.joins = append(q.joins, JoinClause{Kind: "LEFT JOIN", Source: source, On: on})
 	return q
 }
 
@@ -103,6 +124,8 @@ func (q UpdateQuery) compile(c *Compiler) (string, []any, error) {
 type DeleteQuery struct {
 	with      []CTE
 	table     Table
+	using     []Source
+	joins     []JoinClause
 	where     Expression
 	returning []Selection
 }
@@ -110,6 +133,25 @@ type DeleteQuery struct {
 // DeleteFrom creates a DELETE query builder for a table.
 func DeleteFrom(table Table) DeleteQuery {
 	return DeleteQuery{table: table}
+}
+
+// Using adds correlated sources to the DELETE (PostgreSQL DELETE ... USING /
+// MySQL multi-table DELETE). Combine with Where to correlate rows.
+func (q DeleteQuery) Using(sources ...Source) DeleteQuery {
+	q.using = append(q.using, sources...)
+	return q
+}
+
+// Join adds an inner join to the DELETE's source list.
+func (q DeleteQuery) Join(source Source, on Expression) DeleteQuery {
+	q.joins = append(q.joins, JoinClause{Kind: "JOIN", Source: source, On: on})
+	return q
+}
+
+// LeftJoin adds a left join to the DELETE's source list.
+func (q DeleteQuery) LeftJoin(source Source, on Expression) DeleteQuery {
+	q.joins = append(q.joins, JoinClause{Kind: "LEFT JOIN", Source: source, On: on})
+	return q
 }
 
 // Where adds a WHERE predicate, combined with AND when called repeatedly.

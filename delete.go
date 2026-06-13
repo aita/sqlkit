@@ -23,6 +23,26 @@ func Delete(table Table) DeleteQuery {
 	return DeleteQuery{def: def, query: sql.DeleteFrom(def.Table)}
 }
 
+// Using adds correlated sources to the DELETE (PostgreSQL DELETE ... USING /
+// MySQL multi-table DELETE); correlate them with Where.
+func (q DeleteQuery) Using(sources ...sql.Source) DeleteQuery {
+	q.query = q.query.Using(sources...)
+	return q
+}
+
+// Join joins source on the predicate. It renders as an inline join on MySQL and
+// as a correlated USING with the predicate folded into WHERE on PostgreSQL.
+func (q DeleteQuery) Join(source sql.Source, on Predicate) DeleteQuery {
+	q.query = q.query.Join(source, on.Expression())
+	return q
+}
+
+// LeftJoin is Join with a LEFT JOIN (MySQL inline form only).
+func (q DeleteQuery) LeftJoin(source sql.Source, on Predicate) DeleteQuery {
+	q.query = q.query.LeftJoin(source, on.Expression())
+	return q
+}
+
 // Where adds predicates, combined with AND.
 func (q DeleteQuery) Where(predicates ...Predicate) DeleteQuery {
 	if expr := combineWhere(predicates); expr != nil {

@@ -673,7 +673,33 @@ func (c *Compiler) CompileInsert(q InsertQuery) (string, []any, error) {
 	return sb.String(), args, nil
 }
 
-// CompileUpdate compiles an UPDATE statement.
+// usesInlineJoins reports whether the dialect renders multi-table UPDATE/DELETE
+// with MySQL-style inline joins rather than the standard FROM/USING form.
+func (c *Compiler) usesInlineJoins() bool {
+	jd, ok := c.Dialect.(JoinedUpdateDeleter)
+	return ok && jd.UsesInlineJoins()
+}
+
+// writeCommaSources appends sources as a comma-separated list.
+func (c *Compiler) writeCommaSources(sb *strings.Builder, args *[]any, sources []Source) error {
+	for i, source := range sources {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sourceSQL, sourceArgs, err := c.CompileSource(source)
+		if err != nil {
+			return err
+		}
+		sb.WriteString(sourceSQL)
+		*args = append(*args, sourceArgs...)
+	}
+	return nil
+}
+
+// CompileUpdate compiles an UPDATE statement. A multi-table UPDATE (From/Join)
+// renders inline after the target on MySQL (UPDATE t JOIN j ON ... SET ...) and
+// as a trailing FROM list on PostgreSQL (UPDATE t SET ... FROM j WHERE ...),
+// where join ON predicates fold into the WHERE since FROM has no ON.
 func (c *Compiler) CompileUpdate(q UpdateQuery) (string, []any, error) {
 	if q.table.Name == "" {
 		return "", nil, fmt.Errorf("sqlkit/sql: UPDATE requires a table")
@@ -681,6 +707,7 @@ func (c *Compiler) CompileUpdate(q UpdateQuery) (string, []any, error) {
 	if len(q.sets) == 0 {
 		return "", nil, fmt.Errorf("sqlkit/sql: UPDATE requires at least one assignment")
 	}
+	inline := c.usesInlineJoins()
 	var sb strings.Builder
 	var args []any
 	withSQL, withArgs, err := c.compileWith(q.with)
@@ -691,6 +718,28 @@ func (c *Compiler) CompileUpdate(q UpdateQuery) (string, []any, error) {
 	args = append(args, withArgs...)
 	sb.WriteString("UPDATE ")
 	sb.WriteString(c.Dialect.QuoteIdent(q.table.QualifiedName()))
+
+	if inline {
+		for _, source := range q.from {
+			sb.WriteString(", ")
+			sourceSQL, sourceArgs, err := c.CompileSource(source)
+			if err != nil {
+				return "", nil, err
+			}
+			sb.WriteString(sourceSQL)
+			args = append(args, sourceArgs...)
+		}
+		for _, join := range q.joins {
+			joinSQL, joinArgs, err := c.CompileJoin(join)
+			if err != nil {
+				return "", nil, err
+			}
+			sb.WriteString(" ")
+			sb.WriteString(joinSQL)
+			args = append(args, joinArgs...)
+		}
+	}
+
 	sb.WriteString(" SET ")
 	for i, assignment := range q.sets {
 		if i > 0 {
@@ -705,8 +754,19 @@ func (c *Compiler) CompileUpdate(q UpdateQuery) (string, []any, error) {
 		sb.WriteString(valueSQL)
 		args = append(args, valueArgs...)
 	}
-	if q.where != nil {
-		whereSQL, whereArgs, err := c.CompileExpression(q.where)
+
+	where := q.where
+	if !inline {
+		if sources := joinSources(q.from, q.joins); len(sources) > 0 {
+			sb.WriteString(" FROM ")
+			if err := c.writeCommaSources(&sb, &args, sources); err != nil {
+				return "", nil, err
+			}
+		}
+		where = foldJoinOns(where, q.joins)
+	}
+	if where != nil {
+		whereSQL, whereArgs, err := c.CompileExpression(where)
 		if err != nil {
 			return "", nil, err
 		}
@@ -720,11 +780,15 @@ func (c *Compiler) CompileUpdate(q UpdateQuery) (string, []any, error) {
 	return sb.String(), args, nil
 }
 
-// CompileDelete compiles a DELETE statement.
+// CompileDelete compiles a DELETE statement. A multi-table DELETE (Using/Join)
+// renders as MySQL's DELETE t FROM t JOIN j ON ... and as PostgreSQL's
+// DELETE FROM t USING j WHERE ..., where join ON predicates fold into the WHERE.
 func (c *Compiler) CompileDelete(q DeleteQuery) (string, []any, error) {
 	if q.table.Name == "" {
 		return "", nil, fmt.Errorf("sqlkit/sql: DELETE requires a table")
 	}
+	inline := c.usesInlineJoins()
+	hasSources := len(q.using) > 0 || len(q.joins) > 0
 	var sb strings.Builder
 	var args []any
 	withSQL, withArgs, err := c.compileWith(q.with)
@@ -733,10 +797,48 @@ func (c *Compiler) CompileDelete(q DeleteQuery) (string, []any, error) {
 	}
 	sb.WriteString(withSQL)
 	args = append(args, withArgs...)
-	sb.WriteString("DELETE FROM ")
-	sb.WriteString(c.Dialect.QuoteIdent(q.table.QualifiedName()))
-	if q.where != nil {
-		whereSQL, whereArgs, err := c.CompileExpression(q.where)
+	target := c.Dialect.QuoteIdent(q.table.QualifiedName())
+
+	if inline && hasSources {
+		sb.WriteString("DELETE ")
+		sb.WriteString(target)
+		sb.WriteString(" FROM ")
+		sb.WriteString(target)
+		for _, source := range q.using {
+			sb.WriteString(", ")
+			sourceSQL, sourceArgs, err := c.CompileSource(source)
+			if err != nil {
+				return "", nil, err
+			}
+			sb.WriteString(sourceSQL)
+			args = append(args, sourceArgs...)
+		}
+		for _, join := range q.joins {
+			joinSQL, joinArgs, err := c.CompileJoin(join)
+			if err != nil {
+				return "", nil, err
+			}
+			sb.WriteString(" ")
+			sb.WriteString(joinSQL)
+			args = append(args, joinArgs...)
+		}
+	} else {
+		sb.WriteString("DELETE FROM ")
+		sb.WriteString(target)
+		if hasSources {
+			sb.WriteString(" USING ")
+			if err := c.writeCommaSources(&sb, &args, joinSources(q.using, q.joins)); err != nil {
+				return "", nil, err
+			}
+		}
+	}
+
+	where := q.where
+	if !inline {
+		where = foldJoinOns(where, q.joins)
+	}
+	if where != nil {
+		whereSQL, whereArgs, err := c.CompileExpression(where)
 		if err != nil {
 			return "", nil, err
 		}
@@ -748,6 +850,32 @@ func (c *Compiler) CompileDelete(q DeleteQuery) (string, []any, error) {
 		return "", nil, err
 	}
 	return sb.String(), args, nil
+}
+
+// joinSources flattens explicit sources and join sources into one list, for the
+// standard FROM/USING form where joins have no ON clause of their own.
+func joinSources(sources []Source, joins []JoinClause) []Source {
+	out := append([]Source(nil), sources...)
+	for _, join := range joins {
+		out = append(out, join.Source)
+	}
+	return out
+}
+
+// foldJoinOns ANDs each join's ON predicate into where, used by the standard
+// FROM/USING form (PostgreSQL), whose FROM/USING list carries no ON.
+func foldJoinOns(where Expression, joins []JoinClause) Expression {
+	for _, join := range joins {
+		if join.On == nil {
+			continue
+		}
+		if where == nil {
+			where = join.On
+		} else {
+			where = And(where, join.On)
+		}
+	}
+	return where
 }
 
 func (c *Compiler) writeReturning(sb *strings.Builder, args *[]any, returning []Selection) error {
