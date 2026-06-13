@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"go/format"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"text/template"
@@ -16,6 +18,19 @@ import (
 type File struct {
 	Name    string
 	Content []byte
+}
+
+// Write writes generated files into dir, creating it if needed.
+func Write(dir string, files []File) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	for _, file := range files {
+		if err := os.WriteFile(filepath.Join(dir, file.Name), file.Content, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Options configures generation. The zero value (with PackageName set) emits a
@@ -82,8 +97,10 @@ type tableModel struct {
 }
 
 // Generate renders the catalog into one or more Go source files according to
-// opts and returns their formatted contents. The dialect (opts.Dialect,
-// default postgres) selects the default SQL→Go type table.
+// opts and returns their formatted contents. The catalog is the built schema
+// model (meta.Meta) — produce it with sqldef's Catalog.Build, the inspector,
+// or by hand. The dialect (opts.Dialect, default postgres) selects the default
+// SQL→Go type table.
 func Generate(catalog meta.Meta, opts Options) ([]File, error) {
 	if opts.PackageName == "" {
 		return nil, fmt.Errorf("codegen: package name is required")

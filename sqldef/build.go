@@ -3,12 +3,8 @@ package sqldef
 import (
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
-	"github.com/aita/sqlkit/codegen"
-	"github.com/aita/sqlkit/ddl"
 	"github.com/aita/sqlkit/meta"
 )
 
@@ -105,37 +101,3 @@ func hasMetaColumn(columns []meta.Column, name string) bool {
 func joinCols(columns []string) string { return strings.Join(columns, "_") }
 
 func isBlank(s string) bool { return strings.TrimSpace(s) == "" }
-
-// Generate builds the catalog and runs the code generator over its tables,
-// producing the typed table bindings (and whatever else opts requests).
-// opts.Dialect selects the target dialect (default postgres).
-func (d *Catalog) Generate(opts codegen.Options) ([]codegen.File, error) {
-	catalog, err := d.Build()
-	if err != nil {
-		return nil, err
-	}
-	return codegen.Generate(catalog, opts)
-}
-
-// DDL builds the catalog and renders its tables as CREATE TABLE / CREATE INDEX
-// / comment statements for the dialect (default postgres).
-func (d *Catalog) DDL(dialect string) (string, error) {
-	catalog, err := d.Build()
-	if err != nil {
-		return "", err
-	}
-	return ddl.Generate(catalog, dialect)
-}
-
-// Write writes generated files into dir, creating it if needed.
-func Write(dir string, files []codegen.File) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	for _, file := range files {
-		if err := os.WriteFile(filepath.Join(dir, file.Name), file.Content, 0o644); err != nil {
-			return err
-		}
-	}
-	return nil
-}
