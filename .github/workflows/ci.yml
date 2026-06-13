@@ -1,0 +1,109 @@
+name: CI
+
+# Run on every branch push so CI tests the branch's own commit directly. (A
+# pull_request trigger would instead test a commit that merges the branch into
+# its base, which fails whenever the base has moved on independently.)
+on:
+  push:
+    branches:
+      - '**'
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Build, vet, format-check and unit-test the root module. The integration
+  # module is built and vetted here but its tests run in the integration job,
+  # which provides the databases they need.
+  unit-test:
+    name: unit test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-ed:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
+
+      - name: Build & vet integration module
+        working-directory: internal/integration
+        run: |
+          go build ./...
+          go vet ./...
+
+  # Run the integration suite against real PostgreSQL and MySQL service
+  # containers. The suite connects via the SQLKIT_TEST_*_DSN variables instead
+  # of starting its own containers (no Docker socket needed inside the job).
+  integration:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: sqlkit
+          POSTGRES_PASSWORD: sqlkit
+          POSTGRES_DB: blog
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sqlkit -d blog"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          # The blog bindings qualify tables with the "public" schema, which on
+          # MySQL is a database; create one so qualified names resolve.
+          MYSQL_DATABASE: public
+          MYSQL_USER: sqlkit
+          MYSQL_PASSWORD: sqlkit
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -proot --silent"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 15
+          --health-start-period 30s
+
+    env:
+      SQLKIT_TEST_POSTGRES_DSN: postgres://sqlkit:sqlkit@127.0.0.1:5432/blog?sslmode=disable
+      # parseTime lets DATETIME columns scan into time.Time; tls=skip-verify
+      # uses the server's self-signed cert so caching_sha2_password auth
+      # completes over TLS (no cleartext public-key retrieval needed).
+      SQLKIT_TEST_MYSQL_DSN: sqlkit:sqlkit@tcp(127.0.0.1:3306)/public?parseTime=true&tls=skip-verify
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+
+      - name: Integration tests
+        working-directory: internal/integration
+        run: go test -v ./...
