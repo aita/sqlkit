@@ -6,6 +6,110 @@ import (
 	. "github.com/aita/sqlkit/sql"
 )
 
+func TestBetween(t *testing.T) {
+	q := Select(Col("id")).From(Table{Name: "users"}).
+		Where(Between(Col("age"), Int(18), Int(65)))
+	assertSQL(t, q,
+		`SELECT "id" FROM "users" WHERE ("age" BETWEEN $1 AND $2)`, []any{18, 65})
+
+	q = Select(Col("id")).From(Table{Name: "users"}).
+		Where(NotBetween(Col("age"), Int(18), Int(65)))
+	assertSQL(t, q,
+		`SELECT "id" FROM "users" WHERE ("age" NOT BETWEEN $1 AND $2)`, []any{18, 65})
+}
+
+func TestInQueryAndExists(t *testing.T) {
+	sub := Select(Col("user_id")).From(Table{Name: "orders"}).Where(Gt(Col("total"), Int(100)))
+
+	assertSQL(t, Select(Col("id")).From(Table{Name: "users"}).Where(InQuery(Col("id"), sub)),
+		`SELECT "id" FROM "users" WHERE ("id" IN (SELECT "user_id" FROM "orders" WHERE ("total" > $1)))`,
+		[]any{100})
+
+	assertSQL(t, Select(Col("id")).From(Table{Name: "users"}).Where(NotInQuery(Col("id"), sub)),
+		`SELECT "id" FROM "users" WHERE ("id" NOT IN (SELECT "user_id" FROM "orders" WHERE ("total" > $1)))`,
+		[]any{100})
+
+	assertSQL(t, Select(Col("id")).From(Table{Name: "users"}).Where(Exists(sub)),
+		`SELECT "id" FROM "users" WHERE EXISTS (SELECT "user_id" FROM "orders" WHERE ("total" > $1))`,
+		[]any{100})
+
+	assertSQL(t, Select(Col("id")).From(Table{Name: "users"}).Where(NotExists(sub)),
+		`SELECT "id" FROM "users" WHERE (NOT EXISTS (SELECT "user_id" FROM "orders" WHERE ("total" > $1)))`,
+		[]any{100})
+}
+
+func TestNotLikeAndILike(t *testing.T) {
+	assertSQL(t, Select(Col("id")).From(Table{Name: "users"}).Where(NotLike(Col("email"), Val("%@spam.com"))),
+		`SELECT "id" FROM "users" WHERE ("email" NOT LIKE $1)`, []any{"%@spam.com"})
+	assertSQL(t, Select(Col("id")).From(Table{Name: "users"}).Where(ILike(Col("email"), Val("%@EXAMPLE.com"))),
+		`SELECT "id" FROM "users" WHERE ("email" ILIKE $1)`, []any{"%@EXAMPLE.com"})
+}
+
+func TestJSONFunctions(t *testing.T) {
+	assertSQL(t,
+		Select(As(JSONArray(Col("id"), Col("email")), "j")).From(Table{Name: "users"}),
+		`SELECT JSON_ARRAY("id", "email") AS "j" FROM "users"`, nil)
+
+	// PostgreSQL's SQL/JSON JSON_OBJECT requires the "key VALUE value" separator.
+	assertSQL(t,
+		Select(As(JSONObject("id", Col("id"), "name", Col("name")), "j")).From(Table{Name: "users"}),
+		`SELECT JSON_OBJECT($1 VALUE "id", $2 VALUE "name") AS "j" FROM "users"`, []any{"id", "name"})
+
+	assertSQL(t,
+		Select(As(JSONArrayAgg(Col("id")), "ids")).From(Table{Name: "users"}),
+		`SELECT JSON_ARRAYAGG("id") AS "ids" FROM "users"`, nil)
+
+	assertSQL(t,
+		Select(As(JSONObjectAgg(Col("k"), Col("v")), "obj")).From(Table{Name: "kv"}),
+		`SELECT JSON_OBJECTAGG("k" VALUE "v") AS "obj" FROM "kv"`, nil)
+}
+
+func TestSetOpPrecedenceMixed(t *testing.T) {
+	a := Select(Col("id")).From(Table{Name: "a"})
+	b := Select(Col("id")).From(Table{Name: "b"})
+	cq := Select(Col("id")).From(Table{Name: "c"})
+
+	// (a UNION b) INTERSECT c must keep the UNION grouped, since INTERSECT binds
+	// tighter; without parens PostgreSQL would read a UNION (b INTERSECT c).
+	assertSQL(t, a.Union(b).Intersect(cq),
+		`((SELECT "id" FROM "a") UNION (SELECT "id" FROM "b")) INTERSECT (SELECT "id" FROM "c")`, nil)
+
+	// Same-operator chains stay unparenthesized.
+	assertSQL(t, a.Union(b).Union(cq),
+		`(SELECT "id" FROM "a") UNION (SELECT "id" FROM "b") UNION (SELECT "id" FROM "c")`, nil)
+}
+
+func TestConcatPostgres(t *testing.T) {
+	assertSQL(t,
+		Select(As(Concat(Col("first"), Val(" "), Col("last")), "name")).From(Table{Name: "users"}),
+		`SELECT ("first" || $1 || "last") AS "name" FROM "users"`, []any{" "})
+}
+
+func TestJSONAccessPostgres(t *testing.T) {
+	// Object key, returning json (->).
+	assertSQL(t,
+		Select(As(JSONGet(Col("data"), "name"), "n")).From(Table{Name: "events"}),
+		`SELECT ("data" -> 'name') AS "n" FROM "events"`, nil)
+
+	// Nested path with an array index, text form (->> on the last step).
+	assertSQL(t,
+		Select(As(JSONGetText(Col("data"), "items", 0, "id"), "id")).From(Table{Name: "events"}),
+		`SELECT ((("data" -> 'items') -> 0) ->> 'id') AS "id" FROM "events"`, nil)
+
+	// As text it composes with a string comparison.
+	assertSQL(t,
+		Select(Col("id")).From(Table{Name: "events"}).
+			Where(Eq(JSONGetText(Col("data"), "type"), Val("click"))),
+		`SELECT "id" FROM "events" WHERE (("data" ->> 'type') = $1)`, []any{"click"})
+}
+
+func TestJSONAccessRejectsBadStep(t *testing.T) {
+	_, _, err := Select(JSONGet(Col("data"), 1.5)).From(Table{Name: "events"}).ToSQL(PostgreSQLDialect{})
+	if err == nil {
+		t.Fatal("expected error for non-string/int path step")
+	}
+}
+
 func TestCaseExpression(t *testing.T) {
 	query := Select(
 		As(Case().
@@ -144,6 +248,17 @@ func TestIntersectAndExcept(t *testing.T) {
 
 	assertSQL(t, a.Intersect(b), `(SELECT "id" FROM "a") INTERSECT (SELECT "id" FROM "b")`, nil)
 	assertSQL(t, a.Except(b), `(SELECT "id" FROM "a") EXCEPT (SELECT "id" FROM "b")`, nil)
+}
+
+func TestIntersectAndExceptChained(t *testing.T) {
+	a := Select(Col("id")).From(Table{Name: "a"})
+	b := Select(Col("id")).From(Table{Name: "b"})
+	c := Select(Col("id")).From(Table{Name: "c"})
+
+	assertSQL(t, a.Intersect(b).Intersect(c),
+		`(SELECT "id" FROM "a") INTERSECT (SELECT "id" FROM "b") INTERSECT (SELECT "id" FROM "c")`, nil)
+	assertSQL(t, a.Except(b).Except(c),
+		`(SELECT "id" FROM "a") EXCEPT (SELECT "id" FROM "b") EXCEPT (SELECT "id" FROM "c")`, nil)
 }
 
 func TestUnionAsSubquery(t *testing.T) {

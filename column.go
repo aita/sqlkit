@@ -135,6 +135,27 @@ func (c Column[T]) NotIn(values ...T) Predicate {
 	return newPredicate(sql.NotIn(c, items...))
 }
 
+// Between creates a "column BETWEEN low AND high" predicate (inclusive).
+func (c Column[T]) Between(low, high T) Predicate {
+	return newPredicate(sql.Between(c, sql.Val(low), sql.Val(high)))
+}
+
+// NotBetween creates a "column NOT BETWEEN low AND high" predicate.
+func (c Column[T]) NotBetween(low, high T) Predicate {
+	return newPredicate(sql.NotBetween(c, sql.Val(low), sql.Val(high)))
+}
+
+// InQuery creates a "column IN (subquery)" predicate. The subquery must project
+// a single column; its type is not statically checked against T.
+func (c Column[T]) InQuery(subquery Query) Predicate {
+	return newPredicate(sql.InQuery(c, unwrapQuery(subquery)))
+}
+
+// NotInQuery creates a "column NOT IN (subquery)" predicate.
+func (c Column[T]) NotInQuery(subquery Query) Predicate {
+	return newPredicate(sql.NotInQuery(c, unwrapQuery(subquery)))
+}
+
 // IsNull creates a "column IS NULL" predicate.
 func (c Column[T]) IsNull() Predicate { return newPredicate(sql.IsNull(c)) }
 
@@ -166,4 +187,16 @@ func (v typedValue[T]) UnwrapExpression() sql.Expression { return v.ValueExpress
 // Like creates a LIKE predicate for string expressions.
 func Like(expr TypedExpr[string], pattern string) Predicate {
 	return newPredicate(sql.Like(expr, sql.Val(pattern)))
+}
+
+// NotLike creates a NOT LIKE predicate for string expressions.
+func NotLike(expr TypedExpr[string], pattern string) Predicate {
+	return newPredicate(sql.NotLike(expr, sql.Val(pattern)))
+}
+
+// ILike creates a case-insensitive LIKE predicate for string expressions. It
+// renders as PostgreSQL's native ILIKE and as LOWER(x) LIKE LOWER(pattern) on
+// MySQL, so it is case-insensitive on both regardless of column collation.
+func ILike(expr TypedExpr[string], pattern string) Predicate {
+	return newPredicate(sql.ILike(expr, sql.Val(pattern)))
 }

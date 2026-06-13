@@ -57,6 +57,38 @@ func (d *Database) Select(selections ...sql.Selection) SelectQuery {
 	return q
 }
 
+// Union combines two or more SELECT queries with UNION, executed against this
+// database. It mirrors the package-level Union but binds the result to this
+// database regardless of the operands' own executors.
+func (d *Database) Union(first, second SelectQuery, rest ...SelectQuery) UnionQuery {
+	q := Union(first, second, rest...)
+	q.ex = d
+	return q
+}
+
+// UnionAll is Union with UNION ALL, keeping duplicate rows.
+func (d *Database) UnionAll(first, second SelectQuery, rest ...SelectQuery) UnionQuery {
+	q := UnionAll(first, second, rest...)
+	q.ex = d
+	return q
+}
+
+// Intersect combines two or more SELECT queries with INTERSECT, executed
+// against this database.
+func (d *Database) Intersect(first, second SelectQuery, rest ...SelectQuery) UnionQuery {
+	q := Intersect(first, second, rest...)
+	q.ex = d
+	return q
+}
+
+// Except combines two or more SELECT queries with EXCEPT, executed against
+// this database.
+func (d *Database) Except(first, second SelectQuery, rest ...SelectQuery) UnionQuery {
+	q := Except(first, second, rest...)
+	q.ex = d
+	return q
+}
+
 // Insert starts an INSERT builder for a table, mirroring Select. Feed it
 // rows with Values, or a query with FromSelect.
 func (d *Database) Insert(table Table) InsertQuery {

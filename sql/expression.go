@@ -79,8 +79,70 @@ func Ge(left, right any) BinaryExpression { return binary(left, ">=", right) }
 // Like creates a LIKE expression.
 func Like(left, pattern any) BinaryExpression { return binary(left, "LIKE", pattern) }
 
+// NotLike creates a NOT LIKE expression.
+func NotLike(left, pattern any) BinaryExpression { return binary(left, "NOT LIKE", pattern) }
+
 func binary(left any, operator string, right any) BinaryExpression {
 	return BinaryExpression{Left: Expr(left), Operator: operator, Right: Expr(right)}
+}
+
+// ConcatExpression concatenates strings. It renders per dialect: the standard
+// || operator on PostgreSQL, and CONCAT(...) on MySQL, whose || means logical
+// OR instead.
+type ConcatExpression struct {
+	Operands []Expression
+}
+
+func (ConcatExpression) SQLExpression() {}
+func (ConcatExpression) SQLSelection()  {}
+
+// Concat creates a string concatenation expression. Non-expression operands
+// become bind values.
+func Concat(operands ...any) ConcatExpression {
+	expressions := make([]Expression, len(operands))
+	for i, operand := range operands {
+		expressions[i] = Expr(operand)
+	}
+	return ConcatExpression{Operands: expressions}
+}
+
+// ILikeExpression is a case-insensitive LIKE. It renders per dialect: native
+// ILIKE on PostgreSQL, and the portable LOWER(left) LIKE LOWER(pattern) on
+// engines without an ILIKE operator (MySQL).
+type ILikeExpression struct {
+	Left    Expression
+	Pattern Expression
+}
+
+func (ILikeExpression) SQLExpression() {}
+
+// ILike creates a case-insensitive LIKE expression. Non-expression operands
+// become bind values.
+func ILike(left, pattern any) ILikeExpression {
+	return ILikeExpression{Left: Expr(left), Pattern: Expr(pattern)}
+}
+
+// BetweenExpression tests whether an operand falls within an inclusive range.
+type BetweenExpression struct {
+	Operand Expression
+	Low     Expression
+	High    Expression
+	Negate  bool
+}
+
+func (BetweenExpression) SQLExpression() {}
+
+// Between creates an "operand BETWEEN low AND high" expression (inclusive).
+// Non-expression bounds become bind values.
+func Between(operand, low, high any) BetweenExpression {
+	return BetweenExpression{Operand: Expr(operand), Low: Expr(low), High: Expr(high)}
+}
+
+// NotBetween creates an "operand NOT BETWEEN low AND high" expression.
+func NotBetween(operand, low, high any) BetweenExpression {
+	expr := Between(operand, low, high)
+	expr.Negate = true
+	return expr
 }
 
 // LogicalExpression combines predicates with AND or OR.
@@ -112,11 +174,13 @@ func (NotExpression) SQLExpression() {}
 // Not negates a predicate.
 func Not(operand Expression) NotExpression { return NotExpression{Operand: operand} }
 
-// InExpression tests membership in a list of expressions.
+// InExpression tests membership in a list of expressions or, when Subquery is
+// set, in the rows a subquery returns.
 type InExpression struct {
-	Left   Expression
-	Items  []Expression
-	Negate bool
+	Left     Expression
+	Items    []Expression
+	Subquery Query
+	Negate   bool
 }
 
 func (InExpression) SQLExpression() {}
@@ -136,6 +200,33 @@ func NotIn(left any, items ...any) InExpression {
 	expr.Negate = true
 	return expr
 }
+
+// InQuery creates a "left IN (subquery)" expression. The subquery must project
+// a single column.
+func InQuery(left any, subquery Query) InExpression {
+	return InExpression{Left: Expr(left), Subquery: subquery}
+}
+
+// NotInQuery creates a "left NOT IN (subquery)" expression.
+func NotInQuery(left any, subquery Query) InExpression {
+	expr := InQuery(left, subquery)
+	expr.Negate = true
+	return expr
+}
+
+// ExistsExpression tests whether a subquery returns any rows.
+type ExistsExpression struct {
+	Query  Query
+	Negate bool
+}
+
+func (ExistsExpression) SQLExpression() {}
+
+// Exists creates an "EXISTS (subquery)" expression.
+func Exists(query Query) ExistsExpression { return ExistsExpression{Query: query} }
+
+// NotExists creates a "NOT EXISTS (subquery)" expression.
+func NotExists(query Query) ExistsExpression { return ExistsExpression{Query: query, Negate: true} }
 
 // NullPredicate tests an expression for IS NULL / IS NOT NULL.
 type NullPredicate struct {
@@ -261,6 +352,73 @@ func Min(arg any) FuncExpression { return Func("MIN", arg) }
 
 // Max creates a MAX(expr) aggregate.
 func Max(arg any) FuncExpression { return Func("MAX", arg) }
+
+// JSONArray creates a JSON_ARRAY(args...) expression that builds a JSON array
+// from its arguments. The name is SQL/JSON standard (PostgreSQL 16+, MySQL
+// 5.7+); on older PostgreSQL use Func("json_build_array", ...).
+func JSONArray(args ...any) FuncExpression { return Func("JSON_ARRAY", args...) }
+
+// JSONArrayAgg creates a JSON_ARRAYAGG(expr) aggregate that collects the
+// grouped values into a JSON array (PostgreSQL 16+, MySQL 5.7.22+; older
+// PostgreSQL has json_agg / jsonb_agg via Func).
+func JSONArrayAgg(arg any) FuncExpression { return Func("JSON_ARRAYAGG", arg) }
+
+// JSONObjectExpression builds a JSON object from key/value pairs. Its argument
+// syntax diverges by engine — MySQL takes a flat JSON_OBJECT(key, value, ...)
+// list, while the SQL/JSON standard (PostgreSQL 16+) requires a key VALUE value
+// separator — so it renders per dialect rather than through Func. Agg selects
+// the JSON_OBJECTAGG aggregate, which takes a single key/value pair.
+type JSONObjectExpression struct {
+	Pairs []Expression
+	Agg   bool
+}
+
+func (JSONObjectExpression) SQLExpression() {}
+func (JSONObjectExpression) SQLSelection()  {}
+
+// JSONObject creates a JSON_OBJECT expression. Arguments alternate keys and
+// values: JSONObject("id", col, "name", other). Non-expression arguments become
+// bind values.
+func JSONObject(args ...any) JSONObjectExpression {
+	pairs := make([]Expression, len(args))
+	for i, arg := range args {
+		pairs[i] = Expr(arg)
+	}
+	return JSONObjectExpression{Pairs: pairs}
+}
+
+// JSONObjectAgg creates a JSON_OBJECTAGG(key, value) aggregate that collects the
+// grouped key/value pairs into a JSON object.
+func JSONObjectAgg(key, value any) JSONObjectExpression {
+	return JSONObjectExpression{Pairs: []Expression{Expr(key), Expr(value)}, Agg: true}
+}
+
+// JSONAccessExpression extracts the value at a path from a JSON operand. Path
+// steps are object keys (string) or array indices (int) and are rendered as
+// static path literals, not bind parameters. AsText selects the text-returning
+// form. The path is portable: each dialect (a JSONAccessor) renders it in its
+// native syntax (PostgreSQL -> / ->>, MySQL JSON_EXTRACT / JSON_UNQUOTE).
+type JSONAccessExpression struct {
+	Operand Expression
+	Path    []any
+	AsText  bool
+}
+
+func (JSONAccessExpression) SQLExpression() {}
+func (JSONAccessExpression) SQLSelection()  {}
+
+// JSONGet extracts the JSON value at path from a JSON operand, e.g.
+// JSONGet(Col("data"), "address", "city") or JSONGet(Col("tags"), 0). Path
+// steps are object keys (string) or array indices (int).
+func JSONGet(operand any, path ...any) JSONAccessExpression {
+	return JSONAccessExpression{Operand: Expr(operand), Path: path}
+}
+
+// JSONGetText is JSONGet returning the extracted value as text (PostgreSQL ->>,
+// MySQL JSON_UNQUOTE(JSON_EXTRACT(...))), so it compares against string values.
+func JSONGetText(operand any, path ...any) JSONAccessExpression {
+	return JSONAccessExpression{Operand: Expr(operand), Path: path, AsText: true}
+}
 
 // RowNumber creates the ROW_NUMBER() window function.
 func RowNumber() FuncExpression { return Func("ROW_NUMBER") }

@@ -419,6 +419,104 @@ func TestUnionChain(t *testing.T) {
 		[]any{int64(10)})
 }
 
+func TestTypedBetween(t *testing.T) {
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).Where(Users.ID.Between(10, 20)),
+		`SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" BETWEEN $1 AND $2)`,
+		[]any{int64(10), int64(20)})
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).Where(Users.ID.NotBetween(10, 20)),
+		`SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" NOT BETWEEN $1 AND $2)`,
+		[]any{int64(10), int64(20)})
+}
+
+func TestTypedInQuery(t *testing.T) {
+	sub := sqlkit.Select(Users.ID).From(Users).Where(Users.Email.Eq("a@example.com"))
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).Where(Users.ID.InQuery(sub)),
+		`SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" IN (SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."email" = $1)))`,
+		[]any{"a@example.com"})
+}
+
+func TestTypedExists(t *testing.T) {
+	sub := sqlkit.Select(Users.ID).From(Users).Where(Users.Email.Eq("a@example.com"))
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).Where(sqlkit.Exists(sub)),
+		`SELECT "public"."users"."id" FROM "public"."users" WHERE EXISTS (SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."email" = $1))`,
+		[]any{"a@example.com"})
+}
+
+func TestTypedLikeVariants(t *testing.T) {
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).Where(sqlkit.NotLike(Users.Email, "%@spam.com")),
+		`SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."email" NOT LIKE $1)`,
+		[]any{"%@spam.com"})
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).Where(sqlkit.ILike(Users.Email, "%@EXAMPLE.com")),
+		`SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."email" ILIKE $1)`,
+		[]any{"%@EXAMPLE.com"})
+}
+
+func TestUnionHelperVariadic(t *testing.T) {
+	query := sqlkit.Union(
+		sqlkit.Select(Users.ID).From(Users).Where(Users.ID.Eq(1)),
+		sqlkit.Select(Users.ID).From(Users).Where(Users.ID.Eq(2)),
+		sqlkit.Select(Users.ID).From(Users).Where(Users.ID.Eq(3)),
+	).OrderBy(sql.Asc(sql.Col("id"))).Limit(10)
+
+	assertToSQL(t, query,
+		`(SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" = $1)) UNION (SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" = $2)) UNION (SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" = $3)) ORDER BY "id" LIMIT 10`,
+		[]any{int64(1), int64(2), int64(3)})
+}
+
+func TestSetOpHelpers(t *testing.T) {
+	a := sqlkit.Select(Users.ID).From(Users)
+	b := sqlkit.Select(Users.ID).From(Users).Where(Users.ID.Lt(10))
+
+	assertToSQL(t, sqlkit.UnionAll(a, b),
+		`(SELECT "public"."users"."id" FROM "public"."users") UNION ALL (SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" < $1))`,
+		[]any{int64(10)})
+	assertToSQL(t, sqlkit.Intersect(a, b),
+		`(SELECT "public"."users"."id" FROM "public"."users") INTERSECT (SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" < $1))`,
+		[]any{int64(10)})
+	assertToSQL(t, sqlkit.Except(a, b),
+		`(SELECT "public"."users"."id" FROM "public"."users") EXCEPT (SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" < $1))`,
+		[]any{int64(10)})
+}
+
+func TestUnionHelperBindsExecutor(t *testing.T) {
+	db := sqlkit.WrapDB(usersFake().DB())
+
+	var users []MyUserDTO
+	err := sqlkit.UnionAll(
+		db.Select().From(Users).Where(Users.ID.Eq(1)),
+		sqlkit.Select().From(Users).Where(Users.ID.Eq(2)),
+	).All(context.Background()).Scan(&users)
+	if err != nil {
+		t.Fatalf("Union helper All().Scan() error = %v", err)
+	}
+	if len(users) != 2 || users[1].Mail != "b@example.com" {
+		t.Fatalf("users = %#v", users)
+	}
+}
+
+func TestDatabaseUnionMethod(t *testing.T) {
+	db := sqlkit.WrapDB(usersFake().DB())
+
+	var users []MyUserDTO
+	// Operands carry no executor; db.Union binds the result to db.
+	err := db.UnionAll(
+		sqlkit.Select().From(Users).Where(Users.ID.Eq(1)),
+		sqlkit.Select().From(Users).Where(Users.ID.Eq(2)),
+	).All(context.Background()).Scan(&users)
+	if err != nil {
+		t.Fatalf("db.UnionAll().Scan() error = %v", err)
+	}
+	if len(users) != 2 || users[1].Mail != "b@example.com" {
+		t.Fatalf("users = %#v", users)
+	}
+}
+
 func TestUnionScans(t *testing.T) {
 	db := sqlkit.WrapDB(usersFake().DB())
 

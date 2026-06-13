@@ -72,6 +72,44 @@ type Dialect interface {
 	DropIndex(qualifiedIndex, quotedIndex, qualifiedTable string) string
 }
 
+// JSONAccessor is an optional capability a Dialect implements to render JSON
+// path extraction (JSONAccessExpression) in its native syntax. The compiler
+// detects it with a type assertion, so adding it is not a breaking change to
+// Dialect; a dialect that does not implement it rejects JSON access at compile
+// time. operand is the already-compiled JSON expression, path steps are object
+// keys (string) or array indices (int), and asText selects the text form.
+type JSONAccessor interface {
+	JSONAccess(operand string, path []any, asText bool) (string, error)
+}
+
+// CaseInsensitiveLiker is an optional capability a Dialect implements to render
+// a case-insensitive LIKE (ILikeExpression) with a native operator. The
+// compiler detects it with a type assertion, so it is not a breaking change to
+// Dialect; a dialect without it falls back to LOWER(left) LIKE LOWER(pattern).
+// left and pattern are already-compiled SQL fragments.
+type CaseInsensitiveLiker interface {
+	ILike(left, pattern string) string
+}
+
+// Concatenator is an optional capability for dialects whose string
+// concatenation is not the standard || operator (MySQL, where || is logical OR
+// and CONCAT(...) concatenates). The compiler detects it with a type assertion,
+// so it is not a breaking change to Dialect; a dialect without it falls back to
+// the || operator. operands are already-compiled SQL fragments.
+type Concatenator interface {
+	Concat(operands []string) string
+}
+
+// JSONObjectRenderer is an optional capability for dialects whose JSON object
+// constructor does not use the SQL/JSON standard "key VALUE value" separator
+// (MySQL takes a flat JSON_OBJECT(key, value, ...) list). The compiler detects
+// it with a type assertion, so it is not a breaking change to Dialect; without
+// it the standard VALUE form is used. funcName is JSON_OBJECT or
+// JSON_OBJECTAGG, and pairs are already-compiled {key, value} fragments.
+type JSONObjectRenderer interface {
+	JSONObject(funcName string, pairs [][2]string) string
+}
+
 // DialectByName returns the Dialect for a name ("postgres"/"postgresql" or
 // "mysql"; empty defaults to postgres). It errors on an unknown name.
 func DialectByName(name string) (Dialect, error) {
@@ -100,6 +138,36 @@ func typeWithArgs(name string, length, precision, scale int, lengthTypes, decima
 // literal renders a single-quoted SQL string literal.
 func literal(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+// jsonPathStep renders one JSON path step into the dialect-neutral parts a
+// JSONAccessor needs: ok reports a valid step, key/index carry the value.
+func jsonPathStep(index int, step any) (isKey bool, key string, idx int, err error) {
+	switch s := step.(type) {
+	case string:
+		return true, s, 0, nil
+	case int:
+		return false, "", s, nil
+	default:
+		return false, "", 0, fmt.Errorf("sql: JSON path step %d must be a string key or int index, got %T", index, step)
+	}
+}
+
+// isSimpleJSONKey reports whether a key needs no quoting inside a MySQL JSON
+// path (a leading letter/underscore followed by letters, digits, underscores).
+func isSimpleJSONKey(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z'):
+		case i > 0 && r >= '0' && r <= '9':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // PostgreSQLDialect implements PostgreSQL identifier quoting, placeholders, and
@@ -187,6 +255,36 @@ func (PostgreSQLDialect) DropIndex(qualifiedIndex, _, _ string) string {
 	return "DROP INDEX IF EXISTS " + qualifiedIndex + ";"
 }
 
+// ILike renders PostgreSQL's native case-insensitive ILIKE operator.
+func (PostgreSQLDialect) ILike(left, pattern string) string {
+	return "(" + left + " ILIKE " + pattern + ")"
+}
+
+// JSONAccess chains the -> / ->> operators, one per path step (the last uses
+// ->> when asText), e.g. (("data" -> 'a') -> 0) ->> 'b'.
+func (PostgreSQLDialect) JSONAccess(operand string, path []any, asText bool) (string, error) {
+	if len(path) == 0 {
+		return "", fmt.Errorf("sql: JSON access requires at least one path step")
+	}
+	expr := operand
+	for i, step := range path {
+		isKey, key, idx, err := jsonPathStep(i, step)
+		if err != nil {
+			return "", err
+		}
+		operator := "->"
+		if asText && i == len(path)-1 {
+			operator = "->>"
+		}
+		operand := strconv.Itoa(idx)
+		if isKey {
+			operand = literal(key)
+		}
+		expr = "(" + expr + " " + operator + " " + operand + ")"
+	}
+	return expr, nil
+}
+
 // MySQLDialect implements MySQL identifier quoting, placeholders, and DDL
 // rendering. The query builders compile against it; RETURNING is rejected at
 // compile time (MySQL has no RETURNING — read generated keys via
@@ -255,4 +353,52 @@ func (MySQLDialect) DropForeignKey(qualifiedTable, quotedConstraint string) stri
 
 func (MySQLDialect) DropIndex(_, quotedIndex, qualifiedTable string) string {
 	return "DROP INDEX " + quotedIndex + " ON " + qualifiedTable + ";"
+}
+
+// Concat renders MySQL string concatenation, whose || operator means logical OR.
+func (MySQLDialect) Concat(operands []string) string {
+	return "CONCAT(" + strings.Join(operands, ", ") + ")"
+}
+
+// JSONObject renders MySQL's flat JSON_OBJECT(key, value, ...) form, which does
+// not use the SQL/JSON standard VALUE separator.
+func (MySQLDialect) JSONObject(funcName string, pairs [][2]string) string {
+	parts := make([]string, 0, len(pairs)*2)
+	for _, kv := range pairs {
+		parts = append(parts, kv[0], kv[1])
+	}
+	return funcName + "(" + strings.Join(parts, ", ") + ")"
+}
+
+// JSONAccess builds a JSON path string ($.a[0].b) and wraps the operand in
+// JSON_EXTRACT, adding JSON_UNQUOTE for the text form.
+func (MySQLDialect) JSONAccess(operand string, path []any, asText bool) (string, error) {
+	if len(path) == 0 {
+		return "", fmt.Errorf("sql: JSON access requires at least one path step")
+	}
+	var p strings.Builder
+	p.WriteString("$")
+	for i, step := range path {
+		isKey, key, idx, err := jsonPathStep(i, step)
+		if err != nil {
+			return "", err
+		}
+		if !isKey {
+			p.WriteString("[")
+			p.WriteString(strconv.Itoa(idx))
+			p.WriteString("]")
+			continue
+		}
+		p.WriteString(".")
+		if isSimpleJSONKey(key) {
+			p.WriteString(key)
+		} else {
+			p.WriteString(`"` + strings.ReplaceAll(key, `"`, `\"`) + `"`)
+		}
+	}
+	extract := "JSON_EXTRACT(" + operand + ", " + literal(p.String()) + ")"
+	if asText {
+		return "JSON_UNQUOTE(" + extract + ")", nil
+	}
+	return extract, nil
 }

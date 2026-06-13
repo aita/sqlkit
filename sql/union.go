@@ -49,6 +49,16 @@ func (q CompoundQuery) UnionAll(other Query) CompoundQuery {
 	return CompoundQuery{left: q, operator: "UNION ALL", right: other}
 }
 
+// Intersect appends another INTERSECT operand.
+func (q CompoundQuery) Intersect(other Query) CompoundQuery {
+	return CompoundQuery{left: q, operator: "INTERSECT", right: other}
+}
+
+// Except appends another EXCEPT operand.
+func (q CompoundQuery) Except(other Query) CompoundQuery {
+	return CompoundQuery{left: q, operator: "EXCEPT", right: other}
+}
+
 // OrderBy adds ORDER BY terms applied to the combined result.
 func (q CompoundQuery) OrderBy(terms ...OrderTerm) CompoundQuery {
 	q.orderBy = append(q.orderBy, terms...)
@@ -83,11 +93,11 @@ func (q CompoundQuery) compile(c *Compiler) (string, []any, error) {
 
 // CompileCompound compiles a set-operation query.
 func (c *Compiler) CompileCompound(q CompoundQuery) (string, []any, error) {
-	leftSQL, args, err := c.compileOperand(q.left)
+	leftSQL, args, err := c.compileOperand(q.left, q.operator)
 	if err != nil {
 		return "", nil, err
 	}
-	rightSQL, rightArgs, err := c.compileOperand(q.right)
+	rightSQL, rightArgs, err := c.compileOperand(q.right, q.operator)
 	if err != nil {
 		return "", nil, err
 	}
@@ -127,16 +137,23 @@ func (c *Compiler) CompileCompound(q CompoundQuery) (string, []any, error) {
 	return sb.String(), args, nil
 }
 
-// compileOperand compiles one side of a set operation. Nested compounds stay
-// unparenthesized so chained unions read naturally; plain SELECTs are wrapped
-// to keep their own clauses scoped.
-func (c *Compiler) compileOperand(query Query) (string, []any, error) {
+// compileOperand compiles one side of a set operation, given the enclosing
+// operator. A nested compound stays unparenthesized only when it shares that
+// operator — UNION/UNION ALL or INTERSECT chains are left-associative and read
+// naturally without parentheses. Mixing operators needs explicit parentheses to
+// preserve left-to-right grouping, since INTERSECT binds tighter than
+// UNION/EXCEPT (so a UNION b INTERSECT c would parse as a UNION (b INTERSECT c)).
+// Plain SELECTs are always wrapped to keep their own clauses scoped.
+func (c *Compiler) compileOperand(query Query, parentOperator string) (string, []any, error) {
 	sql, args, err := c.compileSubquery(query)
 	if err != nil {
 		return "", nil, err
 	}
-	if _, ok := query.(CompoundQuery); ok {
-		return sql, args, nil
+	if sub, ok := query.(CompoundQuery); ok {
+		if sub.operator == parentOperator {
+			return sql, args, nil
+		}
+		return "(" + sql + ")", args, nil
 	}
 	return "(" + sql + ")", args, nil
 }

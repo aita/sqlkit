@@ -33,6 +33,46 @@ func TestMySQLSelect(t *testing.T) {
 		[]any{7, "%@x.com"})
 }
 
+func TestMySQLJSONObject(t *testing.T) {
+	// MySQL uses a flat key, value list (no VALUE separator).
+	assertMySQL(t,
+		Select(As(JSONObject("id", Col("id"), "name", Col("name")), "j")).From(Table{Name: "users"}),
+		"SELECT JSON_OBJECT(?, `id`, ?, `name`) AS `j` FROM `users`", []any{"id", "name"})
+
+	assertMySQL(t,
+		Select(As(JSONObjectAgg(Col("k"), Col("v")), "obj")).From(Table{Name: "kv"}),
+		"SELECT JSON_OBJECTAGG(`k`, `v`) AS `obj` FROM `kv`", nil)
+}
+
+func TestMySQLConcat(t *testing.T) {
+	// MySQL's || is logical OR, so concatenation compiles to CONCAT(...).
+	assertMySQL(t,
+		Select(As(Concat(Col("first"), Val(" "), Col("last")), "name")).From(Table{Name: "users"}),
+		"SELECT CONCAT(`first`, ?, `last`) AS `name` FROM `users`", []any{" "})
+}
+
+func TestMySQLILike(t *testing.T) {
+	// MySQL has no ILIKE: it compiles to the portable LOWER ... LIKE LOWER form.
+	assertMySQL(t,
+		Select(Col("id")).From(Table{Name: "users"}).Where(ILike(Col("email"), Val("%@EXAMPLE.com"))),
+		"SELECT `id` FROM `users` WHERE (LOWER(`email`) LIKE LOWER(?))", []any{"%@EXAMPLE.com"})
+}
+
+func TestMySQLJSONAccess(t *testing.T) {
+	assertMySQL(t,
+		Select(As(JSONGet(Col("data"), "name"), "n")).From(Table{Name: "events"}),
+		"SELECT JSON_EXTRACT(`data`, '$.name') AS `n` FROM `events`", nil)
+
+	assertMySQL(t,
+		Select(As(JSONGetText(Col("data"), "items", 0, "id"), "id")).From(Table{Name: "events"}),
+		"SELECT JSON_UNQUOTE(JSON_EXTRACT(`data`, '$.items[0].id')) AS `id` FROM `events`", nil)
+
+	// A key needing quoting in the path.
+	assertMySQL(t,
+		Select(JSONGet(Col("data"), "first name")).From(Table{Name: "events"}),
+		"SELECT JSON_EXTRACT(`data`, '$.\"first name\"') FROM `events`", nil)
+}
+
 func TestMySQLInsertUpdateDelete(t *testing.T) {
 	insert := InsertInto(Table{Name: "users"}).Columns("email").Values("a@x.com")
 	assertMySQL(t, insert, "INSERT INTO `users` (`email`) VALUES (?)", []any{"a@x.com"})

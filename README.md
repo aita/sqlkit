@@ -311,6 +311,24 @@ err = db.Select(appdb.Users.ID).From(appdb.Users).All(ctx).Scan(&ids)
 n, err := db.Select().From(appdb.Users).Where(...).Count(ctx)
 ```
 
+Typed columns carry the predicate vocabulary directly: `Eq`/`Ne`/`Lt`/`Le`/
+`Gt`/`Ge`, `In`/`NotIn` (literal values), `Between`/`NotBetween`,
+`IsNull`/`IsNotNull`, and `InQuery`/`NotInQuery` for an `IN (subquery)`. String
+columns also have the free helpers `sqlkit.Like` / `NotLike` / `ILike`
+(`ILike` is case-insensitive on both engines: native `ILIKE` on PostgreSQL,
+`LOWER(x) LIKE LOWER(pattern)` on MySQL). `sqlkit.Exists` / `NotExists` wrap a subquery as a
+predicate for semi-joins, and `sqlkit.And` / `Or` / `Not` combine predicates:
+
+```go
+err = db.Select().From(appdb.Users).
+    Where(
+        appdb.Users.Age.Between(18, 65),
+        sqlkit.Exists(sqlkit.Select(appdb.Posts.ID).From(appdb.Posts).
+            Where(appdb.Posts.UserID.EqExpr(appdb.Users.ID))),
+    ).
+    All(ctx).Scan(&users)
+```
+
 Joins and the generated primary-key lookup:
 
 ```go
@@ -391,11 +409,49 @@ err = db.Select(appdb.Users.Email).From(appdb.Users).Where(...).
     Union(sqlkit.Select(appdb.Users.Email).From(appdb.Users).Where(...)).
     OrderBy(sql.Asc(sql.Col("email"))).
     All(ctx).Scan(&emails)
+
+// Union / UnionAll / Intersect / Except combine a flat list of SELECTs instead
+// of left-folding the chain by hand. db.Union (and session.Union) bind the
+// result to that handle, so the operands need no executor of their own:
+err = db.Union(
+    sqlkit.Select(appdb.Users.Email).From(appdb.Users).Where(...),
+    sqlkit.Select(appdb.Admins.Email).From(appdb.Admins),
+    sqlkit.Select(appdb.Guests.Email).From(appdb.Guests),
+).OrderBy(sql.Asc(sql.Col("email"))).All(ctx).Scan(&emails)
+
+// The package-level sqlkit.Union is the same but binds to the first operand's
+// executor — handy when the operands are already built from a db or session.
+err = sqlkit.Union(
+    db.Select(appdb.Users.Email).From(appdb.Users).Where(...),
+    sqlkit.Select(appdb.Admins.Email).From(appdb.Admins),
+).OrderBy(sql.Asc(sql.Col("email"))).All(ctx).Scan(&emails)
 ```
 
 `Coalesce`, `NullIf`, `Greatest`, `Least`, `Sum`, `Avg`, `Min`, `Max`,
 `Rank`, `DenseRank`, `Lag`, `Lead`, and generic `sql.Func(name, args...)` are
-available.
+available. For JSON, `sql.JSONArray(...)`, `sql.JSONObject(key, val, ...)`,
+`sql.JSONArrayAgg(expr)`, and `sql.JSONObjectAgg(key, val)` build the SQL/JSON
+standard functions (PostgreSQL 16+, MySQL 5.7+); older PostgreSQL exposes the
+classic `json_build_array` / `json_agg` names through `sql.Func`.
+
+`sql.Concat(a, b, ...)` concatenates strings portably — the standard `||`
+operator on PostgreSQL, `CONCAT(...)` on MySQL (whose `||` means logical OR).
+
+JSON values are read with `sql.JSONGet(operand, path...)` (→ json) and
+`sql.JSONGetText(operand, path...)` (→ text). Path steps are object keys
+(`string`) or array indices (`int`), and the path is portable: each dialect
+renders it natively — PostgreSQL chains `->` / `->>`, MySQL emits
+`JSON_EXTRACT` / `JSON_UNQUOTE`.
+
+```go
+// PostgreSQL: ("data" -> 'address') ->> 'city'   MySQL: JSON_UNQUOTE(JSON_EXTRACT(`data`, '$.address.city'))
+city := sql.JSONGetText(appdb.Events.Data, "address", "city")
+err = db.Select(appdb.Events.ID).From(appdb.Events).
+    Where(sqlkit.Cond(sql.Eq(city, sql.Val("Tokyo")))). // text form compares to strings
+    All(ctx).Scan(&ids)
+
+firstTag := sql.JSONGet(appdb.Events.Data, "tags", 0) // -> json
+```
 
 ## Transactions
 
