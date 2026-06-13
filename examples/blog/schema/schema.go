@@ -1,6 +1,6 @@
 // Package schema declares the blog schema as a sqldef.Catalog. It is the
-// source of truth: `go run ./gen` (from examples/blog) regenerates both the
-// blogdb bindings and schema.sql from it.
+// source of truth: `go generate ./...` (from examples/blog) regenerates both
+// the blogdb bindings and schema.sql from it via the sqlkitgen generate command.
 package schema
 
 import "github.com/aita/sqlkit/sqldef"
