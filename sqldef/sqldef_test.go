@@ -87,19 +87,19 @@ func TestBuildPortableTypes(t *testing.T) {
 	)
 	got := buildCatalog(t, catalog)
 	cols := got.Tables[0].Columns
-	// UUID is postgres uuid but mysql char(36): the portable type keeps both.
-	if eng, _ := cols[1].Type.Engine("postgres"); eng != "uuid" {
-		t.Errorf("sku postgres type = %q, want uuid", eng)
+	// UUID is postgres uuid but mysql char(36): one portable type resolves both.
+	if eng, _ := cols[1].Type.Engine("postgres"); eng.Name != "uuid" {
+		t.Errorf("sku postgres type = %q, want uuid", eng.Name)
 	}
-	if eng, _ := cols[1].Type.Engine("mysql"); eng != "char" || cols[1].Type.Length != 36 {
-		t.Errorf("sku mysql type = %q(%d), want char(36)", eng, cols[1].Type.Length)
+	if eng, _ := cols[1].Type.Engine("mysql"); eng.Name != "char" || eng.Length != 36 {
+		t.Errorf("sku mysql type = %q(%d), want char(36)", eng.Name, eng.Length)
 	}
 	// id resolves per dialect from one portable declaration.
-	if eng, _ := cols[0].Type.Engine("postgres"); eng != "int8" {
-		t.Errorf("id postgres type = %q, want int8", eng)
+	if eng, _ := cols[0].Type.Engine("postgres"); eng.Name != "int8" {
+		t.Errorf("id postgres type = %q, want int8", eng.Name)
 	}
-	if eng, _ := cols[0].Type.Engine("mysql"); eng != "bigint" {
-		t.Errorf("id mysql type = %q, want bigint", eng)
+	if eng, _ := cols[0].Type.Engine("mysql"); eng.Name != "bigint" {
+		t.Errorf("id mysql type = %q, want bigint", eng.Name)
 	}
 	if got.Tables[0].Schema.Name != "" {
 		t.Errorf("Build() table schema = %q, want unnamed default", got.Tables[0].Schema.Name)

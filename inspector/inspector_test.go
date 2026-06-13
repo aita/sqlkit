@@ -85,9 +85,9 @@ func TestInspectPostgres(t *testing.T) {
 			Name:    "users",
 			Comment: "Registered accounts",
 			Columns: []meta.Column{
-				{Name: "id", Type: meta.Type{Postgres: "int8"}, HasDefault: true, PrimaryKey: true},
-				{Name: "email", Type: meta.Type{Postgres: "varchar", Length: 255}, Comment: "Unique login address"},
-				{Name: "balance", Type: meta.Type{Postgres: "numeric", Precision: 10, Scale: 2}},
+				{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), HasDefault: true, PrimaryKey: true},
+				{Name: "email", Type: meta.Of("postgres", "varchar", 255, 0, 0), Comment: "Unique login address"},
+				{Name: "balance", Type: meta.Of("postgres", "numeric", 0, 10, 2)},
 			},
 			Indexes: []meta.Index{
 				{Name: "users_email_key", Columns: []string{"email"}, Unique: true},
@@ -100,8 +100,8 @@ func TestInspectPostgres(t *testing.T) {
 			Schema: meta.Schema{Name: "public"},
 			Name:   "posts",
 			Columns: []meta.Column{
-				{Name: "id", Type: meta.Type{Postgres: "int8"}, HasDefault: true, PrimaryKey: true},
-				{Name: "user_id", Type: meta.Type{Postgres: "int8"}},
+				{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), HasDefault: true, PrimaryKey: true},
+				{Name: "user_id", Type: meta.Of("postgres", "int8", 0, 0, 0)},
 			},
 			ForeignKeys: []meta.ForeignKey{
 				{Name: "posts_user_id_fkey", Columns: []string{"user_id"}, RefSchema: meta.Schema{Name: "public"}, RefTable: "users", RefColumns: []string{"id"}},
@@ -177,9 +177,9 @@ func TestInspectMySQL(t *testing.T) {
 			Name:    "users",
 			Comment: "Registered accounts",
 			Columns: []meta.Column{
-				{Name: "id", Type: meta.Type{MySQL: "bigint"}, HasDefault: true, PrimaryKey: true},
-				{Name: "email", Type: meta.Type{MySQL: "varchar", Length: 255}, Comment: "Unique login address"},
-				{Name: "balance", Type: meta.Type{MySQL: "decimal", Precision: 10, Scale: 2}},
+				{Name: "id", Type: meta.Of("mysql", "bigint", 0, 0, 0), HasDefault: true, PrimaryKey: true},
+				{Name: "email", Type: meta.Of("mysql", "varchar", 255, 0, 0), Comment: "Unique login address"},
+				{Name: "balance", Type: meta.Of("mysql", "decimal", 0, 10, 2)},
 			},
 			Indexes: []meta.Index{
 				{Name: "uq_users_email", Columns: []string{"email"}, Unique: true},
@@ -192,8 +192,8 @@ func TestInspectMySQL(t *testing.T) {
 			Schema: meta.Schema{Name: "app"},
 			Name:   "posts",
 			Columns: []meta.Column{
-				{Name: "id", Type: meta.Type{MySQL: "bigint"}, HasDefault: true, PrimaryKey: true},
-				{Name: "user_id", Type: meta.Type{MySQL: "bigint"}},
+				{Name: "id", Type: meta.Of("mysql", "bigint", 0, 0, 0), HasDefault: true, PrimaryKey: true},
+				{Name: "user_id", Type: meta.Of("mysql", "bigint", 0, 0, 0)},
 			},
 			ForeignKeys: []meta.ForeignKey{
 				{Name: "fk_posts_user", Columns: []string{"user_id"}, RefSchema: meta.Schema{Name: "app"}, RefTable: "users", RefColumns: []string{"id"}},

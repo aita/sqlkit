@@ -107,8 +107,7 @@ func inspectPostgres(ctx context.Context, db Querier, schemaName string) ([]meta
 		if err := rows.Scan(&tableName, &column.Name, &udt, &column.Nullable, &column.HasDefault, &length, &precision, &scale); err != nil {
 			return nil, fmt.Errorf("inspector: scan column: %w", err)
 		}
-		column.Type = meta.Type{Postgres: udt, Length: length, Precision: precision, Scale: scale}
-		normalizeNumeric(&column, "postgres")
+		column.Type = columnType("postgres", udt, length, precision, scale)
 		index, ok := tableIndex[tableName]
 		if !ok {
 			index = len(tables)

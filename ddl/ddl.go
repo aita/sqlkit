@@ -38,6 +38,9 @@ func Generate(catalog meta.Meta, dialectName string) (string, error) {
 	tables := catalog.Tables
 	for _, table := range tables {
 		for _, column := range table.Columns {
+			if column.Type == nil {
+				return "", fmt.Errorf("ddl: table %q column %q has no type", table.Name, column.Name)
+			}
 			if _, ok := column.Type.Engine(resolved); !ok {
 				return "", fmt.Errorf("ddl: table %q column %q has no type on dialect %s", table.Name, column.Name, resolved)
 			}
@@ -165,13 +168,13 @@ func addForeignKey(table meta.Table, fk meta.ForeignKey, d dialect) string {
 }
 
 // typeWithArgs appends (length) or (precision, scale) when the type uses one.
-func typeWithArgs(name string, t meta.Type, lengthTypes, decimalTypes map[string]bool) string {
+func typeWithArgs(name string, eng meta.Engine, lengthTypes, decimalTypes map[string]bool) string {
 	dataType := strings.ToLower(name)
 	switch {
-	case lengthTypes[dataType] && t.Length > 0:
-		return fmt.Sprintf("%s(%d)", name, t.Length)
-	case decimalTypes[dataType] && t.Precision > 0:
-		return fmt.Sprintf("%s(%d, %d)", name, t.Precision, t.Scale)
+	case lengthTypes[dataType] && eng.Length > 0:
+		return fmt.Sprintf("%s(%d)", name, eng.Length)
+	case decimalTypes[dataType] && eng.Precision > 0:
+		return fmt.Sprintf("%s(%d, %d)", name, eng.Precision, eng.Scale)
 	}
 	return name
 }
@@ -198,12 +201,12 @@ var pgLengthTypes = map[string]bool{"varchar": true, "char": true}
 var pgDecimalTypes = map[string]bool{"numeric": true}
 
 func (postgres) typeName(column meta.Column) string {
-	engine, _ := column.Type.Engine("postgres")
-	name := strings.ToLower(engine)
+	eng, _ := column.Type.Engine("postgres")
+	name := strings.ToLower(eng.Name)
 	if canonical, ok := pgCanonical[name]; ok {
 		name = canonical
 	}
-	return typeWithArgs(name, column.Type, pgLengthTypes, pgDecimalTypes)
+	return typeWithArgs(name, eng, pgLengthTypes, pgDecimalTypes)
 }
 
 var pgSerial = map[string]string{
@@ -216,8 +219,8 @@ func (postgres) serialColumn(column meta.Column) (string, bool) {
 	if !column.PrimaryKey || !column.HasDefault || column.DefaultExpr != "" {
 		return "", false
 	}
-	engine, _ := column.Type.Engine("postgres")
-	clause, ok := pgSerial[strings.ToLower(engine)]
+	eng, _ := column.Type.Engine("postgres")
+	clause, ok := pgSerial[strings.ToLower(eng.Name)]
 	return clause, ok
 }
 
@@ -248,8 +251,8 @@ var mysqlLengthTypes = map[string]bool{"varchar": true, "char": true, "binary": 
 var mysqlDecimalTypes = map[string]bool{"decimal": true, "numeric": true}
 
 func (mysql) typeName(column meta.Column) string {
-	engine, _ := column.Type.Engine("mysql")
-	return typeWithArgs(strings.ToLower(engine), column.Type, mysqlLengthTypes, mysqlDecimalTypes)
+	eng, _ := column.Type.Engine("mysql")
+	return typeWithArgs(strings.ToLower(eng.Name), eng, mysqlLengthTypes, mysqlDecimalTypes)
 }
 
 var mysqlIntegerTypes = map[string]bool{
@@ -261,8 +264,8 @@ func (m mysql) serialColumn(column meta.Column) (string, bool) {
 	if !column.PrimaryKey || !column.HasDefault || column.DefaultExpr != "" {
 		return "", false
 	}
-	engine, _ := column.Type.Engine("mysql")
-	if !mysqlIntegerTypes[strings.ToLower(engine)] {
+	eng, _ := column.Type.Engine("mysql")
+	if !mysqlIntegerTypes[strings.ToLower(eng.Name)] {
 		return "", false
 	}
 	return m.typeName(column) + " NOT NULL AUTO_INCREMENT", true

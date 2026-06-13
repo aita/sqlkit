@@ -47,14 +47,13 @@ var decimalTypes = map[string]bool{
 	"decimal": true,
 }
 
-// normalizeNumeric clears precision/scale on non-decimal columns, keying off
-// the engine type name for the given dialect.
-func normalizeNumeric(column *meta.Column, dialect string) {
-	engine, _ := column.Type.Engine(dialect)
-	if !decimalTypes[engine] {
-		column.Type.Precision = 0
-		column.Type.Scale = 0
+// columnType builds the column's portable type from the single dialect the
+// inspector read it on, clearing precision/scale on non-decimal types.
+func columnType(dialect, name string, length, precision, scale int) meta.Type {
+	if !decimalTypes[name] {
+		precision, scale = 0, 0
 	}
+	return meta.Of(dialect, name, length, precision, scale)
 }
 
 // fkRow is one referencing column of a foreign-key constraint.

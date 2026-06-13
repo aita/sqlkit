@@ -228,7 +228,7 @@ func goStringSlice(items []string) string {
 // which keeps the engine name verbatim.
 func dslTypeExpr(column meta.Column, dialect string) string {
 	engine, _ := column.Type.Engine(dialect)
-	dataType := strings.ToLower(strings.TrimSpace(engine))
+	dataType := strings.ToLower(strings.TrimSpace(engine.Name))
 	if dialect == "mysql" {
 		switch dataType {
 		case "bool", "boolean":
@@ -244,13 +244,13 @@ func dslTypeExpr(column meta.Column, dialect string) string {
 		case "double":
 			return "sqldef.Double"
 		case "decimal":
-			return fmt.Sprintf("sqldef.Decimal(%d, %d)", column.Type.Precision, column.Type.Scale)
+			return fmt.Sprintf("sqldef.Decimal(%d, %d)", engine.Precision, engine.Scale)
 		case "text":
 			return "sqldef.Text"
 		case "varchar":
-			return fmt.Sprintf("sqldef.VarChar(%d)", column.Type.Length)
+			return fmt.Sprintf("sqldef.VarChar(%d)", engine.Length)
 		case "char":
-			return fmt.Sprintf("sqldef.Char(%d)", column.Type.Length)
+			return fmt.Sprintf("sqldef.Char(%d)", engine.Length)
 		case "blob":
 			return "sqldef.Bytes"
 		case "json":
@@ -278,13 +278,13 @@ func dslTypeExpr(column meta.Column, dialect string) string {
 	case "float8":
 		return "sqldef.Double"
 	case "numeric":
-		return fmt.Sprintf("sqldef.Decimal(%d, %d)", column.Type.Precision, column.Type.Scale)
+		return fmt.Sprintf("sqldef.Decimal(%d, %d)", engine.Precision, engine.Scale)
 	case "text":
 		return "sqldef.Text"
 	case "varchar":
-		return fmt.Sprintf("sqldef.VarChar(%d)", column.Type.Length)
+		return fmt.Sprintf("sqldef.VarChar(%d)", engine.Length)
 	case "bpchar":
-		return fmt.Sprintf("sqldef.Char(%d)", column.Type.Length)
+		return fmt.Sprintf("sqldef.Char(%d)", engine.Length)
 	case "uuid":
 		return "sqldef.UUID"
 	case "bytea":

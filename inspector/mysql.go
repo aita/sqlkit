@@ -88,8 +88,7 @@ func inspectMySQL(ctx context.Context, db Querier, schemaName string) ([]meta.Ta
 		if err := rows.Scan(&tableName, &column.Name, &dataType, &column.Nullable, &column.HasDefault, &column.PrimaryKey, &length, &precision, &scale, &column.Comment, &tableComment); err != nil {
 			return nil, fmt.Errorf("inspector: scan column: %w", err)
 		}
-		column.Type = meta.Type{MySQL: dataType, Length: length, Precision: precision, Scale: scale}
-		normalizeNumeric(&column, "mysql")
+		column.Type = columnType("mysql", dataType, length, precision, scale)
 		index, ok := tableIndex[tableName]
 		if !ok {
 			index = len(tables)

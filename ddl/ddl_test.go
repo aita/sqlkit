@@ -7,18 +7,11 @@ import (
 	"github.com/aita/sqlkit/meta"
 )
 
-// fixture builds the catalog with portable types for the given dialect: the
-// dataTypes map gives the engine name per logical type, set on the dialect's
-// side of meta.Type.
+// fixture builds the catalog with single-dialect types for the given dialect:
+// the dataTypes map gives the engine name per logical type.
 func fixture(dialect string, dataTypes map[string]string) meta.Meta {
 	typ := func(key string, length, precision, scale int) meta.Type {
-		t := meta.Type{Length: length, Precision: precision, Scale: scale}
-		if dialect == "mysql" {
-			t.MySQL = dataTypes[key]
-		} else {
-			t.Postgres = dataTypes[key]
-		}
-		return t
+		return meta.Of(dialect, dataTypes[key], length, precision, scale)
 	}
 	public := meta.Schema{Name: "public"}
 	return meta.Meta{
@@ -132,7 +125,7 @@ func TestGenerateUnqualified(t *testing.T) {
 		Tables: []meta.Table{{
 			Name: "items",
 			Columns: []meta.Column{
-				{Name: "id", Type: meta.Type{Postgres: "int8"}, PrimaryKey: true},
+				{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true},
 			},
 		}},
 	}
@@ -156,7 +149,7 @@ func TestLiteralEscaping(t *testing.T) {
 		Tables: []meta.Table{{
 			Name:    "items",
 			Comment: "it's quoted",
-			Columns: []meta.Column{{Name: "id", Type: meta.Type{Postgres: "int8"}, PrimaryKey: true}},
+			Columns: []meta.Column{{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true}},
 		}},
 	}
 	got, err := Generate(catalog, "postgres")

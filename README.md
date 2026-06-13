@@ -41,56 +41,41 @@ err := db.Select().From(appdb.Users).
 | `ddl` | `meta` → SQL DDL generator (CREATE TABLE / INDEX, constraints, comments) |
 | `cmd/sqlkitgen` | CLI wrapper around `inspector` + `codegen` |
 
-## Generating table bindings
+## The flow: a schema design generates the bindings
 
-`sqlkitgen` introspects a live **PostgreSQL or MySQL** schema and generates
-typed bindings:
+You author the schema as a sqldef design (or bootstrap one from an existing
+database with `sqlkitgen`), then generate the typed table bindings — and the
+DDL — from it. The design is the source of truth; `sqlkitgen` only bootstraps
+it. See [Declaring the schema in Go](#declaring-the-schema-in-go-sqldef-package)
+below for authoring, and `examples/blog/gen` for a generator program.
+
+To bootstrap a design from a live **PostgreSQL or MySQL** schema:
 
 ```sh
-# PostgreSQL
 go run github.com/aita/sqlkit/cmd/sqlkitgen \
-  -dsn "$DATABASE_URL" -schema public -package appdb -out appdb/tables.go
-
-# MySQL, one file per table, with row DTOs in their own files
-go run github.com/aita/sqlkit/cmd/sqlkitgen \
-  -driver mysql -dsn 'user:pass@tcp(localhost:3306)/app' \
-  -package appdb -out appdb -file-per-table -dto -dto-separate-file
+  -dsn "$DATABASE_URL" -schema public -package schema -out schema/schema.go
 ```
 
-By default the generator emits a typed binding per table — and nothing else.
-Row types are not generated unless you ask for them (`-dto`): you can define
-the structs you scan into and insert from, and fields map by name.
-
-The binding is metadata, not an ORM: it exposes `Column[T]` fields (`Users.ID`
-is a `sqlkit.Column[int64]`, ...) and the table identity, but carries no
-data-access methods. All statements start from the db handle with the table as
-an argument: `db.Select().From(Users)`, `db.Insert(Users).Values(...)`,
-`db.Update(Users)`, `db.Delete(Users)`.
-
-```go
-var Users = ...
-```
-
-### CLI flags
-
-| Flag | Purpose |
+| `sqlkitgen` flag | Purpose |
 |---|---|
+| `-dsn` | database connection string (required) |
 | `-driver` | `pgx` (default) or `mysql` |
 | `-dialect` | override the schema dialect (`postgres`/`mysql`); inferred from `-driver` |
 | `-schema` | schema/database to read (default `public` for postgres, current DB for mysql) |
-| `-tables` | comma-separated subset of tables to generate |
-| `-out` | output file (single-file mode) or directory (multi-file mode); stdout if empty |
-| `-file-per-table` | write one file per table |
-| `-file-name` | single-file output name when `-out` is a directory (default `tables.go`) |
-| `-dto` | also generate a row struct (DTO) per table |
-| `-dto-separate-file` | write DTOs into their own file(s) |
-| `-dsl` | emit a `sqldef`-based design file from the schema instead of table bindings |
+| `-package` | package name of the generated design file (required) |
+| `-tables` | comma-separated subset of tables to include |
+| `-out` | output file or directory; stdout if empty |
 
-The generated binding is metadata, not an ORM: no `Get`, no relation
-navigation, no per-column option soup. Foreign keys, indexes, constraints, and
-comments are read into the metadata model (`meta.Table`) for the tools that
-need them — the DDL generator consumes the same model — but they do not add
-methods to the query bindings.
+The bootstrapped design is a starting point meant to be edited (it carries no
+`DO NOT EDIT` marker); from then on the schema lives in code.
+
+The generated binding is metadata, not an ORM: it exposes `Column[T]` fields
+(`Users.ID` is a `sqlkit.Column[int64]`, ...) and the table identity, but no
+`Get`, no relation navigation, no data-access methods. All statements start
+from the db handle with the table as an argument: `db.Select().From(Users)`,
+`db.Insert(Users).Values(...)`, `db.Update(Users)`, `db.Delete(Users)`.
+Row types (DTOs) are not generated unless you ask (`EmitDTO`): define the
+structs you scan into and insert from, and fields map by name.
 
 ### Using codegen as a library
 
@@ -114,11 +99,13 @@ files, err := codegen.Generate(catalog, codegen.Options{
 // files[i].Name / files[i].Content
 ```
 
-Schema metadata — the portable `meta.Type` (per-dialect engine names plus
-length/precision/scale), comments, and the primary-key/nullable/default
-constraints — lives on `meta.Column`, the model the generators consume; the
-dialect is supplied to the generator (`Options.Dialect`), not stored on the
-model. The runtime binding stays minimal: each column is a plain
+Schema metadata — the column's `meta.Type`, comments, and the
+primary-key/nullable/default constraints — lives on `meta.Column`, the model
+the generators consume. `meta.Type` is a portable type that resolves to an
+engine type name only when a generator picks a dialect (`Type.Engine(dialect)`),
+so the model stores no dialect itself; the sqldef DSL supplies types that
+resolve on both engines, and the inspector supplies single-dialect ones
+(`meta.Of`). The runtime binding stays minimal: each column is a plain
 `sqlkit.NewColumn[T](info, "name")` carrying only the table identity, column
 name, and static type `T`.
 
@@ -165,7 +152,9 @@ var Posts = Public.Table("posts",
 ```
 
 Single-schema designs can skip the schema handle — `Catalog.Table(...)`
-declares tables with unqualified names.
+declares tables in the catalog's default schema (unnamed, so unqualified
+names). Pass `sqldef.NewCatalog(sqldef.DefaultSchema("public"))` to make that
+default a named schema.
 
 Columns are NOT NULL unless marked `Nullable()` (nullable columns map to
 pointer types, as with introspection). `Default()` marks database-side
@@ -190,7 +179,7 @@ single-column unique index on a column, `Index`/`UniqueIndex` declare
 (composite) indexes, and `Check` adds a CHECK constraint. `Comment` on a
 column and `TableComment` on a table carry through to the generated bindings
 and DTOs as Go doc comments — and the inspector reads the same metadata back
-from live PostgreSQL/MySQL schemas, so `-dsl` bootstraps preserve it.
+from live PostgreSQL/MySQL schemas, so `sqlkitgen` bootstraps preserve it.
 
 Because declarations are values, they compose: a shared
 `[]sqldef.TableElement` of audit columns can be appended into any table.
@@ -214,17 +203,10 @@ name on the chosen dialect is reported by `Generate`/`DDL`.
 
 ### Bootstrapping a design from an existing database
 
-`sqlkitgen -dsl` runs the introspection in reverse: it reads a live schema and
-emits the catalog design file for it, so an existing database can be converted
-once and maintained as Go code from then on:
-
-```sh
-go run github.com/aita/sqlkit/cmd/sqlkitgen \
-  -dsn "$DATABASE_URL" -schema public -dsl -package schema -out schema/schema.go
-```
-
-The emitted file is a starting point meant to be edited (it carries no
-`DO NOT EDIT` marker). The same conversion is available as a library via
+`sqlkitgen` reads a live schema and emits the catalog design file for it (see
+[the flow](#the-flow-a-schema-design-generates-the-bindings) above), so an
+existing database can be converted once and maintained as Go code from then
+on. The same conversion is available as a library via
 `codegen.GenerateDesign(catalog, codegen.DesignOptions{...})`. Once you have a
 design, `Catalog.DDL("postgres")` renders the schema as CREATE TABLE
 statements.

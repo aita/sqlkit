@@ -51,13 +51,10 @@ type Table struct {
 	Checks      []Check
 }
 
-// Type is a portable column type: the engine type name for each supported
-// dialect plus optional length/precision modifiers. The model stores no
-// dialect — a Type carries every dialect it is valid on, so one Catalog
-// targets both. Generators resolve it to a target engine name with Engine.
-type Type struct {
-	Postgres string
-	MySQL    string
+// Engine is a column type resolved for a specific dialect: the engine type
+// name plus any length/precision modifiers.
+type Engine struct {
+	Name string
 	// Length is the declared type length, e.g. the N of varchar(N) or char(N);
 	// 0 when not applicable.
 	Length int
@@ -67,16 +64,33 @@ type Type struct {
 	Scale     int
 }
 
-// Engine returns the engine type name for the dialect ("postgres" or "mysql")
-// and whether the type is available on it. An empty engine name reports the
-// type as unavailable on that dialect.
-func (t Type) Engine(dialect string) (string, bool) {
-	switch dialect {
-	case "mysql":
-		return t.MySQL, t.MySQL != ""
-	default:
-		return t.Postgres, t.Postgres != ""
+// Type is a portable column type. It commits to an engine type name only when
+// a generator picks a dialect (Engine), so the model stores no dialect itself.
+// The sqldef DSL supplies portable types that resolve on both dialects; the
+// inspector supplies single-dialect ones (see Of).
+type Type interface {
+	// Engine resolves the type for the dialect ("postgres" or "mysql"); ok is
+	// false when the type has no representation on it.
+	Engine(dialect string) (Engine, bool)
+}
+
+// Of returns a Type known only on the given dialect — what the inspector
+// produces from one introspected engine type, and a convenient way to build a
+// meta.Column by hand for a single target dialect.
+func Of(dialect, name string, length, precision, scale int) Type {
+	return single{dialect: dialect, eng: Engine{Name: name, Length: length, Precision: precision, Scale: scale}}
+}
+
+type single struct {
+	dialect string
+	eng     Engine
+}
+
+func (s single) Engine(dialect string) (Engine, bool) {
+	if dialect != s.dialect {
+		return Engine{}, false
 	}
+	return s.eng, true
 }
 
 // Column is a database column. Type is portable; generators resolve it to an
