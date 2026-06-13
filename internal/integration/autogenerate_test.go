@@ -15,7 +15,9 @@ package integration
 // matches the catalog:
 //
 //   - MySQL: Bool -> tinyint; Default(false) -> "0"; Default(now()) ->
-//     "CURRENT_TIMESTAMP"; CHECK `title <> ''` -> "`title` <> _utf8mb4''".
+//     "CURRENT_TIMESTAMP"; CHECK `title <> ''` -> "`title` <> _utf8mb4''"; and a
+//     TEXT column reports CHARACTER_MAXIMUM_LENGTH 65535 while the portable
+//     sqldef.Text type carries length 0, so even a plain Text column diffs.
 //   - Postgres: CHECK `title <> ''` -> "title <> ''::text"; now() default
 //     normalization; unique/secondary index and FK names become engine-generated
 //     and no longer equal the names the catalog's DDL emitted (render matches
@@ -23,11 +25,11 @@ package integration
 //
 // So TestAutogenerateRoundTripIdempotent deliberately uses a reduced "safe"
 // catalog containing only round-trip-stable elements (serial/auto_increment PK,
-// plain NOT NULL and nullable text columns; no Bool, no default expressions, no
-// indexes/unique/FK/checks). Do not "helpfully" expand that catalog — it will
-// reintroduce the spurious diffs above and make the test flaky. The forward-diff
-// test only asserts the presence of specific op.* calls in the rendered body, so
-// it is unaffected by these quirks.
+// fixed-length VarChar columns, both NOT NULL and nullable; no Bool, no Text, no
+// default expressions, no indexes/unique/FK/checks). Do not "helpfully" expand
+// that catalog — it will reintroduce the spurious diffs above and make the test
+// flaky. The forward-diff test only asserts the presence of specific op.* calls
+// in the rendered body, so it is unaffected by these quirks.
 
 import (
 	"context"
@@ -135,7 +137,7 @@ func TestAutogenerateRoundTripIdempotent(t *testing.T) {
 		safeCatalog.Table("accounts",
 			sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
 			sqldef.Column("label", sqldef.VarChar(120)),
-			sqldef.Column("note", sqldef.Text, sqldef.Nullable()),
+			sqldef.Column("note", sqldef.VarChar(255), sqldef.Nullable()),
 		)
 		applyCatalog(t, db, eng, safeCatalog)
 		t.Cleanup(func() { dropTables(t, db, eng, "accounts") })
