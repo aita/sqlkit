@@ -41,7 +41,6 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/examples/blog/schema"
 	"github.com/aita/sqlkit/meta"
 )
 
@@ -213,11 +212,11 @@ func image(envVar, fallback string) string {
 	return fallback
 }
 
-// applySchema recreates the blog schema for the engine. It drops the tables in
-// reverse declaration order (children before parents, so foreign keys never
-// block the drop and an empty database is a no-op), then executes the CREATE
-// SQL the meta model renders from the shared catalog. Running it per subtest
-// gives each test a clean database.
+// applySchema recreates the shared schema (testCatalog) for the engine. It
+// drops the tables in reverse declaration order (children before parents, so
+// foreign keys never block the drop and an empty database is a no-op), then
+// executes the CREATE SQL the meta model renders from the shared catalog.
+// Running it per subtest gives each test a clean database.
 //
 // The drops are issued directly rather than via Metadata.DropSQL because that
 // drops foreign-key constraints with ALTER TABLE first, which fails on the
@@ -225,7 +224,7 @@ func image(envVar, fallback string) string {
 func applySchema(t *testing.T, db *sqlkit.Database, eng engine) {
 	t.Helper()
 	ctx := context.Background()
-	model, err := schema.Catalog.Build()
+	model, err := testCatalog.Build()
 	if err != nil {
 		t.Fatalf("build catalog: %v", err)
 	}

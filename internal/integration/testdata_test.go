@@ -1,0 +1,100 @@
+package integration
+
+// This file holds the test data the whole integration suite shares: the schema
+// catalog applySchema materializes before every subtest, and the migration set
+// the migrator tests drive. Keeping both here means every test works against
+// one definition instead of borrowing the blog example's catalog or repeating
+// migrations inline, so a schema change touches exactly one place.
+//
+// testCatalog mirrors the generated examples/blog/blogdb bindings the typed
+// query tests reference (same tables, columns, keys), so the DDL this catalog
+// renders matches the columns those bindings name.
+
+import (
+	"github.com/aita/sqlkit/migrate"
+	"github.com/aita/sqlkit/sql"
+	"github.com/aita/sqlkit/sqldef"
+)
+
+// testSchema is the schema (PostgreSQL schema / MySQL database) the suite's
+// tables live in. The blog bindings qualify their tables with it, and the
+// migrator writes its history table into it.
+const testSchema = "public"
+
+// testCatalog is the shared schema definition. applySchema builds it into the
+// meta model and executes the rendered CREATE statements for each engine.
+var testCatalog = newTestCatalog()
+
+// newTestCatalog declares the blog schema: users authored posts (has-many) and
+// own at most one profile (has-one). It matches the blogdb bindings exactly so
+// the same schema backs both the DDL path and the typed query path.
+func newTestCatalog() *sqldef.Catalog {
+	cat := sqldef.NewCatalog()
+	public := cat.Schema(testSchema)
+
+	// Registered blog authors.
+	users := public.Table("users",
+		sqldef.TableComment("Registered blog authors"),
+		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+		sqldef.Column("email", sqldef.VarChar(255), sqldef.Unique(), sqldef.Comment("Unique login address")),
+		sqldef.Column("name", sqldef.Text, sqldef.Nullable()),
+		sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default(sql.Raw("now()"))),
+	)
+
+	// Posts reference the user that wrote them (has-many).
+	public.Table("posts",
+		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+		sqldef.Column("user_id", sqldef.BigInt, sqldef.References(users, "id")),
+		sqldef.Column("title", sqldef.Text),
+		sqldef.Column("body", sqldef.Text, sqldef.Nullable()),
+		sqldef.Column("published", sqldef.Bool, sqldef.Default(sql.Raw("false"))),
+		sqldef.Index("user_id"),
+		sqldef.Check(sql.Raw("title <> ''")),
+	)
+
+	// Profiles hold one optional profile per user; the unique user_id makes it a
+	// has-one relation.
+	public.Table("profiles",
+		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+		sqldef.Column("user_id", sqldef.BigInt, sqldef.References(users, "id"), sqldef.Unique()),
+		sqldef.Column("bio", sqldef.Text, sqldef.Nullable()),
+		sqldef.Column("public", sqldef.Bool, sqldef.Default(sql.Raw("false"))),
+	)
+
+	return cat
+}
+
+// testMigrationTables names the tables the migration set owns, outside the
+// shared catalog. The migrator tests drop these (plus the history table) to
+// isolate themselves on the shared connection.
+var testMigrationTables = []string{"tags"}
+
+// testMigrations is the shared versioned migration set: it creates a tags table
+// and then adds a nullable color column, each with a matching Down. The tables
+// it touches are deliberately separate from testCatalog so the migrator tests
+// do not collide with the schema the query tests apply.
+func testMigrations() []migrate.Migration {
+	return []migrate.Migration{
+		{
+			Revision:     "0001",
+			DownRevision: "",
+			Name:         "create_tags",
+			Up: func(op *migrate.Operator) {
+				op.CreateTable("tags",
+					sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+					sqldef.Column("name", sqldef.VarChar(64), sqldef.Unique()),
+				)
+			},
+			Down: func(op *migrate.Operator) { op.DropTable("tags") },
+		},
+		{
+			Revision:     "0002",
+			DownRevision: "0001",
+			Name:         "add_tags_color",
+			Up: func(op *migrate.Operator) {
+				op.AddColumn("tags", sqldef.Column("color", sqldef.VarChar(16), sqldef.Nullable()))
+			},
+			Down: func(op *migrate.Operator) { op.DropColumn("tags", "color") },
+		},
+	}
+}

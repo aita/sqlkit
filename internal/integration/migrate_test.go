@@ -7,7 +7,6 @@ import (
 	"github.com/aita/sqlkit/inspector"
 	"github.com/aita/sqlkit/meta"
 	"github.com/aita/sqlkit/migrate"
-	"github.com/aita/sqlkit/sqldef"
 )
 
 // TestMigratorAgainstPostgres applies and rolls back versioned migrations
@@ -18,47 +17,25 @@ func TestMigratorAgainstPostgres(t *testing.T) {
 	db := connect(t, eng)
 	ctx := context.Background()
 
-	// The migrator owns tables outside the shared blog schema, so connect (not
-	// setup) is used and the migrator's own tables are dropped here to isolate
-	// the test from a prior run on the shared connection.
-	for _, name := range []string{"tags", "schema_migrations"} {
-		ident := eng.dialect.QuoteIdent("public." + name)
+	// The migrator owns tables outside the shared catalog, so connect (not setup)
+	// is used and the migrator's own tables — those the shared migration set
+	// creates, plus the history table — are dropped here to isolate the test from
+	// a prior run on the shared connection.
+	owned := append(append([]string{}, testMigrationTables...), "schema_migrations")
+	for _, name := range owned {
+		ident := eng.dialect.QuoteIdent(testSchema + "." + name)
 		if _, err := db.SQL().ExecContext(ctx, "DROP TABLE IF EXISTS "+ident); err != nil {
 			t.Fatalf("drop %s: %v", name, err)
 		}
 	}
 
-	migrations := []migrate.Migration{
-		{
-			Revision:     "0001",
-			DownRevision: "",
-			Name:         "create_tags",
-			Up: func(op *migrate.Operator) {
-				op.CreateTable("tags",
-					sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-					sqldef.Column("name", sqldef.VarChar(64), sqldef.Unique()),
-				)
-			},
-			Down: func(op *migrate.Operator) { op.DropTable("tags") },
-		},
-		{
-			Revision:     "0002",
-			DownRevision: "0001",
-			Name:         "add_tags_color",
-			Up: func(op *migrate.Operator) {
-				op.AddColumn("tags", sqldef.Column("color", sqldef.VarChar(16), sqldef.Nullable()))
-			},
-			Down: func(op *migrate.Operator) { op.DropColumn("tags", "color") },
-		},
-	}
-
-	m := migrate.New(db, migrations, migrate.WithSchema("public"))
+	m := migrate.New(db, testMigrations(), migrate.WithSchema(testSchema))
 
 	if err := m.Up(ctx); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 
-	model, err := inspector.Inspect(ctx, db.SQL(), eng.name, "public")
+	model, err := inspector.Inspect(ctx, db.SQL(), eng.name, testSchema)
 	if err != nil {
 		t.Fatalf("inspect after up: %v", err)
 	}
@@ -79,7 +56,7 @@ func TestMigratorAgainstPostgres(t *testing.T) {
 	if err := m.DownTo(ctx, ""); err != nil {
 		t.Fatalf("DownTo: %v", err)
 	}
-	model, err = inspector.Inspect(ctx, db.SQL(), eng.name, "public")
+	model, err = inspector.Inspect(ctx, db.SQL(), eng.name, testSchema)
 	if err != nil {
 		t.Fatalf("inspect after down: %v", err)
 	}
