@@ -16,7 +16,7 @@ func TestInspectLiveSchema(t *testing.T) {
 	eachEngine(t, func(t *testing.T, eng engine, db *sqlkit.Database) {
 		ctx := context.Background()
 
-		model, err := inspector.Inspect(ctx, db.SQL(), eng.name, "public")
+		model, err := inspector.Inspect(ctx, db.SQL(), eng.name, testSchema)
 		if err != nil {
 			t.Fatalf("inspect: %v", err)
 		}
