@@ -7,7 +7,17 @@ type InsertQuery struct {
 	columns   []string
 	rows      [][]Expression
 	selectSrc Query
+	conflict  *conflictClause
 	returning []Selection
+}
+
+// conflictClause holds an upsert action: the conflict-target columns, whether
+// it is DO UPDATE (vs DO NOTHING), the SET assignments, and an optional WHERE.
+type conflictClause struct {
+	target   []string
+	doUpdate bool
+	sets     []Assignment
+	where    Expression
 }
 
 // InsertInto creates an INSERT query builder for a table.
@@ -36,6 +46,36 @@ func (q InsertQuery) Values(values ...any) InsertQuery {
 // optional (SQL then assigns the query's columns in table order).
 func (q InsertQuery) FromSelect(query Query) InsertQuery {
 	q.selectSrc = query
+	return q
+}
+
+// OnConflictDoNothing adds an upsert that skips conflicting rows: PostgreSQL
+// ON CONFLICT [ (target...) ] DO NOTHING. target names the conflicting columns
+// (optional on PostgreSQL). MySQL has no DO NOTHING form and rejects it at
+// compile time.
+func (q InsertQuery) OnConflictDoNothing(target ...string) InsertQuery {
+	q.conflict = &conflictClause{target: target}
+	return q
+}
+
+// OnConflictDoUpdate adds an upsert that updates conflicting rows: PostgreSQL
+// ON CONFLICT (target...) DO UPDATE SET assignments, MySQL ON DUPLICATE KEY
+// UPDATE assignments (which ignores target). Reference the proposed row's values
+// with Excluded.
+func (q InsertQuery) OnConflictDoUpdate(target []string, assignments ...Assignment) InsertQuery {
+	q.conflict = &conflictClause{target: target, doUpdate: true, sets: assignments}
+	return q
+}
+
+// OnConflictWhere adds a predicate to the most recent DO UPDATE action
+// (PostgreSQL ON CONFLICT ... DO UPDATE SET ... WHERE ...). It has no effect
+// without a preceding OnConflictDoUpdate, and is unsupported on MySQL.
+func (q InsertQuery) OnConflictWhere(expr Expression) InsertQuery {
+	if q.conflict != nil {
+		clause := *q.conflict
+		clause.where = expr
+		q.conflict = &clause
+	}
 	return q
 }
 

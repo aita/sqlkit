@@ -120,9 +120,7 @@ func (c *Compiler) CompileCompound(q CompoundQuery) (string, []any, error) {
 				return "", nil, err
 			}
 			sb.WriteString(termSQL)
-			if term.Desc {
-				sb.WriteString(" DESC")
-			}
+			writeOrderModifiers(&sb, term)
 			args = append(args, termArgs...)
 		}
 	}

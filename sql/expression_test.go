@@ -38,6 +38,123 @@ func TestInQueryAndExists(t *testing.T) {
 		[]any{100})
 }
 
+func TestScalarSubqueryProjection(t *testing.T) {
+	// A correlated scalar subquery in the SELECT list: per-user order count.
+	count := Select(CountAll()).From(Table{Name: "orders"}).
+		Where(Eq(Col("orders.user_id"), Col("users.id")))
+
+	q := Select(Col("users.id"), As(ScalarSubquery(count), "order_count")).
+		From(Table{Name: "users"})
+
+	assertSQL(t, q,
+		`SELECT "users"."id", (SELECT COUNT(*) FROM "orders" WHERE ("orders"."user_id" = "users"."id")) AS "order_count" FROM "users"`,
+		nil)
+}
+
+func TestScalarSubqueryInComparison(t *testing.T) {
+	avg := Select(Avg(Col("salary"))).From(Table{Name: "employees"})
+
+	q := Select(Col("id")).From(Table{Name: "employees"}).
+		Where(Gt(Col("salary"), ScalarSubquery(avg)))
+
+	assertSQL(t, q,
+		`SELECT "id" FROM "employees" WHERE ("salary" > (SELECT AVG("salary") FROM "employees"))`,
+		nil)
+}
+
+func TestScalarSubquerySharesPlaceholderNumbering(t *testing.T) {
+	sub := Select(Max(Col("total"))).From(Table{Name: "orders"}).
+		Where(Eq(Col("orders.user_id"), Col("users.id"))).
+		Where(Gt(Col("total"), Int(10)))
+
+	q := Select(Col("id")).From(Table{Name: "users"}).
+		Where(Eq(Col("active"), Val(true))).
+		Where(Gt(Col("score"), ScalarSubquery(sub)))
+
+	assertSQL(t, q,
+		`SELECT "id" FROM "users" WHERE (("active" = $1) AND ("score" > (SELECT MAX("total") FROM "orders" WHERE (("orders"."user_id" = "users"."id") AND ("total" > $2)))))`,
+		[]any{true, 10})
+}
+
+func TestQuantifiedAnyAll(t *testing.T) {
+	sub := Select(Col("amount")).From(Table{Name: "payments"}).Where(Gt(Col("amount"), Int(0)))
+
+	assertSQL(t, Select(Col("id")).From(Table{Name: "users"}).Where(Any(Col("balance"), ">", sub)),
+		`SELECT "id" FROM "users" WHERE ("balance" > ANY (SELECT "amount" FROM "payments" WHERE ("amount" > $1)))`,
+		[]any{0})
+
+	assertSQL(t, Select(Col("id")).From(Table{Name: "users"}).Where(All(Col("balance"), ">=", sub)),
+		`SELECT "id" FROM "users" WHERE ("balance" >= ALL (SELECT "amount" FROM "payments" WHERE ("amount" > $1)))`,
+		[]any{0})
+}
+
+func TestScalarSubqueryRequiresQuery(t *testing.T) {
+	q := Select(ScalarSubquery(nil)).From(Table{Name: "users"})
+	if _, _, err := q.ToSQL(PostgreSQLDialect{}); err == nil {
+		t.Fatal("ScalarSubquery(nil) compiled, want error")
+	}
+}
+
+func TestArithmeticAndCast(t *testing.T) {
+	q := Select(As(Mul(Col("price"), Col("qty")), "total")).From(Table{Name: "items"})
+	assertSQL(t, q, `SELECT ("price" * "qty") AS "total" FROM "items"`, nil)
+
+	q = Select(As(Cast(Col("flag"), "integer"), "n")).From(Table{Name: "items"})
+	assertSQL(t, q, `SELECT CAST("flag" AS integer) AS "n" FROM "items"`, nil)
+
+	q = Select(Col("id")).From(Table{Name: "items"}).Where(Gt(Add(Col("a"), Col("b")), Int(10)))
+	assertSQL(t, q, `SELECT "id" FROM "items" WHERE (("a" + "b") > $1)`, []any{10})
+}
+
+func TestOuterAndCrossJoins(t *testing.T) {
+	base := Select(Col("u.id")).From(SourceAlias(Table{Name: "users"}, "u"))
+
+	assertSQL(t, base.RightJoin(SourceAlias(Table{Name: "orgs"}, "o"), Eq(Col("u.org_id"), Col("o.id"))),
+		`SELECT "u"."id" FROM "users" AS "u" RIGHT JOIN "orgs" AS "o" ON ("u"."org_id" = "o"."id")`, nil)
+
+	assertSQL(t, base.FullJoin(SourceAlias(Table{Name: "orgs"}, "o"), Eq(Col("u.org_id"), Col("o.id"))),
+		`SELECT "u"."id" FROM "users" AS "u" FULL JOIN "orgs" AS "o" ON ("u"."org_id" = "o"."id")`, nil)
+
+	assertSQL(t, base.CrossJoin(SourceAlias(Table{Name: "orgs"}, "o")),
+		`SELECT "u"."id" FROM "users" AS "u" CROSS JOIN "orgs" AS "o"`, nil)
+}
+
+func TestUpdateFromAndDeleteUsing(t *testing.T) {
+	upd := Update(Table{Name: "users"}).
+		Set(Set("name", Col("o.name"))).
+		From(SourceAlias(Table{Name: "orgs"}, "o")).
+		Where(Eq(Col("users.org_id"), Col("o.id")))
+	assertSQL(t, upd,
+		`UPDATE "users" SET "name" = "o"."name" FROM "orgs" AS "o" WHERE ("users"."org_id" = "o"."id")`, nil)
+
+	del := DeleteFrom(Table{Name: "users"}).
+		Using(SourceAlias(Table{Name: "orgs"}, "o")).
+		Where(And(Eq(Col("users.org_id"), Col("o.id")), Eq(Col("o.active"), Val(false))))
+	assertSQL(t, del,
+		`DELETE FROM "users" USING "orgs" AS "o" WHERE (("users"."org_id" = "o"."id") AND ("o"."active" = $1))`,
+		[]any{false})
+}
+
+func TestLateralJoin(t *testing.T) {
+	recent := Select(Col("p.id")).From(SourceAlias(Table{Name: "posts"}, "p")).
+		Where(Eq(Col("p.user_id"), Col("u.id"))).Limit(1)
+
+	q := Select(Col("u.id"), Col("r.id")).
+		From(SourceAlias(Table{Name: "users"}, "u")).
+		Join(Lateral(Alias(recent, "r")), Raw("true"))
+
+	assertSQL(t, q,
+		`SELECT "u"."id", "r"."id" FROM "users" AS "u" JOIN LATERAL (SELECT "p"."id" FROM "posts" AS "p" WHERE ("p"."user_id" = "u"."id") LIMIT 1) AS "r" ON true`,
+		nil)
+}
+
+func TestOrderByNulls(t *testing.T) {
+	q := Select(Col("id")).From(Table{Name: "users"}).
+		OrderBy(Asc(Col("name")).NullsFirst(), Desc(Col("score")).NullsLast())
+	assertSQL(t, q,
+		`SELECT "id" FROM "users" ORDER BY "name" NULLS FIRST, "score" DESC NULLS LAST`, nil)
+}
+
 func TestNotLikeAndILike(t *testing.T) {
 	assertSQL(t, Select(Col("id")).From(Table{Name: "users"}).Where(NotLike(Col("email"), Val("%@spam.com"))),
 		`SELECT "id" FROM "users" WHERE ("email" NOT LIKE $1)`, []any{"%@spam.com"})

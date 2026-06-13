@@ -189,6 +189,37 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 			return "(NOT EXISTS (" + subSQL + "))", args, nil
 		}
 		return "EXISTS (" + subSQL + ")", args, nil
+	case ScalarSubqueryExpression:
+		if e.Query == nil {
+			return "", nil, fmt.Errorf("sqlkit/sql: scalar subquery requires a query")
+		}
+		subSQL, args, err := c.compileSubquery(e.Query)
+		if err != nil {
+			return "", nil, err
+		}
+		return "(" + subSQL + ")", args, nil
+	case QuantifiedExpression:
+		if e.Query == nil {
+			return "", nil, fmt.Errorf("sqlkit/sql: %s comparison requires a subquery", e.Quantifier)
+		}
+		leftSQL, args, err := c.CompileExpression(e.Left)
+		if err != nil {
+			return "", nil, err
+		}
+		subSQL, subArgs, err := c.compileSubquery(e.Query)
+		if err != nil {
+			return "", nil, err
+		}
+		args = append(args, subArgs...)
+		return "(" + leftSQL + " " + e.Operator + " " + e.Quantifier + " (" + subSQL + "))", args, nil
+	case ExcludedExpression:
+		if e.Column == "" {
+			return "", nil, fmt.Errorf("sqlkit/sql: Excluded requires a column name")
+		}
+		if r, ok := c.Dialect.(ExcludedRenderer); ok {
+			return r.Excluded(e.Column), nil, nil
+		}
+		return "excluded." + c.Dialect.QuoteName(e.Column), nil, nil
 	case ConcatExpression:
 		if len(e.Operands) == 0 {
 			return "", nil, fmt.Errorf("sqlkit/sql: CONCAT requires at least one operand")
@@ -251,6 +282,15 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		}
 		sb.WriteString(")")
 		return sb.String(), args, nil
+	case CastExpression:
+		if e.Type == "" {
+			return "", nil, fmt.Errorf("sqlkit/sql: CAST requires a target type")
+		}
+		operandSQL, args, err := c.CompileExpression(e.Operand)
+		if err != nil {
+			return "", nil, err
+		}
+		return "CAST(" + operandSQL + " AS " + e.Type + ")", args, nil
 	case CountExpression:
 		if e.All || e.Target == nil {
 			return "COUNT(*)", nil, nil
@@ -334,9 +374,7 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 					return "", nil, err
 				}
 				order.WriteString(termSQL)
-				if term.Desc {
-					order.WriteString(" DESC")
-				}
+				writeOrderModifiers(&order, term)
 				args = append(args, termArgs...)
 			}
 			parts = append(parts, order.String())
@@ -386,12 +424,16 @@ func (c *Compiler) CompileSource(source Source) (string, []any, error) {
 		return "", nil, fmt.Errorf("sqlkit/sql: missing source")
 	}
 	s := source.SQLSource()
+	lateral := ""
+	if s.Lateral {
+		lateral = "LATERAL "
+	}
 	if s.Query != nil {
 		sql, args, err := c.compileSubquery(s.Query)
 		if err != nil {
 			return "", nil, err
 		}
-		compiled := "(" + sql + ")"
+		compiled := lateral + "(" + sql + ")"
 		if s.Alias != "" {
 			compiled += " AS " + c.Dialect.QuoteIdent(s.Alias)
 		}
@@ -400,7 +442,7 @@ func (c *Compiler) CompileSource(source Source) (string, []any, error) {
 	if s.Name == "" {
 		return "", nil, fmt.Errorf("sqlkit/sql: missing source name")
 	}
-	compiled := c.Dialect.QuoteIdent(s.Name)
+	compiled := lateral + c.Dialect.QuoteIdent(s.Name)
 	if s.Alias != "" {
 		compiled += " AS " + c.Dialect.QuoteIdent(s.Alias)
 	}
@@ -585,9 +627,7 @@ func (c *Compiler) CompileSelect(q SelectQuery) (string, []any, error) {
 				return "", nil, err
 			}
 			sb.WriteString(termSQL)
-			if term.Desc {
-				sb.WriteString(" DESC")
-			}
+			writeOrderModifiers(&sb, term)
 			args = append(args, termArgs...)
 		}
 	}
@@ -640,6 +680,9 @@ func (c *Compiler) CompileInsert(q InsertQuery) (string, []any, error) {
 		sb.WriteString(" ")
 		sb.WriteString(selectSQL)
 		args = append(args, selectArgs...)
+		if err := c.writeUpsert(&sb, &args, q.conflict); err != nil {
+			return "", nil, err
+		}
 		if err := c.writeReturning(&sb, &args, q.returning); err != nil {
 			return "", nil, err
 		}
@@ -667,10 +710,64 @@ func (c *Compiler) CompileInsert(q InsertQuery) (string, []any, error) {
 		}
 		sb.WriteString(")")
 	}
+	if err := c.writeUpsert(&sb, &args, q.conflict); err != nil {
+		return "", nil, err
+	}
 	if err := c.writeReturning(&sb, &args, q.returning); err != nil {
 		return "", nil, err
 	}
 	return sb.String(), args, nil
+}
+
+// writeUpsert appends the dialect's conflict clause (ON CONFLICT / ON DUPLICATE
+// KEY UPDATE) to an INSERT. Assignment and WHERE placeholders are numbered after
+// the VALUES/SELECT they follow, matching their textual position.
+func (c *Compiler) writeUpsert(sb *strings.Builder, args *[]any, conflict *conflictClause) error {
+	if conflict == nil {
+		return nil
+	}
+	renderer, ok := c.Dialect.(UpsertRenderer)
+	if !ok {
+		return fmt.Errorf("sqlkit/sql: dialect %s does not support upsert", c.Dialect.Name())
+	}
+	if conflict.doUpdate && len(conflict.sets) == 0 {
+		return fmt.Errorf("sqlkit/sql: ON CONFLICT DO UPDATE requires at least one assignment")
+	}
+	target := make([]string, len(conflict.target))
+	for i, col := range conflict.target {
+		target[i] = c.Dialect.QuoteName(col)
+	}
+	assignments := make([]string, 0, len(conflict.sets))
+	for _, assignment := range conflict.sets {
+		valueSQL, valueArgs, err := c.CompileExpression(assignment.Value)
+		if err != nil {
+			return err
+		}
+		assignments = append(assignments, c.Dialect.QuoteIdent(assignment.Column)+" = "+valueSQL)
+		*args = append(*args, valueArgs...)
+	}
+	// Only DO UPDATE carries a WHERE; on DO NOTHING the predicate is dropped, so
+	// it must not contribute bind values either (which would desync the args).
+	var whereSQL string
+	if conflict.doUpdate && conflict.where != nil {
+		w, whereArgs, err := c.CompileExpression(conflict.where)
+		if err != nil {
+			return err
+		}
+		whereSQL = w
+		*args = append(*args, whereArgs...)
+	}
+	clause, err := renderer.Upsert(UpsertClause{
+		Target:      target,
+		DoUpdate:    conflict.doUpdate,
+		Assignments: assignments,
+		WhereSQL:    whereSQL,
+	})
+	if err != nil {
+		return err
+	}
+	sb.WriteString(clause)
+	return nil
 }
 
 // usesInlineJoins reports whether the dialect renders multi-table UPDATE/DELETE
@@ -925,4 +1022,16 @@ func (c *Compiler) writeReturning(sb *strings.Builder, args *[]any, returning []
 func (c *Compiler) nextPlaceholder() string {
 	c.ordinal++
 	return c.Dialect.Placeholder(c.ordinal)
+}
+
+// writeOrderModifiers appends the direction and NULLS ordering of an ORDER BY
+// term (after its already-written expression) to sb.
+func writeOrderModifiers(sb *strings.Builder, term OrderTerm) {
+	if term.Desc {
+		sb.WriteString(" DESC")
+	}
+	if term.Nulls != "" {
+		sb.WriteString(" NULLS ")
+		sb.WriteString(term.Nulls)
+	}
 }

@@ -110,6 +110,35 @@ type JSONObjectRenderer interface {
 	JSONObject(funcName string, pairs [][2]string) string
 }
 
+// UpsertClause carries the already-compiled pieces of an upsert for a dialect to
+// assemble into its native syntax. Target holds the already-quoted conflict
+// columns; DoUpdate distinguishes DO UPDATE from DO NOTHING; Assignments are the
+// already-compiled "col = expr" fragments; WhereSQL is an optional already-
+// compiled predicate ("" when none).
+type UpsertClause struct {
+	Target      []string
+	DoUpdate    bool
+	Assignments []string
+	WhereSQL    string
+}
+
+// UpsertRenderer is an optional capability a Dialect implements to render an
+// INSERT conflict clause (PostgreSQL ON CONFLICT, MySQL ON DUPLICATE KEY
+// UPDATE). The compiler detects it with a type assertion, so it is not a
+// breaking change to Dialect; a dialect without it rejects upserts at compile
+// time. The returned fragment is appended to the INSERT, leading space included.
+type UpsertRenderer interface {
+	Upsert(clause UpsertClause) (string, error)
+}
+
+// ExcludedRenderer is an optional capability for dialects whose reference to an
+// upsert's proposed row value is not PostgreSQL's excluded.<col> (MySQL uses
+// VALUES(<col>)). The compiler detects it with a type assertion; without it the
+// excluded.<col> form is used. column is the bare column name.
+type ExcludedRenderer interface {
+	Excluded(column string) string
+}
+
 // JoinedUpdateDeleter is an optional capability for dialects whose multi-table
 // UPDATE/DELETE syntax differs from the SQL-standard FROM/USING form. MySQL puts
 // the joined sources inline (UPDATE t JOIN j ON ... SET ...) and names the
@@ -272,6 +301,33 @@ func (PostgreSQLDialect) ILike(left, pattern string) string {
 	return "(" + left + " ILIKE " + pattern + ")"
 }
 
+// Upsert renders PostgreSQL's ON CONFLICT clause.
+func (PostgreSQLDialect) Upsert(cl UpsertClause) (string, error) {
+	// PostgreSQL allows ON CONFLICT DO NOTHING without a target, but DO UPDATE
+	// requires a conflict target (column list or constraint) to arbitrate.
+	if cl.DoUpdate && len(cl.Target) == 0 {
+		return "", fmt.Errorf("sql: PostgreSQL ON CONFLICT DO UPDATE requires a conflict target")
+	}
+	var sb strings.Builder
+	sb.WriteString(" ON CONFLICT")
+	if len(cl.Target) > 0 {
+		sb.WriteString(" (")
+		sb.WriteString(strings.Join(cl.Target, ", "))
+		sb.WriteString(")")
+	}
+	if !cl.DoUpdate {
+		sb.WriteString(" DO NOTHING")
+		return sb.String(), nil
+	}
+	sb.WriteString(" DO UPDATE SET ")
+	sb.WriteString(strings.Join(cl.Assignments, ", "))
+	if cl.WhereSQL != "" {
+		sb.WriteString(" WHERE ")
+		sb.WriteString(cl.WhereSQL)
+	}
+	return sb.String(), nil
+}
+
 // JSONAccess chains the -> / ->> operators, one per path step (the last uses
 // ->> when asText), e.g. (("data" -> 'a') -> 0) ->> 'b'.
 func (PostgreSQLDialect) JSONAccess(operand string, path []any, asText bool) (string, error) {
@@ -373,6 +429,24 @@ func (MySQLDialect) DropIndex(_, quotedIndex, qualifiedTable string) string {
 // Concat renders MySQL string concatenation, whose || operator means logical OR.
 func (MySQLDialect) Concat(operands []string) string {
 	return "CONCAT(" + strings.Join(operands, ", ") + ")"
+}
+
+// Upsert renders MySQL's ON DUPLICATE KEY UPDATE clause. MySQL infers the
+// conflicting key, so the target is ignored; it has no DO NOTHING form and no
+// per-action WHERE, both of which are reported as errors.
+func (MySQLDialect) Upsert(cl UpsertClause) (string, error) {
+	if !cl.DoUpdate {
+		return "", fmt.Errorf("sql: MySQL has no ON CONFLICT DO NOTHING; use INSERT IGNORE or an OnConflictDoUpdate")
+	}
+	if cl.WhereSQL != "" {
+		return "", fmt.Errorf("sql: MySQL ON DUPLICATE KEY UPDATE does not support a WHERE clause")
+	}
+	return " ON DUPLICATE KEY UPDATE " + strings.Join(cl.Assignments, ", "), nil
+}
+
+// Excluded renders MySQL's reference to the proposed row value, VALUES(col).
+func (d MySQLDialect) Excluded(column string) string {
+	return "VALUES(" + d.QuoteName(column) + ")"
 }
 
 // JSONObject renders MySQL's flat JSON_OBJECT(key, value, ...) form, which does

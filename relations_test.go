@@ -85,6 +85,16 @@ func TestSelectLeftJoinRel(t *testing.T) {
 		nil)
 }
 
+func TestSelectRightAndFullJoinRel(t *testing.T) {
+	db := newDB()
+	assertSelectSQL(t, Users.Q(db).RightJoinRel(UsersPosts),
+		`SELECT "public"."users"."id", "public"."users"."email", "public"."users"."name" FROM "public"."users" RIGHT JOIN "public"."posts" ON ("public"."posts"."user_id" = "public"."users"."id")`,
+		nil)
+	assertSelectSQL(t, Users.Q(db).FullJoinRel(UsersPosts),
+		`SELECT "public"."users"."id", "public"."users"."email", "public"."users"."name" FROM "public"."users" FULL JOIN "public"."posts" ON ("public"."posts"."user_id" = "public"."users"."id")`,
+		nil)
+}
+
 // userFilter is a reusable filter bundle; unset (nil) terms are skipped.
 type userFilter struct {
 	Email sqlkit.FilterTerm

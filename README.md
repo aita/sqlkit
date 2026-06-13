@@ -563,6 +563,38 @@ err = db.Select().From(appdb.Users).
     All(ctx).Scan(&users)
 ```
 
+### Correlated subqueries
+
+`Exists` / `NotExists` and `InQuery` / `NotInQuery` already accept correlated
+subqueries — the inner query just references an outer column with `EqExpr`.
+Two more forms cover the rest:
+
+- **Scalar subqueries.** `sqlkit.SubExpr[T](sub)` wraps a single-column,
+  single-row subquery as a typed expression of type `T`, usable as a projection
+  (`sql.As(...)`) or in a comparison (`EqExpr`/`NeExpr`/`LtExpr`/`LeExpr`/
+  `GtExpr`/`GeExpr`). It may be correlated.
+- **Quantified comparisons.** `LtAny`/`LeAny`/`GtAny`/`GeAny` and the matching
+  `…All` methods render `column <op> ANY/ALL (subquery)`, generalizing
+  `InQuery` (`= ANY`) and `NotInQuery` (`<> ALL`) to the ordering operators.
+
+```go
+// SELECT id, (SELECT COUNT(*) FROM posts WHERE posts.user_id = users.id) AS post_count
+postCount := sqlkit.Select(sql.CountAll()).From(appdb.Posts).
+    Where(appdb.Posts.UserID.EqExpr(appdb.Users.ID))
+
+err = db.Select(appdb.Users.ID, sql.As(sqlkit.SubExpr[int64](postCount), "post_count")).
+    From(appdb.Users).All(ctx).Scan(&rows)
+
+// WHERE age > (SELECT AVG(age) FROM users)
+avg := sqlkit.Select(sql.Avg(appdb.Users.Age)).From(appdb.Users)
+err = db.Select().From(appdb.Users).
+    Where(appdb.Users.Age.GtExpr(sqlkit.SubExpr[int64](avg))).
+    All(ctx).Scan(&users)
+```
+
+At the untyped `sql` level these are `sql.ScalarSubquery(query)` and
+`sql.Any(left, op, query)` / `sql.All(left, op, query)`.
+
 Joins and the generated primary-key lookup:
 
 ```go
@@ -576,6 +608,32 @@ err := db.Select(appdb.Posts.ID, appdb.Posts.Title).From(appdb.Posts).
 var user MyUserDTO
 err := db.Select().From(appdb.Users).Where(appdb.Users.ID.Eq(42)).
     Limit(1).All(ctx).Scan(&user)
+```
+
+`Join` / `LeftJoin` / `RightJoin` / `FullJoin` all take a source and an ON
+predicate; `CrossJoin` takes only a source. A `LATERAL` join lets the joined
+subquery reference the rows to its left — wrap the source with `sql.Lateral`:
+
+```go
+recent := sqlkit.Select(appdb.Posts.ID).From(appdb.Posts).
+    Where(appdb.Posts.UserID.EqExpr(appdb.Users.ID)).Limit(3)
+
+err = db.Select(appdb.Users.ID).From(appdb.Users).
+    Join(sql.Lateral(sql.SourceAlias(recent, "r")), sqlkit.Cond(sql.Raw("true"))).
+    All(ctx).Scan(&rows)
+```
+
+Expressions: `sql.Add` / `Sub` / `Mul` / `Div` / `Mod` build arithmetic
+(typed columns also have `Add`/`Sub`/`Mul`/`Div`, handy for `SET n = n + 1`),
+`sqlkit.Cast[T](expr, "type")` and `sql.Cast` render `CAST(... AS ...)`, and
+`OrderTerm.NullsFirst()` / `NullsLast()` append `NULLS FIRST|LAST` (PostgreSQL):
+
+```go
+db.Update(appdb.Counters).
+    Set(appdb.Counters.N.SetExpr(appdb.Counters.N.Add(1))).
+    Where(appdb.Counters.ID.Eq(id)).Exec(ctx)
+
+db.Select().From(appdb.Users).OrderBy(appdb.Users.Name.Asc().NullsLast())
 ```
 
 ## Relation-aware queries
@@ -684,6 +742,38 @@ err = db.Delete(appdb.Posts).Where(appdb.Posts.Published.Eq(false)).
 
 Columns with a database-side default are omitted from INSERT when their value
 is the Go zero value in every row, so serial keys and defaults are filled in.
+
+**Upsert.** `OnConflictDoNothing` / `OnConflictDoUpdate` render PostgreSQL's
+`ON CONFLICT` and MySQL's `ON DUPLICATE KEY UPDATE`. In a `DO UPDATE`
+assignment, `Column.Excluded()` refers to the row the INSERT proposed
+(PostgreSQL `excluded.col`, MySQL `VALUES(col)`). `OnConflictWhere` adds the
+optional PostgreSQL predicate. MySQL has no `DO NOTHING` or conflict `WHERE`, so
+those error on the MySQL dialect.
+
+```go
+_, err = db.Insert(appdb.Users).Values(u).
+    OnConflictDoUpdate([]sqlkit.AnyColumn{appdb.Users.Email},
+        appdb.Users.Name.SetExpr(appdb.Users.Name.Excluded())).
+    Exec(ctx)
+```
+
+**Update/delete with other tables.** `Update(...).From(src...)` and
+`Delete(...).Using(src...)` add the PostgreSQL `UPDATE ... FROM` /
+`DELETE ... USING` source lists, so the SET expressions and WHERE may reference
+another table (the SET value here is a typed column of the joined table):
+
+```go
+_, err = db.Update(appdb.Posts).
+    Set(appdb.Posts.UserID.SetExpr(appdb.Users.ID)).
+    From(appdb.Users).
+    Where(appdb.Users.Email.Eq("alice@example.com")).
+    Exec(ctx)
+
+_, err = db.Delete(appdb.Posts).
+    Using(appdb.Users).
+    Where(appdb.Users.ID.EqExpr(appdb.Posts.UserID), appdb.Users.Banned.Eq(true)).
+    Exec(ctx)
+```
 
 ## Aggregates, CASE, window functions, UNION
 
