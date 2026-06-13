@@ -79,8 +79,37 @@ func Ge(left, right any) BinaryExpression { return binary(left, ">=", right) }
 // Like creates a LIKE expression.
 func Like(left, pattern any) BinaryExpression { return binary(left, "LIKE", pattern) }
 
+// NotLike creates a NOT LIKE expression.
+func NotLike(left, pattern any) BinaryExpression { return binary(left, "NOT LIKE", pattern) }
+
+// ILike creates a case-insensitive ILIKE expression (PostgreSQL only).
+func ILike(left, pattern any) BinaryExpression { return binary(left, "ILIKE", pattern) }
+
 func binary(left any, operator string, right any) BinaryExpression {
 	return BinaryExpression{Left: Expr(left), Operator: operator, Right: Expr(right)}
+}
+
+// BetweenExpression tests whether an operand falls within an inclusive range.
+type BetweenExpression struct {
+	Operand Expression
+	Low     Expression
+	High    Expression
+	Negate  bool
+}
+
+func (BetweenExpression) SQLExpression() {}
+
+// Between creates an "operand BETWEEN low AND high" expression (inclusive).
+// Non-expression bounds become bind values.
+func Between(operand, low, high any) BetweenExpression {
+	return BetweenExpression{Operand: Expr(operand), Low: Expr(low), High: Expr(high)}
+}
+
+// NotBetween creates an "operand NOT BETWEEN low AND high" expression.
+func NotBetween(operand, low, high any) BetweenExpression {
+	expr := Between(operand, low, high)
+	expr.Negate = true
+	return expr
 }
 
 // LogicalExpression combines predicates with AND or OR.
@@ -112,11 +141,13 @@ func (NotExpression) SQLExpression() {}
 // Not negates a predicate.
 func Not(operand Expression) NotExpression { return NotExpression{Operand: operand} }
 
-// InExpression tests membership in a list of expressions.
+// InExpression tests membership in a list of expressions or, when Subquery is
+// set, in the rows a subquery returns.
 type InExpression struct {
-	Left   Expression
-	Items  []Expression
-	Negate bool
+	Left     Expression
+	Items    []Expression
+	Subquery Query
+	Negate   bool
 }
 
 func (InExpression) SQLExpression() {}
@@ -136,6 +167,33 @@ func NotIn(left any, items ...any) InExpression {
 	expr.Negate = true
 	return expr
 }
+
+// InQuery creates a "left IN (subquery)" expression. The subquery must project
+// a single column.
+func InQuery(left any, subquery Query) InExpression {
+	return InExpression{Left: Expr(left), Subquery: subquery}
+}
+
+// NotInQuery creates a "left NOT IN (subquery)" expression.
+func NotInQuery(left any, subquery Query) InExpression {
+	expr := InQuery(left, subquery)
+	expr.Negate = true
+	return expr
+}
+
+// ExistsExpression tests whether a subquery returns any rows.
+type ExistsExpression struct {
+	Query  Query
+	Negate bool
+}
+
+func (ExistsExpression) SQLExpression() {}
+
+// Exists creates an "EXISTS (subquery)" expression.
+func Exists(query Query) ExistsExpression { return ExistsExpression{Query: query} }
+
+// NotExists creates a "NOT EXISTS (subquery)" expression.
+func NotExists(query Query) ExistsExpression { return ExistsExpression{Query: query, Negate: true} }
 
 // NullPredicate tests an expression for IS NULL / IS NOT NULL.
 type NullPredicate struct {
@@ -261,6 +319,26 @@ func Min(arg any) FuncExpression { return Func("MIN", arg) }
 
 // Max creates a MAX(expr) aggregate.
 func Max(arg any) FuncExpression { return Func("MAX", arg) }
+
+// JSONArray creates a JSON_ARRAY(args...) expression that builds a JSON array
+// from its arguments. The name is SQL/JSON standard (PostgreSQL 16+, MySQL
+// 5.7+); on older PostgreSQL use Func("json_build_array", ...).
+func JSONArray(args ...any) FuncExpression { return Func("JSON_ARRAY", args...) }
+
+// JSONObject creates a JSON_OBJECT(key, value, ...) expression. Arguments
+// alternate keys and values: JSONObject("id", col, "name", other). The name is
+// SQL/JSON standard (PostgreSQL 16+, MySQL 5.7+); on older PostgreSQL use
+// Func("json_build_object", ...).
+func JSONObject(args ...any) FuncExpression { return Func("JSON_OBJECT", args...) }
+
+// JSONArrayAgg creates a JSON_ARRAYAGG(expr) aggregate that collects the
+// grouped values into a JSON array (PostgreSQL 16+, MySQL 5.7.22+; older
+// PostgreSQL has json_agg / jsonb_agg via Func).
+func JSONArrayAgg(arg any) FuncExpression { return Func("JSON_ARRAYAGG", arg) }
+
+// JSONObjectAgg creates a JSON_OBJECTAGG(key, value) aggregate that collects
+// the grouped key/value pairs into a JSON object.
+func JSONObjectAgg(key, value any) FuncExpression { return Func("JSON_OBJECTAGG", key, value) }
 
 // RowNumber creates the ROW_NUMBER() window function.
 func RowNumber() FuncExpression { return Func("ROW_NUMBER") }

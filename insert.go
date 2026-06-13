@@ -65,14 +65,7 @@ func (q InsertQuery) Columns(columns ...AnyColumn) InsertQuery {
 // the query. It is mutually exclusive with Values.
 func (q InsertQuery) FromSelect(query sql.Query) InsertQuery {
 	// Unwrap the typed builders so the subquery shares placeholder numbering.
-	switch s := query.(type) {
-	case SelectQuery:
-		q.selectSrc = s.query
-	case UnionQuery:
-		q.selectSrc = s.query
-	default:
-		q.selectSrc = query
-	}
+	q.selectSrc = unwrapQuery(query)
 	return q
 }
 

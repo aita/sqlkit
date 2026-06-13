@@ -71,6 +71,20 @@ type Execable interface {
 	Exec(ctx context.Context) (stdsql.Result, error)
 }
 
+// unwrapQuery returns the underlying sql.Query for the typed builders so a
+// subquery shares the outer statement's placeholder numbering, leaving any
+// other Query (such as a raw sql.Query) untouched.
+func unwrapQuery(query Query) sql.Query {
+	switch q := query.(type) {
+	case SelectQuery:
+		return q.query
+	case UnionQuery:
+		return q.query
+	default:
+		return query
+	}
+}
+
 // Compile-time checks that the concrete builders satisfy the interfaces. Every
 // builder is a Query; reads add Scannable/Selectable, writes add Execable.
 var (

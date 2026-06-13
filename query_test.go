@@ -419,6 +419,44 @@ func TestUnionChain(t *testing.T) {
 		[]any{int64(10)})
 }
 
+func TestTypedBetween(t *testing.T) {
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).Where(Users.ID.Between(10, 20)),
+		`SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" BETWEEN $1 AND $2)`,
+		[]any{int64(10), int64(20)})
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).Where(Users.ID.NotBetween(10, 20)),
+		`SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" NOT BETWEEN $1 AND $2)`,
+		[]any{int64(10), int64(20)})
+}
+
+func TestTypedInQuery(t *testing.T) {
+	sub := sqlkit.Select(Users.ID).From(Users).Where(Users.Email.Eq("a@example.com"))
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).Where(Users.ID.InQuery(sub)),
+		`SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" IN (SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."email" = $1)))`,
+		[]any{"a@example.com"})
+}
+
+func TestTypedExists(t *testing.T) {
+	sub := sqlkit.Select(Users.ID).From(Users).Where(Users.Email.Eq("a@example.com"))
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).Where(sqlkit.Exists(sub)),
+		`SELECT "public"."users"."id" FROM "public"."users" WHERE EXISTS (SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."email" = $1))`,
+		[]any{"a@example.com"})
+}
+
+func TestTypedLikeVariants(t *testing.T) {
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).Where(sqlkit.NotLike(Users.Email, "%@spam.com")),
+		`SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."email" NOT LIKE $1)`,
+		[]any{"%@spam.com"})
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).Where(sqlkit.ILike(Users.Email, "%@EXAMPLE.com")),
+		`SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."email" ILIKE $1)`,
+		[]any{"%@EXAMPLE.com"})
+}
+
 func TestUnionHelperVariadic(t *testing.T) {
 	query := sqlkit.Union(
 		sqlkit.Select(Users.ID).From(Users).Where(Users.ID.Eq(1)),

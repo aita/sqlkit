@@ -82,12 +82,24 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		}
 		return "(NOT " + operandSQL + ")", args, nil
 	case InExpression:
-		if len(e.Items) == 0 {
-			return "", nil, fmt.Errorf("sqlkit/sql: IN requires at least one item")
-		}
 		leftSQL, args, err := c.CompileExpression(e.Left)
 		if err != nil {
 			return "", nil, err
+		}
+		operator := "IN"
+		if e.Negate {
+			operator = "NOT IN"
+		}
+		if e.Subquery != nil {
+			subSQL, subArgs, err := c.compileSubquery(e.Subquery)
+			if err != nil {
+				return "", nil, err
+			}
+			args = append(args, subArgs...)
+			return "(" + leftSQL + " " + operator + " (" + subSQL + "))", args, nil
+		}
+		if len(e.Items) == 0 {
+			return "", nil, fmt.Errorf("sqlkit/sql: IN requires at least one item")
 		}
 		items := make([]string, len(e.Items))
 		for i, item := range e.Items {
@@ -98,11 +110,39 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 			items[i] = itemSQL
 			args = append(args, itemArgs...)
 		}
-		operator := "IN"
-		if e.Negate {
-			operator = "NOT IN"
-		}
 		return "(" + leftSQL + " " + operator + " (" + strings.Join(items, ", ") + "))", args, nil
+	case BetweenExpression:
+		operandSQL, args, err := c.CompileExpression(e.Operand)
+		if err != nil {
+			return "", nil, err
+		}
+		lowSQL, lowArgs, err := c.CompileExpression(e.Low)
+		if err != nil {
+			return "", nil, err
+		}
+		highSQL, highArgs, err := c.CompileExpression(e.High)
+		if err != nil {
+			return "", nil, err
+		}
+		args = append(args, lowArgs...)
+		args = append(args, highArgs...)
+		operator := "BETWEEN"
+		if e.Negate {
+			operator = "NOT BETWEEN"
+		}
+		return "(" + operandSQL + " " + operator + " " + lowSQL + " AND " + highSQL + ")", args, nil
+	case ExistsExpression:
+		if e.Query == nil {
+			return "", nil, fmt.Errorf("sqlkit/sql: EXISTS requires a subquery")
+		}
+		subSQL, args, err := c.compileSubquery(e.Query)
+		if err != nil {
+			return "", nil, err
+		}
+		if e.Negate {
+			return "(NOT EXISTS (" + subSQL + "))", args, nil
+		}
+		return "EXISTS (" + subSQL + ")", args, nil
 	case NullPredicate:
 		operandSQL, args, err := c.CompileExpression(e.Operand)
 		if err != nil {

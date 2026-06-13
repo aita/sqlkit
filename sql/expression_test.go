@@ -6,6 +6,63 @@ import (
 	. "github.com/aita/sqlkit/sql"
 )
 
+func TestBetween(t *testing.T) {
+	q := Select(Col("id")).From(Table{Name: "users"}).
+		Where(Between(Col("age"), Int(18), Int(65)))
+	assertSQL(t, q,
+		`SELECT "id" FROM "users" WHERE ("age" BETWEEN $1 AND $2)`, []any{18, 65})
+
+	q = Select(Col("id")).From(Table{Name: "users"}).
+		Where(NotBetween(Col("age"), Int(18), Int(65)))
+	assertSQL(t, q,
+		`SELECT "id" FROM "users" WHERE ("age" NOT BETWEEN $1 AND $2)`, []any{18, 65})
+}
+
+func TestInQueryAndExists(t *testing.T) {
+	sub := Select(Col("user_id")).From(Table{Name: "orders"}).Where(Gt(Col("total"), Int(100)))
+
+	assertSQL(t, Select(Col("id")).From(Table{Name: "users"}).Where(InQuery(Col("id"), sub)),
+		`SELECT "id" FROM "users" WHERE ("id" IN (SELECT "user_id" FROM "orders" WHERE ("total" > $1)))`,
+		[]any{100})
+
+	assertSQL(t, Select(Col("id")).From(Table{Name: "users"}).Where(NotInQuery(Col("id"), sub)),
+		`SELECT "id" FROM "users" WHERE ("id" NOT IN (SELECT "user_id" FROM "orders" WHERE ("total" > $1)))`,
+		[]any{100})
+
+	assertSQL(t, Select(Col("id")).From(Table{Name: "users"}).Where(Exists(sub)),
+		`SELECT "id" FROM "users" WHERE EXISTS (SELECT "user_id" FROM "orders" WHERE ("total" > $1))`,
+		[]any{100})
+
+	assertSQL(t, Select(Col("id")).From(Table{Name: "users"}).Where(NotExists(sub)),
+		`SELECT "id" FROM "users" WHERE (NOT EXISTS (SELECT "user_id" FROM "orders" WHERE ("total" > $1)))`,
+		[]any{100})
+}
+
+func TestNotLikeAndILike(t *testing.T) {
+	assertSQL(t, Select(Col("id")).From(Table{Name: "users"}).Where(NotLike(Col("email"), Val("%@spam.com"))),
+		`SELECT "id" FROM "users" WHERE ("email" NOT LIKE $1)`, []any{"%@spam.com"})
+	assertSQL(t, Select(Col("id")).From(Table{Name: "users"}).Where(ILike(Col("email"), Val("%@EXAMPLE.com"))),
+		`SELECT "id" FROM "users" WHERE ("email" ILIKE $1)`, []any{"%@EXAMPLE.com"})
+}
+
+func TestJSONFunctions(t *testing.T) {
+	assertSQL(t,
+		Select(As(JSONArray(Col("id"), Col("email")), "j")).From(Table{Name: "users"}),
+		`SELECT JSON_ARRAY("id", "email") AS "j" FROM "users"`, nil)
+
+	assertSQL(t,
+		Select(As(JSONObject("id", Col("id"), "name", Col("name")), "j")).From(Table{Name: "users"}),
+		`SELECT JSON_OBJECT($1, "id", $2, "name") AS "j" FROM "users"`, []any{"id", "name"})
+
+	assertSQL(t,
+		Select(As(JSONArrayAgg(Col("id")), "ids")).From(Table{Name: "users"}),
+		`SELECT JSON_ARRAYAGG("id") AS "ids" FROM "users"`, nil)
+
+	assertSQL(t,
+		Select(As(JSONObjectAgg(Col("k"), Col("v")), "obj")).From(Table{Name: "kv"}),
+		`SELECT JSON_OBJECTAGG("k", "v") AS "obj" FROM "kv"`, nil)
+}
+
 func TestCaseExpression(t *testing.T) {
 	query := Select(
 		As(Case().

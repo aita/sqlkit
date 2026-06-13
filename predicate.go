@@ -64,6 +64,19 @@ func combineWhere(predicates []Predicate) sql.Expression {
 	return And(predicates...).expr
 }
 
+// Exists creates an "EXISTS (subquery)" predicate, true when the subquery
+// returns at least one row — the typed way to express a semi-join:
+//
+//	db.Select().From(Users).Where(sqlkit.Exists(
+//		sqlkit.Select(Orders.ID).From(Orders).Where(Orders.UserID.EqExpr(Users.ID)),
+//	))
+func Exists(subquery Query) Predicate { return newPredicate(sql.Exists(unwrapQuery(subquery))) }
+
+// NotExists creates a "NOT EXISTS (subquery)" predicate.
+func NotExists(subquery Query) Predicate {
+	return newPredicate(sql.NotExists(unwrapQuery(subquery)))
+}
+
 // Cond wraps a raw SQL expression as a predicate. It is the escape hatch for
 // conditions the typed layer does not cover, such as CASE expressions or
 // window function comparisons built with package sql.
