@@ -1,4 +1,4 @@
-package schema_test
+package sqldef_test
 
 import (
 	"reflect"
@@ -7,30 +7,30 @@ import (
 
 	"github.com/aita/sqlkit/codegen"
 	"github.com/aita/sqlkit/meta"
-	"github.com/aita/sqlkit/schema"
+	"github.com/aita/sqlkit/sqldef"
 )
 
 // blogCatalog mirrors examples/blog: users and the posts that reference them.
-func blogCatalog() *schema.Catalog {
-	catalog := schema.NewCatalog()
+func blogCatalog() *sqldef.Catalog {
+	catalog := sqldef.NewCatalog()
 	public := catalog.Schema("public")
 	users := public.Table("users",
-		schema.Column("id", schema.BigInt, schema.PrimaryKey(), schema.Default()),
-		schema.Column("email", schema.VarChar(255)),
-		schema.Column("name", schema.Text, schema.Nullable()),
-		schema.Column("created_at", schema.Timestamp, schema.Default("now()")),
+		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+		sqldef.Column("email", sqldef.VarChar(255)),
+		sqldef.Column("name", sqldef.Text, sqldef.Nullable()),
+		sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default("now()")),
 	)
 	public.Table("posts",
-		schema.Column("id", schema.BigInt, schema.PrimaryKey(), schema.Default()),
-		schema.Column("user_id", schema.BigInt, schema.References(users, "id")),
-		schema.Column("title", schema.Text),
-		schema.Column("body", schema.Text, schema.Nullable()),
-		schema.Column("published", schema.Bool, schema.Default("false")),
+		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+		sqldef.Column("user_id", sqldef.BigInt, sqldef.References(users, "id")),
+		sqldef.Column("title", sqldef.Text),
+		sqldef.Column("body", sqldef.Text, sqldef.Nullable()),
+		sqldef.Column("published", sqldef.Bool, sqldef.Default("false")),
 	)
 	return catalog
 }
 
-func buildOne(t *testing.T, catalog *schema.Catalog, dialect string) meta.Schema {
+func buildOne(t *testing.T, catalog *sqldef.Catalog, dialect string) meta.Schema {
 	t.Helper()
 	models, err := catalog.Build(dialect)
 	if err != nil {
@@ -81,12 +81,12 @@ func TestBuildPostgres(t *testing.T) {
 }
 
 func TestBuildMySQL(t *testing.T) {
-	catalog := schema.NewCatalog()
+	catalog := sqldef.NewCatalog()
 	catalog.Table("items",
-		schema.Column("id", schema.BigInt, schema.PrimaryKey(), schema.Default()),
-		schema.Column("sku", schema.UUID),
-		schema.Column("price", schema.Decimal(10, 2)),
-		schema.Column("created_at", schema.Timestamp),
+		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+		sqldef.Column("sku", sqldef.UUID),
+		sqldef.Column("price", sqldef.Decimal(10, 2)),
+		sqldef.Column("created_at", sqldef.Timestamp),
 	)
 	got := buildOne(t, catalog, "mysql")
 	want := []meta.Column{
@@ -111,21 +111,21 @@ func TestBuildDefaultsToPostgres(t *testing.T) {
 }
 
 func TestCompositeAndSelfForeignKeys(t *testing.T) {
-	catalog := schema.NewCatalog()
+	catalog := sqldef.NewCatalog()
 	public := catalog.Schema("public")
 	orders := public.Table("orders",
-		schema.Column("region", schema.Text, schema.PrimaryKey()),
-		schema.Column("number", schema.BigInt, schema.PrimaryKey()),
+		sqldef.Column("region", sqldef.Text, sqldef.PrimaryKey()),
+		sqldef.Column("number", sqldef.BigInt, sqldef.PrimaryKey()),
 	)
 	public.Table("order_lines",
-		schema.Column("id", schema.BigInt, schema.PrimaryKey()),
-		schema.Column("order_region", schema.Text),
-		schema.Column("order_number", schema.BigInt),
-		schema.ForeignKey([]string{"order_region", "order_number"}, orders, []string{"region", "number"}),
+		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey()),
+		sqldef.Column("order_region", sqldef.Text),
+		sqldef.Column("order_number", sqldef.BigInt),
+		sqldef.ForeignKey([]string{"order_region", "order_number"}, orders, []string{"region", "number"}),
 	)
 	employees := public.Table("employees",
-		schema.Column("id", schema.BigInt, schema.PrimaryKey()),
-		schema.Column("manager_id", schema.BigInt, schema.Nullable()),
+		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey()),
+		sqldef.Column("manager_id", sqldef.BigInt, sqldef.Nullable()),
 	)
 	employees.ForeignKey([]string{"manager_id"}, employees, []string{"id"})
 
@@ -153,13 +153,13 @@ func TestCompositeAndSelfForeignKeys(t *testing.T) {
 }
 
 func TestCrossSchemaReference(t *testing.T) {
-	catalog := schema.NewCatalog()
+	catalog := sqldef.NewCatalog()
 	audit := catalog.Schema("audit").Table("events",
-		schema.Column("id", schema.BigInt, schema.PrimaryKey()),
+		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey()),
 	)
 	catalog.Schema("public").Table("orders",
-		schema.Column("id", schema.BigInt, schema.PrimaryKey()),
-		schema.Column("event_id", schema.BigInt, schema.References(audit, "id")),
+		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey()),
+		sqldef.Column("event_id", sqldef.BigInt, sqldef.References(audit, "id")),
 	)
 	models, err := catalog.Build("postgres")
 	if err != nil {
@@ -175,17 +175,17 @@ func TestCrossSchemaReference(t *testing.T) {
 }
 
 func TestIndexesChecksComments(t *testing.T) {
-	catalog := schema.NewCatalog()
+	catalog := sqldef.NewCatalog()
 	catalog.Table("products",
-		schema.TableComment("Sellable products"),
-		schema.Column("id", schema.BigInt, schema.PrimaryKey(), schema.Default()),
-		schema.Column("sku", schema.VarChar(64), schema.Unique(), schema.Comment("Stock keeping unit")),
-		schema.Column("vendor", schema.Text),
-		schema.Column("name", schema.Text),
-		schema.Column("price", schema.Decimal(10, 2)),
-		schema.Index("name"),
-		schema.UniqueIndex("vendor", "name"),
-		schema.Check("price > 0"),
+		sqldef.TableComment("Sellable products"),
+		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+		sqldef.Column("sku", sqldef.VarChar(64), sqldef.Unique(), sqldef.Comment("Stock keeping unit")),
+		sqldef.Column("vendor", sqldef.Text),
+		sqldef.Column("name", sqldef.Text),
+		sqldef.Column("price", sqldef.Decimal(10, 2)),
+		sqldef.Index("name"),
+		sqldef.UniqueIndex("vendor", "name"),
+		sqldef.Check("price > 0"),
 	)
 	got := buildOne(t, catalog, "postgres")
 	table := got.Tables[0]
@@ -212,16 +212,16 @@ func TestIndexesChecksComments(t *testing.T) {
 }
 
 func TestSharedElementsReuse(t *testing.T) {
-	audit := []schema.TableElement{
-		schema.Column("created_at", schema.Timestamp, schema.Default("now()")),
-		schema.Column("updated_at", schema.Timestamp, schema.Nullable()),
+	audit := []sqldef.TableElement{
+		sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default("now()")),
+		sqldef.Column("updated_at", sqldef.Timestamp, sqldef.Nullable()),
 	}
-	catalog := schema.NewCatalog()
-	catalog.Table("a", append([]schema.TableElement{
-		schema.Column("id", schema.BigInt, schema.PrimaryKey()),
+	catalog := sqldef.NewCatalog()
+	catalog.Table("a", append([]sqldef.TableElement{
+		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey()),
 	}, audit...)...)
-	catalog.Table("b", append([]schema.TableElement{
-		schema.Column("id", schema.BigInt, schema.PrimaryKey()),
+	catalog.Table("b", append([]sqldef.TableElement{
+		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey()),
 	}, audit...)...)
 
 	got := buildOne(t, catalog, "postgres")
@@ -276,19 +276,19 @@ func TestDDL(t *testing.T) {
 func TestBuildErrors(t *testing.T) {
 	tests := []struct {
 		name    string
-		catalog func() *schema.Catalog
+		catalog func() *sqldef.Catalog
 		dialect string
 		want    string
 	}{
 		{
 			name:    "no tables",
-			catalog: schema.NewCatalog,
+			catalog: sqldef.NewCatalog,
 			want:    "declares no tables",
 		},
 		{
 			name: "no columns",
-			catalog: func() *schema.Catalog {
-				c := schema.NewCatalog()
+			catalog: func() *sqldef.Catalog {
+				c := sqldef.NewCatalog()
 				c.Table("users")
 				return c
 			},
@@ -296,21 +296,21 @@ func TestBuildErrors(t *testing.T) {
 		},
 		{
 			name: "duplicate table",
-			catalog: func() *schema.Catalog {
-				c := schema.NewCatalog()
-				c.Table("users", schema.Column("id", schema.BigInt))
-				c.Table("users", schema.Column("id", schema.BigInt))
+			catalog: func() *sqldef.Catalog {
+				c := sqldef.NewCatalog()
+				c.Table("users", sqldef.Column("id", sqldef.BigInt))
+				c.Table("users", sqldef.Column("id", sqldef.BigInt))
 				return c
 			},
 			want: `table "users" is declared twice`,
 		},
 		{
 			name: "duplicate column",
-			catalog: func() *schema.Catalog {
-				c := schema.NewCatalog()
+			catalog: func() *sqldef.Catalog {
+				c := sqldef.NewCatalog()
 				c.Table("users",
-					schema.Column("id", schema.BigInt),
-					schema.Column("id", schema.BigInt),
+					sqldef.Column("id", sqldef.BigInt),
+					sqldef.Column("id", sqldef.BigInt),
 				)
 				return c
 			},
@@ -318,51 +318,51 @@ func TestBuildErrors(t *testing.T) {
 		},
 		{
 			name: "nullable primary key",
-			catalog: func() *schema.Catalog {
-				c := schema.NewCatalog()
-				c.Table("users", schema.Column("id", schema.BigInt, schema.PrimaryKey(), schema.Nullable()))
+			catalog: func() *sqldef.Catalog {
+				c := sqldef.NewCatalog()
+				c.Table("users", sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Nullable()))
 				return c
 			},
 			want: "primary key column cannot be nullable",
 		},
 		{
 			name: "nil reference",
-			catalog: func() *schema.Catalog {
-				c := schema.NewCatalog()
-				c.Table("posts", schema.Column("user_id", schema.BigInt, schema.References(nil, "id")))
+			catalog: func() *sqldef.Catalog {
+				c := sqldef.NewCatalog()
+				c.Table("posts", sqldef.Column("user_id", sqldef.BigInt, sqldef.References(nil, "id")))
 				return c
 			},
 			want: "references a nil table",
 		},
 		{
 			name: "reference into another catalog",
-			catalog: func() *schema.Catalog {
-				other := schema.NewCatalog()
-				users := other.Table("users", schema.Column("id", schema.BigInt))
-				c := schema.NewCatalog()
-				c.Table("posts", schema.Column("user_id", schema.BigInt, schema.References(users, "id")))
+			catalog: func() *sqldef.Catalog {
+				other := sqldef.NewCatalog()
+				users := other.Table("users", sqldef.Column("id", sqldef.BigInt))
+				c := sqldef.NewCatalog()
+				c.Table("posts", sqldef.Column("user_id", sqldef.BigInt, sqldef.References(users, "id")))
 				return c
 			},
 			want: "from a different catalog",
 		},
 		{
 			name: "unknown referenced column",
-			catalog: func() *schema.Catalog {
-				c := schema.NewCatalog()
-				users := c.Table("users", schema.Column("id", schema.BigInt))
-				c.Table("posts", schema.Column("user_id", schema.BigInt, schema.References(users, "uuid")))
+			catalog: func() *sqldef.Catalog {
+				c := sqldef.NewCatalog()
+				users := c.Table("users", sqldef.Column("id", sqldef.BigInt))
+				c.Table("posts", sqldef.Column("user_id", sqldef.BigInt, sqldef.References(users, "uuid")))
 				return c
 			},
 			want: `references unknown column "uuid"`,
 		},
 		{
 			name: "foreign key column count mismatch",
-			catalog: func() *schema.Catalog {
-				c := schema.NewCatalog()
-				users := c.Table("users", schema.Column("id", schema.BigInt))
+			catalog: func() *sqldef.Catalog {
+				c := sqldef.NewCatalog()
+				users := c.Table("users", sqldef.Column("id", sqldef.BigInt))
 				c.Table("posts",
-					schema.Column("user_id", schema.BigInt),
-					schema.ForeignKey([]string{"user_id"}, users, []string{"id", "email"}),
+					sqldef.Column("user_id", sqldef.BigInt),
+					sqldef.ForeignKey([]string{"user_id"}, users, []string{"id", "email"}),
 				)
 				return c
 			},
@@ -370,11 +370,11 @@ func TestBuildErrors(t *testing.T) {
 		},
 		{
 			name: "duplicate references",
-			catalog: func() *schema.Catalog {
-				c := schema.NewCatalog()
-				users := c.Table("users", schema.Column("id", schema.BigInt))
+			catalog: func() *sqldef.Catalog {
+				c := sqldef.NewCatalog()
+				users := c.Table("users", sqldef.Column("id", sqldef.BigInt))
 				c.Table("posts",
-					schema.Column("user_id", schema.BigInt, schema.References(users, "id"), schema.References(users, "id")),
+					sqldef.Column("user_id", sqldef.BigInt, sqldef.References(users, "id"), sqldef.References(users, "id")),
 				)
 				return c
 			},
@@ -382,29 +382,29 @@ func TestBuildErrors(t *testing.T) {
 		},
 		{
 			name: "index on unknown column",
-			catalog: func() *schema.Catalog {
-				c := schema.NewCatalog()
-				c.Table("users", schema.Column("id", schema.BigInt), schema.Index("email"))
+			catalog: func() *sqldef.Catalog {
+				c := sqldef.NewCatalog()
+				c.Table("users", sqldef.Column("id", sqldef.BigInt), sqldef.Index("email"))
 				return c
 			},
 			want: `index references unknown column "email"`,
 		},
 		{
 			name: "index without columns",
-			catalog: func() *schema.Catalog {
-				c := schema.NewCatalog()
-				c.Table("users", schema.Column("id", schema.BigInt), schema.Index())
+			catalog: func() *sqldef.Catalog {
+				c := sqldef.NewCatalog()
+				c.Table("users", sqldef.Column("id", sqldef.BigInt), sqldef.Index())
 				return c
 			},
 			want: "index declares no columns",
 		},
 		{
 			name: "duplicate index",
-			catalog: func() *schema.Catalog {
-				c := schema.NewCatalog()
+			catalog: func() *sqldef.Catalog {
+				c := sqldef.NewCatalog()
 				c.Table("users",
-					schema.Column("email", schema.Text, schema.Unique()),
-					schema.UniqueIndex("email"),
+					sqldef.Column("email", sqldef.Text, sqldef.Unique()),
+					sqldef.UniqueIndex("email"),
 				)
 				return c
 			},
@@ -412,27 +412,27 @@ func TestBuildErrors(t *testing.T) {
 		},
 		{
 			name: "empty check",
-			catalog: func() *schema.Catalog {
-				c := schema.NewCatalog()
-				c.Table("users", schema.Column("id", schema.BigInt), schema.Check("  "))
+			catalog: func() *sqldef.Catalog {
+				c := sqldef.NewCatalog()
+				c.Table("users", sqldef.Column("id", sqldef.BigInt), sqldef.Check("  "))
 				return c
 			},
 			want: "Check requires an expression",
 		},
 		{
 			name: "default with two expressions",
-			catalog: func() *schema.Catalog {
-				c := schema.NewCatalog()
-				c.Table("users", schema.Column("id", schema.BigInt, schema.Default("a", "b")))
+			catalog: func() *sqldef.Catalog {
+				c := sqldef.NewCatalog()
+				c.Table("users", sqldef.Column("id", sqldef.BigInt, sqldef.Default("a", "b")))
 				return c
 			},
 			want: "Default takes at most one expression",
 		},
 		{
 			name: "type unavailable on dialect",
-			catalog: func() *schema.Catalog {
-				c := schema.NewCatalog()
-				c.Table("users", schema.Column("tags", schema.TypeFor("citext", "")))
+			catalog: func() *sqldef.Catalog {
+				c := sqldef.NewCatalog()
+				c.Table("users", sqldef.Column("tags", sqldef.TypeFor("citext", "")))
 				return c
 			},
 			dialect: "mysql",

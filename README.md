@@ -34,7 +34,7 @@ err := db.Select().From(appdb.Users).
 |---|---|
 | `sqlkit` | Typed query chains, `Database`, `Session`, result scanning, streaming `Records[T]` iteration (module root) |
 | `sql` | SQL AST, dialects, compiler, and all statement generation |
-| `schema` | In-code schema declarations: a reusable `Catalog` of tables that feeds the generators |
+| `sqldef` | In-code schema declarations: a reusable `Catalog` of tables that feeds the generators |
 | `meta` | Database schema metadata model shared by the tooling (tables, columns, indexes, constraints, comments) |
 | `inspector` | PostgreSQL/MySQL introspection into the `meta` model |
 | `codegen` | `meta` → Go code generator (library: customizable types, layout, DTOs) |
@@ -84,7 +84,7 @@ var Users = ...
 | `-file-name` | single-file output name when `-out` is a directory (default `tables.go`) |
 | `-dto` | also generate a row struct (DTO) per table |
 | `-dto-separate-file` | write DTOs into their own file(s) |
-| `-dsl` | emit a `schema`-package design file from the schema instead of table bindings |
+| `-dsl` | emit a `sqldef`-based design file from the schema instead of table bindings |
 | `-ddl` | emit CREATE TABLE DDL from the schema instead of table bindings |
 
 The generated binding is metadata, not an ORM: no `Get`, no relation
@@ -96,7 +96,7 @@ methods to the query bindings.
 ### Using codegen as a library
 
 The `codegen` package is the generator's public API. Build a `meta.Schema`
-with the `schema` package, by hand, or with `inspector.Inspect`, customize the
+with the `sqldef` package, by hand, or with `inspector.Inspect`, customize the
 SQL→Go type mapping, and choose what to emit:
 
 ```go
@@ -120,43 +120,44 @@ the generators consume. The runtime binding stays minimal: each column is a
 plain `sqlkit.NewColumn[T](info, "name")` carrying only the table identity,
 column name, and static type `T`.
 
-## Declaring the schema in Go (schema package)
+## Declaring the schema in Go (sqldef package)
 
-The `schema` package is an alternative to introspection: declare the schema as
+The `sqldef` package is an alternative to introspection: declare the schema as
 plain Go values in an ordinary package, and generate the table bindings — and
 the DDL — from it, no live database required. The design is the source of
 truth, lives in version control, and feeds the same `meta` model the rest of
-the tooling consumes.
+the tooling consumes. By convention the design package itself is named
+`schema`; it imports `sqldef` for the building blocks.
 
 A `Catalog` is the reusable root. Tables are values: store them in variables,
 reference them from foreign keys, share them across files or packages.
 
 ```go
-// design/design.go
-package design
+// schema/schema.go
+package schema
 
-import "github.com/aita/sqlkit/schema"
+import "github.com/aita/sqlkit/sqldef"
 
-var Catalog = schema.NewCatalog()
+var Catalog = sqldef.NewCatalog()
 
 var Public = Catalog.Schema("public")
 
 var Users = Public.Table("users",
-    schema.TableComment("Registered blog authors"),
-    schema.Column("id", schema.BigInt, schema.PrimaryKey(), schema.Default()),
-    schema.Column("email", schema.VarChar(255), schema.Unique(), schema.Comment("Unique login address")),
-    schema.Column("name", schema.Text, schema.Nullable()),
-    schema.Column("created_at", schema.Timestamp, schema.Default("now()")),
+    sqldef.TableComment("Registered blog authors"),
+    sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+    sqldef.Column("email", sqldef.VarChar(255), sqldef.Unique(), sqldef.Comment("Unique login address")),
+    sqldef.Column("name", sqldef.Text, sqldef.Nullable()),
+    sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default("now()")),
 )
 
 var Posts = Public.Table("posts",
-    schema.Column("id", schema.BigInt, schema.PrimaryKey(), schema.Default()),
-    schema.Column("user_id", schema.BigInt, schema.References(Users, "id")),
-    schema.Column("title", schema.Text),
-    schema.Column("body", schema.Text, schema.Nullable()),
-    schema.Column("published", schema.Bool, schema.Default("false")),
-    schema.Index("user_id"),
-    schema.Check("title <> ''"),
+    sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+    sqldef.Column("user_id", sqldef.BigInt, sqldef.References(Users, "id")),
+    sqldef.Column("title", sqldef.Text),
+    sqldef.Column("body", sqldef.Text, sqldef.Nullable()),
+    sqldef.Column("published", sqldef.Bool, sqldef.Default("false")),
+    sqldef.Index("user_id"),
+    sqldef.Check("title <> ''"),
 )
 ```
 
@@ -187,17 +188,17 @@ and DTOs as Go doc comments — and the inspector reads the same metadata back
 from live PostgreSQL/MySQL schemas, so `-dsl` bootstraps preserve it.
 
 Because declarations are values, they compose: a shared
-`[]schema.TableElement` of audit columns can be appended into any table.
+`[]sqldef.TableElement` of audit columns can be appended into any table.
 
 A small generator program turns the catalog into code and DDL — see
 `examples/blog/gen`, which regenerates both `blogdb` and `schema.sql`:
 
 ```go
-files, err := design.Catalog.Generate(codegen.Options{PackageName: "blogdb"})
+files, err := schema.Catalog.Generate(codegen.Options{PackageName: "blogdb"})
 if err != nil { ... }
-err = schema.Write("blogdb", files)
+err = sqldef.Write("blogdb", files)
 
-ddl, err := design.Catalog.DDL("postgres") // CREATE TABLE / INDEX / COMMENT ...
+ddl, err := schema.Catalog.DDL("postgres") // CREATE TABLE / INDEX / COMMENT ...
 ```
 
 `Generate` accepts the full `codegen.Options` surface (DTOs, file layout, type
@@ -214,7 +215,7 @@ once and maintained as Go code from then on:
 
 ```sh
 go run github.com/aita/sqlkit/cmd/sqlkitgen \
-  -dsn "$DATABASE_URL" -schema public -dsl -package design -out design/design.go
+  -dsn "$DATABASE_URL" -schema public -dsl -package schema -out schema/schema.go
 ```
 
 The emitted file is a starting point meant to be edited (it carries no

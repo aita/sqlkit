@@ -25,14 +25,14 @@ type DesignOptions struct {
 	Tables []string
 
 	// Dialect overrides Schema.Dialect ("postgres" or "mysql"); it selects how
-	// engine type names map back to schema package types.
+	// engine type names map back to sqldef package types.
 	Dialect string
 }
 
-const schemaImport = "github.com/aita/sqlkit/schema"
+const sqldefImport = "github.com/aita/sqlkit/sqldef"
 
 // GenerateDesign renders the schema as a design source file built on the
-// schema package — the inverse of that package: introspect a live database
+// sqldef package — the inverse of that package: introspect a live database
 // once, then maintain the schema as Go code and generate bindings and DDL
 // from it. Unlike binding generation the result is a starting point meant to
 // be edited, so it carries no DO NOT EDIT marker.
@@ -86,7 +86,7 @@ func GenerateDesign(model meta.Schema, opts DesignOptions) (File, error) {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "// Catalog holds the design of schema %q, bootstrapped from a live\n", model.Name)
 	sb.WriteString("// database; edit it and regenerate the bindings from it.\n")
-	sb.WriteString("var Catalog = schema.NewCatalog()\n")
+	sb.WriteString("var Catalog = sqldef.NewCatalog()\n")
 	if schemaVar != "" {
 		fmt.Fprintf(&sb, "\n// %s is schema %q of the catalog.\nvar %s = Catalog.Schema(%q)\n", schemaVar, model.Name, schemaVar, model.Name)
 	}
@@ -103,7 +103,7 @@ func GenerateDesign(model meta.Schema, opts DesignOptions) (File, error) {
 	}
 
 	fb := newFileBuf()
-	fb.add(schemaImport)
+	fb.add(sqldefImport)
 	fb.write(sb.String())
 	return fb.fileWithHeader(opts.PackageName, fileName, "// Bootstrapped by sqlkitgen; maintained by hand.\n\n")
 }
@@ -151,46 +151,46 @@ func renderDesignTable(sb *strings.Builder, trailers *[]string, table meta.Table
 
 	fmt.Fprintf(sb, "var %s = %s.Table(%q,\n", varName, owner, table.Name)
 	if table.Comment != "" {
-		fmt.Fprintf(sb, "\tschema.TableComment(%q),\n", table.Comment)
+		fmt.Fprintf(sb, "\tsqldef.TableComment(%q),\n", table.Comment)
 	}
 	for _, column := range table.Columns {
-		fmt.Fprintf(sb, "\tschema.Column(%q, %s", column.Name, dslTypeExpr(column, dialect))
+		fmt.Fprintf(sb, "\tsqldef.Column(%q, %s", column.Name, dslTypeExpr(column, dialect))
 		if column.PrimaryKey {
-			sb.WriteString(", schema.PrimaryKey()")
+			sb.WriteString(", sqldef.PrimaryKey()")
 		}
 		if column.HasDefault {
 			if column.DefaultExpr != "" {
-				fmt.Fprintf(sb, ", schema.Default(%q)", column.DefaultExpr)
+				fmt.Fprintf(sb, ", sqldef.Default(%q)", column.DefaultExpr)
 			} else {
-				sb.WriteString(", schema.Default()")
+				sb.WriteString(", sqldef.Default()")
 			}
 		}
 		if column.Nullable {
-			sb.WriteString(", schema.Nullable()")
+			sb.WriteString(", sqldef.Nullable()")
 		}
 		if uniques[column.Name] {
-			sb.WriteString(", schema.Unique()")
+			sb.WriteString(", sqldef.Unique()")
 		}
 		if fk, ok := refs[column.Name]; ok {
-			fmt.Fprintf(sb, ", schema.References(%s, %q)", tableVars[fk.RefTable], fk.RefColumns[0])
+			fmt.Fprintf(sb, ", sqldef.References(%s, %q)", tableVars[fk.RefTable], fk.RefColumns[0])
 		}
 		if column.Comment != "" {
-			fmt.Fprintf(sb, ", schema.Comment(%q)", column.Comment)
+			fmt.Fprintf(sb, ", sqldef.Comment(%q)", column.Comment)
 		}
 		sb.WriteString("),\n")
 	}
 	for _, fk := range elements {
-		fmt.Fprintf(sb, "\tschema.ForeignKey(%s, %s, %s),\n", goStringSlice(fk.Columns), tableVars[fk.RefTable], goStringSlice(fk.RefColumns))
+		fmt.Fprintf(sb, "\tsqldef.ForeignKey(%s, %s, %s),\n", goStringSlice(fk.Columns), tableVars[fk.RefTable], goStringSlice(fk.RefColumns))
 	}
 	for _, ix := range indexes {
-		call := "schema.Index"
+		call := "sqldef.Index"
 		if ix.Unique {
-			call = "schema.UniqueIndex"
+			call = "sqldef.UniqueIndex"
 		}
 		fmt.Fprintf(sb, "\t%s(%s),\n", call, quotedList(ix.Columns))
 	}
 	for _, check := range table.Checks {
-		fmt.Fprintf(sb, "\tschema.Check(%q),\n", check.Expression)
+		fmt.Fprintf(sb, "\tsqldef.Check(%q),\n", check.Expression)
 	}
 	for _, fk := range foreign {
 		fmt.Fprintf(sb, "\t// NOTE: foreign key %s references %s.%s outside this design and must be declared by hand.\n",
@@ -211,79 +211,79 @@ func goStringSlice(items []string) string {
 	return "[]string{" + quotedList(items) + "}"
 }
 
-// dslTypeExpr maps an engine type name back to the schema package expression
-// that produces it. Types without a portable name fall back to schema.Type,
+// dslTypeExpr maps an engine type name back to the sqldef package expression
+// that produces it. Types without a portable name fall back to sqldef.Type,
 // which keeps the engine name verbatim.
 func dslTypeExpr(column meta.Column, dialect string) string {
 	dataType := strings.ToLower(strings.TrimSpace(column.DataType))
 	if dialect == "mysql" {
 		switch dataType {
 		case "bool", "boolean":
-			return "schema.Bool"
+			return "sqldef.Bool"
 		case "smallint":
-			return "schema.SmallInt"
+			return "sqldef.SmallInt"
 		case "int", "integer":
-			return "schema.Int"
+			return "sqldef.Int"
 		case "bigint":
-			return "schema.BigInt"
+			return "sqldef.BigInt"
 		case "float":
-			return "schema.Float"
+			return "sqldef.Float"
 		case "double":
-			return "schema.Double"
+			return "sqldef.Double"
 		case "decimal":
-			return fmt.Sprintf("schema.Decimal(%d, %d)", column.Precision, column.Scale)
+			return fmt.Sprintf("sqldef.Decimal(%d, %d)", column.Precision, column.Scale)
 		case "text":
-			return "schema.Text"
+			return "sqldef.Text"
 		case "varchar":
-			return fmt.Sprintf("schema.VarChar(%d)", column.Length)
+			return fmt.Sprintf("sqldef.VarChar(%d)", column.Length)
 		case "char":
-			return fmt.Sprintf("schema.Char(%d)", column.Length)
+			return fmt.Sprintf("sqldef.Char(%d)", column.Length)
 		case "blob":
-			return "schema.Bytes"
+			return "sqldef.Bytes"
 		case "json":
-			return "schema.JSON"
+			return "sqldef.JSON"
 		case "date":
-			return "schema.Date"
+			return "sqldef.Date"
 		case "time":
-			return "schema.Time"
+			return "sqldef.Time"
 		case "datetime":
-			return "schema.Timestamp"
+			return "sqldef.Timestamp"
 		}
-		return fmt.Sprintf("schema.Type(%q)", dataType)
+		return fmt.Sprintf("sqldef.Type(%q)", dataType)
 	}
 	switch dataType {
 	case "bool":
-		return "schema.Bool"
+		return "sqldef.Bool"
 	case "int2":
-		return "schema.SmallInt"
+		return "sqldef.SmallInt"
 	case "int4":
-		return "schema.Int"
+		return "sqldef.Int"
 	case "int8":
-		return "schema.BigInt"
+		return "sqldef.BigInt"
 	case "float4":
-		return "schema.Float"
+		return "sqldef.Float"
 	case "float8":
-		return "schema.Double"
+		return "sqldef.Double"
 	case "numeric":
-		return fmt.Sprintf("schema.Decimal(%d, %d)", column.Precision, column.Scale)
+		return fmt.Sprintf("sqldef.Decimal(%d, %d)", column.Precision, column.Scale)
 	case "text":
-		return "schema.Text"
+		return "sqldef.Text"
 	case "varchar":
-		return fmt.Sprintf("schema.VarChar(%d)", column.Length)
+		return fmt.Sprintf("sqldef.VarChar(%d)", column.Length)
 	case "bpchar":
-		return fmt.Sprintf("schema.Char(%d)", column.Length)
+		return fmt.Sprintf("sqldef.Char(%d)", column.Length)
 	case "uuid":
-		return "schema.UUID"
+		return "sqldef.UUID"
 	case "bytea":
-		return "schema.Bytes"
+		return "sqldef.Bytes"
 	case "jsonb":
-		return "schema.JSON"
+		return "sqldef.JSON"
 	case "date":
-		return "schema.Date"
+		return "sqldef.Date"
 	case "time":
-		return "schema.Time"
+		return "sqldef.Time"
 	case "timestamptz":
-		return "schema.Timestamp"
+		return "sqldef.Timestamp"
 	}
-	return fmt.Sprintf("schema.Type(%q)", dataType)
+	return fmt.Sprintf("sqldef.Type(%q)", dataType)
 }

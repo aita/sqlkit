@@ -43,15 +43,15 @@ func TestGenerateDesignMySQL(t *testing.T) {
 	}
 	got := string(file.Content)
 	for _, want := range []string{
-		`var Catalog = schema.NewCatalog()`,
+		`var Catalog = sqldef.NewCatalog()`,
 		`var App = Catalog.Schema("app")`,
 		"var Items = App.Table(\"items\",",
-		`schema.Column("id", schema.BigInt, schema.PrimaryKey(), schema.Default()),`,
-		`schema.Column("name", schema.VarChar(100)),`,
-		`schema.Column("price", schema.Decimal(10, 2)),`,
-		`schema.Column("attrs", schema.JSON, schema.Nullable()),`,
-		`schema.Column("created_at", schema.Timestamp, schema.Default("now()")),`,
-		`schema.Column("point", schema.Type("geometry")),`,
+		`sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),`,
+		`sqldef.Column("name", sqldef.VarChar(100)),`,
+		`sqldef.Column("price", sqldef.Decimal(10, 2)),`,
+		`sqldef.Column("attrs", sqldef.JSON, sqldef.Nullable()),`,
+		`sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default("now()")),`,
+		`sqldef.Column("point", sqldef.Type("geometry")),`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("generated design missing %q\n%s", want, got)
@@ -97,7 +97,7 @@ func TestGenerateDesignForeignKeys(t *testing.T) {
 	got := string(file.Content)
 	for _, want := range []string{
 		`var Public = Catalog.Schema("public")`,
-		`schema.ForeignKey([]string{"order_region", "order_number"}, Orders, []string{"region", "number"}),`,
+		`sqldef.ForeignKey([]string{"order_region", "order_number"}, Orders, []string{"region", "number"}),`,
 		`var _ = OrderLines.ForeignKey([]string{"parent_id"}, OrderLines, []string{"id"})`,
 		`foreign key fk_other_schema references audit.events outside this design`,
 	} {
@@ -140,11 +140,11 @@ func TestGenerateDesignIndexesChecksComments(t *testing.T) {
 	}
 	got := string(file.Content)
 	for _, want := range []string{
-		`schema.TableComment("Sellable products"),`,
-		`schema.Column("sku", schema.VarChar(64), schema.Unique(), schema.Comment("Stock keeping unit")),`,
-		`schema.Index("name"),`,
-		`schema.UniqueIndex("vendor", "name"),`,
-		`schema.Check("price > 0"),`,
+		`sqldef.TableComment("Sellable products"),`,
+		`sqldef.Column("sku", sqldef.VarChar(64), sqldef.Unique(), sqldef.Comment("Stock keeping unit")),`,
+		`sqldef.Index("name"),`,
+		`sqldef.UniqueIndex("vendor", "name"),`,
+		`sqldef.Check("price > 0"),`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("generated design missing %q\n%s", want, got)

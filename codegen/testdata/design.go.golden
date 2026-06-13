@@ -3,27 +3,27 @@
 package design
 
 import (
-	"github.com/aita/sqlkit/schema"
+	"github.com/aita/sqlkit/sqldef"
 )
 
 // Catalog holds the design of schema "public", bootstrapped from a live
 // database; edit it and regenerate the bindings from it.
-var Catalog = schema.NewCatalog()
+var Catalog = sqldef.NewCatalog()
 
 // Public is schema "public" of the catalog.
 var Public = Catalog.Schema("public")
 
 var Users = Public.Table("users",
-	schema.Column("id", schema.BigInt, schema.PrimaryKey(), schema.Default()),
-	schema.Column("email", schema.VarChar(255)),
-	schema.Column("name", schema.Text, schema.Nullable()),
-	schema.Column("created_at", schema.Timestamp, schema.Default()),
+	sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+	sqldef.Column("email", sqldef.VarChar(255)),
+	sqldef.Column("name", sqldef.Text, sqldef.Nullable()),
+	sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default()),
 )
 
 var Posts = Public.Table("posts",
-	schema.Column("id", schema.BigInt, schema.PrimaryKey(), schema.Default()),
-	schema.Column("user_id", schema.BigInt, schema.References(Users, "id")),
-	schema.Column("title", schema.Text),
-	schema.Column("body", schema.Text, schema.Nullable()),
-	schema.Column("published", schema.Bool, schema.Default()),
+	sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+	sqldef.Column("user_id", sqldef.BigInt, sqldef.References(Users, "id")),
+	sqldef.Column("title", sqldef.Text),
+	sqldef.Column("body", sqldef.Text, sqldef.Nullable()),
+	sqldef.Column("published", sqldef.Bool, sqldef.Default()),
 )

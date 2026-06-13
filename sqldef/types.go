@@ -1,4 +1,4 @@
-package schema
+package sqldef
 
 // DataType is a column type in a design. It carries the engine type name for
 // each supported dialect plus optional length/precision modifiers; Build

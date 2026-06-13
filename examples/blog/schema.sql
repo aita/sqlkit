@@ -1,4 +1,4 @@
--- Generated from design/design.go by 'go run ./gen'. Apply with:
+-- Generated from schema/schema.go by 'go run ./gen'. Apply with:
 --
 --   psql "$DATABASE_URL" -f schema.sql
 

@@ -1,45 +1,48 @@
-// Package schema declares database schemas as plain Go values. A Catalog is
+// Package sqldef declares database schemas as plain Go values. A Catalog is
 // the reusable root: tables are declared as values hanging off it, so designs
 // can reference each other (foreign keys take the *Table they point at), be
 // split across files or packages, and feed every generator — the typed table
 // bindings (codegen) and the DDL (ddl) come from the same catalog.
 //
-//	package design
+// A design package conventionally takes the name schema and imports this
+// package for the building blocks:
 //
-//	import "github.com/aita/sqlkit/schema"
+//	package schema
 //
-//	var Catalog = schema.NewCatalog()
+//	import "github.com/aita/sqlkit/sqldef"
+//
+//	var Catalog = sqldef.NewCatalog()
 //
 //	var Users = Catalog.Table("users",
-//		schema.Column("id", schema.BigInt, schema.PrimaryKey(), schema.Default()),
-//		schema.Column("email", schema.VarChar(255), schema.Unique()),
-//		schema.Column("name", schema.Text, schema.Nullable()),
-//		schema.Column("created_at", schema.Timestamp, schema.Default("now()")),
+//		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+//		sqldef.Column("email", sqldef.VarChar(255), sqldef.Unique()),
+//		sqldef.Column("name", sqldef.Text, sqldef.Nullable()),
+//		sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default("now()")),
 //	)
 //
 //	var Posts = Catalog.Table("posts",
-//		schema.Column("id", schema.BigInt, schema.PrimaryKey(), schema.Default()),
-//		schema.Column("user_id", schema.BigInt, schema.References(Users, "id")),
-//		schema.Column("title", schema.Text),
-//		schema.Index("user_id"),
-//		schema.Check("title <> ''"),
+//		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+//		sqldef.Column("user_id", sqldef.BigInt, sqldef.References(Users, "id")),
+//		sqldef.Column("title", sqldef.Text),
+//		sqldef.Index("user_id"),
+//		sqldef.Check("title <> ''"),
 //	)
 //
 // A small generator program turns the catalog into Go source and DDL:
 //
-//	files, err := design.Catalog.Generate(codegen.Options{PackageName: "appdb"})
+//	files, err := schema.Catalog.Generate(codegen.Options{PackageName: "appdb"})
 //	if err != nil { ... }
-//	err = schema.Write("appdb", files)
-//	sql, err := design.Catalog.DDL("postgres")
+//	err = sqldef.Write("appdb", files)
+//	sql, err := schema.Catalog.DDL("postgres")
 //
 // Tables declared with Catalog.Table live in the unnamed default schema and
 // generate unqualified names; Catalog.Schema("public").Table(...) qualifies
 // them. Columns are NOT NULL unless marked Nullable. Declarations are plain
-// values, so they compose: a shared []schema.TableElement (say, audit
+// values, so they compose: a shared []sqldef.TableElement (say, audit
 // columns) can be appended into any table, and mistakes — duplicate names,
 // dangling foreign keys — are collected and reported by Build, Generate, and
 // DDL.
-package schema
+package sqldef
 
 import "fmt"
 

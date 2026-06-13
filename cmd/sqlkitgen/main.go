@@ -5,10 +5,10 @@
 //
 //	sqlkitgen -dsn postgres://user:pass@localhost/app -schema public -package appdb -out appdb/tables.go
 //	sqlkitgen -driver mysql -dsn 'user:pass@tcp(localhost:3306)/app' -package appdb -out appdb -file-per-table -dto
-//	sqlkitgen -dsn postgres://user:pass@localhost/app -schema public -dsl -package design -out design/design.go
+//	sqlkitgen -dsn postgres://user:pass@localhost/app -schema public -dsl -package schema -out schema/schema.go
 //	sqlkitgen -dsn postgres://user:pass@localhost/app -schema public -ddl -out schema.sql
 //
-// With -dsl the schema is emitted as a design file built on the schema
+// With -dsl the schema is emitted as a design file built on the sqldef
 // package instead of table bindings: introspect once, then maintain the
 // schema as Go code and generate the bindings (and DDL) from the catalog.
 // With -ddl the schema is emitted as CREATE TABLE statements.
@@ -53,7 +53,7 @@ func run() error {
 	fileName := flag.String("file-name", "tables.go", "single-file output name (used when -out is a directory)")
 	dto := flag.Bool("dto", false, "also generate a row struct (DTO) per table")
 	dtoSeparate := flag.Bool("dto-separate-file", false, "write DTOs into their own file(s)")
-	dslDesign := flag.Bool("dsl", false, "generate a schema-package design file from the schema instead of table bindings")
+	dslDesign := flag.Bool("dsl", false, "generate a sqldef-based design file from the schema instead of table bindings")
 	emitDDL := flag.Bool("ddl", false, "generate CREATE TABLE DDL from the schema instead of table bindings (default expressions are not introspected; integer serial keys are recovered)")
 	version := flag.Bool("version", false, "print sqlkitgen version")
 	flag.Parse()

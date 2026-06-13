@@ -1,5 +1,5 @@
 // Command gen regenerates the blogdb bindings and schema.sql from the
-// catalog in ../design. Run from examples/blog:
+// catalog in ../schema. Run from examples/blog:
 //
 //	go run ./gen
 package main
@@ -9,26 +9,26 @@ import (
 	"os"
 
 	"github.com/aita/sqlkit/codegen"
-	"github.com/aita/sqlkit/examples/blog/design"
-	"github.com/aita/sqlkit/schema"
+	"github.com/aita/sqlkit/examples/blog/schema"
+	"github.com/aita/sqlkit/sqldef"
 )
 
-const sqlHeader = `-- Generated from design/design.go by 'go run ./gen'. Apply with:
+const sqlHeader = `-- Generated from schema/schema.go by 'go run ./gen'. Apply with:
 --
 --   psql "$DATABASE_URL" -f schema.sql
 
 `
 
 func main() {
-	files, err := design.Catalog.Generate(codegen.Options{PackageName: "blogdb"})
+	files, err := schema.Catalog.Generate(codegen.Options{PackageName: "blogdb"})
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := schema.Write("blogdb", files); err != nil {
+	if err := sqldef.Write("blogdb", files); err != nil {
 		log.Fatal(err)
 	}
 
-	ddl, err := design.Catalog.DDL("postgres")
+	ddl, err := schema.Catalog.DDL("postgres")
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -1,4 +1,4 @@
-package schema
+package sqldef
 
 import (
 	"errors"
@@ -20,7 +20,7 @@ func (c *Catalog) Build(dialect string) ([]meta.Schema, error) {
 		dialect = "postgres"
 	}
 	if dialect != "postgres" && dialect != "mysql" {
-		return nil, fmt.Errorf("schema: unsupported dialect %q (want postgres or mysql)", dialect)
+		return nil, fmt.Errorf("sqldef: unsupported dialect %q (want postgres or mysql)", dialect)
 	}
 
 	errs := append([]error(nil), c.errs...)
@@ -49,7 +49,7 @@ func (c *Catalog) Build(dialect string) ([]meta.Schema, error) {
 	}
 
 	if len(errs) > 0 {
-		return nil, fmt.Errorf("schema: invalid catalog: %w", errors.Join(errs...))
+		return nil, fmt.Errorf("sqldef: invalid catalog: %w", errors.Join(errs...))
 	}
 	return models, nil
 }
