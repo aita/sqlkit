@@ -8,20 +8,20 @@ import (
 	"github.com/aita/sqlkit/meta"
 )
 
-// Build validates the catalog and returns the assembled meta.Meta. Tables
+// Build validates the catalog and returns the assembled meta.Metadata. Tables
 // are already built (Table assembles each one eagerly), so Build only checks
 // for declaration errors; no dialect is needed — column types stay portable
-// and the generators resolve them. The returned meta.Meta is the
-// dialect-agnostic value the codegen and ddl generators consume.
-func (d *Catalog) Build() (meta.Meta, error) {
+// and the generators resolve them. The returned meta.Metadata is the
+// dialect-agnostic value the codegen generator and the DDL renderer consume.
+func (d *Catalog) Build() (meta.Metadata, error) {
 	errs := append([]error(nil), d.errs...)
 	if len(d.tables) == 0 {
 		errs = append(errs, errors.New("catalog declares no tables"))
 	}
 	if len(errs) > 0 {
-		return meta.Meta{}, fmt.Errorf("sqldef: invalid catalog: %w", errors.Join(errs...))
+		return meta.Metadata{}, fmt.Errorf("sqldef: invalid catalog: %w", errors.Join(errs...))
 	}
-	return meta.Meta{Tables: d.tables}, nil
+	return meta.Metadata{Tables: d.tables}, nil
 }
 
 // resolveFK validates a foreign key against the local columns and the

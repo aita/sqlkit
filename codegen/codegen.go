@@ -97,11 +97,11 @@ type tableModel struct {
 }
 
 // Generate renders the catalog into one or more Go source files according to
-// opts and returns their formatted contents. The catalog is the built schema
-// model (meta.Meta) — produce it with sqldef's Catalog.Build, the inspector,
-// or by hand. The dialect (opts.Dialect, default postgres) selects the default
-// SQL→Go type table.
-func Generate(catalog meta.Meta, opts Options) ([]File, error) {
+// opts and returns their formatted contents. The md argument is the built
+// schema model (meta.Metadata) — produce it with sqldef's Catalog.Build, the
+// inspector, or by hand. The dialect (opts.Dialect, default postgres) selects
+// the default SQL→Go type table.
+func Generate(md meta.Metadata, opts Options) ([]File, error) {
 	if opts.PackageName == "" {
 		return nil, fmt.Errorf("codegen: package name is required")
 	}
@@ -118,7 +118,7 @@ func Generate(catalog meta.Meta, opts Options) ([]File, error) {
 		dtoName = defaultDTOName
 	}
 
-	tables := filterTables(catalog.Tables, opts.Tables)
+	tables := filterTables(md.Tables, opts.Tables)
 	if len(tables) == 0 {
 		return nil, fmt.Errorf("codegen: no tables to generate")
 	}

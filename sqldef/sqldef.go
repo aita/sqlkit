@@ -2,9 +2,9 @@
 // directly into the meta model. A catalog (sqldef.NewCatalog) is the reusable
 // root: each Table call assembles and returns a meta.Table immediately, so
 // foreign keys reference those values (References(Users, "id")), catalogs can
-// be split across files or packages, and the catalog Builds into a meta.Meta
-// that every generator — the typed table bindings (codegen) and the DDL (ddl)
-// — consumes.
+// be split across files or packages, and the catalog Builds into a
+// meta.Metadata that every generator — the typed table bindings (codegen) and
+// the DDL (meta.Metadata.CreateSQL) — consumes.
 //
 // A catalog package conventionally takes the name schema and imports this
 // package for the building blocks:
@@ -33,15 +33,16 @@
 // Catalog.Table returns a meta.Table, so Users and Posts are meta.Table
 // values. Column types are portable (meta.Type carries both dialects), so the
 // table is dialect-agnostic; the generators resolve the type when you choose a
-// dialect. sqldef is purely the schema DSL: Build assembles the meta.Meta and
-// the generators consume it directly. A small generator program turns the
+// dialect. sqldef is purely the schema DSL: Build assembles the meta.Metadata
+// and the generators consume it directly. A small generator program turns the
 // catalog into Go source and DDL:
 //
-//	catalog, err := schema.Catalog.Build()
+//	md, err := schema.Catalog.Build()
 //	if err != nil { ... }
-//	files, err := codegen.Generate(catalog, codegen.Options{PackageName: "appdb"})
+//	files, err := codegen.Generate(md, codegen.Options{PackageName: "appdb"})
 //	err = codegen.Write("appdb", files)
-//	sql, err := ddl.Generate(catalog, "postgres")
+//	d, err := sql.DialectByName("postgres")
+//	sqlText, err := md.CreateSQL(d)
 //
 // Tables declared with Catalog.Table live in the unnamed default schema and
 // generate unqualified names (use this for schemaless engines like MySQL or
@@ -58,7 +59,7 @@ import (
 
 // Catalog is the root the tables hang off: it accumulates the
 // meta.Tables declared on it, plus any declaration errors, and Builds them
-// into a meta.Meta. Create one with NewCatalog.
+// into a meta.Metadata. Create one with NewCatalog.
 type Catalog struct {
 	defaultSchema string   // schema Catalog.Table declares into ("" = unnamed)
 	schemaNames   []string // distinct schema names in first-seen order

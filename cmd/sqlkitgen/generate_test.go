@@ -61,7 +61,8 @@ func TestRenderDDLShim(t *testing.T) {
 	for _, want := range []string{
 		`schema "github.com/me/app/schema"`,
 		"var _ *sqldef.Catalog = schema.Catalog",
-		`ddl.Generate(md, "postgres")`,
+		`sql.DialectByName("postgres")`,
+		`md.CreateSQL(dialect)`,
 		`os.WriteFile("/tmp/schema.sql"`,
 	} {
 		if !strings.Contains(s, want) {
@@ -83,6 +84,18 @@ func TestRenderDDLShim(t *testing.T) {
 	}
 	if strings.Contains(ss, "os.WriteFile") {
 		t.Errorf("ddl stdout shim should not write a file\n%s", ss)
+	}
+
+	// With --drop the shim prepends the teardown DDL.
+	dropSrc, err := renderDDLShim("github.com/me/app/schema", "", &ddlCmd{Var: "Catalog", Dialect: "postgres", Drop: true})
+	if err != nil {
+		t.Fatalf("renderDDLShim drop: %v", err)
+	}
+	if _, err := parser.ParseFile(token.NewFileSet(), "main.go", dropSrc, parser.AllErrors); err != nil {
+		t.Fatalf("ddl drop shim is not valid Go: %v\n%s", err, dropSrc)
+	}
+	if ds := string(dropSrc); !strings.Contains(ds, "md.DropSQL(dialect)") {
+		t.Errorf("ddl drop shim should prepend DropSQL\n%s", ds)
 	}
 }
 

@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit/codegen"
-	"github.com/aita/sqlkit/ddl"
 	"github.com/aita/sqlkit/meta"
+	querysql "github.com/aita/sqlkit/sql"
 	"github.com/aita/sqlkit/sqldef"
 )
 
@@ -31,13 +31,13 @@ func blogCatalog() *sqldef.Catalog {
 	return catalog
 }
 
-func buildCatalog(t *testing.T, c *sqldef.Catalog) meta.Meta {
+func buildCatalog(t *testing.T, c *sqldef.Catalog) meta.Metadata {
 	t.Helper()
-	catalog, err := c.Build()
+	md, err := c.Build()
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	return catalog
+	return md
 }
 
 func TestBuild(t *testing.T) {
@@ -45,7 +45,7 @@ func TestBuild(t *testing.T) {
 
 	// Column types stay portable (the sqldef constructors are meta.Type values),
 	// resolved to an engine name only by the generators.
-	want := meta.Meta{
+	want := meta.Metadata{
 		Tables: []meta.Table{
 			{
 				Schema: meta.Schema{Name: "public"},
@@ -255,9 +255,9 @@ func TestSchemalessDatabase(t *testing.T) {
 	if got.Tables[0].Schema.Name != "" {
 		t.Errorf("schemaless table schema = %q, want empty", got.Tables[0].Schema.Name)
 	}
-	sql, err := ddl.Generate(got, "mysql")
+	sql, err := got.CreateSQL(querysql.MySQLDialect{})
 	if err != nil {
-		t.Fatalf("ddl.Generate() error = %v", err)
+		t.Fatalf("DDL() error = %v", err)
 	}
 	if !strings.Contains(sql, "CREATE TABLE `items` (") {
 		t.Errorf("schemaless DDL should be unqualified:\n%s", sql)
@@ -288,9 +288,9 @@ func TestGenerate(t *testing.T) {
 }
 
 func TestDDL(t *testing.T) {
-	sql, err := ddl.Generate(buildCatalog(t, blogCatalog()), "postgres")
+	sql, err := buildCatalog(t, blogCatalog()).CreateSQL(querysql.PostgreSQLDialect{})
 	if err != nil {
-		t.Fatalf("ddl.Generate() error = %v", err)
+		t.Fatalf("DDL() error = %v", err)
 	}
 	for _, want := range []string{
 		`CREATE TABLE "public"."users" (`,
@@ -476,18 +476,18 @@ func TestBuildErrors(t *testing.T) {
 func TestTypeUnavailableOnDialect(t *testing.T) {
 	c := sqldef.NewCatalog()
 	c.Table("users", sqldef.Column("tags", sqldef.TypeFor("citext", "")))
-	catalog, err := c.Build()
+	md, err := c.Build()
 	if err != nil {
 		t.Fatalf("Build() should not resolve types: %v", err)
 	}
-	if _, err := ddl.Generate(catalog, "mysql"); err == nil || !strings.Contains(err.Error(), "no type on dialect mysql") {
-		t.Errorf("ddl.Generate(mysql) error = %v, want unavailable-type error", err)
+	if _, err := md.CreateSQL(querysql.MySQLDialect{}); err == nil || !strings.Contains(err.Error(), "no type on dialect mysql") {
+		t.Errorf("DDL(mysql) error = %v, want unavailable-type error", err)
 	}
 }
 
 func TestUnsupportedDialect(t *testing.T) {
-	_, err := ddl.Generate(buildCatalog(t, blogCatalog()), "oracle")
+	_, err := querysql.DialectByName("oracle")
 	if err == nil || !strings.Contains(err.Error(), "unsupported dialect") {
-		t.Errorf("ddl.Generate(oracle) error = %v, want unsupported dialect", err)
+		t.Errorf("DialectByName(oracle) error = %v, want unsupported dialect", err)
 	}
 }
