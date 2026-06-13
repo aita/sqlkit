@@ -10,7 +10,7 @@
 //	DATABASE_URL=postgres://localhost/blog go run .
 package main
 
-//go:generate go run github.com/aita/sqlkit/cmd/sqlkitgen generate ./schema --name blogdb --out blogdb
+//go:generate go run github.com/aita/sqlkit/cmd/sqlkitgen generate ./schema --name blogdb --out blogdb --relations
 //go:generate go run github.com/aita/sqlkit/cmd/sqlkitgen ddl ./schema --out schema.sql
 
 import (
@@ -134,6 +134,21 @@ func run(ctx context.Context, db *sqlkit.Database) error {
 		for _, s := range stats {
 			fmt.Printf("#%d %s: %d posts\n", s.Rank, s.Email, s.PostCount)
 		}
+
+		// Relation-aware read with the generated QuerySet ORM layer: Join takes
+		// the Profile relation and derives the ON clause from the foreign key, so
+		// the caller never writes the join condition. The terminal returns
+		// sqlkit.Rows, scanned into a caller-defined DTO.
+		var publicAuthors []User
+		if err := blogdb.Users.Q(session).
+			Join(blogdb.Users.Rels.Profile).
+			Where(blogdb.Users.Rels.Profile.Public.Eq(true)).
+			OrderBy(blogdb.Users.CreatedAt.Desc()).
+			Limit(50).
+			All(ctx).Scan(&publicAuthors); err != nil {
+			return err
+		}
+		fmt.Printf("%d authors with a public profile\n", len(publicAuthors))
 
 		return nil
 	})

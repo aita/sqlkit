@@ -117,11 +117,12 @@ func TestGenerateMatchesCommittedBindings(t *testing.T) {
 	}
 	out := t.TempDir()
 	cmd := &generateCmd{
-		Package: "github.com/aita/sqlkit/examples/blog/schema",
-		Var:     "Catalog",
-		Name:    "blogdb",
-		Out:     out,
-		Dialect: "postgres",
+		Package:   "github.com/aita/sqlkit/examples/blog/schema",
+		Var:       "Catalog",
+		Name:      "blogdb",
+		Out:       out,
+		Dialect:   "postgres",
+		Relations: true, // matches the example's //go:generate directive
 	}
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("generate: %v", err)

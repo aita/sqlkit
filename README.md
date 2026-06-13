@@ -33,6 +33,7 @@ err := db.Select().From(appdb.Users).
 | Package | Purpose |
 |---|---|
 | `sqlkit` | Typed query chains, `Database`, `Session`, result scanning, streaming `Records[T]` iteration (module root) |
+| `orm` | Relation-aware `QuerySet` (Django/SQLAlchemy-style) over the bindings: FK-driven joins, reusable `Filter` bundles, CRUD shortcuts |
 | `sql` | SQL AST, dialects, compiler, and all statement generation |
 | `sqldef` | In-code schema declarations: a reusable `Catalog` of tables that feeds the generators |
 | `meta` | Database schema metadata model shared by the tooling (tables, columns, indexes, constraints, comments), plus SQL DDL generation (`CreateSQL`/`DropSQL`) |
@@ -343,6 +344,62 @@ var user MyUserDTO
 err := db.Select().From(appdb.Users).Where(appdb.Users.ID.Eq(42)).
     Limit(1).All(ctx).Scan(&user)
 ```
+
+## Relation-aware queries (orm package)
+
+The query builder above stays at the SQL level: you spell out every join
+condition. Generate with `--relations` and the bindings gain a thin
+Django/SQLAlchemy-style layer — foreign-key **relation metadata** plus a
+`QuerySet` — built on top of the same DSL. It is the Query side of CQRS, not a
+CRUD wrapper: terminals return the same `sqlkit.Rows`, so DTO mapping stays
+yours.
+
+```sh
+go run github.com/aita/sqlkit/cmd/sqlkitgen generate ./schema \
+  --name appdb --out appdb --relations
+```
+
+Each foreign key generates a relation on both sides — `appdb.Posts.Rels.User`
+(belongs-to), `appdb.Users.Rels.Posts` (has-many), and `appdb.Users.Rels.Profile`
+(has-one, when the FK is unique). `Join` takes a relation and derives the `ON`
+clause from the FK, and the relation exposes the target's typed columns:
+
+```go
+// JOIN profiles ON profiles.user_id = users.id — the ON clause comes from the FK.
+var authors []MyUserDTO
+err := appdb.Users.Queryer(db).            // or the shorthand .Q(db)
+    Where(appdb.Users.Age.Le(20)).
+    Join(appdb.Users.Rels.Profile).
+    Where(appdb.Users.Rels.Profile.Public.Eq(true)).
+    OrderBy(appdb.Users.CreatedAt.Desc()).
+    Limit(50).
+    All(ctx).Scan(&authors)
+```
+
+`Queryer(db)`/`Q(db)` take any `sqlkit.Executor` (a `*Database` or a `*Session`).
+A `QuerySet` is an immutable value — each method returns a new one — with
+`Where`, `Join`/`LeftJoin`, `OrderBy`, `Limit`/`Offset`, `Distinct`, and the
+terminals `All`/`First`/`One`/`Page`/`Count`. `Build()` drops back to the
+underlying `sqlkit.SelectQuery` (for `ToSQL`, `Union`, …).
+
+Reusable **filter bundles** map their set fields to columns by name (`sqlkit`
+tag or snake_case), so a request struct becomes a predicate set:
+
+```go
+type UsersFilter struct {
+    Age  orm.FilterTerm // orm.Eq/Ne/Lt/Le/Gt/Ge/In/Like/IsNull
+    Name orm.FilterTerm
+}
+
+err := appdb.Users.Q(db).
+    Filter(UsersFilter{Age: orm.Le(20)}).   // unset fields are skipped
+    All(ctx).Scan(&authors)
+```
+
+Secondary CRUD lives on the QuerySet too — `Get(ctx, pk...)` (primary-key
+lookup), and `Insert()`/`Update()`/`Delete()` returning the bound builders — but
+the headline is the relation-aware `Select`. See `examples/blog` for a runnable
+end-to-end use.
 
 ## Writing
 

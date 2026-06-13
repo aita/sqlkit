@@ -54,6 +54,12 @@ type Options struct {
 	// Ignored when FilePerTable is set.
 	FileName string
 
+	// EmitRelations generates the relation-aware ORM surface: foreign-key
+	// relation metadata (table.Rels), Queryer/Q entry points returning an
+	// orm.QuerySet, and a columns/table struct split. Off by default, so the
+	// binding stays pure metadata unless asked.
+	EmitRelations bool
+
 	// EmitDTO additionally generates a row struct (DTO) per table.
 	EmitDTO bool
 
@@ -71,7 +77,10 @@ type Options struct {
 	DTOName func(table meta.Table) string
 }
 
-const sqlkitImport = "github.com/aita/sqlkit"
+const (
+	sqlkitImport = "github.com/aita/sqlkit"
+	ormImport    = "github.com/aita/sqlkit/orm"
+)
 
 type columnModel struct {
 	Field      string
@@ -94,6 +103,25 @@ type tableModel struct {
 	Columns   []columnModel
 	// Doc is the table comment as doc-comment lines.
 	Doc []string
+
+	// Relational, when set, switches to the relation-aware binding layout
+	// (a columns struct + table struct + Queryer/Q + Rels). It is enabled by
+	// Options.EmitRelations.
+	Relational  bool
+	ColumnsType string // e.g. "UsersColumns"
+	Ctor        string // e.g. "newUsersColumns"
+	RelsType    string // e.g. "UsersRels"
+	Relations   []relationModel
+}
+
+// relationModel is one generated relation (a foreign-key join path) on a table.
+type relationModel struct {
+	Field         string // relation field name in the Rels struct, e.g. "Profile"
+	RelType       string // relation struct type name, e.g. "UsersProfileRel"
+	TargetColumns string // embedded target columns type, e.g. "ProfilesColumns"
+	TargetCtor    string // target columns constructor, e.g. "newProfilesColumns"
+	Cardinality   string // "orm.ToOne" or "orm.ToMany"
+	JoinOn        string // the JoinOn predicate expression, fully rendered
 }
 
 // Generate renders the catalog into one or more Go source files according to
@@ -148,6 +176,14 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 		models = append(models, tm)
 	}
 
+	if opts.EmitRelations {
+		relations := buildRelations(tables)
+		for i, tm := range models {
+			tm.Relational = true
+			tm.Relations = relations[qualified(tables[i].Schema.Name, tables[i].Name)]
+		}
+	}
+
 	return assemble(models, opts)
 }
 
@@ -155,12 +191,15 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 func buildTable(table meta.Table, dialect string, mapper TypeMapper) (*tableModel, error) {
 	varName := goName(table.Name)
 	tm := &tableModel{
-		TypeName:  varName + "Table",
-		VarName:   varName,
-		Schema:    table.Schema.Name,
-		Name:      table.Name,
-		Qualified: qualified(table.Schema.Name, table.Name),
-		Doc:       docLines(table.Comment),
+		TypeName:    varName + "Table",
+		VarName:     varName,
+		Schema:      table.Schema.Name,
+		Name:        table.Name,
+		Qualified:   qualified(table.Schema.Name, table.Name),
+		Doc:         docLines(table.Comment),
+		ColumnsType: varName + "Columns",
+		Ctor:        "new" + varName + "Columns",
+		RelsType:    varName + "Rels",
 	}
 	for _, column := range table.Columns {
 		goType, err := mapper.GoTypeFor(column, dialect)
@@ -292,6 +331,9 @@ func assemble(models []*tableModel, opts Options) ([]File, error) {
 
 func bindingImports(tm *tableModel) []string {
 	imports := []string{sqlkitImport}
+	if tm.Relational {
+		imports = append(imports, ormImport, sqlImport)
+	}
 	for _, c := range tm.Columns {
 		if c.GoTypeImp != "" {
 			imports = append(imports, c.GoTypeImp)
@@ -372,6 +414,9 @@ func (b *fileBuf) fileWithHeader(pkg, name, header string) (File, error) {
 }
 
 func renderBinding(tm *tableModel) string {
+	if tm.Relational {
+		return execute(relationalBindingTemplate, tm)
+	}
 	return execute(bindingTemplate, tm)
 }
 
@@ -431,6 +476,109 @@ func (t {{.TypeName}}) PrimaryKey() []sqlkit.AnyColumn {
 // Defaulted returns the columns with database-side defaults.
 func (t {{.TypeName}}) Defaulted() []sqlkit.AnyColumn {
 	return []sqlkit.AnyColumn{ {{- $first := true}}{{range .Columns}}{{if .HasDefault}}{{if not $first}}, {{end}}{{$first = false}}t.{{.Field}}{{end}}{{end -}} }
+}
+
+var _ sqlkit.Table = {{.VarName}}
+`))
+
+// relationalBindingTemplate emits the relation-aware binding: a columns struct
+// (carrying the Table interface), relation structs and a Rels struct, and a
+// table struct embedding the columns plus Queryer/Q entry points. Splitting the
+// columns out of the table struct lets relations embed the target's columns
+// (so callers reach target columns through the relation) without forming a
+// recursive struct type; building every value from the new*Columns constructors
+// keeps the package-level vars free of initialization cycles.
+var relationalBindingTemplate = template.Must(template.New("relbinding").Parse(`// {{.ColumnsType}} holds the typed column bindings for table {{.Qualified}}.
+type {{.ColumnsType}} struct {
+	info sqlkit.TableInfo
+{{- range .Columns}}
+{{- range .Doc}}
+	// {{.}}
+{{- end}}
+	{{.Field}} sqlkit.Column[{{.GoType}}]
+{{- end}}
+}
+
+func {{.Ctor}}() {{.ColumnsType}} {
+	info := sqlkit.TableInfo{Schema: {{printf "%q" .Schema}}, Name: {{printf "%q" .Name}}}
+	return {{.ColumnsType}}{
+		info: info,
+{{- range .Columns}}
+		{{.Field}}: sqlkit.NewColumn[{{.GoType}}](info, {{printf "%q" .Name}}),
+{{- end}}
+	}
+}
+
+// Info returns the table identity.
+func (t {{.ColumnsType}}) Info() sqlkit.TableInfo { return t.info }
+
+// SQLSource marks the table as a FROM/JOIN source.
+func (t {{.ColumnsType}}) SQLSource() sqlkit.SourceExpression { return t.info.SQLSource() }
+
+// Columns returns all column bindings in declaration order.
+func (t {{.ColumnsType}}) Columns() []sqlkit.AnyColumn {
+	return []sqlkit.AnyColumn{ {{- range $i, $c := .Columns}}{{if $i}}, {{end}}t.{{$c.Field}}{{end -}} }
+}
+
+// PrimaryKey returns the primary key column bindings.
+func (t {{.ColumnsType}}) PrimaryKey() []sqlkit.AnyColumn {
+	return []sqlkit.AnyColumn{ {{- $first := true}}{{range .Columns}}{{if .PrimaryKey}}{{if not $first}}, {{end}}{{$first = false}}t.{{.Field}}{{end}}{{end -}} }
+}
+
+// Defaulted returns the columns with database-side defaults.
+func (t {{.ColumnsType}}) Defaulted() []sqlkit.AnyColumn {
+	return []sqlkit.AnyColumn{ {{- $first := true}}{{range .Columns}}{{if .HasDefault}}{{if not $first}}, {{end}}{{$first = false}}t.{{.Field}}{{end}}{{end -}} }
+}
+{{if .Relations}}
+// {{.RelsType}} are the generated relations of table {{.Qualified}}.
+type {{.RelsType}} struct {
+{{- range .Relations}}
+	{{.Field}} {{.RelType}}
+{{- end}}
+}
+{{range .Relations}}
+// {{.RelType}} is the {{.Field}} relation of table {{$.Qualified}}.
+type {{.RelType}} struct{ {{.TargetColumns}} }
+
+// Target returns the related table joined in.
+func (r {{.RelType}}) Target() sqlkit.Table { return r.{{.TargetColumns}} }
+
+// JoinOn is the foreign-key join condition.
+func (r {{.RelType}}) JoinOn() sqlkit.Predicate { return {{.JoinOn}} }
+
+// Cardinality reports the relation multiplicity.
+func (r {{.RelType}}) Cardinality() orm.Cardinality { return {{.Cardinality}} }
+
+// Name returns the relation's field name.
+func (r {{.RelType}}) Name() string { return {{printf "%q" .Field}} }
+{{end}}{{end -}}
+// {{.TypeName}} is the typed binding for table {{.Qualified}}.
+{{- range .Doc}}
+// {{.}}
+{{- end}}
+type {{.TypeName}} struct {
+	{{.ColumnsType}}
+{{- if .Relations}}
+	Rels {{.RelsType}}
+{{- end}}
+}
+
+// Queryer starts a relation-aware QuerySet over {{.Qualified}}, bound to ex.
+func (t {{.TypeName}}) Queryer(ex sqlkit.Executor) orm.QuerySet { return orm.NewQuerySet(ex, t) }
+
+// Q is shorthand for Queryer.
+func (t {{.TypeName}}) Q(ex sqlkit.Executor) orm.QuerySet { return orm.NewQuerySet(ex, t) }
+
+// {{.VarName}} provides typed access to table {{.Qualified}}.
+var {{.VarName}} = {{.TypeName}}{
+	{{.ColumnsType}}: {{.Ctor}}(),
+{{- if .Relations}}
+	Rels: {{.RelsType}}{
+{{- range .Relations}}
+		{{.Field}}: {{.RelType}}{ {{.TargetColumns}}: {{.TargetCtor}}() },
+{{- end}}
+	},
+{{- end}}
 }
 
 var _ sqlkit.Table = {{.VarName}}

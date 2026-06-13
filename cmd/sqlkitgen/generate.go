@@ -22,6 +22,7 @@ type generateCmd struct {
 	Dialect         string   `help:"Type-mapping dialect (postgres or mysql)." default:"postgres"`
 	FileName        string   `help:"Single-file output name (default tables.go); ignored with --file-per-table."`
 	FilePerTable    bool     `help:"Write one file per table instead of a single combined file."`
+	Relations       bool     `help:"Generate the relation-aware ORM surface (Rels metadata + Queryer/Q)."`
 	EmitDTO         bool     `help:"Also generate a row struct (DTO) per table."`
 	DTOSeparateFile bool     `help:"Write the DTOs into their own file(s)."`
 }
@@ -55,6 +56,7 @@ type generateShimData struct {
 	FileName        string
 	Tables          string // a Go expression: nil or []string{...}
 	FilePerTable    bool
+	Relations       bool
 	EmitDTO         bool
 	DTOSeparateFile bool
 }
@@ -84,6 +86,7 @@ func main() {
 		Dialect:         {{printf "%q" .Dialect}},
 		FileName:        {{printf "%q" .FileName}},
 		FilePerTable:    {{.FilePerTable}},
+		EmitRelations:   {{.Relations}},
 		EmitDTO:         {{.EmitDTO}},
 		DTOSeparateFile: {{.DTOSeparateFile}},
 		Tables:          {{.Tables}},
@@ -108,6 +111,7 @@ func renderShim(importPath, outDir string, c *generateCmd) ([]byte, error) {
 		FileName:        c.FileName,
 		Tables:          tablesLiteral(c.Tables),
 		FilePerTable:    c.FilePerTable,
+		Relations:       c.Relations,
 		EmitDTO:         c.EmitDTO,
 		DTOSeparateFile: c.DTOSeparateFile,
 	}

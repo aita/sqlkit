@@ -75,6 +75,11 @@ func newRows(ctx context.Context, ex Executor, query sql.Query) Rows {
 	return Rows{ctx: ctx, ex: ex, sqlText: sqlText, args: args, err: err}
 }
 
+// ErrRows returns a Rows that fails with err when scanned. It lets builders
+// layered on top of sqlkit (such as package orm) defer a build-time error to
+// the Scan call, matching how the typed builders surface compilation errors.
+func ErrRows(err error) Rows { return Rows{err: err} }
+
 func newRawRows(ctx context.Context, ex Executor, query any, args []any) Rows {
 	sqlText, sqlArgs, err := resolveQuery(ex.sqlDialect(), query, args)
 	return Rows{ctx: ctx, ex: ex, sqlText: sqlText, args: sqlArgs, err: err}
