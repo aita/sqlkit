@@ -24,6 +24,47 @@ func (d *Catalog) Build() (meta.Metadata, error) {
 	return meta.Metadata{Tables: d.tables}, nil
 }
 
+// BuildTable assembles a single meta.Table from sqldef table elements without a
+// catalog, validating it. It is the reuse point for tools that build one table
+// at a time — such as migration operations — so they share the sqldef
+// vocabulary (Column, Index, UniqueIndex, Check, PrimaryKey, TableComment) and
+// its validation. Foreign keys declared with References/ForeignKey need their
+// target table in a catalog, so name-based foreign keys belong in the caller
+// (e.g. the migrate operator) instead.
+func BuildTable(schema, name string, elements ...TableElement) (meta.Table, error) {
+	cat := NewCatalog(DefaultSchema(schema))
+	table := cat.Table(name, elements...)
+	if _, err := cat.Build(); err != nil {
+		return meta.Table{}, err
+	}
+	return table, nil
+}
+
+// BuildColumn assembles a single meta.Column from one sqldef Column element, for
+// operations that take a lone column such as ALTER TABLE ADD COLUMN. The element
+// must declare exactly one column; column-level Unique/References (table-level
+// constructs) carry no meaning on a lone column and are dropped.
+func BuildColumn(element TableElement) (meta.Column, error) {
+	// Apply the element to a scratch builder and read the column directly, rather
+	// than calling Build, so table-level constructs the element may carry
+	// (column Unique/References, which produce an index or a foreign key against
+	// a table not declared here) are dropped instead of failing validation.
+	cat := NewCatalog()
+	b := &tableBuilder{catalog: cat, name: "_column"}
+	element.applyTable(b)
+	if len(cat.errs) > 0 {
+		return meta.Column{}, fmt.Errorf("sqldef: invalid column: %w", errors.Join(cat.errs...))
+	}
+	if len(b.columns) != 1 {
+		return meta.Column{}, fmt.Errorf("sqldef: expected exactly one column, got %d", len(b.columns))
+	}
+	c := b.columns[0]
+	if c.primaryKey && c.nullable {
+		return meta.Column{}, fmt.Errorf("sqldef: column %q: a primary key column cannot be nullable", c.name)
+	}
+	return c.toMeta(), nil
+}
+
 // resolveFK validates a foreign key against the local columns and the
 // referenced table, assigns its name, and returns the meta.ForeignKey. It
 // reports failures to the catalog and returns ok=false on error.
