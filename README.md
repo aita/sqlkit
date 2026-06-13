@@ -38,8 +38,7 @@ err := db.Select().From(appdb.Users).
 
 | Package | Purpose |
 |---|---|
-| `sqlkit` | Typed query chains, `Database`, `Session`, result scanning, streaming `Records[T]` iteration (module root) |
-| `orm` | Relation-aware `QuerySet` (Django/SQLAlchemy-style) over the bindings: FK-driven joins, reusable `Filter` bundles, CRUD shortcuts |
+| `sqlkit` | Typed query chains, `Database`, `Session`, result scanning, streaming `Records[T]` iteration, and the relation-aware surface (FK-driven `JoinRel`, `Filter` bundles, `Preload`) — module root |
 | `sql` | SQL AST, dialects, compiler, and all statement generation — DML query builders and DDL statement builders (the SQL DSL) |
 | `sqldef` | In-code schema declarations: a reusable `Catalog` of tables that feeds the generators |
 | `meta` | Database schema metadata model shared by the tooling (tables, columns, indexes, constraints, comments), plus SQL DDL generation (`CreateSQL`/`DropSQL`) built on the `sql` DDL builders |
@@ -579,14 +578,14 @@ err := db.Select().From(appdb.Users).Where(appdb.Users.ID.Eq(42)).
     Limit(1).All(ctx).Scan(&user)
 ```
 
-## Relation-aware queries (orm package)
+## Relation-aware queries
 
 The query builder above stays at the SQL level: you spell out every join
-condition. Generate with `--relations` and the bindings gain a thin
-Django/SQLAlchemy-style layer — foreign-key **relation metadata** plus a
-`QuerySet` — built on top of the same DSL. It is the Query side of CQRS, not a
-CRUD wrapper: terminals return the same `sqlkit.Rows`, so DTO mapping stays
-yours.
+condition. Generate with `--relations` and the bindings gain foreign-key
+**relation metadata** (`sqlkit.Relation` values) that the same `SelectQuery`
+consumes — in the spirit of SQLAlchemy 2.0's unified `select()`, there is no
+separate query layer. Terminals return the same `sqlkit.Rows`, so DTO mapping
+stays yours.
 
 ```sh
 go run github.com/aita/sqlkit/cmd/sqlkit generate ./schema \
@@ -595,45 +594,58 @@ go run github.com/aita/sqlkit/cmd/sqlkit generate ./schema \
 
 Each foreign key generates a relation on both sides — `appdb.Posts.Rels.User`
 (belongs-to), `appdb.Users.Rels.Posts` (has-many), and `appdb.Users.Rels.Profile`
-(has-one, when the FK is unique). `Join` takes a relation and derives the `ON`
-clause from the FK, and the relation exposes the target's typed columns:
+(has-one, when the FK is unique). `JoinRel` takes a relation and derives the
+`ON` clause from the FK, and the relation exposes the target's typed columns:
 
 ```go
 // JOIN profiles ON profiles.user_id = users.id — the ON clause comes from the FK.
 var authors []MyUserDTO
-err := appdb.Users.Queryer(db).            // or the shorthand .Q(db)
+err := appdb.Users.Q(db).                  // or db.Select().From(appdb.Users)
     Where(appdb.Users.Age.Le(20)).
-    Join(appdb.Users.Rels.Profile).
+    JoinRel(appdb.Users.Rels.Profile).     // or LeftJoinRel
     Where(appdb.Users.Rels.Profile.Public.Eq(true)).
     OrderBy(appdb.Users.CreatedAt.Desc()).
     Limit(50).
     All(ctx).Scan(&authors)
 ```
 
-`Queryer(db)`/`Q(db)` take any `sqlkit.Executor` (a `*Database` or a `*Session`).
-A `QuerySet` is an immutable value — each method returns a new one — with
-`Where`, `Join`/`LeftJoin`, `OrderBy`, `Limit`/`Offset`, `Distinct`, and the
-terminals `All`/`First`/`One`/`Page`/`Count`. `Build()` drops back to the
-underlying `sqlkit.SelectQuery` (for `ToSQL`, `Union`, …).
+`Queryer(db)`/`Q(db)` are sugar for `db.Select().From(table)` and take any
+`sqlkit.Executor` (a `*Database` or a `*Session`); everything below lives on the
+ordinary `SelectQuery`.
 
 Reusable **filter bundles** map their set fields to columns by name (`sqlkit`
 tag or snake_case), so a request struct becomes a predicate set:
 
 ```go
 type UsersFilter struct {
-    Age  orm.FilterTerm // orm.Eq/Ne/Lt/Le/Gt/Ge/In/Like/IsNull
-    Name orm.FilterTerm
+    Age  sqlkit.FilterTerm // sqlkit.Eq/Ne/Lt/Le/Gt/Ge/In/FilterLike/FilterIsNull
+    Name sqlkit.FilterTerm
 }
 
-err := appdb.Users.Q(db).
-    Filter(UsersFilter{Age: orm.Le(20)}).   // unset fields are skipped
+err := db.Select().From(appdb.Users).
+    Filter(UsersFilter{Age: sqlkit.Le(20)}).   // unset fields are skipped
     All(ctx).Scan(&authors)
 ```
 
-Secondary CRUD lives on the QuerySet too — `Get(ctx, pk...)` (primary-key
-lookup), and `Insert()`/`Update()`/`Delete()` returning the bound builders — but
-the headline is the relation-aware `Select`. See `examples/blog` for a runnable
-end-to-end use.
+`Get(ctx, pk...)` is a primary-key lookup on the same builder. **Eager loading**
+is declared on the chain with `Preload` and runs at `Scan`: after the base rows
+materialize, each relation is fetched in one batched follow-up query and
+assigned onto a relation field (matched by name or a `preload:"<Relation>"` tag)
+by reflection — avoiding the N+1. Pass the *target table* — the relation from the
+`From` table is resolved automatically:
+
+```go
+var users []UserWithPosts  // has a `Posts []Post` field
+err := db.Select().From(appdb.Users).
+    Preload(appdb.Posts). // resolves Users→Posts; SELECT posts WHERE user_id IN (…)
+    All(ctx).Scan(&users)
+```
+
+When several relations reach the same table (e.g. a self-reference's `Manager`
+and `Reports`), pass the relation explicitly with `PreloadRel(appdb.Employees.Rels.Manager)`.
+
+Relations also drive multi-table writes: `Update(t).JoinRel(rel)` and
+`Delete(t).UsingRel(rel)`. See `examples/blog` for a runnable end-to-end use.
 
 ## Writing
 

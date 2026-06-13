@@ -65,6 +65,9 @@ type Rows struct {
 	// exactlyOne makes Scan require a single-row result: ErrNoRows when
 	// empty, ErrTooManyRows when a second row exists. Set by One.
 	exactlyOne bool
+	// preloads are relations eager-loaded after a successful Scan, set by
+	// SelectQuery terminals when Preload was registered.
+	preloads []Relation
 }
 
 func newRows(ctx context.Context, ex Executor, query sql.Query) Rows {
@@ -75,9 +78,9 @@ func newRows(ctx context.Context, ex Executor, query sql.Query) Rows {
 	return Rows{ctx: ctx, ex: ex, sqlText: sqlText, args: args, err: err}
 }
 
-// ErrRows returns a Rows that fails with err when scanned. It lets builders
-// layered on top of sqlkit (such as package orm) defer a build-time error to
-// the Scan call, matching how the typed builders surface compilation errors.
+// ErrRows returns a Rows that fails with err when scanned. It lets the builders
+// defer a build-time error (e.g. SelectQuery.Filter's mapping error) to the
+// Scan call, matching how the typed builders surface compilation errors.
 func ErrRows(err error) Rows { return Rows{err: err} }
 
 func newRawRows(ctx context.Context, ex Executor, query any, args []any) Rows {
@@ -100,11 +103,20 @@ func (r Rows) Scan(dest any) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	if r.exactlyOne {
-		return scanExactlyOne(rows, dest)
+	if err := func() error {
+		defer rows.Close()
+		if r.exactlyOne {
+			return scanExactlyOne(rows, dest)
+		}
+		return scanInto(rows, dest)
+	}(); err != nil {
+		return err
 	}
-	return scanInto(rows, dest)
+	// Eager-load any registered relations onto the just-scanned destination.
+	if len(r.preloads) > 0 {
+		return applyPreloads(r.ctx, r.ex, dest, r.preloads)
+	}
+	return nil
 }
 
 // scanExactlyOne scans the single result row into dest, requiring exactly

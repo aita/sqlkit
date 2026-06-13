@@ -54,10 +54,10 @@ type Options struct {
 	// Ignored when FilePerTable is set.
 	FileName string
 
-	// EmitRelations generates the relation-aware ORM surface: foreign-key
-	// relation metadata (table.Rels), Queryer/Q entry points returning an
-	// orm.QuerySet, and a columns/table struct split. Off by default, so the
-	// binding stays pure metadata unless asked.
+	// EmitRelations generates the relation-aware surface: foreign-key relation
+	// metadata (table.Rels) implementing sqlkit.Relation, Queryer/Q entry points
+	// returning a sqlkit.SelectQuery, and a columns/table struct split. Off by
+	// default, so the binding stays pure metadata unless asked.
 	EmitRelations bool
 
 	// EmitDTO additionally generates a row struct (DTO) per table.
@@ -77,10 +77,7 @@ type Options struct {
 	DTOName func(table meta.Table) string
 }
 
-const (
-	sqlkitImport = "github.com/aita/sqlkit"
-	ormImport    = "github.com/aita/sqlkit/orm"
-)
+const sqlkitImport = "github.com/aita/sqlkit"
 
 type columnModel struct {
 	Field      string
@@ -120,8 +117,16 @@ type relationModel struct {
 	RelType       string // relation struct type name, e.g. "UsersProfileRel"
 	TargetColumns string // embedded target columns type, e.g. "ProfilesColumns"
 	TargetCtor    string // target columns constructor, e.g. "newProfilesColumns"
-	Cardinality   string // "orm.ToOne" or "orm.ToMany"
+	Cardinality   string // "sqlkit.ToOne" or "sqlkit.ToMany"
 	JoinOn        string // the JoinOn predicate expression, fully rendered
+	// Alias is non-empty for self-referential relations, where the target is an
+	// aliased view of the same table (so the self-join is unambiguous). The
+	// relation value is then built with TargetCtor().As(Alias).
+	Alias string
+	// TargetKeys and BaseKeys are the join column pairs by bare SQL name: the
+	// relation matches target.TargetKeys[i] = base.BaseKeys[i]. They back Keys.
+	TargetKeys []string
+	BaseKeys   []string
 }
 
 // Generate renders the catalog into one or more Go source files according to
@@ -332,9 +337,8 @@ func assemble(models []*tableModel, opts Options) ([]File, error) {
 func bindingImports(tm *tableModel) []string {
 	imports := []string{sqlkitImport}
 	if tm.Relational {
-		imports = append(imports, ormImport)
-		// sql is referenced only by the JoinOn expressions, which are emitted
-		// only for tables that actually have relations.
+		// sql is referenced only by JoinOn expressions, which are emitted only
+		// for tables that actually have relations.
 		if len(tm.Relations) > 0 {
 			imports = append(imports, sqlImport)
 		}
@@ -483,6 +487,18 @@ func (t {{.TypeName}}) Defaulted() []sqlkit.AnyColumn {
 	return []sqlkit.AnyColumn{ {{- $first := true}}{{range .Columns}}{{if .HasDefault}}{{if not $first}}, {{end}}{{$first = false}}t.{{.Field}}{{end}}{{end -}} }
 }
 
+// As returns a copy of the binding aliased as alias: its columns render
+// qualified by the alias and its source renders "{{.Qualified}} AS <alias>".
+func (t {{.TypeName}}) As(alias string) {{.TypeName}} {
+	info := t.info.WithAlias(alias)
+	return {{.TypeName}}{
+		info: info,
+{{- range .Columns}}
+		{{.Field}}: sqlkit.NewColumn[{{.GoType}}](info, {{printf "%q" .Name}}),
+{{- end}}
+	}
+}
+
 var _ sqlkit.Table = {{.VarName}}
 `))
 
@@ -534,6 +550,18 @@ func (t {{.ColumnsType}}) PrimaryKey() []sqlkit.AnyColumn {
 func (t {{.ColumnsType}}) Defaulted() []sqlkit.AnyColumn {
 	return []sqlkit.AnyColumn{ {{- $first := true}}{{range .Columns}}{{if .HasDefault}}{{if not $first}}, {{end}}{{$first = false}}t.{{.Field}}{{end}}{{end -}} }
 }
+
+// As returns a copy of the binding aliased as alias: its columns render
+// qualified by the alias and its source renders "{{.Qualified}} AS <alias>".
+func (t {{.ColumnsType}}) As(alias string) {{.ColumnsType}} {
+	info := t.info.WithAlias(alias)
+	return {{.ColumnsType}}{
+		info: info,
+{{- range .Columns}}
+		{{.Field}}: sqlkit.NewColumn[{{.GoType}}](info, {{printf "%q" .Name}}),
+{{- end}}
+	}
+}
 {{if .Relations}}
 // {{.RelsType}} are the generated relations of table {{.Qualified}}.
 type {{.RelsType}} struct {
@@ -552,10 +580,15 @@ func (r {{.RelType}}) Target() sqlkit.Table { return r.{{.TargetColumns}} }
 func (r {{.RelType}}) JoinOn() sqlkit.Predicate { return {{.JoinOn}} }
 
 // Cardinality reports the relation multiplicity.
-func (r {{.RelType}}) Cardinality() orm.Cardinality { return {{.Cardinality}} }
+func (r {{.RelType}}) Cardinality() sqlkit.Cardinality { return {{.Cardinality}} }
 
 // Name returns the relation's field name.
 func (r {{.RelType}}) Name() string { return {{printf "%q" .Field}} }
+
+// Keys returns the join column pairs (target columns, base columns).
+func (r {{.RelType}}) Keys() (target, base []string) {
+	return []string{ {{- range $i, $c := .TargetKeys}}{{if $i}}, {{end}}{{printf "%q" $c}}{{end -}} }, []string{ {{- range $i, $c := .BaseKeys}}{{if $i}}, {{end}}{{printf "%q" $c}}{{end -}} }
+}
 {{end}}{{end -}}
 // {{.TypeName}} is the typed binding for table {{.Qualified}}.
 {{- range .Doc}}
@@ -568,11 +601,22 @@ type {{.TypeName}} struct {
 {{- end}}
 }
 
-// Queryer starts a relation-aware QuerySet over {{.Qualified}}, bound to ex.
-func (t {{.TypeName}}) Queryer(ex sqlkit.Executor) orm.QuerySet { return orm.NewQuerySet(ex, t) }
+// Queryer starts a SELECT over {{.Qualified}} bound to ex, with all columns
+// selected; chain JoinRel, Filter, Where, and the terminals from there.
+func (t {{.TypeName}}) Queryer(ex sqlkit.Executor) sqlkit.SelectQuery { return ex.Select().From(t) }
 
 // Q is shorthand for Queryer.
-func (t {{.TypeName}}) Q(ex sqlkit.Executor) orm.QuerySet { return orm.NewQuerySet(ex, t) }
+func (t {{.TypeName}}) Q(ex sqlkit.Executor) sqlkit.SelectQuery { return ex.Select().From(t) }
+
+// Relations lists the table's foreign-key relations, so Preload(target) can
+// resolve which relation reaches a related table.
+func (t {{.TypeName}}) Relations() []sqlkit.Relation {
+{{- if .Relations}}
+	return []sqlkit.Relation{ {{- range $i, $r := .Relations}}{{if $i}}, {{end}}t.Rels.{{$r.Field}}{{end}} }
+{{- else}}
+	return nil
+{{- end}}
+}
 
 // {{.VarName}} provides typed access to table {{.Qualified}}.
 var {{.VarName}} = {{.TypeName}}{
@@ -580,7 +624,11 @@ var {{.VarName}} = {{.TypeName}}{
 {{- if .Relations}}
 	Rels: {{.RelsType}}{
 {{- range .Relations}}
+{{- if .Alias}}
+		{{.Field}}: {{.RelType}}{ {{.TargetColumns}}: {{.TargetCtor}}().As({{printf "%q" .Alias}}) },
+{{- else}}
 		{{.Field}}: {{.RelType}}{ {{.TargetColumns}}: {{.TargetCtor}}() },
+{{- end}}
 {{- end}}
 	},
 {{- end}}

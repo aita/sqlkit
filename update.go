@@ -38,6 +38,33 @@ func (q UpdateQuery) WithCTE(ctes ...sql.CTE) UpdateQuery {
 	return q
 }
 
+// From adds correlated sources to the UPDATE (PostgreSQL UPDATE ... FROM /
+// MySQL multi-table UPDATE); correlate them with Where.
+func (q UpdateQuery) From(sources ...sql.Source) UpdateQuery {
+	q.query = q.query.From(sources...)
+	return q
+}
+
+// Join joins source on the predicate. It renders as an inline join on MySQL and
+// as a correlated FROM with the predicate folded into WHERE on PostgreSQL.
+func (q UpdateQuery) Join(source sql.Source, on Predicate) UpdateQuery {
+	q.query = q.query.Join(source, on.Expression())
+	return q
+}
+
+// LeftJoin is Join with a LEFT JOIN (MySQL inline form only).
+func (q UpdateQuery) LeftJoin(source sql.Source, on Predicate) UpdateQuery {
+	q.query = q.query.LeftJoin(source, on.Expression())
+	return q
+}
+
+// JoinRel correlates the UPDATE to a relation's target on its foreign-key
+// condition (PostgreSQL UPDATE ... FROM / MySQL inline JOIN), so callers never
+// spell out the ON clause.
+func (q UpdateQuery) JoinRel(rel Relation) UpdateQuery {
+	return q.Join(rel.Target(), rel.JoinOn())
+}
+
 // Where adds predicates, combined with AND.
 func (q UpdateQuery) Where(predicates ...Predicate) UpdateQuery {
 	if expr := combineWhere(predicates); expr != nil {

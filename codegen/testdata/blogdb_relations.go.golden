@@ -4,7 +4,6 @@ package blogdb
 
 import (
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/orm"
 	"github.com/aita/sqlkit/sql"
 	"time"
 )
@@ -50,6 +49,19 @@ func (t UsersColumns) Defaulted() []sqlkit.AnyColumn {
 	return []sqlkit.AnyColumn{t.ID, t.CreatedAt}
 }
 
+// As returns a copy of the binding aliased as alias: its columns render
+// qualified by the alias and its source renders "public.users AS <alias>".
+func (t UsersColumns) As(alias string) UsersColumns {
+	info := t.info.WithAlias(alias)
+	return UsersColumns{
+		info:      info,
+		ID:        sqlkit.NewColumn[int64](info, "id"),
+		Email:     sqlkit.NewColumn[string](info, "email"),
+		Name:      sqlkit.NewColumn[*string](info, "name"),
+		CreatedAt: sqlkit.NewColumn[time.Time](info, "created_at"),
+	}
+}
+
 // UsersRels are the generated relations of table public.users.
 type UsersRels struct {
 	Posts   UsersPostsRel
@@ -68,10 +80,15 @@ func (r UsersPostsRel) JoinOn() sqlkit.Predicate {
 }
 
 // Cardinality reports the relation multiplicity.
-func (r UsersPostsRel) Cardinality() orm.Cardinality { return orm.ToMany }
+func (r UsersPostsRel) Cardinality() sqlkit.Cardinality { return sqlkit.ToMany }
 
 // Name returns the relation's field name.
 func (r UsersPostsRel) Name() string { return "Posts" }
+
+// Keys returns the join column pairs (target columns, base columns).
+func (r UsersPostsRel) Keys() (target, base []string) {
+	return []string{"user_id"}, []string{"id"}
+}
 
 // UsersProfileRel is the Profile relation of table public.users.
 type UsersProfileRel struct{ ProfilesColumns }
@@ -85,10 +102,15 @@ func (r UsersProfileRel) JoinOn() sqlkit.Predicate {
 }
 
 // Cardinality reports the relation multiplicity.
-func (r UsersProfileRel) Cardinality() orm.Cardinality { return orm.ToOne }
+func (r UsersProfileRel) Cardinality() sqlkit.Cardinality { return sqlkit.ToOne }
 
 // Name returns the relation's field name.
 func (r UsersProfileRel) Name() string { return "Profile" }
+
+// Keys returns the join column pairs (target columns, base columns).
+func (r UsersProfileRel) Keys() (target, base []string) {
+	return []string{"user_id"}, []string{"id"}
+}
 
 // UsersTable is the typed binding for table public.users.
 type UsersTable struct {
@@ -96,11 +118,18 @@ type UsersTable struct {
 	Rels UsersRels
 }
 
-// Queryer starts a relation-aware QuerySet over public.users, bound to ex.
-func (t UsersTable) Queryer(ex sqlkit.Executor) orm.QuerySet { return orm.NewQuerySet(ex, t) }
+// Queryer starts a SELECT over public.users bound to ex, with all columns
+// selected; chain JoinRel, Filter, Where, and the terminals from there.
+func (t UsersTable) Queryer(ex sqlkit.Executor) sqlkit.SelectQuery { return ex.Select().From(t) }
 
 // Q is shorthand for Queryer.
-func (t UsersTable) Q(ex sqlkit.Executor) orm.QuerySet { return orm.NewQuerySet(ex, t) }
+func (t UsersTable) Q(ex sqlkit.Executor) sqlkit.SelectQuery { return ex.Select().From(t) }
+
+// Relations lists the table's foreign-key relations, so Preload(target) can
+// resolve which relation reaches a related table.
+func (t UsersTable) Relations() []sqlkit.Relation {
+	return []sqlkit.Relation{t.Rels.Posts, t.Rels.Profile}
+}
 
 // Users provides typed access to table public.users.
 var Users = UsersTable{
@@ -156,6 +185,20 @@ func (t PostsColumns) Defaulted() []sqlkit.AnyColumn {
 	return []sqlkit.AnyColumn{t.ID, t.Published}
 }
 
+// As returns a copy of the binding aliased as alias: its columns render
+// qualified by the alias and its source renders "public.posts AS <alias>".
+func (t PostsColumns) As(alias string) PostsColumns {
+	info := t.info.WithAlias(alias)
+	return PostsColumns{
+		info:      info,
+		ID:        sqlkit.NewColumn[int64](info, "id"),
+		UserID:    sqlkit.NewColumn[int64](info, "user_id"),
+		Title:     sqlkit.NewColumn[string](info, "title"),
+		Body:      sqlkit.NewColumn[*string](info, "body"),
+		Published: sqlkit.NewColumn[bool](info, "published"),
+	}
+}
+
 // PostsRels are the generated relations of table public.posts.
 type PostsRels struct {
 	User PostsUserRel
@@ -173,10 +216,15 @@ func (r PostsUserRel) JoinOn() sqlkit.Predicate {
 }
 
 // Cardinality reports the relation multiplicity.
-func (r PostsUserRel) Cardinality() orm.Cardinality { return orm.ToOne }
+func (r PostsUserRel) Cardinality() sqlkit.Cardinality { return sqlkit.ToOne }
 
 // Name returns the relation's field name.
 func (r PostsUserRel) Name() string { return "User" }
+
+// Keys returns the join column pairs (target columns, base columns).
+func (r PostsUserRel) Keys() (target, base []string) {
+	return []string{"id"}, []string{"user_id"}
+}
 
 // PostsTable is the typed binding for table public.posts.
 type PostsTable struct {
@@ -184,11 +232,18 @@ type PostsTable struct {
 	Rels PostsRels
 }
 
-// Queryer starts a relation-aware QuerySet over public.posts, bound to ex.
-func (t PostsTable) Queryer(ex sqlkit.Executor) orm.QuerySet { return orm.NewQuerySet(ex, t) }
+// Queryer starts a SELECT over public.posts bound to ex, with all columns
+// selected; chain JoinRel, Filter, Where, and the terminals from there.
+func (t PostsTable) Queryer(ex sqlkit.Executor) sqlkit.SelectQuery { return ex.Select().From(t) }
 
 // Q is shorthand for Queryer.
-func (t PostsTable) Q(ex sqlkit.Executor) orm.QuerySet { return orm.NewQuerySet(ex, t) }
+func (t PostsTable) Q(ex sqlkit.Executor) sqlkit.SelectQuery { return ex.Select().From(t) }
+
+// Relations lists the table's foreign-key relations, so Preload(target) can
+// resolve which relation reaches a related table.
+func (t PostsTable) Relations() []sqlkit.Relation {
+	return []sqlkit.Relation{t.Rels.User}
+}
 
 // Posts provides typed access to table public.posts.
 var Posts = PostsTable{
@@ -241,6 +296,19 @@ func (t ProfilesColumns) Defaulted() []sqlkit.AnyColumn {
 	return []sqlkit.AnyColumn{t.ID, t.Public}
 }
 
+// As returns a copy of the binding aliased as alias: its columns render
+// qualified by the alias and its source renders "public.profiles AS <alias>".
+func (t ProfilesColumns) As(alias string) ProfilesColumns {
+	info := t.info.WithAlias(alias)
+	return ProfilesColumns{
+		info:   info,
+		ID:     sqlkit.NewColumn[int64](info, "id"),
+		UserID: sqlkit.NewColumn[int64](info, "user_id"),
+		Bio:    sqlkit.NewColumn[*string](info, "bio"),
+		Public: sqlkit.NewColumn[bool](info, "public"),
+	}
+}
+
 // ProfilesRels are the generated relations of table public.profiles.
 type ProfilesRels struct {
 	User ProfilesUserRel
@@ -258,10 +326,15 @@ func (r ProfilesUserRel) JoinOn() sqlkit.Predicate {
 }
 
 // Cardinality reports the relation multiplicity.
-func (r ProfilesUserRel) Cardinality() orm.Cardinality { return orm.ToOne }
+func (r ProfilesUserRel) Cardinality() sqlkit.Cardinality { return sqlkit.ToOne }
 
 // Name returns the relation's field name.
 func (r ProfilesUserRel) Name() string { return "User" }
+
+// Keys returns the join column pairs (target columns, base columns).
+func (r ProfilesUserRel) Keys() (target, base []string) {
+	return []string{"id"}, []string{"user_id"}
+}
 
 // ProfilesTable is the typed binding for table public.profiles.
 type ProfilesTable struct {
@@ -269,11 +342,18 @@ type ProfilesTable struct {
 	Rels ProfilesRels
 }
 
-// Queryer starts a relation-aware QuerySet over public.profiles, bound to ex.
-func (t ProfilesTable) Queryer(ex sqlkit.Executor) orm.QuerySet { return orm.NewQuerySet(ex, t) }
+// Queryer starts a SELECT over public.profiles bound to ex, with all columns
+// selected; chain JoinRel, Filter, Where, and the terminals from there.
+func (t ProfilesTable) Queryer(ex sqlkit.Executor) sqlkit.SelectQuery { return ex.Select().From(t) }
 
 // Q is shorthand for Queryer.
-func (t ProfilesTable) Q(ex sqlkit.Executor) orm.QuerySet { return orm.NewQuerySet(ex, t) }
+func (t ProfilesTable) Q(ex sqlkit.Executor) sqlkit.SelectQuery { return ex.Select().From(t) }
+
+// Relations lists the table's foreign-key relations, so Preload(target) can
+// resolve which relation reaches a related table.
+func (t ProfilesTable) Relations() []sqlkit.Relation {
+	return []sqlkit.Relation{t.Rels.User}
+}
 
 // Profiles provides typed access to table public.profiles.
 var Profiles = ProfilesTable{

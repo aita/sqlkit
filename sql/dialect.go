@@ -110,6 +110,18 @@ type JSONObjectRenderer interface {
 	JSONObject(funcName string, pairs [][2]string) string
 }
 
+// JoinedUpdateDeleter is an optional capability for dialects whose multi-table
+// UPDATE/DELETE syntax differs from the SQL-standard FROM/USING form. MySQL puts
+// the joined sources inline (UPDATE t JOIN j ON ... SET ...) and names the
+// delete targets after DELETE (DELETE t FROM t JOIN ...), whereas PostgreSQL
+// appends them after SET / the target with FROM / USING. The compiler detects
+// it with a type assertion, so it is not a breaking change to Dialect; a
+// dialect that does not implement it uses the standard FROM/USING layout.
+type JoinedUpdateDeleter interface {
+	// UsesInlineJoins reports the MySQL-style inline-join layout.
+	UsesInlineJoins() bool
+}
+
 // DialectByName returns the Dialect for a name ("postgres"/"postgresql" or
 // "mysql"; empty defaults to postgres). It errors on an unknown name.
 func DialectByName(name string) (Dialect, error) {
@@ -310,6 +322,9 @@ func (MySQLDialect) Placeholder(int) string { return "?" }
 
 // SupportsReturning reports RETURNING support (MySQL lacks it).
 func (MySQLDialect) SupportsReturning() bool { return false }
+
+// UsesInlineJoins selects MySQL's inline multi-table UPDATE/DELETE layout.
+func (MySQLDialect) UsesInlineJoins() bool { return true }
 
 var mysqlLengthTypes = map[string]bool{"varchar": true, "char": true, "binary": true, "varbinary": true}
 var mysqlDecimalTypes = map[string]bool{"decimal": true, "numeric": true}

@@ -49,6 +49,19 @@ func (t UsersTable) Defaulted() []sqlkit.AnyColumn {
 	return []sqlkit.AnyColumn{t.ID, t.CreatedAt}
 }
 
+// As returns a copy of the binding aliased as alias: its columns render
+// qualified by the alias and its source renders "public.users AS <alias>".
+func (t UsersTable) As(alias string) UsersTable {
+	info := t.info.WithAlias(alias)
+	return UsersTable{
+		info:      info,
+		ID:        sqlkit.NewColumn[int64](info, "id"),
+		Email:     sqlkit.NewColumn[string](info, "email"),
+		Name:      sqlkit.NewColumn[*string](info, "name"),
+		CreatedAt: sqlkit.NewColumn[time.Time](info, "created_at"),
+	}
+}
+
 var _ sqlkit.Table = Users
 
 // User is a generated row struct for table public.users; any struct
@@ -102,6 +115,20 @@ func (t PostsTable) PrimaryKey() []sqlkit.AnyColumn {
 // Defaulted returns the columns with database-side defaults.
 func (t PostsTable) Defaulted() []sqlkit.AnyColumn {
 	return []sqlkit.AnyColumn{t.ID, t.Published}
+}
+
+// As returns a copy of the binding aliased as alias: its columns render
+// qualified by the alias and its source renders "public.posts AS <alias>".
+func (t PostsTable) As(alias string) PostsTable {
+	info := t.info.WithAlias(alias)
+	return PostsTable{
+		info:      info,
+		ID:        sqlkit.NewColumn[int64](info, "id"),
+		UserID:    sqlkit.NewColumn[int64](info, "user_id"),
+		Title:     sqlkit.NewColumn[string](info, "title"),
+		Body:      sqlkit.NewColumn[*string](info, "body"),
+		Published: sqlkit.NewColumn[bool](info, "published"),
+	}
 }
 
 var _ sqlkit.Table = Posts

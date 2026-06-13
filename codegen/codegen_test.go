@@ -110,37 +110,67 @@ func TestGenerateRelationsGolden(t *testing.T) {
 
 	body := string(got)
 	for _, want := range []string{
-		"func (t UsersTable) Queryer(ex sqlkit.Executor) orm.QuerySet",
-		"func (t UsersTable) Q(ex sqlkit.Executor) orm.QuerySet",
+		"func (t UsersTable) Queryer(ex sqlkit.Executor) sqlkit.SelectQuery",
+		"func (t UsersTable) Q(ex sqlkit.Executor) sqlkit.SelectQuery",
 		"type UsersColumns struct",
 		"func newUsersColumns() UsersColumns",
 		"Profile UsersProfileRel", // has-one (unique FK)
 		"Posts   UsersPostsRel",   // has-many
 		"User PostsUserRel",       // belongs-to
-		"return orm.ToOne",
-		"return orm.ToMany",
+		"return sqlkit.ToOne",
+		"return sqlkit.ToMany",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("relations golden missing %q", want)
 		}
 	}
 	// Profile is has-one, Posts is has-many.
-	if !strings.Contains(body, "func (r UsersProfileRel) Cardinality() orm.Cardinality { return orm.ToOne }") {
+	if !strings.Contains(body, "func (r UsersProfileRel) Cardinality() sqlkit.Cardinality { return sqlkit.ToOne }") {
 		t.Errorf("Profile relation should be ToOne (unique FK)\n%s", body)
 	}
-	if !strings.Contains(body, "func (r UsersPostsRel) Cardinality() orm.Cardinality { return orm.ToMany }") {
+	if !strings.Contains(body, "func (r UsersPostsRel) Cardinality() sqlkit.Cardinality { return sqlkit.ToMany }") {
 		t.Errorf("Posts relation should be ToMany\n%s", body)
 	}
 }
 
-func TestGenerateRelationsNoForeignKeysOmitsSQLImport(t *testing.T) {
-	// A relation-aware binding for a table without foreign keys still emits the
-	// Queryer surface (orm import) but no JoinOn expressions, so it must not
-	// import sql — an unused import would make the generated file uncompilable.
-	got := string(generateSingle(t, fixtureTables()[:1], Options{PackageName: "blogdb", EmitRelations: true}))
-	if !strings.Contains(got, `"github.com/aita/sqlkit/orm"`) {
-		t.Errorf("relation-aware binding should import orm\n%s", got)
+func TestGenerateSelfReferentialRelations(t *testing.T) {
+	tables := []meta.Table{{
+		Schema: meta.Schema{Name: "public"},
+		Name:   "employees",
+		Columns: []meta.Column{
+			{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true, HasDefault: true},
+			{Name: "manager_id", Type: meta.Of("postgres", "int8", 0, 0, 0), Nullable: true},
+			{Name: "name", Type: meta.Of("postgres", "text", 0, 0, 0)},
+		},
+		ForeignKeys: []meta.ForeignKey{
+			{Name: "employees_manager_id_fkey", Columns: []string{"manager_id"}, RefSchema: meta.Schema{Name: "public"}, RefTable: "employees", RefColumns: []string{"id"}},
+		},
+	}}
+	body := string(generateSingle(t, tables, Options{PackageName: "hrdb", EmitRelations: true}))
+
+	for _, want := range []string{
+		// Forward belongs-to "Manager" with the target aliased "manager".
+		"type EmployeesManagerRel struct{ EmployeesColumns }",
+		`EmployeesColumns: newEmployeesColumns().As("manager")`,
+		"func (r EmployeesManagerRel) Cardinality() sqlkit.Cardinality { return sqlkit.ToOne }",
+		// JoinOn equates the aliased target id to the base manager_id.
+		"sqlkit.Cond(sql.Eq(r.ID, newEmployeesColumns().ManagerID))",
+		// Reverse has-many; alias suffixed to avoid colliding with the table name.
+		"func (r EmployeesEmployeesRel) Cardinality() sqlkit.Cardinality { return sqlkit.ToMany }",
+		`As("employees_ref")`,
+		"sqlkit.Cond(sql.Eq(r.ManagerID, newEmployeesColumns().ID))",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("self-referential relations missing %q\n%s", want, body)
+		}
 	}
+}
+
+func TestGenerateRelationsNoForeignKeysOmitsSQLImport(t *testing.T) {
+	// A relation-aware binding for a table without foreign keys emits the
+	// Queryer surface but no JoinOn expressions, so it must not import sql — an
+	// unused import would make the generated file uncompilable.
+	got := string(generateSingle(t, fixtureTables()[:1], Options{PackageName: "blogdb", EmitRelations: true}))
 	if strings.Contains(got, `"github.com/aita/sqlkit/sql"`) {
 		t.Errorf("binding without relations must not import sql (unused)\n%s", got)
 	}
