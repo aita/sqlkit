@@ -1,22 +1,49 @@
-// Package meta is the database schema metadata model shared across sqlkit's
-// tooling: the inspector introspects a live database into it, the schema
-// package builds it from in-code designs, and the codegen and ddl generators
-// consume it. It is a pure data model with no database or generation
-// dependencies.
+// Package meta is the database schema metadata model: the flat, value-only
+// abstraction of tables and columns that sqlkit's SQL generators consume. The
+// sqldef package builds it from in-code designs and the inspector introspects
+// a live database into it (for the initial bootstrap); the codegen and ddl
+// generators take it from there. It is a pure data model with no database,
+// dialect, or generation dependencies — the dialect is supplied to the
+// generators at call time, not stored on the model.
+//
+// Everything is a value type with no back-references, so a design may be split
+// across packages: each exposes the []Table it owns and the generators run
+// over the concatenation.
 package meta
 
-// Schema is a loaded database schema.
-type Schema struct {
-	Name string
-	// Dialect identifies the source database ("postgres" or "mysql"). It
-	// selects the default SQL→Go type table during code generation.
-	Dialect string
-	Tables  []Table
+// Catalog is a resolved set of tables — the dialect-agnostic value that a
+// sqldef design builds into and that the codegen and ddl generators consume.
+// It is the meta-level hand-off type: sqldef.Catalog.Build returns one, and
+// the generators take it (plus the target dialect) from there.
+type Catalog struct {
+	Tables []Table
 }
 
-// Table is a database table.
+// Schemas returns the distinct schemas of the catalog's tables, in first-seen
+// order.
+func (c Catalog) Schemas() []Schema {
+	var out []Schema
+	seen := map[string]bool{}
+	for _, t := range c.Tables {
+		if !seen[t.Schema.Name] {
+			seen[t.Schema.Name] = true
+			out = append(out, t.Schema)
+		}
+	}
+	return out
+}
+
+// Schema identifies the schema (PostgreSQL schema / MySQL database) a table
+// belongs to. It is a small value, not a container: construct
+// meta.Schema{Name: "public"} wherever one is needed. The zero value is the
+// unnamed default schema, which generates unqualified names.
+type Schema struct {
+	Name string
+}
+
+// Table is a database table. Schema is the schema it belongs to.
 type Table struct {
-	Schema      string
+	Schema      Schema
 	Name        string
 	Comment     string
 	Columns     []Column
@@ -68,7 +95,7 @@ type Check struct {
 type ForeignKey struct {
 	Name       string
 	Columns    []string
-	RefSchema  string
+	RefSchema  Schema
 	RefTable   string
 	RefColumns []string
 }

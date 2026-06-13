@@ -12,15 +12,17 @@ import (
 	"github.com/aita/sqlkit/meta"
 )
 
-// Build resolves the catalog into one schema model per declared schema for
-// the dialect ("postgres" or "mysql"; empty defaults to "postgres"),
-// validating it along the way.
-func (c *Catalog) Build(dialect string) ([]meta.Schema, error) {
+// Build resolves the design into a meta.Catalog for the dialect ("postgres"
+// or "mysql"; empty defaults to "postgres"), validating it along the way.
+// Each table carries its schema in Table.Schema, in declaration order grouped
+// by schema. The returned meta.Catalog is the dialect-agnostic value the
+// codegen and ddl generators consume.
+func (c *Design) Build(dialect string) (meta.Catalog, error) {
 	if dialect == "" {
 		dialect = "postgres"
 	}
 	if dialect != "postgres" && dialect != "mysql" {
-		return nil, fmt.Errorf("sqldef: unsupported dialect %q (want postgres or mysql)", dialect)
+		return meta.Catalog{}, fmt.Errorf("sqldef: unsupported dialect %q (want postgres or mysql)", dialect)
 	}
 
 	errs := append([]error(nil), c.errs...)
@@ -28,34 +30,24 @@ func (c *Catalog) Build(dialect string) ([]meta.Schema, error) {
 		errs = append(errs, fmt.Errorf(format, args...))
 	}
 
-	total := 0
+	var tables []meta.Table
 	for _, s := range c.schemas {
-		total += len(s.tables)
+		for _, t := range s.tables {
+			tables = append(tables, buildTable(t, c, dialect, fail))
+		}
 	}
-	if total == 0 {
+	if len(tables) == 0 {
 		fail("catalog declares no tables")
 	}
 
-	var models []meta.Schema
-	for _, s := range c.schemas {
-		if len(s.tables) == 0 {
-			continue
-		}
-		model := meta.Schema{Name: s.name, Dialect: dialect}
-		for _, t := range s.tables {
-			model.Tables = append(model.Tables, buildTable(t, c, dialect, fail))
-		}
-		models = append(models, model)
-	}
-
 	if len(errs) > 0 {
-		return nil, fmt.Errorf("sqldef: invalid catalog: %w", errors.Join(errs...))
+		return meta.Catalog{}, fmt.Errorf("sqldef: invalid catalog: %w", errors.Join(errs...))
 	}
-	return models, nil
+	return meta.Catalog{Tables: tables}, nil
 }
 
-func buildTable(t *Table, c *Catalog, dialect string, fail func(string, ...any)) meta.Table {
-	mt := meta.Table{Schema: t.schema.name, Name: t.name, Comment: t.comment}
+func buildTable(t *Table, c *Design, dialect string, fail func(string, ...any)) meta.Table {
+	mt := meta.Table{Schema: meta.Schema{Name: t.schema.name}, Name: t.name, Comment: t.comment}
 	if len(t.columns) == 0 {
 		fail("table %q declares no columns", t.name)
 	}
@@ -89,7 +81,7 @@ func buildTable(t *Table, c *Catalog, dialect string, fail func(string, ...any))
 		mt.ForeignKeys = append(mt.ForeignKeys, meta.ForeignKey{
 			Name:       fmt.Sprintf("fk_%s_%s", t.name, strings.Join(fk.columns, "_")),
 			Columns:    fk.columns,
-			RefSchema:  fk.ref.schema.name,
+			RefSchema:  meta.Schema{Name: fk.ref.schema.name},
 			RefTable:   fk.ref.name,
 			RefColumns: fk.refColumns,
 		})
@@ -165,11 +157,11 @@ func collectIndexes(t *Table) []indexDef {
 	return append(indexes, t.indexes...)
 }
 
-func validateForeignKey(t *Table, fk fkDef, c *Catalog) error {
+func validateForeignKey(t *Table, fk fkDef, c *Design) error {
 	if fk.ref == nil {
 		return fmt.Errorf("table %q: foreign key references a nil table", t.name)
 	}
-	if fk.ref.schema.catalog != c {
+	if fk.ref.schema.design != c {
 		return fmt.Errorf("table %q: foreign key references table %q from a different catalog", t.name, fk.ref.name)
 	}
 	if len(fk.columns) == 0 || len(fk.columns) != len(fk.refColumns) {
@@ -197,50 +189,25 @@ func hasColumn(t *Table, name string) bool {
 	return false
 }
 
-// Generate builds the catalog and runs the code generator over every schema,
+// Generate builds the catalog and runs the code generator over its tables,
 // producing the typed table bindings (and whatever else opts requests).
-// opts.Dialect selects the target dialect (default postgres). When several
-// schemas would emit a file with the same name, later files are prefixed with
-// their schema name.
-func (c *Catalog) Generate(opts codegen.Options) ([]codegen.File, error) {
-	models, err := c.Build(opts.Dialect)
+// opts.Dialect selects the target dialect (default postgres).
+func (c *Design) Generate(opts codegen.Options) ([]codegen.File, error) {
+	tables, err := c.Build(opts.Dialect)
 	if err != nil {
 		return nil, err
 	}
-	var files []codegen.File
-	used := map[string]bool{}
-	for _, model := range models {
-		generated, err := codegen.Generate(model, opts)
-		if err != nil {
-			return nil, err
-		}
-		for _, file := range generated {
-			if used[file.Name] && model.Name != "" {
-				file.Name = model.Name + "_" + file.Name
-			}
-			used[file.Name] = true
-			files = append(files, file)
-		}
-	}
-	return files, nil
+	return codegen.Generate(tables, opts)
 }
 
-// DDL builds the catalog and renders every schema as CREATE TABLE /
+// DDL builds the catalog and renders its tables as CREATE TABLE /
 // CREATE INDEX / comment statements for the dialect (default postgres).
-func (c *Catalog) DDL(dialect string) (string, error) {
-	models, err := c.Build(dialect)
+func (c *Design) DDL(dialect string) (string, error) {
+	tables, err := c.Build(dialect)
 	if err != nil {
 		return "", err
 	}
-	parts := make([]string, 0, len(models))
-	for _, model := range models {
-		sql, err := ddl.Generate(model)
-		if err != nil {
-			return "", err
-		}
-		parts = append(parts, sql)
-	}
-	return strings.Join(parts, "\n"), nil
+	return ddl.Generate(tables, dialect)
 }
 
 // Write writes generated files into dir, creating it if needed.

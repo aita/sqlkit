@@ -18,16 +18,25 @@ type Querier interface {
 }
 
 // Inspect reads all base tables of a schema for the given dialect ("postgres"
-// or "mysql"; an empty dialect defaults to PostgreSQL).
-func Inspect(ctx context.Context, db Querier, dialect, schemaName string) (meta.Schema, error) {
+// or "mysql"; an empty dialect defaults to PostgreSQL) into a meta.Catalog.
+// Each table carries its schema in Table.Schema. Introspection is meant for
+// the initial bootstrap; afterwards the schema is maintained as a sqldef
+// design.
+func Inspect(ctx context.Context, db Querier, dialect, schemaName string) (meta.Catalog, error) {
+	var tables []meta.Table
+	var err error
 	switch dialect {
 	case "", "postgres", "postgresql", "pgx":
-		return inspectPostgres(ctx, db, schemaName)
+		tables, err = inspectPostgres(ctx, db, schemaName)
 	case "mysql":
-		return inspectMySQL(ctx, db, schemaName)
+		tables, err = inspectMySQL(ctx, db, schemaName)
 	default:
-		return meta.Schema{}, fmt.Errorf("inspector: unsupported dialect %q", dialect)
+		return meta.Catalog{}, fmt.Errorf("inspector: unsupported dialect %q", dialect)
 	}
+	if err != nil {
+		return meta.Catalog{}, err
+	}
+	return meta.Catalog{Tables: tables}, nil
 }
 
 // decimalTypes are the SQL types for which a precision/scale is meaningful.
@@ -58,10 +67,10 @@ type fkRow struct {
 
 // attachForeignKeys groups foreign-key rows by (table, constraint) and attaches
 // them to the matching tables, preserving column order.
-func attachForeignKeys(model *meta.Schema, rows []fkRow) {
+func attachForeignKeys(tables []meta.Table, rows []fkRow) {
 	tableIndex := map[string]int{}
-	for i := range model.Tables {
-		tableIndex[model.Tables[i].Name] = i
+	for i := range tables {
+		tableIndex[tables[i].Name] = i
 	}
 	// key -> index of the ForeignKey within its table.
 	fkIndex := map[string]int{}
@@ -73,15 +82,15 @@ func attachForeignKeys(model *meta.Schema, rows []fkRow) {
 		key := row.table + "\x00" + row.constraint
 		fi, ok := fkIndex[key]
 		if !ok {
-			fi = len(model.Tables[ti].ForeignKeys)
+			fi = len(tables[ti].ForeignKeys)
 			fkIndex[key] = fi
-			model.Tables[ti].ForeignKeys = append(model.Tables[ti].ForeignKeys, meta.ForeignKey{
+			tables[ti].ForeignKeys = append(tables[ti].ForeignKeys, meta.ForeignKey{
 				Name:      row.constraint,
-				RefSchema: row.refSchema,
+				RefSchema: meta.Schema{Name: row.refSchema},
 				RefTable:  row.refTable,
 			})
 		}
-		fk := &model.Tables[ti].ForeignKeys[fi]
+		fk := &tables[ti].ForeignKeys[fi]
 		fk.Columns = append(fk.Columns, row.column)
 		fk.RefColumns = append(fk.RefColumns, row.refColumn)
 	}
@@ -97,10 +106,10 @@ type indexRow struct {
 
 // attachIndexes groups index rows by (table, index) and attaches them to the
 // matching tables, preserving column order.
-func attachIndexes(model *meta.Schema, rows []indexRow) {
+func attachIndexes(tables []meta.Table, rows []indexRow) {
 	tableIndex := map[string]int{}
-	for i := range model.Tables {
-		tableIndex[model.Tables[i].Name] = i
+	for i := range tables {
+		tableIndex[tables[i].Name] = i
 	}
 	ixIndex := map[string]int{}
 	for _, row := range rows {
@@ -111,26 +120,26 @@ func attachIndexes(model *meta.Schema, rows []indexRow) {
 		key := row.table + "\x00" + row.index
 		ii, ok := ixIndex[key]
 		if !ok {
-			ii = len(model.Tables[ti].Indexes)
+			ii = len(tables[ti].Indexes)
 			ixIndex[key] = ii
-			model.Tables[ti].Indexes = append(model.Tables[ti].Indexes, meta.Index{
+			tables[ti].Indexes = append(tables[ti].Indexes, meta.Index{
 				Name:   row.index,
 				Unique: row.unique,
 			})
 		}
-		ix := &model.Tables[ti].Indexes[ii]
+		ix := &tables[ti].Indexes[ii]
 		ix.Columns = append(ix.Columns, row.column)
 	}
 }
 
 // attachCheck adds a check constraint to its table, normalizing the clause to
 // the bare expression (no CHECK keyword or outer parentheses).
-func attachCheck(model *meta.Schema, tableName, constraint, clause string) {
-	for i := range model.Tables {
-		if model.Tables[i].Name != tableName {
+func attachCheck(tables []meta.Table, tableName, constraint, clause string) {
+	for i := range tables {
+		if tables[i].Name != tableName {
 			continue
 		}
-		model.Tables[i].Checks = append(model.Tables[i].Checks, meta.Check{
+		tables[i].Checks = append(tables[i].Checks, meta.Check{
 			Name:       constraint,
 			Expression: normalizeCheckClause(clause),
 		})

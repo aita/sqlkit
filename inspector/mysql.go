@@ -62,22 +62,22 @@ ORDER BY CONSTRAINT_NAME, ORDINAL_POSITION`
 
 // inspectMySQL reads the schema from MySQL's information_schema. An empty schema
 // resolves to the connection's current database via DATABASE().
-func inspectMySQL(ctx context.Context, db Querier, schemaName string) (meta.Schema, error) {
+func inspectMySQL(ctx context.Context, db Querier, schemaName string) ([]meta.Table, error) {
 	if schemaName == "" {
 		current, err := currentMySQLSchema(ctx, db)
 		if err != nil {
-			return meta.Schema{}, err
+			return nil, err
 		}
 		schemaName = current
 	}
 	if schemaName == "" {
-		return meta.Schema{}, fmt.Errorf("inspector: no MySQL schema selected; pass a database name")
+		return nil, fmt.Errorf("inspector: no MySQL schema selected; pass a database name")
 	}
-	model := meta.Schema{Name: schemaName, Dialect: "mysql"}
+	var tables []meta.Table
 
 	rows, err := db.QueryContext(ctx, mysqlColumnsQuery, schemaName)
 	if err != nil {
-		return meta.Schema{}, fmt.Errorf("inspector: read columns: %w", err)
+		return nil, fmt.Errorf("inspector: read columns: %w", err)
 	}
 	defer rows.Close()
 	tableIndex := map[string]int{}
@@ -85,56 +85,56 @@ func inspectMySQL(ctx context.Context, db Querier, schemaName string) (meta.Sche
 		var tableName, tableComment string
 		var column meta.Column
 		if err := rows.Scan(&tableName, &column.Name, &column.DataType, &column.Nullable, &column.HasDefault, &column.PrimaryKey, &column.Length, &column.Precision, &column.Scale, &column.Comment, &tableComment); err != nil {
-			return meta.Schema{}, fmt.Errorf("inspector: scan column: %w", err)
+			return nil, fmt.Errorf("inspector: scan column: %w", err)
 		}
 		normalizeNumeric(&column)
 		index, ok := tableIndex[tableName]
 		if !ok {
-			index = len(model.Tables)
+			index = len(tables)
 			tableIndex[tableName] = index
-			model.Tables = append(model.Tables, meta.Table{Schema: schemaName, Name: tableName, Comment: tableComment})
+			tables = append(tables, meta.Table{Schema: meta.Schema{Name: schemaName}, Name: tableName, Comment: tableComment})
 		}
-		model.Tables[index].Columns = append(model.Tables[index].Columns, column)
+		tables[index].Columns = append(tables[index].Columns, column)
 	}
 	if err := rows.Err(); err != nil {
-		return meta.Schema{}, fmt.Errorf("inspector: read columns: %w", err)
+		return nil, fmt.Errorf("inspector: read columns: %w", err)
 	}
 
 	fkRows, err := db.QueryContext(ctx, mysqlForeignKeysQuery, schemaName)
 	if err != nil {
-		return meta.Schema{}, fmt.Errorf("inspector: read foreign keys: %w", err)
+		return nil, fmt.Errorf("inspector: read foreign keys: %w", err)
 	}
 	defer fkRows.Close()
 	var fks []fkRow
 	for fkRows.Next() {
 		var row fkRow
 		if err := fkRows.Scan(&row.constraint, &row.table, &row.column, &row.refSchema, &row.refTable, &row.refColumn); err != nil {
-			return meta.Schema{}, fmt.Errorf("inspector: scan foreign key: %w", err)
+			return nil, fmt.Errorf("inspector: scan foreign key: %w", err)
 		}
 		fks = append(fks, row)
 	}
 	if err := fkRows.Err(); err != nil {
-		return meta.Schema{}, fmt.Errorf("inspector: read foreign keys: %w", err)
+		return nil, fmt.Errorf("inspector: read foreign keys: %w", err)
 	}
-	attachForeignKeys(&model, fks)
+	attachForeignKeys(tables, fks)
 
 	ixRows, err := db.QueryContext(ctx, mysqlIndexesQuery, schemaName)
 	if err != nil {
-		return meta.Schema{}, fmt.Errorf("inspector: read indexes: %w", err)
+		return nil, fmt.Errorf("inspector: read indexes: %w", err)
 	}
 	defer ixRows.Close()
 	var indexes []indexRow
 	for ixRows.Next() {
 		var row indexRow
 		if err := ixRows.Scan(&row.table, &row.index, &row.unique, &row.column); err != nil {
-			return meta.Schema{}, fmt.Errorf("inspector: scan index: %w", err)
+			return nil, fmt.Errorf("inspector: scan index: %w", err)
 		}
 		indexes = append(indexes, row)
 	}
 	if err := ixRows.Err(); err != nil {
-		return meta.Schema{}, fmt.Errorf("inspector: read indexes: %w", err)
+		return nil, fmt.Errorf("inspector: read indexes: %w", err)
 	}
-	attachIndexes(&model, indexes)
+	attachIndexes(tables, indexes)
 
 	// Best-effort: CHECK_CONSTRAINTS is missing on servers older than
 	// MySQL 8.0.16 / MariaDB 10.2, so a failed query skips checks rather
@@ -144,16 +144,16 @@ func inspectMySQL(ctx context.Context, db Querier, schemaName string) (meta.Sche
 		for ckRows.Next() {
 			var tableName, constraint, clause string
 			if err := ckRows.Scan(&tableName, &constraint, &clause); err != nil {
-				return meta.Schema{}, fmt.Errorf("inspector: scan check constraint: %w", err)
+				return nil, fmt.Errorf("inspector: scan check constraint: %w", err)
 			}
-			attachCheck(&model, tableName, constraint, clause)
+			attachCheck(tables, tableName, constraint, clause)
 		}
 		if err := ckRows.Err(); err != nil {
-			return meta.Schema{}, fmt.Errorf("inspector: read check constraints: %w", err)
+			return nil, fmt.Errorf("inspector: read check constraints: %w", err)
 		}
 	}
 
-	return model, nil
+	return tables, nil
 }
 
 func currentMySQLSchema(ctx context.Context, db Querier) (string, error) {

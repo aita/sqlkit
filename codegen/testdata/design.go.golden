@@ -6,9 +6,9 @@ import (
 	"github.com/aita/sqlkit/sqldef"
 )
 
-// Catalog holds the design of schema "public", bootstrapped from a live
-// database; edit it and regenerate the bindings from it.
-var Catalog = sqldef.NewCatalog()
+// Catalog holds the design bootstrapped from a live database; edit it
+// and regenerate the bindings and DDL from it.
+var Catalog = sqldef.Catalog()
 
 // Public is schema "public" of the catalog.
 var Public = Catalog.Schema("public")

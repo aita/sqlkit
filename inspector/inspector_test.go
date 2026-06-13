@@ -79,42 +79,38 @@ func TestInspectPostgres(t *testing.T) {
 		t.Fatalf("Inspect() error = %v", err)
 	}
 
-	want := meta.Schema{
-		Name:    "public",
-		Dialect: "postgres",
-		Tables: []meta.Table{
-			{
-				Schema:  "public",
-				Name:    "users",
-				Comment: "Registered accounts",
-				Columns: []meta.Column{
-					{Name: "id", DataType: "int8", HasDefault: true, PrimaryKey: true},
-					{Name: "email", DataType: "varchar", Length: 255, Comment: "Unique login address"},
-					{Name: "balance", DataType: "numeric", Precision: 10, Scale: 2},
-				},
-				Indexes: []meta.Index{
-					{Name: "users_email_key", Columns: []string{"email"}, Unique: true},
-				},
-				Checks: []meta.Check{
-					{Name: "users_balance_check", Expression: "balance >= (0)::numeric"},
-				},
+	want := meta.Catalog{Tables: []meta.Table{
+		{
+			Schema:  meta.Schema{Name: "public"},
+			Name:    "users",
+			Comment: "Registered accounts",
+			Columns: []meta.Column{
+				{Name: "id", DataType: "int8", HasDefault: true, PrimaryKey: true},
+				{Name: "email", DataType: "varchar", Length: 255, Comment: "Unique login address"},
+				{Name: "balance", DataType: "numeric", Precision: 10, Scale: 2},
 			},
-			{
-				Schema: "public",
-				Name:   "posts",
-				Columns: []meta.Column{
-					{Name: "id", DataType: "int8", HasDefault: true, PrimaryKey: true},
-					{Name: "user_id", DataType: "int8"},
-				},
-				ForeignKeys: []meta.ForeignKey{
-					{Name: "posts_user_id_fkey", Columns: []string{"user_id"}, RefSchema: "public", RefTable: "users", RefColumns: []string{"id"}},
-				},
-				Indexes: []meta.Index{
-					{Name: "idx_posts_user_id", Columns: []string{"user_id"}},
-				},
+			Indexes: []meta.Index{
+				{Name: "users_email_key", Columns: []string{"email"}, Unique: true},
+			},
+			Checks: []meta.Check{
+				{Name: "users_balance_check", Expression: "balance >= (0)::numeric"},
 			},
 		},
-	}
+		{
+			Schema: meta.Schema{Name: "public"},
+			Name:   "posts",
+			Columns: []meta.Column{
+				{Name: "id", DataType: "int8", HasDefault: true, PrimaryKey: true},
+				{Name: "user_id", DataType: "int8"},
+			},
+			ForeignKeys: []meta.ForeignKey{
+				{Name: "posts_user_id_fkey", Columns: []string{"user_id"}, RefSchema: meta.Schema{Name: "public"}, RefTable: "users", RefColumns: []string{"id"}},
+			},
+			Indexes: []meta.Index{
+				{Name: "idx_posts_user_id", Columns: []string{"user_id"}},
+			},
+		},
+	}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Inspect() = %#v,\nwant %#v", got, want)
 	}
@@ -175,39 +171,35 @@ func TestInspectMySQL(t *testing.T) {
 		t.Fatalf("Inspect() error = %v", err)
 	}
 
-	want := meta.Schema{
-		Name:    "app",
-		Dialect: "mysql",
-		Tables: []meta.Table{
-			{
-				Schema:  "app",
-				Name:    "users",
-				Comment: "Registered accounts",
-				Columns: []meta.Column{
-					{Name: "id", DataType: "bigint", HasDefault: true, PrimaryKey: true},
-					{Name: "email", DataType: "varchar", Length: 255, Comment: "Unique login address"},
-					{Name: "balance", DataType: "decimal", Precision: 10, Scale: 2},
-				},
-				Indexes: []meta.Index{
-					{Name: "uq_users_email", Columns: []string{"email"}, Unique: true},
-				},
-				Checks: []meta.Check{
-					{Name: "users_chk_1", Expression: "`balance` >= 0"},
-				},
+	want := meta.Catalog{Tables: []meta.Table{
+		{
+			Schema:  meta.Schema{Name: "app"},
+			Name:    "users",
+			Comment: "Registered accounts",
+			Columns: []meta.Column{
+				{Name: "id", DataType: "bigint", HasDefault: true, PrimaryKey: true},
+				{Name: "email", DataType: "varchar", Length: 255, Comment: "Unique login address"},
+				{Name: "balance", DataType: "decimal", Precision: 10, Scale: 2},
 			},
-			{
-				Schema: "app",
-				Name:   "posts",
-				Columns: []meta.Column{
-					{Name: "id", DataType: "bigint", HasDefault: true, PrimaryKey: true},
-					{Name: "user_id", DataType: "bigint"},
-				},
-				ForeignKeys: []meta.ForeignKey{
-					{Name: "fk_posts_user", Columns: []string{"user_id"}, RefSchema: "app", RefTable: "users", RefColumns: []string{"id"}},
-				},
+			Indexes: []meta.Index{
+				{Name: "uq_users_email", Columns: []string{"email"}, Unique: true},
+			},
+			Checks: []meta.Check{
+				{Name: "users_chk_1", Expression: "`balance` >= 0"},
 			},
 		},
-	}
+		{
+			Schema: meta.Schema{Name: "app"},
+			Name:   "posts",
+			Columns: []meta.Column{
+				{Name: "id", DataType: "bigint", HasDefault: true, PrimaryKey: true},
+				{Name: "user_id", DataType: "bigint"},
+			},
+			ForeignKeys: []meta.ForeignKey{
+				{Name: "fk_posts_user", Columns: []string{"user_id"}, RefSchema: meta.Schema{Name: "app"}, RefTable: "users", RefColumns: []string{"id"}},
+			},
+		},
+	}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Inspect() = %#v,\nwant %#v", got, want)
 	}

@@ -6,12 +6,11 @@
 //	sqlkitgen -dsn postgres://user:pass@localhost/app -schema public -package appdb -out appdb/tables.go
 //	sqlkitgen -driver mysql -dsn 'user:pass@tcp(localhost:3306)/app' -package appdb -out appdb -file-per-table -dto
 //	sqlkitgen -dsn postgres://user:pass@localhost/app -schema public -dsl -package schema -out schema/schema.go
-//	sqlkitgen -dsn postgres://user:pass@localhost/app -schema public -ddl -out schema.sql
 //
 // With -dsl the schema is emitted as a design file built on the sqldef
 // package instead of table bindings: introspect once, then maintain the
-// schema as Go code and generate the bindings (and DDL) from the catalog.
-// With -ddl the schema is emitted as CREATE TABLE statements.
+// schema as Go code and generate the bindings and DDL from the catalog
+// (sqldef.Catalog.Generate / Catalog.DDL).
 //
 // The codegen and inspector packages are the library entry points behind this
 // command; import them directly to customize type mapping and generation.
@@ -30,7 +29,6 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/aita/sqlkit/codegen"
-	"github.com/aita/sqlkit/ddl"
 	"github.com/aita/sqlkit/inspector"
 )
 
@@ -54,7 +52,6 @@ func run() error {
 	dto := flag.Bool("dto", false, "also generate a row struct (DTO) per table")
 	dtoSeparate := flag.Bool("dto-separate-file", false, "write DTOs into their own file(s)")
 	dslDesign := flag.Bool("dsl", false, "generate a sqldef-based design file from the schema instead of table bindings")
-	emitDDL := flag.Bool("ddl", false, "generate CREATE TABLE DDL from the schema instead of table bindings (default expressions are not introspected; integer serial keys are recovered)")
 	version := flag.Bool("version", false, "print sqlkitgen version")
 	flag.Parse()
 
@@ -72,7 +69,7 @@ func run() error {
 	if *dsn == "" {
 		return fmt.Errorf("-dsn is required")
 	}
-	if *packageName == "" && !*emitDDL {
+	if *packageName == "" {
 		return fmt.Errorf("-package is required")
 	}
 
@@ -88,27 +85,12 @@ func run() error {
 	}
 	defer db.Close()
 
-	model, err := inspector.Inspect(ctx, db, resolvedDialect, *schema)
+	inspected, err := inspector.Inspect(ctx, db, resolvedDialect, *schema)
 	if err != nil {
 		return err
 	}
-	if len(model.Tables) == 0 {
+	if len(inspected.Tables) == 0 {
 		return fmt.Errorf("schema %q contains no tables", *schema)
-	}
-
-	if *emitDDL {
-		sql, err := ddl.Generate(model)
-		if err != nil {
-			return err
-		}
-		if *out == "" {
-			_, err := os.Stdout.WriteString(sql)
-			return err
-		}
-		if err := os.MkdirAll(filepath.Dir(*out), 0o755); err != nil {
-			return err
-		}
-		return os.WriteFile(*out, []byte(sql), 0o644)
 	}
 
 	if *dslDesign {
@@ -120,7 +102,7 @@ func run() error {
 		if fileNameSet {
 			designOpts.FileName = *fileName
 		}
-		file, err := codegen.GenerateDesign(model, designOpts)
+		file, err := codegen.GenerateDesign(inspected, designOpts)
 		if err != nil {
 			return err
 		}
@@ -136,7 +118,7 @@ func run() error {
 		EmitDTO:         *dto,
 		DTOSeparateFile: *dtoSeparate,
 	}
-	files, err := codegen.Generate(model, opts)
+	files, err := codegen.Generate(inspected, opts)
 	if err != nil {
 		return err
 	}

@@ -81,15 +81,16 @@ type tableModel struct {
 	Doc []string
 }
 
-// Generate renders the schema into one or more Go source files according to
-// opts and returns their formatted contents.
-func Generate(model meta.Schema, opts Options) ([]File, error) {
+// Generate renders the catalog into one or more Go source files according to
+// opts and returns their formatted contents. The dialect (opts.Dialect,
+// default postgres) selects the default SQL→Go type table.
+func Generate(catalog meta.Catalog, opts Options) ([]File, error) {
 	if opts.PackageName == "" {
 		return nil, fmt.Errorf("codegen: package name is required")
 	}
 	dialect := opts.Dialect
 	if dialect == "" {
-		dialect = model.Dialect
+		dialect = "postgres"
 	}
 	mapper := opts.TypeMapper
 	if mapper == nil {
@@ -100,7 +101,7 @@ func Generate(model meta.Schema, opts Options) ([]File, error) {
 		dtoName = defaultDTOName
 	}
 
-	tables := filterTables(model.Tables, opts.Tables)
+	tables := filterTables(catalog.Tables, opts.Tables)
 	if len(tables) == 0 {
 		return nil, fmt.Errorf("codegen: no tables to generate")
 	}
@@ -139,9 +140,9 @@ func buildTable(table meta.Table, dialect string, mapper TypeMapper) (*tableMode
 	tm := &tableModel{
 		TypeName:  varName + "Table",
 		VarName:   varName,
-		Schema:    table.Schema,
+		Schema:    table.Schema.Name,
 		Name:      table.Name,
-		Qualified: qualified(table.Schema, table.Name),
+		Qualified: qualified(table.Schema.Name, table.Name),
 		Doc:       docLines(table.Comment),
 	}
 	for _, column := range table.Columns {

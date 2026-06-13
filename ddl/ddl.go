@@ -18,35 +18,35 @@ import (
 	"github.com/aita/sqlkit/meta"
 )
 
-// Generate renders the DDL for every table of the schema in declaration
-// order, using model.Dialect ("postgres" or "mysql"; empty defaults to
-// postgres).
-func Generate(model meta.Schema) (string, error) {
+// Generate renders the DDL for the catalog's tables in declaration order, for
+// the dialect ("postgres" or "mysql"; empty defaults to postgres).
+func Generate(catalog meta.Catalog, dialectName string) (string, error) {
 	var d dialect
-	switch model.Dialect {
+	switch dialectName {
 	case "", "postgres":
 		d = postgres{}
 	case "mysql":
 		d = mysql{}
 	default:
-		return "", fmt.Errorf("ddl: unsupported dialect %q (want postgres or mysql)", model.Dialect)
+		return "", fmt.Errorf("ddl: unsupported dialect %q (want postgres or mysql)", dialectName)
 	}
 
+	tables := catalog.Tables
 	var stmts []string
-	for _, table := range model.Tables {
+	for _, table := range tables {
 		stmts = append(stmts, createTable(table, d))
 	}
-	for _, table := range model.Tables {
+	for _, table := range tables {
 		for _, index := range table.Indexes {
 			stmts = append(stmts, createIndex(table, index, d))
 		}
 	}
-	for _, table := range model.Tables {
+	for _, table := range tables {
 		for _, fk := range table.ForeignKeys {
 			stmts = append(stmts, addForeignKey(table, fk, d))
 		}
 	}
-	for _, table := range model.Tables {
+	for _, table := range tables {
 		if block := d.comments(table); block != "" {
 			stmts = append(stmts, block)
 		}
@@ -110,7 +110,7 @@ func createTable(table meta.Table, d dialect) string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("CREATE TABLE " + qualify(d, table.Schema, table.Name) + " (\n")
+	sb.WriteString("CREATE TABLE " + qualify(d, table.Schema.Name, table.Name) + " (\n")
 	for i, def := range defs {
 		sb.WriteString("    " + def)
 		if i < len(defs)-1 {
@@ -142,14 +142,14 @@ func createIndex(table meta.Table, index meta.Index, d dialect) string {
 		kind = "UNIQUE INDEX"
 	}
 	return "CREATE " + kind + " " + d.quote(index.Name) + " ON " +
-		qualify(d, table.Schema, table.Name) + " (" + quoteAll(d, index.Columns) + ");"
+		qualify(d, table.Schema.Name, table.Name) + " (" + quoteAll(d, index.Columns) + ");"
 }
 
 func addForeignKey(table meta.Table, fk meta.ForeignKey, d dialect) string {
-	return "ALTER TABLE " + qualify(d, table.Schema, table.Name) +
+	return "ALTER TABLE " + qualify(d, table.Schema.Name, table.Name) +
 		" ADD CONSTRAINT " + d.quote(fk.Name) +
 		" FOREIGN KEY (" + quoteAll(d, fk.Columns) + ")" +
-		" REFERENCES " + qualify(d, fk.RefSchema, fk.RefTable) +
+		" REFERENCES " + qualify(d, fk.RefSchema.Name, fk.RefTable) +
 		" (" + quoteAll(d, fk.RefColumns) + ");"
 }
 
@@ -212,7 +212,7 @@ func (postgres) tableSuffix(meta.Table) string   { return "" }
 
 func (p postgres) comments(table meta.Table) string {
 	var stmts []string
-	qualified := qualify(p, table.Schema, table.Name)
+	qualified := qualify(p, table.Schema.Name, table.Name)
 	if table.Comment != "" {
 		stmts = append(stmts, "COMMENT ON TABLE "+qualified+" IS "+literal(table.Comment)+";")
 	}

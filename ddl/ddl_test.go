@@ -7,14 +7,13 @@ import (
 	"github.com/aita/sqlkit/meta"
 )
 
-func fixture(dialect string, dataTypes map[string]string) meta.Schema {
+func fixture(dataTypes map[string]string) meta.Catalog {
 	dt := func(key string) string { return dataTypes[key] }
-	return meta.Schema{
-		Name:    "public",
-		Dialect: dialect,
+	public := meta.Schema{Name: "public"}
+	return meta.Catalog{
 		Tables: []meta.Table{
 			{
-				Schema:  "public",
+				Schema:  public,
 				Name:    "users",
 				Comment: "Registered blog authors",
 				Columns: []meta.Column{
@@ -32,14 +31,14 @@ func fixture(dialect string, dataTypes map[string]string) meta.Schema {
 				},
 			},
 			{
-				Schema: "public",
+				Schema: public,
 				Name:   "posts",
 				Columns: []meta.Column{
 					{Name: "id", DataType: dt("bigint"), PrimaryKey: true, HasDefault: true},
 					{Name: "user_id", DataType: dt("bigint")},
 				},
 				ForeignKeys: []meta.ForeignKey{
-					{Name: "fk_posts_user_id", Columns: []string{"user_id"}, RefSchema: "public", RefTable: "users", RefColumns: []string{"id"}},
+					{Name: "fk_posts_user_id", Columns: []string{"user_id"}, RefSchema: public, RefTable: "users", RefColumns: []string{"id"}},
 				},
 				Indexes: []meta.Index{
 					{Name: "idx_posts_user_id", Columns: []string{"user_id"}},
@@ -50,14 +49,14 @@ func fixture(dialect string, dataTypes map[string]string) meta.Schema {
 }
 
 func TestGeneratePostgres(t *testing.T) {
-	model := fixture("postgres", map[string]string{
+	catalog := fixture(map[string]string{
 		"bigint":    "int8",
 		"varchar":   "varchar",
 		"text":      "text",
 		"decimal":   "numeric",
 		"timestamp": "timestamptz",
 	})
-	got, err := Generate(model)
+	got, err := Generate(catalog, "postgres")
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
@@ -92,14 +91,14 @@ COMMENT ON COLUMN "public"."users"."email" IS 'Unique login address';
 }
 
 func TestGenerateMySQL(t *testing.T) {
-	model := fixture("mysql", map[string]string{
+	catalog := fixture(map[string]string{
 		"bigint":    "bigint",
 		"varchar":   "varchar",
 		"text":      "text",
 		"decimal":   "decimal",
 		"timestamp": "datetime",
 	})
-	got, err := Generate(model)
+	got, err := Generate(catalog, "mysql")
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
@@ -118,8 +117,7 @@ func TestGenerateMySQL(t *testing.T) {
 }
 
 func TestGenerateUnqualified(t *testing.T) {
-	model := meta.Schema{
-		Dialect: "postgres",
+	catalog := meta.Catalog{
 		Tables: []meta.Table{{
 			Name: "items",
 			Columns: []meta.Column{
@@ -127,7 +125,7 @@ func TestGenerateUnqualified(t *testing.T) {
 			},
 		}},
 	}
-	got, err := Generate(model)
+	got, err := Generate(catalog, "postgres")
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
@@ -137,21 +135,20 @@ func TestGenerateUnqualified(t *testing.T) {
 }
 
 func TestGenerateUnsupportedDialect(t *testing.T) {
-	if _, err := Generate(meta.Schema{Dialect: "oracle"}); err == nil {
+	if _, err := Generate(meta.Catalog{}, "oracle"); err == nil {
 		t.Error("Generate(oracle): expected error")
 	}
 }
 
 func TestLiteralEscaping(t *testing.T) {
-	model := meta.Schema{
-		Dialect: "postgres",
+	catalog := meta.Catalog{
 		Tables: []meta.Table{{
 			Name:    "items",
 			Comment: "it's quoted",
 			Columns: []meta.Column{{Name: "id", DataType: "int8", PrimaryKey: true}},
 		}},
 	}
-	got, err := Generate(model)
+	got, err := Generate(catalog, "postgres")
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}

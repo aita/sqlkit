@@ -8,7 +8,7 @@ import (
 )
 
 func TestGenerateDesign(t *testing.T) {
-	file, err := GenerateDesign(fixtureSchema(), DesignOptions{PackageName: "design"})
+	file, err := GenerateDesign(meta.Catalog{Tables: fixtureTables()}, DesignOptions{PackageName: "design"})
 	if err != nil {
 		t.Fatalf("GenerateDesign() error = %v", err)
 	}
@@ -19,31 +19,27 @@ func TestGenerateDesign(t *testing.T) {
 }
 
 func TestGenerateDesignMySQL(t *testing.T) {
-	model := meta.Schema{
-		Name:    "app",
-		Dialect: "mysql",
-		Tables: []meta.Table{
-			{
-				Schema: "app",
-				Name:   "items",
-				Columns: []meta.Column{
-					{Name: "id", DataType: "bigint", PrimaryKey: true, HasDefault: true},
-					{Name: "name", DataType: "varchar", Length: 100},
-					{Name: "price", DataType: "decimal", Precision: 10, Scale: 2},
-					{Name: "attrs", DataType: "json", Nullable: true},
-					{Name: "created_at", DataType: "datetime", HasDefault: true, DefaultExpr: "now()"},
-					{Name: "point", DataType: "geometry"},
-				},
+	tables := []meta.Table{
+		{
+			Schema: meta.Schema{Name: "app"},
+			Name:   "items",
+			Columns: []meta.Column{
+				{Name: "id", DataType: "bigint", PrimaryKey: true, HasDefault: true},
+				{Name: "name", DataType: "varchar", Length: 100},
+				{Name: "price", DataType: "decimal", Precision: 10, Scale: 2},
+				{Name: "attrs", DataType: "json", Nullable: true},
+				{Name: "created_at", DataType: "datetime", HasDefault: true, DefaultExpr: "now()"},
+				{Name: "point", DataType: "geometry"},
 			},
 		},
 	}
-	file, err := GenerateDesign(model, DesignOptions{PackageName: "design"})
+	file, err := GenerateDesign(meta.Catalog{Tables: tables}, DesignOptions{PackageName: "design", Dialect: "mysql"})
 	if err != nil {
 		t.Fatalf("GenerateDesign() error = %v", err)
 	}
 	got := string(file.Content)
 	for _, want := range []string{
-		`var Catalog = sqldef.NewCatalog()`,
+		`var Catalog = sqldef.Catalog()`,
 		`var App = Catalog.Schema("app")`,
 		"var Items = App.Table(\"items\",",
 		`sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),`,
@@ -60,37 +56,33 @@ func TestGenerateDesignMySQL(t *testing.T) {
 }
 
 func TestGenerateDesignForeignKeys(t *testing.T) {
-	model := meta.Schema{
-		Name:    "public",
-		Dialect: "postgres",
-		Tables: []meta.Table{
-			{
-				Schema: "public",
-				Name:   "orders",
-				Columns: []meta.Column{
-					{Name: "region", DataType: "text", PrimaryKey: true},
-					{Name: "number", DataType: "int8", PrimaryKey: true},
-				},
+	tables := []meta.Table{
+		{
+			Schema: meta.Schema{Name: "public"},
+			Name:   "orders",
+			Columns: []meta.Column{
+				{Name: "region", DataType: "text", PrimaryKey: true},
+				{Name: "number", DataType: "int8", PrimaryKey: true},
 			},
-			{
-				Schema: "public",
-				Name:   "order_lines",
-				Columns: []meta.Column{
-					{Name: "order_region", DataType: "text"},
-					{Name: "order_number", DataType: "int8"},
-					{Name: "parent_id", DataType: "int8", Nullable: true},
-					{Name: "id", DataType: "int8", PrimaryKey: true},
-					{Name: "audit_id", DataType: "int8"},
-				},
-				ForeignKeys: []meta.ForeignKey{
-					{Name: "fk_composite", Columns: []string{"order_region", "order_number"}, RefSchema: "public", RefTable: "orders", RefColumns: []string{"region", "number"}},
-					{Name: "fk_self", Columns: []string{"parent_id"}, RefSchema: "public", RefTable: "order_lines", RefColumns: []string{"id"}},
-					{Name: "fk_other_schema", Columns: []string{"audit_id"}, RefSchema: "audit", RefTable: "events", RefColumns: []string{"id"}},
-				},
+		},
+		{
+			Schema: meta.Schema{Name: "public"},
+			Name:   "order_lines",
+			Columns: []meta.Column{
+				{Name: "order_region", DataType: "text"},
+				{Name: "order_number", DataType: "int8"},
+				{Name: "parent_id", DataType: "int8", Nullable: true},
+				{Name: "id", DataType: "int8", PrimaryKey: true},
+				{Name: "audit_id", DataType: "int8"},
+			},
+			ForeignKeys: []meta.ForeignKey{
+				{Name: "fk_composite", Columns: []string{"order_region", "order_number"}, RefSchema: meta.Schema{Name: "public"}, RefTable: "orders", RefColumns: []string{"region", "number"}},
+				{Name: "fk_self", Columns: []string{"parent_id"}, RefSchema: meta.Schema{Name: "public"}, RefTable: "order_lines", RefColumns: []string{"id"}},
+				{Name: "fk_other_schema", Columns: []string{"audit_id"}, RefSchema: meta.Schema{Name: "audit"}, RefTable: "events", RefColumns: []string{"id"}},
 			},
 		},
 	}
-	file, err := GenerateDesign(model, DesignOptions{PackageName: "design"})
+	file, err := GenerateDesign(meta.Catalog{Tables: tables}, DesignOptions{PackageName: "design"})
 	if err != nil {
 		t.Fatalf("GenerateDesign() error = %v", err)
 	}
@@ -108,33 +100,29 @@ func TestGenerateDesignForeignKeys(t *testing.T) {
 }
 
 func TestGenerateDesignIndexesChecksComments(t *testing.T) {
-	model := meta.Schema{
-		Name:    "public",
-		Dialect: "postgres",
-		Tables: []meta.Table{
-			{
-				Schema:  "public",
-				Name:    "products",
-				Comment: "Sellable products",
-				Columns: []meta.Column{
-					{Name: "id", DataType: "int8", PrimaryKey: true, HasDefault: true},
-					{Name: "sku", DataType: "varchar", Length: 64, Comment: "Stock keeping unit"},
-					{Name: "vendor", DataType: "text"},
-					{Name: "name", DataType: "text"},
-					{Name: "price", DataType: "numeric", Precision: 10, Scale: 2},
-				},
-				Indexes: []meta.Index{
-					{Name: "products_sku_key", Columns: []string{"sku"}, Unique: true},
-					{Name: "idx_products_name", Columns: []string{"name"}},
-					{Name: "uq_products_vendor_name", Columns: []string{"vendor", "name"}, Unique: true},
-				},
-				Checks: []meta.Check{
-					{Name: "products_price_check", Expression: "price > 0"},
-				},
+	tables := []meta.Table{
+		{
+			Schema:  meta.Schema{Name: "public"},
+			Name:    "products",
+			Comment: "Sellable products",
+			Columns: []meta.Column{
+				{Name: "id", DataType: "int8", PrimaryKey: true, HasDefault: true},
+				{Name: "sku", DataType: "varchar", Length: 64, Comment: "Stock keeping unit"},
+				{Name: "vendor", DataType: "text"},
+				{Name: "name", DataType: "text"},
+				{Name: "price", DataType: "numeric", Precision: 10, Scale: 2},
+			},
+			Indexes: []meta.Index{
+				{Name: "products_sku_key", Columns: []string{"sku"}, Unique: true},
+				{Name: "idx_products_name", Columns: []string{"name"}},
+				{Name: "uq_products_vendor_name", Columns: []string{"vendor", "name"}, Unique: true},
+			},
+			Checks: []meta.Check{
+				{Name: "products_price_check", Expression: "price > 0"},
 			},
 		},
 	}
-	file, err := GenerateDesign(model, DesignOptions{PackageName: "design"})
+	file, err := GenerateDesign(meta.Catalog{Tables: tables}, DesignOptions{PackageName: "design"})
 	if err != nil {
 		t.Fatalf("GenerateDesign() error = %v", err)
 	}
@@ -153,10 +141,10 @@ func TestGenerateDesignIndexesChecksComments(t *testing.T) {
 }
 
 func TestGenerateDesignErrors(t *testing.T) {
-	if _, err := GenerateDesign(fixtureSchema(), DesignOptions{}); err == nil {
+	if _, err := GenerateDesign(meta.Catalog{Tables: fixtureTables()}, DesignOptions{}); err == nil {
 		t.Error("GenerateDesign() without package name: expected error")
 	}
-	if _, err := GenerateDesign(meta.Schema{Name: "public"}, DesignOptions{PackageName: "design"}); err == nil {
+	if _, err := GenerateDesign(meta.Catalog{}, DesignOptions{PackageName: "design"}); err == nil {
 		t.Error("GenerateDesign() without tables: expected error")
 	}
 }

@@ -1,8 +1,9 @@
-// Package sqldef declares database schemas as plain Go values. A Catalog is
-// the reusable root: tables are declared as values hanging off it, so designs
-// can reference each other (foreign keys take the *Table they point at), be
-// split across files or packages, and feed every generator — the typed table
-// bindings (codegen) and the DDL (ddl) come from the same catalog.
+// Package sqldef declares database schemas as plain Go values. A design
+// (sqldef.Catalog) is the reusable root: tables are declared as values hanging
+// off it, so designs can reference each other (foreign keys take the *Table
+// they point at), be split across files or packages, and Build into a
+// meta.Catalog that every generator — the typed table bindings (codegen) and
+// the DDL (ddl) — consumes.
 //
 // A design package conventionally takes the name schema and imports this
 // package for the building blocks:
@@ -11,7 +12,7 @@
 //
 //	import "github.com/aita/sqlkit/sqldef"
 //
-//	var Catalog = sqldef.NewCatalog()
+//	var Catalog = sqldef.Catalog()
 //
 //	var Users = Catalog.Table("users",
 //		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
@@ -46,44 +47,45 @@ package sqldef
 
 import "fmt"
 
-// Catalog is the root a design hangs off. Create one per design package and
-// declare tables on it; the generators consume the whole catalog.
-type Catalog struct {
+// Design is the root a schema design hangs off: a catalog of tables under
+// construction. Create one with Catalog and declare tables on it; the
+// generators consume the resolved meta.Catalog it Builds.
+type Design struct {
 	schemas []*Schema
 	errs    []error
 }
 
-// NewCatalog returns an empty catalog.
-func NewCatalog() *Catalog { return &Catalog{} }
+// Catalog returns an empty design to declare tables on.
+func Catalog() *Design { return &Design{} }
 
 // Schema returns the named schema (PostgreSQL schema / MySQL database),
 // creating it on first use.
-func (c *Catalog) Schema(name string) *Schema {
+func (c *Design) Schema(name string) *Schema {
 	for _, s := range c.schemas {
 		if s.name == name {
 			return s
 		}
 	}
-	s := &Schema{catalog: c, name: name}
+	s := &Schema{design: c, name: name}
 	c.schemas = append(c.schemas, s)
 	return s
 }
 
 // Table declares a table in the catalog's unnamed default schema. Use
 // Catalog.Schema("public").Table(...) to qualify tables with a schema name.
-func (c *Catalog) Table(name string, elements ...TableElement) *Table {
+func (c *Design) Table(name string, elements ...TableElement) *Table {
 	return c.Schema("").Table(name, elements...)
 }
 
-func (c *Catalog) fail(format string, args ...any) {
+func (c *Design) fail(format string, args ...any) {
 	c.errs = append(c.errs, fmt.Errorf(format, args...))
 }
 
 // Schema is a named schema within a catalog.
 type Schema struct {
-	catalog *Catalog
-	name    string
-	tables  []*Table
+	design *Design
+	name   string
+	tables []*Table
 }
 
 // Name returns the schema name ("" for the default schema).
@@ -94,12 +96,12 @@ func (s *Schema) Name() string { return s.name }
 func (s *Schema) Table(name string, elements ...TableElement) *Table {
 	t := &Table{schema: s, name: name}
 	if name == "" {
-		s.catalog.fail("Table requires a name")
+		s.design.fail("Table requires a name")
 		return t
 	}
 	for _, existing := range s.tables {
 		if existing.name == name {
-			s.catalog.fail("table %q is declared twice in schema %q", name, s.name)
+			s.design.fail("table %q is declared twice in schema %q", name, s.name)
 		}
 	}
 	s.tables = append(s.tables, t)
@@ -141,7 +143,7 @@ func (t *Table) ForeignKey(columns []string, ref *Table, refColumns []string) *T
 
 func (t *Table) fail(format string, args ...any) {
 	args = append([]any{t.name}, args...)
-	t.schema.catalog.fail("table %q: "+format, args...)
+	t.schema.design.fail("table %q: "+format, args...)
 }
 
 type columnDef struct {

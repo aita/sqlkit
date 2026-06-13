@@ -12,62 +12,71 @@ type DesignOptions struct {
 	// PackageName is the package of the generated design file. Required.
 	PackageName string
 
-	// VarName is the exported variable holding the schema handle (the result
-	// of Catalog.Schema). Defaults to the schema name as a Go identifier; it
-	// is unused when the schema is unnamed, in which case tables hang off the
-	// catalog directly.
-	VarName string
-
 	// FileName is the output file name (default "design.go").
 	FileName string
 
 	// Tables, when non-empty, restricts generation to these table names.
 	Tables []string
 
-	// Dialect overrides Schema.Dialect ("postgres" or "mysql"); it selects how
-	// engine type names map back to sqldef package types.
+	// Dialect ("postgres" or "mysql", default postgres) selects how engine
+	// type names map back to sqldef package types.
 	Dialect string
 }
 
 const sqldefImport = "github.com/aita/sqlkit/sqldef"
 
-// GenerateDesign renders the schema as a design source file built on the
-// sqldef package — the inverse of that package: introspect a live database
-// once, then maintain the schema as Go code and generate bindings and DDL
-// from it. Unlike binding generation the result is a starting point meant to
-// be edited, so it carries no DO NOT EDIT marker.
-func GenerateDesign(model meta.Schema, opts DesignOptions) (File, error) {
+// GenerateDesign renders the catalog as a sqldef design source file — the
+// inverse of building a catalog: introspect a live database once, then
+// maintain the schema as Go code and generate bindings and DDL from it.
+// Unlike binding generation the result is a starting point meant to be
+// edited, so it carries no DO NOT EDIT marker.
+func GenerateDesign(catalog meta.Catalog, opts DesignOptions) (File, error) {
 	if opts.PackageName == "" {
 		return File{}, fmt.Errorf("codegen: package name is required")
 	}
 	dialect := opts.Dialect
 	if dialect == "" {
-		dialect = model.Dialect
+		dialect = "postgres"
 	}
 	fileName := opts.FileName
 	if fileName == "" {
 		fileName = "design.go"
 	}
 
-	tables := filterTables(model.Tables, opts.Tables)
+	tables := filterTables(catalog.Tables, opts.Tables)
 	if len(tables) == 0 {
 		return File{}, fmt.Errorf("codegen: no tables to generate")
 	}
 
-	schemaVar := ""
-	if model.Name != "" {
-		schemaVar = opts.VarName
-		if schemaVar == "" {
-			schemaVar = goName(model.Name)
+	// Distinct schema names in declaration order; each named schema gets a
+	// Catalog.Schema handle variable, the unnamed default hangs off the
+	// catalog directly.
+	reserved := map[string]bool{"Catalog": true}
+	var schemaOrder []string
+	schemaSeen := map[string]bool{}
+	for _, table := range tables {
+		name := table.Schema.Name
+		if !schemaSeen[name] {
+			schemaSeen[name] = true
+			schemaOrder = append(schemaOrder, name)
 		}
+	}
+	schemaVars := map[string]string{}
+	for _, name := range schemaOrder {
+		if name == "" {
+			schemaVars[name] = "Catalog"
+			continue
+		}
+		v := goName(name)
+		for reserved[v] {
+			v += "Schema"
+		}
+		reserved[v] = true
+		schemaVars[name] = v
 	}
 
 	// Assign a Go variable to each table so foreign keys can reference the
-	// table values; names colliding with the fixed variables get a suffix.
-	reserved := map[string]bool{"Catalog": true}
-	if schemaVar != "" {
-		reserved[schemaVar] = true
-	}
+	// table values; names colliding with reserved identifiers get a suffix.
 	tableVars := map[string]string{}
 	for _, table := range tables {
 		name := goName(table.Name)
@@ -78,22 +87,20 @@ func GenerateDesign(model meta.Schema, opts DesignOptions) (File, error) {
 		tableVars[table.Name] = name
 	}
 
-	owner := "Catalog"
-	if schemaVar != "" {
-		owner = schemaVar
-	}
-
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "// Catalog holds the design of schema %q, bootstrapped from a live\n", model.Name)
-	sb.WriteString("// database; edit it and regenerate the bindings from it.\n")
-	sb.WriteString("var Catalog = sqldef.NewCatalog()\n")
-	if schemaVar != "" {
-		fmt.Fprintf(&sb, "\n// %s is schema %q of the catalog.\nvar %s = Catalog.Schema(%q)\n", schemaVar, model.Name, schemaVar, model.Name)
+	sb.WriteString("// Catalog holds the design bootstrapped from a live database; edit it\n")
+	sb.WriteString("// and regenerate the bindings and DDL from it.\n")
+	sb.WriteString("var Catalog = sqldef.Catalog()\n")
+	for _, name := range schemaOrder {
+		if name == "" {
+			continue
+		}
+		fmt.Fprintf(&sb, "\n// %s is schema %q of the catalog.\nvar %s = Catalog.Schema(%q)\n", schemaVars[name], name, schemaVars[name], name)
 	}
 	var trailers []string
 	for _, table := range tables {
 		sb.WriteString("\n")
-		renderDesignTable(&sb, &trailers, table, owner, tableVars, dialect)
+		renderDesignTable(&sb, &trailers, table, schemaVars[table.Schema.Name], tableVars, dialect)
 	}
 	if len(trailers) > 0 {
 		sb.WriteString("\n")
@@ -115,13 +122,14 @@ func renderDesignTable(sb *strings.Builder, trailers *[]string, table meta.Table
 	// References option on their column; composite ones become ForeignKey
 	// elements. Self-referencing keys cannot mention the table's own variable
 	// inside its declaration and trail behind as method calls; keys into
-	// tables outside the generated set are flagged.
+	// tables outside the generated set are flagged. References may cross
+	// schemas within the catalog, so only the ref table's presence matters.
 	refs := map[string]meta.ForeignKey{}
 	var elements, foreign []meta.ForeignKey
 	for _, fk := range table.ForeignKeys {
 		refVar, ok := tableVars[fk.RefTable]
 		switch {
-		case !ok || (fk.RefSchema != "" && fk.RefSchema != table.Schema):
+		case !ok:
 			foreign = append(foreign, fk)
 		case fk.RefTable == table.Name:
 			*trailers = append(*trailers, fmt.Sprintf("var _ = %s.ForeignKey(%s, %s, %s)",
@@ -193,8 +201,12 @@ func renderDesignTable(sb *strings.Builder, trailers *[]string, table meta.Table
 		fmt.Fprintf(sb, "\tsqldef.Check(%q),\n", check.Expression)
 	}
 	for _, fk := range foreign {
-		fmt.Fprintf(sb, "\t// NOTE: foreign key %s references %s.%s outside this design and must be declared by hand.\n",
-			fk.Name, fk.RefSchema, fk.RefTable)
+		ref := fk.RefTable
+		if fk.RefSchema.Name != "" {
+			ref = fk.RefSchema.Name + "." + fk.RefTable
+		}
+		fmt.Fprintf(sb, "\t// NOTE: foreign key %s references %s outside this design and must be declared by hand.\n",
+			fk.Name, ref)
 	}
 	sb.WriteString(")\n")
 }

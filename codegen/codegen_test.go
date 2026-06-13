@@ -12,44 +12,40 @@ import (
 
 var update = flag.Bool("update", false, "rewrite golden files")
 
-// fixtureSchema mirrors examples/blog/schema.sql: users and posts with a
+// fixtureTables mirrors examples/blog/schema.sql: users and posts with a
 // foreign key from posts.user_id to users.id.
-func fixtureSchema() meta.Schema {
-	return meta.Schema{
-		Name:    "public",
-		Dialect: "postgres",
-		Tables: []meta.Table{
-			{
-				Schema: "public",
-				Name:   "users",
-				Columns: []meta.Column{
-					{Name: "id", DataType: "int8", PrimaryKey: true, HasDefault: true},
-					{Name: "email", DataType: "varchar", Length: 255},
-					{Name: "name", DataType: "text", Nullable: true},
-					{Name: "created_at", DataType: "timestamptz", HasDefault: true},
-				},
+func fixtureTables() []meta.Table {
+	return []meta.Table{
+		{
+			Schema: meta.Schema{Name: "public"},
+			Name:   "users",
+			Columns: []meta.Column{
+				{Name: "id", DataType: "int8", PrimaryKey: true, HasDefault: true},
+				{Name: "email", DataType: "varchar", Length: 255},
+				{Name: "name", DataType: "text", Nullable: true},
+				{Name: "created_at", DataType: "timestamptz", HasDefault: true},
 			},
-			{
-				Schema: "public",
-				Name:   "posts",
-				Columns: []meta.Column{
-					{Name: "id", DataType: "int8", PrimaryKey: true, HasDefault: true},
-					{Name: "user_id", DataType: "int8"},
-					{Name: "title", DataType: "text"},
-					{Name: "body", DataType: "text", Nullable: true},
-					{Name: "published", DataType: "bool", HasDefault: true},
-				},
-				ForeignKeys: []meta.ForeignKey{
-					{Name: "posts_user_id_fkey", Columns: []string{"user_id"}, RefSchema: "public", RefTable: "users", RefColumns: []string{"id"}},
-				},
+		},
+		{
+			Schema: meta.Schema{Name: "public"},
+			Name:   "posts",
+			Columns: []meta.Column{
+				{Name: "id", DataType: "int8", PrimaryKey: true, HasDefault: true},
+				{Name: "user_id", DataType: "int8"},
+				{Name: "title", DataType: "text"},
+				{Name: "body", DataType: "text", Nullable: true},
+				{Name: "published", DataType: "bool", HasDefault: true},
+			},
+			ForeignKeys: []meta.ForeignKey{
+				{Name: "posts_user_id_fkey", Columns: []string{"user_id"}, RefSchema: meta.Schema{Name: "public"}, RefTable: "users", RefColumns: []string{"id"}},
 			},
 		},
 	}
 }
 
-func generateSingle(t *testing.T, model meta.Schema, opts Options) []byte {
+func generateSingle(t *testing.T, tables []meta.Table, opts Options) []byte {
 	t.Helper()
-	files, err := Generate(model, opts)
+	files, err := Generate(meta.Catalog{Tables: tables}, opts)
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
@@ -80,17 +76,17 @@ func checkGolden(t *testing.T, name string, got []byte) {
 }
 
 func TestGenerateGolden(t *testing.T) {
-	got := generateSingle(t, fixtureSchema(), Options{PackageName: "blogdb"})
+	got := generateSingle(t, fixtureTables(), Options{PackageName: "blogdb"})
 	checkGolden(t, "blogdb.go.golden", got)
 }
 
 func TestGenerateWithDTOGolden(t *testing.T) {
-	got := generateSingle(t, fixtureSchema(), Options{PackageName: "blogdb", EmitDTO: true})
+	got := generateSingle(t, fixtureTables(), Options{PackageName: "blogdb", EmitDTO: true})
 	checkGolden(t, "blogdb_dto.go.golden", got)
 }
 
 func TestGenerateFilePerTable(t *testing.T) {
-	files, err := Generate(fixtureSchema(), Options{PackageName: "blogdb", FilePerTable: true, EmitDTO: true, DTOSeparateFile: true})
+	files, err := Generate(meta.Catalog{Tables: fixtureTables()}, Options{PackageName: "blogdb", FilePerTable: true, EmitDTO: true, DTOSeparateFile: true})
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
@@ -106,7 +102,7 @@ func TestGenerateFilePerTable(t *testing.T) {
 }
 
 func TestGenerateTablesFilter(t *testing.T) {
-	files, err := Generate(fixtureSchema(), Options{PackageName: "blogdb", Tables: []string{"users"}})
+	files, err := Generate(meta.Catalog{Tables: fixtureTables()}, Options{PackageName: "blogdb", Tables: []string{"users"}})
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
@@ -117,7 +113,7 @@ func TestGenerateTablesFilter(t *testing.T) {
 }
 
 func TestBindingsAreNotAnORM(t *testing.T) {
-	body := string(generateSingle(t, fixtureSchema(), Options{PackageName: "blogdb"}))
+	body := string(generateSingle(t, fixtureTables(), Options{PackageName: "blogdb"}))
 	// The binding is metadata: no executor-bound accessors, no relation
 	// navigation methods, and plain NewColumn calls without metadata options.
 	for _, banned := range []string{"sqlkit.Executor", ") Get(", ") User()", ") Posts()", "sqlkit.With"} {
@@ -131,16 +127,12 @@ func TestBindingsAreNotAnORM(t *testing.T) {
 }
 
 func TestDTONameCollisionForSingularTable(t *testing.T) {
-	model := meta.Schema{
-		Name:    "public",
-		Dialect: "postgres",
-		Tables: []meta.Table{{
-			Schema:  "public",
-			Name:    "account",
-			Columns: []meta.Column{{Name: "id", DataType: "int8", PrimaryKey: true}},
-		}},
-	}
-	body := string(generateSingle(t, model, Options{PackageName: "x", EmitDTO: true}))
+	tables := []meta.Table{{
+		Schema:  meta.Schema{Name: "public"},
+		Name:    "account",
+		Columns: []meta.Column{{Name: "id", DataType: "int8", PrimaryKey: true}},
+	}}
+	body := string(generateSingle(t, tables, Options{PackageName: "x", EmitDTO: true}))
 	// var Account (binding) must not collide with the DTO type, which becomes
 	// AccountRow.
 	if !strings.Contains(body, "type AccountRow struct") {
@@ -153,28 +145,24 @@ func TestCustomTypeMapper(t *testing.T) {
 		"timestamptz": {ImportPath: "time", Name: "time.Time"},
 		"int8":        {Name: "uint64"},
 	}}
-	body := string(generateSingle(t, fixtureSchema(), Options{PackageName: "blogdb", TypeMapper: mapper}))
+	body := string(generateSingle(t, fixtureTables(), Options{PackageName: "blogdb", TypeMapper: mapper}))
 	if !strings.Contains(body, "sqlkit.Column[uint64]") {
 		t.Fatalf("custom type mapper override not applied:\n%s", body)
 	}
 }
 
 func TestMySQLTypeMapping(t *testing.T) {
-	model := meta.Schema{
-		Name:    "app",
-		Dialect: "mysql",
-		Tables: []meta.Table{{
-			Schema: "app",
-			Name:   "items",
-			Columns: []meta.Column{
-				{Name: "id", DataType: "bigint", PrimaryKey: true, HasDefault: true},
-				{Name: "qty", DataType: "int"},
-				{Name: "label", DataType: "varchar"},
-				{Name: "created_at", DataType: "datetime"},
-			},
-		}},
-	}
-	body := string(generateSingle(t, model, Options{PackageName: "appdb"}))
+	tables := []meta.Table{{
+		Schema: meta.Schema{Name: "app"},
+		Name:   "items",
+		Columns: []meta.Column{
+			{Name: "id", DataType: "bigint", PrimaryKey: true, HasDefault: true},
+			{Name: "qty", DataType: "int"},
+			{Name: "label", DataType: "varchar"},
+			{Name: "created_at", DataType: "datetime"},
+		},
+	}}
+	body := string(generateSingle(t, tables, Options{PackageName: "appdb", Dialect: "mysql"}))
 	for _, want := range []string{"sqlkit.Column[int64]", "sqlkit.Column[int32]", "sqlkit.Column[string]", "sqlkit.Column[time.Time]"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("MySQL mapping missing %q:\n%s", want, body)
@@ -225,22 +213,18 @@ func TestNaming(t *testing.T) {
 }
 
 func TestGenerateComments(t *testing.T) {
-	model := meta.Schema{
-		Name:    "public",
-		Dialect: "postgres",
-		Tables: []meta.Table{
-			{
-				Schema:  "public",
-				Name:    "users",
-				Comment: "Registered accounts",
-				Columns: []meta.Column{
-					{Name: "id", DataType: "int8", PrimaryKey: true},
-					{Name: "email", DataType: "varchar", Length: 255, Comment: "Unique login address"},
-				},
+	tables := []meta.Table{
+		{
+			Schema:  meta.Schema{Name: "public"},
+			Name:    "users",
+			Comment: "Registered accounts",
+			Columns: []meta.Column{
+				{Name: "id", DataType: "int8", PrimaryKey: true},
+				{Name: "email", DataType: "varchar", Length: 255, Comment: "Unique login address"},
 			},
 		},
 	}
-	got := string(generateSingle(t, model, Options{PackageName: "appdb", EmitDTO: true}))
+	got := string(generateSingle(t, tables, Options{PackageName: "appdb", EmitDTO: true}))
 	for _, want := range []string{
 		"// UsersTable is the typed binding for table public.users.\n// Registered accounts\ntype UsersTable struct {",
 		"\t// Unique login address\n\tEmail sqlkit.Column[string]",
@@ -254,12 +238,12 @@ func TestGenerateComments(t *testing.T) {
 }
 
 func TestGenerateUnknownTypeFails(t *testing.T) {
-	model := meta.Schema{Tables: []meta.Table{{
-		Schema:  "public",
+	catalog := meta.Catalog{Tables: []meta.Table{{
+		Schema:  meta.Schema{Name: "public"},
 		Name:    "things",
 		Columns: []meta.Column{{Name: "weird", DataType: "hstore"}},
 	}}}
-	if _, err := Generate(model, Options{PackageName: "x"}); err == nil {
+	if _, err := Generate(catalog, Options{PackageName: "x"}); err == nil {
 		t.Fatal("Generate() with unsupported type succeeded, want error")
 	}
 }
