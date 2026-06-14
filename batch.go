@@ -15,6 +15,45 @@ type compiledStmt struct {
 	args []any
 }
 
+// splitter is implemented by a query builder that can split itself into several
+// compiled statements run in place of one — automatic statement splitting is the
+// only implementation. The run path consults it once: runExec runs the statements
+// atomically and merges their Result; newRows concatenates their rows at scan.
+// ok is false when no split applies, running the statement unchanged. write tells
+// newRows the chunks are writes (RETURNING — a writable atomic transaction) rather
+// than reads (SELECT — an optional read snapshot).
+type splitter interface {
+	splitStatements(ex Executor) (stmts []compiledStmt, ok bool, write bool, err error)
+}
+
+// chunkConfig holds a query's per-call auto-chunking settings, set by AutoChunk.
+type chunkConfig struct {
+	size int  // max items per statement (rows for INSERT, IN values for SELECT/UPDATE/DELETE)
+	off  bool // force a single statement even when auto-split is enabled
+}
+
+// ChunkOption configures a query's automatic statement splitting; pass it to a
+// builder's AutoChunk.
+type ChunkOption func(*chunkConfig)
+
+// ChunkSize caps each split statement at n items — rows for a bulk INSERT, IN-list
+// values for a SELECT/UPDATE/DELETE. It only lowers the chunk below the dialect's
+// bind-parameter limit; it never raises it past the limit.
+func ChunkSize(n int) ChunkOption { return func(c *chunkConfig) { c.size = n } }
+
+// ChunkOff forces the statement to run as a single statement, disabling automatic
+// splitting for this query even when it is enabled on the executor.
+func ChunkOff() ChunkOption { return func(c *chunkConfig) { c.off = true } }
+
+// applyChunkOptions folds opts onto the builder's current chunk settings.
+func applyChunkOptions(size int, off bool, opts []ChunkOption) (int, bool) {
+	c := chunkConfig{size: size, off: off}
+	for _, opt := range opts {
+		opt(&c)
+	}
+	return c.size, c.off
+}
+
 // statement wraps the compiled SQL as the Statement an interceptor sees for one
 // split chunk. The AST is omitted (the chunk has no standalone builder), so an
 // interceptor that needs to Recompile should rewrite SQL/Args directly.
@@ -96,20 +135,15 @@ func execOn(ctx context.Context, ex Executor, stmts []compiledStmt) (stdsql.Resu
 	return result, nil
 }
 
-// detectBindParamLimit confirms the connection is usable and returns the
-// dialect's per-statement bind-parameter limit. The cap itself is a protocol
-// constant (65535 for PostgreSQL and MySQL) exposed through BindParamLimiter;
-// the round-trip validates that the database is reachable before a Database is
-// configured to split statements at the limit.
-func detectBindParamLimit(ctx context.Context, db *stdsql.DB, dialect sql.Dialect) (int, error) {
-	if err := db.PingContext(ctx); err != nil {
-		return 0, err
+// resolveBindParamLimit returns the dialect's per-statement bind-parameter limit
+// (the BindParamLimiter capability — 65535 for PostgreSQL and MySQL), which drives
+// automatic statement splitting. It is 0 when the dialect does not report one, in
+// which case nothing splits automatically.
+func resolveBindParamLimit(dialect sql.Dialect) int {
+	if limiter, ok := dialect.(sql.BindParamLimiter); ok {
+		return limiter.MaxBindParams()
 	}
-	limiter, ok := dialect.(sql.BindParamLimiter)
-	if !ok {
-		return 0, fmt.Errorf("sqlkit: dialect %s does not report a bind-parameter limit", dialect.Name())
-	}
-	return limiter.MaxBindParams(), nil
+	return 0
 }
 
 // splitInStatements splits a deferred column IN whose value list would exceed
@@ -118,7 +152,11 @@ func detectBindParamLimit(ctx context.Context, db *stdsql.DB, dialect sql.Dialec
 // already fit). compile renders the statement carrying the given WHERE-IN
 // expression; it is called once with nil to compile the IN-free base and size
 // its other parameters against the limit.
-func splitInStatements(ex Executor, batch *batchIn, compile func(in sql.Expression) (string, []any, error)) (stmts []compiledStmt, ok bool, err error) {
+//
+// maxChunk, when positive, additionally caps the values per chunk (the per-query
+// AutoChunk size or the preload default) — it can only make chunks smaller than
+// the bind-parameter limit allows, never larger.
+func splitInStatements(ex Executor, batch *batchIn, maxChunk int, compile func(in sql.Expression) (string, []any, error)) (stmts []compiledStmt, ok bool, err error) {
 	if batch == nil || ex == nil {
 		return nil, false, nil
 	}
@@ -133,6 +171,9 @@ func splitInStatements(ex Executor, batch *batchIn, compile func(in sql.Expressi
 	per := limit - len(baseArgs)
 	if per < 1 {
 		per = 1
+	}
+	if maxChunk > 0 && maxChunk < per {
+		per = maxChunk
 	}
 	if len(batch.values) <= per {
 		return nil, false, nil

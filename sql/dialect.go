@@ -1,9 +1,12 @@
 package sql
 
 import (
+	"database/sql/driver"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Dialect captures SQL syntax details that vary by database engine. It is the
@@ -207,6 +210,31 @@ type InlineAutoIncrementPrimaryKey interface {
 	InlinesAutoIncrementPrimaryKey() bool
 }
 
+// DerivedValuesUnionDialect is an optional capability for dialects that cannot
+// alias the columns of a VALUES row constructor used as a derived table. MySQL
+// names VALUES columns column_0, column_1, … with no way to override them, so a
+// VALUES source (ValuesSource) must be rendered as a UNION ALL of SELECTs whose
+// first arm supplies the column names. The compiler detects it with a type
+// assertion, so it is not a breaking change to Dialect; a dialect that does not
+// implement it uses the standard (VALUES ...) AS alias(cols) form (PostgreSQL).
+type DerivedValuesUnionDialect interface {
+	// UsesValuesUnion reports the UNION-ALL-of-SELECTs rendering for a VALUES
+	// derived table.
+	UsesValuesUnion() bool
+}
+
+// ValuesCaster is an optional capability for dialects that need the columns of a
+// VALUES derived table (ValuesSource) typed explicitly. PostgreSQL infers a bare
+// VALUES parameter as text, so a join or assignment against a non-text column
+// (e.g. a bigint primary key in a bulk UPDATE ... FROM (VALUES ...)) fails with
+// "operator does not exist: bigint = text". The compiler casts the first row's
+// values to the type this returns so the server infers each column's type; ok =
+// false leaves a value uncast. A dialect that does not implement it (MySQL,
+// which types VALUES columns from the bound parameters) gets no casts.
+type ValuesCaster interface {
+	ValuesCastType(value any) (sqlType string, ok bool)
+}
+
 // DialectByName returns the Dialect for a name: "postgres"/"postgresql" (or
 // empty, the default), "mysql", "sqlite"/"sqlite3", or "standard"/"ansi"/"sql"
 // (the SQL standard / ANSI text target). It errors on an unknown name.
@@ -301,6 +329,52 @@ func (PostgreSQLDialect) SupportsReturning() bool { return true }
 // MaxBindParams reports PostgreSQL's per-statement bind-parameter cap (65535),
 // the limit of the 16-bit parameter count in the wire protocol.
 func (PostgreSQLDialect) MaxBindParams() int { return 65535 }
+
+// ValuesCastType maps a Go value to the PostgreSQL type a VALUES column should be
+// cast to so the server does not default the parameter to text. It dereferences
+// pointers (nullable fields) and reports ok = false for nil or an unrecognized
+// type, leaving the value uncast.
+func (d PostgreSQLDialect) ValuesCastType(value any) (string, bool) {
+	v := reflect.ValueOf(value)
+	for v.Kind() == reflect.Pointer {
+		if v.IsNil() {
+			return "", false
+		}
+		v = v.Elem()
+	}
+	if !v.IsValid() {
+		return "", false
+	}
+	// Unwrap database/sql Null* wrappers and other driver.Valuer values to the
+	// value they store, so e.g. sql.NullInt64{Valid: true} casts as bigint rather
+	// than falling through as an unrecognized struct (left uncast => text).
+	if valuer, ok := v.Interface().(driver.Valuer); ok {
+		dv, err := valuer.Value()
+		if err != nil || dv == nil {
+			return "", false
+		}
+		return d.ValuesCastType(dv)
+	}
+	if _, ok := v.Interface().(time.Time); ok {
+		return "timestamptz", true
+	}
+	switch v.Kind() {
+	case reflect.Bool:
+		return "boolean", true
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return "bigint", true
+	case reflect.Float32, reflect.Float64:
+		return "double precision", true
+	case reflect.String:
+		return "text", true
+	case reflect.Slice:
+		if v.Type().Elem().Kind() == reflect.Uint8 {
+			return "bytea", true
+		}
+	}
+	return "", false
+}
 
 // pgCanonical maps udt names to the spelled-out SQL type names.
 var pgCanonical = map[string]string{
@@ -506,6 +580,10 @@ func (MySQLDialect) MaxBindParams() int { return 65535 }
 
 // UsesInlineJoins selects MySQL's inline multi-table UPDATE/DELETE layout.
 func (MySQLDialect) UsesInlineJoins() bool { return true }
+
+// UsesValuesUnion selects MySQL's UNION-ALL-of-SELECTs rendering for a VALUES
+// derived table, since MySQL cannot alias VALUES columns.
+func (MySQLDialect) UsesValuesUnion() bool { return true }
 
 var mysqlLengthTypes = map[string]bool{"varchar": true, "char": true, "binary": true, "varbinary": true}
 var mysqlDecimalTypes = map[string]bool{"decimal": true, "numeric": true}

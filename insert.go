@@ -24,7 +24,8 @@ type InsertQuery struct {
 	conflict     *insertConflict
 	returning    []sql.Selection
 	hasReturning bool
-	batchSize    int
+	batchSize    int  // AutoChunk(ChunkSize): max rows per statement
+	chunkOff     bool // AutoChunk(ChunkOff): run as one statement
 }
 
 // insertConflict holds a typed upsert action mirroring sql.conflictClause.
@@ -72,21 +73,25 @@ func (q InsertQuery) Columns(columns ...AnyColumn) InsertQuery {
 	return q
 }
 
-// BatchSize splits a Values-based INSERT into separate statements of at most n
-// rows each when executed, keeping large bulk inserts within the database's
-// bind-parameter and statement-size limits. n <= 0 (the default) leaves the
-// per-statement row count to the executor's configured bind-parameter limit (see
-// WithMaxBindParams): when one is set, the rows are still split so the statement
-// never exceeds it, sizing each batch to floor(limit / columns). An explicit n
-// is additionally capped by that limit, so it can only make batches smaller.
+// AutoChunk configures how a Values-based INSERT is split into several statements
+// when executed: ChunkSize(n) caps each statement at n rows, ChunkOff() runs it as
+// one statement. With no ChunkSize, the dialect's bind-parameter limit still
+// sizes each statement to floor(limit / columns) so it never exceeds the limit;
+// an explicit ChunkSize can only make statements smaller.
 //
-// It applies to Exec only: ToSQL always compiles the full statement, and it has
-// no effect on FromSelect. When the rows split into several statements run
-// through a Database, they run in one transaction so they succeed or fail
-// together; through a Session they join its transaction.
-func (q InsertQuery) BatchSize(n int) InsertQuery {
-	q.batchSize = n
+// It applies to Exec/Returning only: ToSQL always compiles the full statement, and
+// it has no effect on FromSelect. Split statements run atomically — one transaction
+// through a Database, the session's transaction through a Session.
+func (q InsertQuery) AutoChunk(opts ...ChunkOption) InsertQuery {
+	q.batchSize, q.chunkOff = applyChunkOptions(q.batchSize, q.chunkOff, opts)
 	return q
+}
+
+// BatchSize splits a Values-based INSERT into statements of at most n rows.
+//
+// Deprecated: use AutoChunk(ChunkSize(n)).
+func (q InsertQuery) BatchSize(n int) InsertQuery {
+	return q.AutoChunk(ChunkSize(n))
 }
 
 // FromSelect makes this an INSERT ... SELECT, inserting the rows produced by
@@ -276,8 +281,8 @@ func intersect(names, allowed []string) []string {
 }
 
 // Exec runs the INSERT statement and returns the database/sql result. The rows
-// are split into several statements when BatchSize is set or the executor's
-// configured bind-parameter limit (WithMaxBindParams) would otherwise be
+// are split into several statements when BatchSize is set or the dialect's
+// bind-parameter limit would otherwise be
 // exceeded; the returned result then aggregates the batches: RowsAffected sums
 // every batch and LastInsertId reports the final batch. Split statements run
 // atomically — in one transaction through a Database, joining the session's
@@ -286,23 +291,9 @@ func (q InsertQuery) Exec(ctx context.Context) (stdsql.Result, error) {
 	if q.ex == nil {
 		return nil, errNoExecutor
 	}
-	// FromSelect carries no per-row bind values to split, and an empty/erroring
-	// build is left to the single-statement path to surface.
-	if q.selectSrc != nil || len(q.rows) == 0 {
-		return runExec(ctx, q.ex, q)
-	}
-	insert, err := q.build()
-	if err != nil {
-		return nil, err
-	}
-	if q.conflict != nil {
-		insert = q.applyConflict(insert)
-	}
-	batch := q.effectiveBatchSize(insert.ColumnCount())
-	if batch <= 0 || len(q.rows) <= batch {
-		return runExec(ctx, q.ex, q)
-	}
-	return q.execBatched(ctx, insert, batch)
+	// runExec consults splitStatements; a split runs the chunks atomically and
+	// merges the result, otherwise the statement runs as one.
+	return runExec(ctx, q.ex, q)
 }
 
 // effectiveBatchSize combines the explicit BatchSize with the executor's
@@ -312,6 +303,8 @@ func (q InsertQuery) Exec(ctx context.Context) (stdsql.Result, error) {
 // statement).
 func (q InsertQuery) effectiveBatchSize(columns int) int {
 	batch := q.batchSize
+	// maxBindParams is already 0 when auto-split is off, so the explicit BatchSize
+	// (if any) survives untouched; otherwise the limit caps it.
 	if limit := q.ex.maxBindParams(); limit > 0 && columns > 0 {
 		perStmt := limit / columns
 		if perStmt < 1 {
@@ -324,21 +317,40 @@ func (q InsertQuery) effectiveBatchSize(columns int) int {
 	return batch
 }
 
-// execBatched inserts q.rows in chunks of batch rows, one statement per chunk.
-// The statement is built once so the mapped columns and the defaulted-and-zero
-// omission mask are derived from all rows (preserving non-batched Values
-// semantics), then the row list is split into per-chunk statements that share
-// that fixed column set and run atomically through execStatements.
-func (q InsertQuery) execBatched(ctx context.Context, insert sql.InsertQuery, batch int) (stdsql.Result, error) {
-	dialect := q.ex.sqlDialect()
+// splitStatements implements splitter: it splits a bulk Values INSERT into one
+// compiled statement per chunk of rows, each carrying the same columns, conflict,
+// and (when hasReturning) RETURNING clauses, which SplitRows preserves. The
+// statement is built once so the mapped columns and the defaulted-and-zero omission
+// mask derive from all rows (preserving non-batched Values semantics). It reports
+// ok=false — running the statement unchanged — for ChunkOff, FromSelect, no rows, or
+// when the rows already fit one statement. Inserts are always writes.
+func (q InsertQuery) splitStatements(ex Executor) ([]compiledStmt, bool, bool, error) {
+	if q.chunkOff || q.selectSrc != nil || len(q.rows) == 0 {
+		return nil, false, true, nil
+	}
+	insert, err := q.build()
+	if err != nil {
+		return nil, false, true, err
+	}
+	if q.conflict != nil {
+		insert = q.applyConflict(insert)
+	}
+	if q.hasReturning {
+		insert = insert.Returning(q.returningSelections()...)
+	}
+	batch := q.effectiveBatchSize(insert.ColumnCount())
+	if batch <= 0 || len(q.rows) <= batch {
+		return nil, false, true, nil
+	}
+	dialect := ex.sqlDialect()
 	parts := insert.SplitRows(batch)
 	stmts := make([]compiledStmt, 0, len(parts))
 	for _, part := range parts {
 		sqlText, args, err := part.ToSQL(dialect)
 		if err != nil {
-			return nil, err
+			return nil, false, true, err
 		}
 		stmts = append(stmts, compiledStmt{sql: sqlText, args: args})
 	}
-	return execStatements(ctx, q.ex, stmts)
+	return stmts, true, true, nil
 }

@@ -522,3 +522,152 @@ func TestWithIdentitiesOverridesMetadata(t *testing.T) {
 		t.Fatalf("flush: %v", err)
 	}
 }
+
+// --- Item 7: uow flush DELETE batching + bulk UPDATE. ---
+
+func TestRemoveBatchesIntoChunkedInDeletes(t *testing.T) {
+	fake := &sqltest.Fake{}
+	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()), uow.WithBatchSize(2))
+	for _, id := range []int64{1, 2, 3, 4, 5} {
+		if err := scope.Remove(newUsers(), userRow{ID: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := scope.Flush(ctx()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	execs := fake.Execs()
+	if len(execs) != 3 {
+		t.Fatalf("deletes = %d, want 3 (2+2+1 keys): %v", len(execs), verbs(execs))
+	}
+	for _, e := range execs {
+		if !strings.HasPrefix(e.SQL, "DELETE") || !strings.Contains(e.SQL, "IN (") {
+			t.Fatalf("not a chunked IN delete: %q", e.SQL)
+		}
+	}
+}
+
+func TestRemoveBatchSizeChunksDeletes(t *testing.T) {
+	fake := &sqltest.Fake{}
+	// No bind-param limit, but an explicit batch size still merges and chunks.
+	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()), uow.WithBatchSize(2))
+	for _, id := range []int64{1, 2, 3, 4, 5} {
+		if err := scope.Remove(newUsers(), userRow{ID: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := scope.Flush(ctx()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if n := len(fake.Execs()); n != 3 {
+		t.Fatalf("deletes = %d, want 3 (batch size 2)", n)
+	}
+}
+
+func TestExplicitUpdateBatchesViaValuesJoin(t *testing.T) {
+	fake := &sqltest.Fake{}
+	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()))
+	if err := scope.Update(newUsers(),
+		userRow{ID: 1, Email: "a@x", Name: "A"},
+		userRow{ID: 2, Email: "b@x", Name: "B"},
+		userRow{ID: 3, Email: "c@x", Name: "C"},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := scope.Flush(ctx()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	execs := fake.Execs()
+	if len(execs) != 1 {
+		t.Fatalf("updates = %d, want 1 bulk update: %v", len(execs), verbs(execs))
+	}
+	if !strings.Contains(execs[0].SQL, "VALUES") || !strings.Contains(execs[0].SQL, "FROM") {
+		t.Fatalf("not a VALUES-join update: %q", execs[0].SQL)
+	}
+	// Explicit update sets every non-PK column (email, name); each row contributes
+	// the key plus those two values => 3 rows x 3 = 9 args.
+	if len(execs[0].Args) != 9 {
+		t.Fatalf("args = %d, want 9 (3 rows x [id, email, name])", len(execs[0].Args))
+	}
+}
+
+func TestExplicitUpdateBulkChunksByBatchSize(t *testing.T) {
+	fake := &sqltest.Fake{}
+	// 3 values per row (id, email, name); batch size 2 => 2 rows per statement.
+	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()), uow.WithBatchSize(2))
+	if err := scope.Update(newUsers(),
+		userRow{ID: 1, Email: "a@x", Name: "A"},
+		userRow{ID: 2, Email: "b@x", Name: "B"},
+		userRow{ID: 3, Email: "c@x", Name: "C"},
+		userRow{ID: 4, Email: "d@x", Name: "D"},
+		userRow{ID: 5, Email: "e@x", Name: "E"},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := scope.Flush(ctx()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	execs := fake.Execs()
+	if len(execs) != 3 {
+		t.Fatalf("updates = %d, want 3 (2+2+1 rows)", len(execs))
+	}
+	for _, e := range execs {
+		if !strings.Contains(e.SQL, "VALUES") {
+			t.Fatalf("chunk is not a VALUES-join update: %q", e.SQL)
+		}
+	}
+}
+
+func TestScopeAutoChunkFalseFlushesPerRow(t *testing.T) {
+	fake := &sqltest.Fake{}
+	// The executor enables auto-chunk by default; the scope overrides it off.
+	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()), uow.WithAutoChunk(false))
+	for _, id := range []int64{1, 2, 3} {
+		if err := scope.Remove(newUsers(), userRow{ID: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := scope.Update(newUsers(),
+		userRow{ID: 10, Email: "x@x", Name: "X"},
+		userRow{ID: 11, Email: "y@x", Name: "Y"},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := scope.Flush(ctx()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	execs := fake.Execs()
+	if len(execs) != 5 {
+		t.Fatalf("execs = %d, want 5 (3 deletes + 2 updates, all per-row)", len(execs))
+	}
+	for _, e := range execs {
+		if strings.Contains(e.SQL, "VALUES") || strings.Contains(e.SQL, "IN (") {
+			t.Fatalf("scope auto-split off should flush per row, got %q", e.SQL)
+		}
+	}
+}
+
+func TestScopeAutoChunkTrueOverDisabledExecutor(t *testing.T) {
+	fake := &sqltest.Fake{}
+	// The executor has auto-chunk off; the scope turns it on and sizes its own
+	// chunks to the configured batch size.
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(false))
+	scope := uow.NewScope(db, uow.WithAutoChunk(true), uow.WithBatchSize(2))
+	for _, id := range []int64{1, 2, 3, 4, 5} {
+		if err := scope.Remove(newUsers(), userRow{ID: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := scope.Flush(ctx()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	execs := fake.Execs()
+	if len(execs) != 3 {
+		t.Fatalf("deletes = %d, want 3 (2+2+1, scope-sized)", len(execs))
+	}
+	for _, e := range execs {
+		if !strings.Contains(e.SQL, "IN (") {
+			t.Fatalf("not a chunked IN delete: %q", e.SQL)
+		}
+	}
+}
