@@ -31,6 +31,10 @@ type Database struct {
 	// sessionExecutor — the session's own transaction — in a Session).
 	exec Executor
 
+	// resultObs are the observers (WithResultObserver) run over each scanned
+	// result, in registration order, and inherited by sessions.
+	resultObs []ResultObserver
+
 	// batchReadSnapshot runs a split SELECT's chunk queries inside one REPEATABLE
 	// READ transaction so they observe a single consistent snapshot, as an
 	// unsplit statement would. It defaults to true (active only when splitting is
@@ -90,6 +94,16 @@ func WithMetadata(m meta.Metadata) DatabaseOption {
 // Multiple calls accumulate.
 func WithInterceptor(interceptors ...Interceptor) DatabaseOption {
 	return func(d *Database) { d.ics = append(d.ics, interceptors...) }
+}
+
+// WithResultObserver registers observers that inspect the result of every query
+// scanned through the database (and through sessions it opens). Unlike an
+// Interceptor, which wraps execution and cannot read the result without consuming
+// it, a ResultObserver sees the result already materialized into its Go value, so
+// it is the place to examine column values or accumulate statistics — see
+// ResultObserver. Observers run in registration order; multiple calls accumulate.
+func WithResultObserver(observers ...ResultObserver) DatabaseOption {
+	return func(d *Database) { d.resultObs = append(d.resultObs, observers...) }
 }
 
 // dbExecutor is the default terminal Executor: it runs compiled statements
@@ -332,7 +346,7 @@ func (d *Database) NewSession(opts ...SessionOption) *Session {
 	if options.autoChunk != nil {
 		autoChunk = *options.autoChunk
 	}
-	return &Session{base: d.executor(), txOpts: options.tx, dialect: d.dialect, identities: d.identities, ics: d.ics, autoChunk: autoChunk, preloadChunk: d.preloadChunk}
+	return &Session{base: d.executor(), txOpts: options.tx, dialect: d.dialect, identities: d.identities, ics: d.ics, autoChunk: autoChunk, preloadChunk: d.preloadChunk, resultObs: d.resultObs}
 }
 
 // WithSession runs fn inside a session and commits when fn returns nil; on
@@ -432,3 +446,5 @@ func (d *Database) executor() Executor {
 	}
 	return dbExecutor{d.db}
 }
+
+func (d *Database) resultObservers() []ResultObserver { return d.resultObs }

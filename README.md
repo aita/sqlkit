@@ -279,19 +279,13 @@ err = db.Select().From(appdb.Users).Preload(appdb.Posts).All(ctx).Scan(&users)
 Relations also drive multi-table writes (`Update(t).JoinRel(rel)`,
 `Delete(t).UsingRel(rel)`) and primary-key lookups (`Get(ctx, pk...)`).
 
-### Raw SQL and streaming
+### Raw SQL
 
 When a query is easier by hand, `RawSQL` runs a raw string (or a built
-`sql.Query`) and scans the same way. `Records[T]` streams a large result as an
-iterator of already-scanned values instead of materializing a slice.
+`sql.Query`) and scans the same way.
 
 ```go
 err := db.RawSQL(ctx, "SELECT * FROM users WHERE id = $1", 42).Scan(&user)
-
-for user, err := range sqlkit.Records[User](db.RawSQL(ctx, query)) {
-    if err != nil { return err }
-    ...
-}
 ```
 
 ### Transactions

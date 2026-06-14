@@ -34,6 +34,10 @@ type Session struct {
 	autoChunk    bool
 	preloadChunk int
 
+	// resultObs are the result observers inherited from the Database (see
+	// WithResultObserver), run over each result scanned through this session.
+	resultObs []ResultObserver
+
 	// identities is inherited from the Database (see WithMetadata): a uow.Scope
 	// opened over this session validates its bindings against it automatically.
 	identities *meta.IdentityMap
@@ -275,6 +279,8 @@ func (s *Session) AutoChunkEnabled() bool { return s.autoChunk }
 func (s *Session) preloadChunkSize() int { return s.preloadChunk }
 
 func (s *Session) executor() Executor { return sessionExecutor{s} }
+
+func (s *Session) resultObservers() []ResultObserver { return s.resultObs }
 
 // sessionExecutor is the terminal Executor for a Session: it routes each
 // statement to the session's active executor (its transaction, or the bare
