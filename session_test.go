@@ -12,10 +12,6 @@ import (
 	"github.com/aita/sqlkit/sql"
 )
 
-// The fixtures below mirror what sqlkit generates: a typed table binding
-// with a Get accessor. All statements start from the db or session handle
-// (db.Select().From(t), db.Insert(t).Values(...), db.Update(t), ...).
-
 type User struct {
 	ID    int64
 	Email string
@@ -50,13 +46,18 @@ func (t UsersTable) Get(ctx context.Context, ex sqlkit.Querier, id int64, dest a
 	return true, nil
 }
 
-func (t UsersTable) Info() sqlkit.TableInfo             { return t.info }
+func (t UsersTable) Info() sqlkit.TableInfo { return t.info }
+
 func (t UsersTable) SQLSource() sqlkit.SourceExpression { return t.info.SQLSource() }
+
 func (t UsersTable) Columns() []sqlkit.AnyColumn {
 	return []sqlkit.AnyColumn{t.ID, t.Email, t.Name}
 }
+
 func (t UsersTable) PrimaryKey() []sqlkit.AnyColumn { return []sqlkit.AnyColumn{t.ID} }
-func (t UsersTable) Defaulted() []sqlkit.AnyColumn  { return []sqlkit.AnyColumn{t.ID} }
+
+func (t UsersTable) Defaulted() []sqlkit.AnyColumn { return []sqlkit.AnyColumn{t.ID} }
+
 func (t UsersTable) As(alias string) UsersTable {
 	info := t.info.WithAlias(alias)
 	return UsersTable{
@@ -90,13 +91,17 @@ var Posts = func() PostsTable {
 	}
 }()
 
-func (t PostsTable) Info() sqlkit.TableInfo             { return t.info }
+func (t PostsTable) Info() sqlkit.TableInfo { return t.info }
+
 func (t PostsTable) SQLSource() sqlkit.SourceExpression { return t.info.SQLSource() }
+
 func (t PostsTable) Columns() []sqlkit.AnyColumn {
 	return []sqlkit.AnyColumn{t.ID, t.UserID, t.Title}
 }
+
 func (t PostsTable) PrimaryKey() []sqlkit.AnyColumn { return []sqlkit.AnyColumn{t.ID} }
-func (t PostsTable) Defaulted() []sqlkit.AnyColumn  { return []sqlkit.AnyColumn{t.ID} }
+
+func (t PostsTable) Defaulted() []sqlkit.AnyColumn { return []sqlkit.AnyColumn{t.ID} }
 
 func newSession(t *testing.T, fake *sqltest.Fake) *sqlkit.Session {
 	t.Helper()

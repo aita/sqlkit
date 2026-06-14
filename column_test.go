@@ -1,9 +1,11 @@
 package sqlkit_test
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/aita/sqlkit"
+	"github.com/aita/sqlkit/sql"
 )
 
 func TestColumnReferenceQualifiesByRealTable(t *testing.T) {
@@ -140,4 +142,70 @@ func TestTypedExpressionWrappers(t *testing.T) {
 	where(t, Users.ID.GtExpr(sqlkit.V[int64](5)), `(`+id+` > $1)`, []any{int64(5)})
 	where(t, Users.ID.GtExpr(sqlkit.SubExpr[int64](sqlkit.Select(Posts.ID).From(Posts))),
 		`(`+id+` > (SELECT "public"."posts"."id" FROM "public"."posts"))`, nil)
+}
+
+func TestTypedArithmeticAndCast(t *testing.T) {
+	// UPDATE ... SET id = id + 1 via a typed arithmetic expression.
+	assertToSQL(t,
+		sqlkit.Update(Users).Set(Users.ID.SetExpr(Users.ID.Add(1))).Where(Users.ID.Eq(7)),
+		`UPDATE "public"."users" SET "id" = ("public"."users"."id" + $1) WHERE ("public"."users"."id" = $2)`,
+		[]any{int64(1), int64(7)})
+
+	assertToSQL(t,
+		sqlkit.Select(sql.As(sqlkit.Cast[int64](Users.Email, "integer"), "n")).From(Users),
+		`SELECT CAST("public"."users"."email" AS integer) AS "n" FROM "public"."users"`,
+		nil)
+}
+
+func TestTypedLikeVariants(t *testing.T) {
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).Where(sqlkit.NotLike(Users.Email, "%@spam.com")),
+		`SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."email" NOT LIKE $1)`,
+		[]any{"%@spam.com"})
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).Where(sqlkit.ILike(Users.Email, "%@EXAMPLE.com")),
+		`SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."email" ILIKE $1)`,
+		[]any{"%@EXAMPLE.com"})
+}
+
+func TestColumnIsDistinctFrom(t *testing.T) {
+	// IS DISTINCT FROM against a value and against another typed column.
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).Where(Users.Email.IsDistinctFrom("a@x.com")),
+		`SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."email" IS DISTINCT FROM $1)`,
+		[]any{"a@x.com"})
+
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).Where(Users.ID.IsNotDistinctFromExpr(Posts.UserID)),
+		`SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" IS NOT DISTINCT FROM "public"."posts"."user_id")`,
+		nil)
+}
+
+func TestColumnEqAnyAndNeAll(t *testing.T) {
+	// EqAny binds the whole list as one array parameter (PostgreSQL's IN
+	// replacement), so a single $1 carries all values.
+	q := sqlkit.Select(Users.ID).From(Users).Where(Users.ID.EqAny(1, 2, 3))
+	gotSQL, args, err := q.ToSQL(sql.PostgreSQLDialect{})
+	if err != nil {
+		t.Fatalf("ToSQL() error = %v", err)
+	}
+	wantSQL := `SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" = ANY($1))`
+	if gotSQL != wantSQL {
+		t.Fatalf("ToSQL() = %q, want %q", gotSQL, wantSQL)
+	}
+	if want := []any{[]int64{1, 2, 3}}; !reflect.DeepEqual(args, want) {
+		t.Fatalf("args = %#v, want %#v", args, want)
+	}
+
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).Where(Users.ID.NeAll(4, 5)),
+		`SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" <> ALL($1))`,
+		[]any{[]int64{4, 5}})
+}
+
+func TestColumnSimilarTo(t *testing.T) {
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).Where(sqlkit.SimilarTo(Users.Email, "%@example.com")),
+		`SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."email" SIMILAR TO $1)`,
+		[]any{"%@example.com"})
 }

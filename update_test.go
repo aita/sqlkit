@@ -10,6 +10,22 @@ import (
 	"github.com/aita/sqlkit/internal/sqltest"
 )
 
+func TestTypedUpdateFromAndDeleteUsing(t *testing.T) {
+	assertToSQL(t,
+		sqlkit.Update(Posts).
+			Set(Posts.Title.SetExpr(sqlkit.SubExpr[string](
+				sqlkit.Select(Users.Email).From(Users).Where(Users.ID.EqExpr(Posts.UserID))))).
+			From(Users).
+			Where(Users.ID.EqExpr(Posts.UserID)),
+		`UPDATE "public"."posts" SET "title" = (SELECT "public"."users"."email" FROM "public"."users" WHERE ("public"."users"."id" = "public"."posts"."user_id")) FROM "public"."users" WHERE ("public"."users"."id" = "public"."posts"."user_id")`,
+		nil)
+
+	assertToSQL(t,
+		sqlkit.Delete(Posts).Using(Users).Where(Users.ID.EqExpr(Posts.UserID), Users.Email.Eq("x@example.com")),
+		`DELETE FROM "public"."posts" USING "public"."users" WHERE (("public"."users"."id" = "public"."posts"."user_id") AND ("public"."users"."email" = $1))`,
+		[]any{"x@example.com"})
+}
+
 // version is a Users-bound int64 column standing in for a generated version
 // column (the fixtures in session_test.go have none).
 var version = sqlkit.NewColumn[int64](Users.Info(), "version")

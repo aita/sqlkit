@@ -6,10 +6,6 @@ import (
 	"github.com/aita/sqlkit"
 )
 
-// These tests cover the driver-name -> dialect mapping only; they need no SQLite
-// driver. The real driver-backed round-trip lives in internal/integration, which
-// quarantines the driver dependency from the root module that consumers import.
-
 func TestDialectForDriverSQLite(t *testing.T) {
 	for _, name := range []string{"sqlite", "sqlite3"} {
 		if got := sqlkit.DialectForDriver(name).Name(); got != "sqlite" {
@@ -23,5 +19,16 @@ func TestRegisterDriverDialect(t *testing.T) {
 	sqlkit.RegisterDriverDialect("sqlite-custom", sqlkit.SQLiteDialect{})
 	if got := sqlkit.DialectForDriver("sqlite-custom").Name(); got != "sqlite" {
 		t.Fatalf("DialectForDriver(sqlite-custom) = %q, want sqlite", got)
+	}
+}
+
+func TestDialectForDriver(t *testing.T) {
+	if sqlkit.DialectForDriver("mysql").Name() != "mysql" {
+		t.Fatal("mysql driver should select the MySQL dialect")
+	}
+	for _, name := range []string{"pgx", "postgres", "anything-else"} {
+		if sqlkit.DialectForDriver(name).Name() != "postgres" {
+			t.Fatalf("driver %q should default to postgres", name)
+		}
 	}
 }

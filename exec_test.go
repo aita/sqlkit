@@ -166,7 +166,8 @@ func (t *stubTx) Exec(ctx context.Context, stmt sqlkit.Statement) (stdsql.Result
 	return t.tx.ExecContext(ctx, stmt.SQL, stmt.Args...)
 }
 
-func (t *stubTx) Commit() error   { t.e.commits++; return t.tx.Commit() }
+func (t *stubTx) Commit() error { t.e.commits++; return t.tx.Commit() }
+
 func (t *stubTx) Rollback() error { t.e.rollbacks++; return t.tx.Rollback() }
 
 // TestWrapExecutorTxCommit verifies a WithSession over a TxExecutor terminal runs
@@ -233,5 +234,28 @@ func TestWrapExecutorTxSavepoint(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("savepoint did not run through the terminal's Tx; execs = %v", term.execs)
+	}
+}
+
+func TestUnboundChainFailsAtExecution(t *testing.T) {
+	// Package-level constructors build subqueries / ToSQL-only chains; they
+	// are not bound to an executor, so executing them errors.
+	var out []User
+	err := sqlkit.Select().From(Users).All(context.Background()).Scan(&out)
+	if err == nil || !strings.Contains(err.Error(), "not bound to an executor") {
+		t.Fatalf("unbound Select Scan() = %v, want no-executor error", err)
+	}
+
+	if _, err := sqlkit.Insert(Users).Values(User{Email: "x"}).Exec(context.Background()); err == nil {
+		t.Fatal("unbound Insert Exec() succeeded, want error")
+	}
+	if _, err := sqlkit.Update(Users).Set(Users.Email.Set("x")).Exec(context.Background()); err == nil {
+		t.Fatal("unbound Update Exec() succeeded, want error")
+	}
+	if _, err := sqlkit.Delete(Users).Exec(context.Background()); err == nil {
+		t.Fatal("unbound Delete Exec() succeeded, want error")
+	}
+	if _, err := sqlkit.Select().From(Users).Count(context.Background()); err == nil {
+		t.Fatal("unbound Count() succeeded, want error")
 	}
 }
