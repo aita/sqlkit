@@ -71,7 +71,11 @@ func (c *Compiler) CompileCreateTable(s CreateTableStmt) (string, error) {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("CREATE TABLE ")
+	sb.WriteString("CREATE ")
+	if s.temporary {
+		sb.WriteString("TEMPORARY ")
+	}
+	sb.WriteString("TABLE ")
 	if s.ifNotExists {
 		sb.WriteString("IF NOT EXISTS ")
 	}
@@ -189,6 +193,55 @@ func (c *Compiler) CompileDropTable(s DropTableStmt) (string, error) {
 		sb.WriteString("IF EXISTS ")
 	}
 	sb.WriteString(c.qualify(s.table) + ";")
+	return sb.String(), nil
+}
+
+// CompileCreateView renders a CREATE VIEW statement. The view body compiles to
+// plain SQL text; a body that binds values is rejected, since a DDL statement
+// carries no bind arguments (inline literals with Raw).
+func (c *Compiler) CompileCreateView(s CreateViewStmt) (string, error) {
+	if s.query == nil {
+		return "", fmt.Errorf("sqlkit/sql: CREATE VIEW requires a query")
+	}
+	if s.orReplace && c.Dialect.Name() == "sqlite" {
+		return "", fmt.Errorf("sqlkit/sql: SQLite does not support CREATE OR REPLACE VIEW; drop and recreate instead")
+	}
+	body, args, err := s.query.ToSQL(c.Dialect)
+	if err != nil {
+		return "", err
+	}
+	if len(args) > 0 {
+		return "", fmt.Errorf("sqlkit/sql: CREATE VIEW body must not bind values; use Raw to inline literals")
+	}
+	var sb strings.Builder
+	sb.WriteString("CREATE ")
+	if s.orReplace {
+		sb.WriteString("OR REPLACE ")
+	}
+	sb.WriteString("VIEW ")
+	sb.WriteString(c.qualify(s.table))
+	if len(s.columns) > 0 {
+		sb.WriteString(" (" + c.quoteAll(s.columns) + ")")
+	}
+	sb.WriteString(" AS\n")
+	sb.WriteString(body)
+	sb.WriteString(";")
+	return sb.String(), nil
+}
+
+// CompileDropView renders a DROP VIEW statement (CASCADE is PostgreSQL/standard
+// only; MySQL and SQLite have no CASCADE clause for DROP VIEW).
+func (c *Compiler) CompileDropView(s DropViewStmt) (string, error) {
+	var sb strings.Builder
+	sb.WriteString("DROP VIEW ")
+	if s.ifExists {
+		sb.WriteString("IF EXISTS ")
+	}
+	sb.WriteString(c.qualify(s.table))
+	if s.cascade && c.Dialect.Name() != "mysql" && c.Dialect.Name() != "sqlite" {
+		sb.WriteString(" CASCADE")
+	}
+	sb.WriteString(";")
 	return sb.String(), nil
 }
 
