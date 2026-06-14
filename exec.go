@@ -38,6 +38,9 @@ type Executor interface {
 
 	sqlDialect() sql.Dialect
 	interceptors() []Interceptor
+	// maxBindParams reports the configured bind-parameter limit driving automatic
+	// statement splitting, or 0 when splitting is disabled.
+	maxBindParams() int
 	queryContext(ctx context.Context, query string, args ...any) (*stdsql.Rows, error)
 	execContext(ctx context.Context, query string, args ...any) (stdsql.Result, error)
 }
@@ -70,6 +73,11 @@ type Rows struct {
 	// preloads are relations eager-loaded after a successful Scan, set by
 	// SelectQuery terminals when Preload was registered.
 	preloads []Relation
+	// batches, when non-empty, holds several compiled statements whose rows Scan
+	// concatenates into the destination slice. It is set by All when a large IN
+	// list is split to stay within the bind-parameter limit; sqlText/args are
+	// then unused.
+	batches []compiledStmt
 }
 
 func newRows(ctx context.Context, ex Executor, query sql.Query) Rows {
@@ -114,6 +122,9 @@ func (r Rows) Scan(dest any) error {
 	if r.err != nil {
 		return r.err
 	}
+	if len(r.batches) > 0 {
+		return r.scanBatched(dest)
+	}
 	rows, err := runQuery(r.ctx, r.ex, r.statement())
 	if err != nil {
 		return err
@@ -130,6 +141,58 @@ func (r Rows) Scan(dest any) error {
 	// Eager-load any registered relations onto the just-scanned destination.
 	if len(r.preloads) > 0 {
 		return applyPreloads(r.ctx, r.ex, dest, r.preloads)
+	}
+	return nil
+}
+
+// scanBatched runs the split statements in turn and concatenates their rows
+// into dest, a pointer to a slice. It backs a SELECT whose large IN list was
+// split to stay within the bind-parameter limit; each batch is scanned into a
+// fresh slice of the destination type and appended, then any preloads run once
+// over the combined result.
+func (r Rows) scanBatched(dest any) (err error) {
+	dv := reflect.ValueOf(dest)
+	if dv.Kind() != reflect.Pointer || dv.IsNil() || dv.Elem().Kind() != reflect.Slice {
+		return fmt.Errorf("sqlkit: a split query scans into a pointer to a slice, got %T", dest)
+	}
+	// Run every chunk (and any preloads) under one REPEATABLE READ snapshot when
+	// the executor is an auto-committing Database and the snapshot is enabled, so
+	// the combined result is consistent as an unsplit statement's would be. A
+	// Session already provides the surrounding transaction.
+	ex := r.ex
+	if db, ok := r.ex.(*Database); ok {
+		if session, on := db.newBatchReadSession(); on {
+			ex = session
+			defer func() {
+				if err != nil {
+					_ = session.Rollback()
+					return
+				}
+				err = session.Commit()
+			}()
+		}
+	}
+
+	sliceType := dv.Elem().Type()
+	dialect := ex.sqlDialect()
+	acc := reflect.MakeSlice(sliceType, 0, 0)
+	for _, batch := range r.batches {
+		rows, err := runQuery(r.ctx, ex, Statement{Op: OpQuery, SQL: batch.sql, Args: batch.args, Dialect: dialect})
+		if err != nil {
+			return err
+		}
+		tmp := reflect.New(sliceType)
+		if err := func() error {
+			defer rows.Close()
+			return scanInto(rows, tmp.Interface())
+		}(); err != nil {
+			return err
+		}
+		acc = reflect.AppendSlice(acc, tmp.Elem())
+	}
+	dv.Elem().Set(acc)
+	if len(r.preloads) > 0 {
+		return applyPreloads(r.ctx, ex, dest, r.preloads)
 	}
 	return nil
 }

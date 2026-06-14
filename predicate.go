@@ -7,9 +7,28 @@ import "github.com/aita/sqlkit/sql"
 // compile error rather than a runtime SQL error.
 type Predicate struct {
 	expr sql.Expression
+	// batch is set on a column IN predicate, carrying its value list so a
+	// builder can split it across statements when the bind-parameter limit would
+	// otherwise be exceeded. It is ignored once the predicate is combined with
+	// And/Or/Not, which clear it.
+	batch *batchIn
 }
 
 func newPredicate(expr sql.Expression) Predicate { return Predicate{expr: expr} }
+
+// batchIn carries the pieces of a positive column IN needed to rebuild it for an
+// arbitrary subset of its values: the left-hand column and the full value list.
+// Only positive IN is splittable; NOT IN cannot be partitioned across
+// statements, so it never produces a batchIn.
+type batchIn struct {
+	col    sql.Expression
+	values []any
+}
+
+// exprFor renders the IN expression for the given subset of values.
+func (b *batchIn) exprFor(values []any) sql.Expression {
+	return sql.In(b.col, values...)
+}
 
 // Expression returns the underlying untyped SQL expression.
 func (p Predicate) Expression() sql.Expression { return p.expr }
@@ -62,6 +81,26 @@ func combineWhere(predicates []Predicate) sql.Expression {
 		return nil
 	}
 	return And(predicates...).expr
+}
+
+// resolveWhere folds a Where call's predicates while keeping a single splittable
+// IN deferred so it can later be chunked across statements. current is the batch
+// a builder already holds back (or nil).
+//
+// A lone batchable IN added when nothing is deferred becomes the new deferred
+// batch (folding nothing now). Otherwise everything folds normally: flush is the
+// previously deferred batch, which must be ANDed in first to keep its original
+// WHERE position (and is no longer splittable), and fold is the new predicates'
+// combined expression. The builder ANDs flush then fold into its query, in that
+// order, and stores deferred.
+func resolveWhere(predicates []Predicate, current *batchIn) (flush, fold sql.Expression, deferred *batchIn) {
+	if current == nil && len(predicates) == 1 && predicates[0].batch != nil {
+		return nil, nil, predicates[0].batch
+	}
+	if current != nil {
+		flush = current.exprFor(current.values)
+	}
+	return flush, combineWhere(predicates), nil
 }
 
 // Exists creates an "EXISTS (subquery)" predicate, true when the subquery

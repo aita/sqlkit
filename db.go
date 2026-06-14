@@ -24,6 +24,26 @@ type Database struct {
 	metaErr    error
 
 	ics []Interceptor
+
+	// bindParamLimit caps the bind parameters a single statement may carry. When
+	// positive it drives automatic statement splitting: bulk INSERTs are chunked
+	// into several statements and large IN lists are split, so a statement never
+	// exceeds it. Zero (the default) disables automatic splitting.
+	bindParamLimit int
+	// autoBindParams requests detecting the limit from the database at Open.
+	autoBindParams bool
+	// batchReadSnapshot runs a split SELECT's chunk queries inside one REPEATABLE
+	// READ transaction so they observe a single consistent snapshot, as an
+	// unsplit statement would. It defaults to true (active only when splitting is
+	// enabled); WithBatchReadSnapshot(false) turns it off, running the chunks as
+	// independent reads.
+	batchReadSnapshot bool
+	// batchWriteSnapshot raises the isolation of the transaction wrapping a split
+	// INSERT/UPDATE/DELETE to REPEATABLE READ, so data the statements read (a
+	// reference UPDATE's SET subquery or FROM source) is consistent across the
+	// chunks. It defaults to false because it can surface serialization failures
+	// the caller must retry; WithBatchWriteSnapshot(true) opts in.
+	batchWriteSnapshot bool
 }
 
 // DatabaseOption configures a Database.
@@ -60,6 +80,53 @@ func WithInterceptor(interceptors ...Interceptor) DatabaseOption {
 	return func(d *Database) { d.ics = append(d.ics, interceptors...) }
 }
 
+// WithMaxBindParams sets the maximum number of bind parameters a single
+// statement may carry. When positive it turns on automatic statement splitting:
+// bulk INSERTs (Insert(...).Values(...).Exec) are chunked into several
+// statements and large IN lists (col.In on Select/Update/Delete) are split
+// so no statement exceeds the limit. n <= 0 (the default) disables splitting.
+//
+// Pass it to keep control of the value, or use WithAutoMaxBindParams to detect a
+// safe one from the database at Open.
+func WithMaxBindParams(n int) DatabaseOption {
+	return func(d *Database) { d.bindParamLimit = n }
+}
+
+// WithAutoMaxBindParams configures the Database, at Open, to query the database
+// for a safe bind-parameter limit (PostgreSQL and MySQL both cap a statement at
+// 65535) and enable automatic statement splitting at it. Open returns the
+// database's ping error if it is unreachable. It is ignored by WrapDB, which has
+// no driver round-trip to make; call DetectMaxBindParams there instead.
+func WithAutoMaxBindParams() DatabaseOption {
+	return func(d *Database) { d.autoBindParams = true }
+}
+
+// WithBatchReadSnapshot controls whether a split SELECT (a large IN list chunked
+// to stay within the bind-parameter limit) runs its chunk queries inside one
+// REPEATABLE READ transaction, so they observe a single consistent snapshot just
+// as the unsplit statement would. It is on by default whenever splitting is
+// enabled; pass false to run the chunks as independent reads instead, trading
+// the snapshot for not holding a connection across the chunks. It has no effect
+// when splitting is disabled, or on chunks already running inside a Session
+// (which use that session's transaction). It does not change the atomic
+// transaction wrapping split INSERT/UPDATE/DELETE writes.
+func WithBatchReadSnapshot(enabled bool) DatabaseOption {
+	return func(d *Database) { d.batchReadSnapshot = enabled }
+}
+
+// WithBatchWriteSnapshot raises the isolation of the transaction wrapping a split
+// INSERT/UPDATE/DELETE to REPEATABLE READ, so any data those statements read is
+// consistent across the chunks — the case that matters for a reference UPDATE,
+// whose SET subquery or FROM source would otherwise be re-read per chunk and
+// could drift between them. It is off by default because REPEATABLE READ can
+// surface serialization failures (PostgreSQL 40001) the caller must retry; the
+// split is always atomic regardless, so enable this only when the chunks read
+// data that must not change mid-batch. It has no effect on chunks already
+// running inside a Session, which use that session's transaction.
+func WithBatchWriteSnapshot(enabled bool) DatabaseOption {
+	return func(d *Database) { d.batchWriteSnapshot = enabled }
+}
+
 // Open opens a database/sql handle from a driver name and DSN string. The
 // dialect is inferred from the driver name (see DialectForDriver); pass
 // WithDialect to override.
@@ -72,17 +139,61 @@ func Open(driverName, dsn string, opts ...DatabaseOption) (*Database, error) {
 	if d.metaErr != nil {
 		return nil, d.metaErr
 	}
+	if d.autoBindParams {
+		if _, err := d.DetectMaxBindParams(context.Background()); err != nil {
+			return nil, err
+		}
+	}
 	return d, nil
 }
 
 // WrapDB creates a sqlkit database handle from an existing database/sql handle.
 func WrapDB(db *stdsql.DB, opts ...DatabaseOption) *Database {
-	d := &Database{db: db, dialect: sql.PostgreSQLDialect{}}
+	d := &Database{db: db, dialect: sql.PostgreSQLDialect{}, batchReadSnapshot: true}
 	for _, opt := range opts {
 		opt(d)
 	}
 	return d
 }
+
+// newBatchReadSession opens a REPEATABLE READ, read-only session for running a
+// split SELECT's chunks under one snapshot, or returns false when the consistent
+// snapshot is disabled.
+func (d *Database) newBatchReadSession() (*Session, bool) {
+	if !d.batchReadSnapshot {
+		return nil, false
+	}
+	return d.NewSession(WithTxOptions(TxOptions{Isolation: stdsql.LevelRepeatableRead, ReadOnly: true})), true
+}
+
+// batchWriteSessionOptions returns the session options for the transaction that
+// wraps a split write: REPEATABLE READ when the write snapshot is enabled, else
+// none (the driver's default isolation).
+func (d *Database) batchWriteSessionOptions() []SessionOption {
+	if !d.batchWriteSnapshot {
+		return nil
+	}
+	return []SessionOption{WithTxOptions(TxOptions{Isolation: stdsql.LevelRepeatableRead})}
+}
+
+// DetectMaxBindParams queries the database for a safe maximum number of bind
+// parameters per statement, configures the Database to split statements at it,
+// and returns it. PostgreSQL and MySQL both cap a statement at 65535 parameters
+// (a 16-bit protocol field), so the round-trip mainly confirms the connection is
+// usable. After it returns, bulk INSERTs are chunked and large IN lists are
+// split automatically. WithAutoMaxBindParams calls it for you at Open.
+func (d *Database) DetectMaxBindParams(ctx context.Context) (int, error) {
+	limit, err := detectBindParamLimit(ctx, d.db, d.dialect)
+	if err != nil {
+		return 0, err
+	}
+	d.bindParamLimit = limit
+	return limit, nil
+}
+
+// MaxBindParams returns the configured bind-parameter limit driving automatic
+// statement splitting, or 0 when splitting is disabled.
+func (d *Database) MaxBindParams() int { return d.bindParamLimit }
 
 // SQL returns the wrapped database/sql handle.
 func (d *Database) SQL() *stdsql.DB { return d.db }
@@ -171,7 +282,7 @@ func (d *Database) NewSession(opts ...SessionOption) *Session {
 	for _, opt := range opts {
 		opt(&options)
 	}
-	return &Session{db: d.db, txOpts: options.tx, dialect: d.dialect, identities: d.identities, ics: d.ics}
+	return &Session{db: d.db, txOpts: options.tx, dialect: d.dialect, identities: d.identities, ics: d.ics, bindParamLimit: d.bindParamLimit}
 }
 
 // WithSession runs fn inside a session and commits when fn returns nil; on
@@ -239,6 +350,8 @@ func (d *Database) Exec(ctx context.Context, query sql.Query) (stdsql.Result, er
 func (d *Database) sqlDialect() sql.Dialect { return d.dialect }
 
 func (d *Database) interceptors() []Interceptor { return d.ics }
+
+func (d *Database) maxBindParams() int { return d.bindParamLimit }
 
 func (d *Database) queryContext(ctx context.Context, query string, args ...any) (*stdsql.Rows, error) {
 	return d.db.QueryContext(ctx, query, args...)

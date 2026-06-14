@@ -85,6 +85,19 @@ func (q InsertQuery) Returning(selections ...Selection) InsertQuery {
 	return q
 }
 
+// ColumnCount reports the number of columns each VALUES row binds, the per-row
+// bind-parameter count used to size batches against a parameter limit. It is the
+// explicit Columns list when set, else the width of the first row, else 0.
+func (q InsertQuery) ColumnCount() int {
+	if len(q.columns) > 0 {
+		return len(q.columns)
+	}
+	if len(q.rows) > 0 {
+		return len(q.rows[0])
+	}
+	return 0
+}
+
 // SplitRows partitions a VALUES insert into copies of at most n rows each, every
 // copy keeping the same column list, conflict, and returning clauses. It lets a
 // large insert run as several statements without re-deriving the column set per

@@ -26,13 +26,14 @@ type Result struct {
 // Fake is a scriptable in-memory database driver. Set QueryFunc/ExecFunc to
 // control responses; all statements are recorded.
 type Fake struct {
-	mu       sync.Mutex
-	queries  []Call
-	execs    []Call
-	all      []Call
-	begins   int
-	commits  int
-	rowReads int
+	mu        sync.Mutex
+	queries   []Call
+	execs     []Call
+	all       []Call
+	begins    int
+	commits   int
+	rowReads  int
+	beginOpts []driver.TxOptions
 
 	// QueryFunc serves QueryContext calls. Nil means every query returns an
 	// empty result set.
@@ -87,6 +88,14 @@ func (f *Fake) Begins() int {
 	return f.begins
 }
 
+// BeginOptions returns the transaction options of each begun transaction, in
+// order, so tests can observe the isolation level and read-only flag requested.
+func (f *Fake) BeginOptions() []driver.TxOptions {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]driver.TxOptions(nil), f.beginOpts...)
+}
+
 // Commits returns the number of committed transactions.
 func (f *Fake) Commits() int {
 	f.mu.Lock()
@@ -127,15 +136,16 @@ func (c *conn) Prepare(string) (driver.Stmt, error) {
 
 func (c *conn) Close() error { return nil }
 
-func (c *conn) Begin() (driver.Tx, error) { return c.beginTx() }
+func (c *conn) Begin() (driver.Tx, error) { return c.beginTx(driver.TxOptions{}) }
 
-func (c *conn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
-	return c.beginTx()
+func (c *conn) BeginTx(_ context.Context, opts driver.TxOptions) (driver.Tx, error) {
+	return c.beginTx(opts)
 }
 
-func (c *conn) beginTx() (driver.Tx, error) {
+func (c *conn) beginTx(opts driver.TxOptions) (driver.Tx, error) {
 	c.f.mu.Lock()
 	c.f.begins++
+	c.f.beginOpts = append(c.f.beginOpts, opts)
 	c.f.mu.Unlock()
 	return tx{f: c.f}, nil
 }

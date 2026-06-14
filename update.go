@@ -20,6 +20,10 @@ type UpdateQuery struct {
 	returning    []sql.Selection
 	hasReturning bool
 	err          error
+	// batch holds a lone column IN back from the WHERE so Exec can split its
+	// value list across statements when the bind-parameter limit would be
+	// exceeded; finalQuery folds it back in for ToSQL and RETURNING.
+	batch *batchIn
 }
 
 // Update creates an unbound UPDATE builder, for ToSQL or tests. Assignments
@@ -152,12 +156,28 @@ func (q UpdateQuery) JoinRel(rel Relation) UpdateQuery {
 	return q.Join(rel.Target(), rel.JoinOn())
 }
 
-// Where adds predicates, combined with AND.
+// Where adds predicates, combined with AND. A lone column IN whose value
+// list is large enough to exceed the executor's bind-parameter limit is held
+// back and split across statements by Exec; see WithMaxBindParams.
 func (q UpdateQuery) Where(predicates ...Predicate) UpdateQuery {
-	if expr := combineWhere(predicates); expr != nil {
-		q.query = q.query.Where(expr)
+	flush, fold, deferred := resolveWhere(predicates, q.batch)
+	if flush != nil {
+		q.query = q.query.Where(flush)
 	}
+	if fold != nil {
+		q.query = q.query.Where(fold)
+	}
+	q.batch = deferred
 	return q
+}
+
+// finalQuery folds any deferred IN back into the query, for ToSQL and RETURNING
+// (every use other than Exec's splitting path).
+func (q UpdateQuery) finalQuery() sql.UpdateQuery {
+	if q.batch == nil {
+		return q.query
+	}
+	return q.query.Where(q.batch.exprFor(q.batch.values))
 }
 
 // Returning adds an explicit RETURNING clause and makes the statement yield
@@ -169,12 +189,14 @@ func (q UpdateQuery) Returning(selections ...sql.Selection) ReturningQuery {
 	return ReturningQuery{ex: q.ex, query: q}
 }
 
-// ToSQL compiles the UPDATE statement.
+// ToSQL compiles the UPDATE statement. A deferred IN is folded into a single
+// statement carrying the full value list, independent of any configured
+// bind-parameter limit (which only affects Exec).
 func (q UpdateQuery) ToSQL(dialect sql.Dialect) (string, []any, error) {
 	if q.err != nil {
 		return "", nil, q.err
 	}
-	query := q.query
+	query := q.finalQuery()
 	if q.hasReturning {
 		if len(q.returning) > 0 {
 			query = query.Returning(q.returning...)
@@ -185,7 +207,34 @@ func (q UpdateQuery) ToSQL(dialect sql.Dialect) (string, []any, error) {
 	return query.ToSQL(dialect)
 }
 
-// Exec runs the UPDATE statement and returns the database/sql result.
+// Exec runs the UPDATE statement and returns the database/sql result. When a
+// lone column IN in the WHERE carries more values than the executor's
+// bind-parameter limit (WithMaxBindParams) allows, the value list is split
+// across several statements run atomically (one transaction through a Database,
+// the session's transaction through a Session); the returned result then sums
+// their RowsAffected.
 func (q UpdateQuery) Exec(ctx context.Context) (stdsql.Result, error) {
+	if q.err != nil {
+		return nil, q.err
+	}
+	if q.ex == nil {
+		return nil, errNoExecutor
+	}
+	if !q.hasReturning {
+		dialect := q.ex.sqlDialect()
+		stmts, ok, err := splitInStatements(q.ex, q.batch, func(in sql.Expression) (string, []any, error) {
+			query := q.query
+			if in != nil {
+				query = query.Where(in)
+			}
+			return query.ToSQL(dialect)
+		})
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return execStatements(ctx, q.ex, stmts)
+		}
+	}
 	return runExec(ctx, q.ex, q)
 }

@@ -149,6 +149,17 @@ type ExcludedRenderer interface {
 	Excluded(column string) string
 }
 
+// BindParamLimiter is an optional capability a Dialect implements to report the
+// maximum number of bind parameters a single statement may carry. Both
+// PostgreSQL and MySQL cap this at 65535, because the parameter count is a
+// 16-bit field in their wire protocols. sqlkit reads it (through a Database
+// configured to auto-detect) to split bulk INSERTs and chunk large IN lists so
+// a statement never exceeds the limit; the compiler does not need it, so adding
+// it is not a breaking change to Dialect.
+type BindParamLimiter interface {
+	MaxBindParams() int
+}
+
 // JoinedUpdateDeleter is an optional capability for dialects whose multi-table
 // UPDATE/DELETE syntax differs from the SQL-standard FROM/USING form. MySQL puts
 // the joined sources inline (UPDATE t JOIN j ON ... SET ...) and names the
@@ -246,6 +257,10 @@ func (PostgreSQLDialect) Placeholder(position int) string {
 
 // SupportsReturning reports RETURNING support (PostgreSQL has it).
 func (PostgreSQLDialect) SupportsReturning() bool { return true }
+
+// MaxBindParams reports PostgreSQL's per-statement bind-parameter cap (65535),
+// the limit of the 16-bit parameter count in the wire protocol.
+func (PostgreSQLDialect) MaxBindParams() int { return 65535 }
 
 // pgCanonical maps udt names to the spelled-out SQL type names.
 var pgCanonical = map[string]string{
@@ -388,6 +403,10 @@ func (MySQLDialect) Placeholder(int) string { return "?" }
 
 // SupportsReturning reports RETURNING support (MySQL lacks it).
 func (MySQLDialect) SupportsReturning() bool { return false }
+
+// MaxBindParams reports MySQL's per-statement placeholder cap (65535), the
+// limit of the 16-bit parameter count in the client/server protocol.
+func (MySQLDialect) MaxBindParams() int { return 65535 }
 
 // UsesInlineJoins selects MySQL's inline multi-table UPDATE/DELETE layout.
 func (MySQLDialect) UsesInlineJoins() bool { return true }
