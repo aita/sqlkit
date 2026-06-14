@@ -181,14 +181,21 @@ func (c *Compiler) compileRestateColumn(col ColumnDef) (string, error) {
 	return strings.Join(clauses, ", "), nil
 }
 
-// CompileDropTable renders a DROP TABLE statement.
+// CompileDropTable renders a DROP TABLE statement over one or more tables.
 func (c *Compiler) CompileDropTable(s DropTableStmt) (string, error) {
+	if len(s.tables) == 0 {
+		return "", fmt.Errorf("sqlkit/sql: DROP TABLE requires at least one table")
+	}
+	tables := make([]string, len(s.tables))
+	for i, t := range s.tables {
+		tables[i] = c.qualify(t)
+	}
 	var sb strings.Builder
 	sb.WriteString("DROP TABLE ")
 	if s.ifExists {
 		sb.WriteString("IF EXISTS ")
 	}
-	sb.WriteString(c.qualify(s.table) + ";")
+	sb.WriteString(strings.Join(tables, ", ") + ";")
 	return sb.String(), nil
 }
 

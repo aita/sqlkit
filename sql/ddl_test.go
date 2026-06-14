@@ -136,6 +136,17 @@ func TestDropTable(t *testing.T) {
 	}
 }
 
+func TestDropTableMultiple(t *testing.T) {
+	stmt := sql.DropTable(
+		sql.Table{Schema: "public", Name: "users"},
+		sql.Table{Schema: "public", Name: "posts"},
+	).IfExists()
+	got := mustDDL(t, stmt, "postgres")
+	if want := `DROP TABLE IF EXISTS "public"."users", "public"."posts";`; got != want {
+		t.Errorf("DropTable(multiple) = %q, want %q", got, want)
+	}
+}
+
 func TestCreateIndex(t *testing.T) {
 	users := sql.Table{Schema: "public", Name: "users"}
 	got := mustDDL(t, sql.CreateIndex("uq_users_email", users, "email").Unique(), "postgres")

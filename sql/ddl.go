@@ -247,14 +247,15 @@ func (s CreateTableStmt) compileDDL(c *Compiler) (string, error) {
 }
 func (CreateTableStmt) ddlStatement() {}
 
-// DropTableStmt builds a DROP TABLE statement.
+// DropTableStmt builds a DROP TABLE statement over one or more tables.
 type DropTableStmt struct {
-	table    Table
+	tables   []Table
 	ifExists bool
 }
 
-// DropTable starts a DROP TABLE builder for a table.
-func DropTable(table Table) DropTableStmt { return DropTableStmt{table: table} }
+// DropTable starts a DROP TABLE builder for one or more tables, dropped in a
+// single "DROP TABLE a, b" statement.
+func DropTable(tables ...Table) DropTableStmt { return DropTableStmt{tables: tables} }
 
 // IfExists adds IF EXISTS.
 func (s DropTableStmt) IfExists() DropTableStmt {
