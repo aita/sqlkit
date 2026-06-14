@@ -330,6 +330,46 @@ func (s DropIndexStmt) compileDDL(c *Compiler) (string, error) {
 }
 func (DropIndexStmt) ddlStatement() {}
 
+// TruncateStmt builds a TRUNCATE TABLE statement, which empties one or more
+// tables far faster than a DELETE. It binds no values and runs through Exec like
+// the other statements. The options diverge by engine: RESTART IDENTITY and
+// CASCADE are PostgreSQL features (MySQL always resets AUTO_INCREMENT and has no
+// CASCADE), truncating several tables at once is PostgreSQL-only, and SQLite has
+// no TRUNCATE at all — these are reported as errors at compile time.
+type TruncateStmt struct {
+	tables          []Table
+	restartIdentity bool
+	cascade         bool
+}
+
+// Truncate starts a TRUNCATE TABLE builder for one or more tables (multiple
+// tables are PostgreSQL-only).
+func Truncate(tables ...Table) TruncateStmt { return TruncateStmt{tables: tables} }
+
+// RestartIdentity adds RESTART IDENTITY, resetting owned identity/serial
+// sequences (PostgreSQL and the standard target; implicit on MySQL).
+func (s TruncateStmt) RestartIdentity() TruncateStmt {
+	s.restartIdentity = true
+	return s
+}
+
+// Cascade adds CASCADE, also truncating tables with foreign keys referencing the
+// truncated ones (PostgreSQL only).
+func (s TruncateStmt) Cascade() TruncateStmt {
+	s.cascade = true
+	return s
+}
+
+// ToSQL compiles the TRUNCATE statement.
+func (s TruncateStmt) ToSQL(d Dialect) (string, []any, error) {
+	out, err := s.compileDDL(NewCompiler(d))
+	return out, nil, err
+}
+func (s TruncateStmt) compileDDL(c *Compiler) (string, error) {
+	return c.CompileTruncate(s)
+}
+func (TruncateStmt) ddlStatement() {}
+
 // DropForeignKeyStmt builds the statement that drops a foreign-key constraint,
 // using the dialect's syntax (PostgreSQL DROP CONSTRAINT, MySQL DROP FOREIGN KEY).
 type DropForeignKeyStmt struct {
@@ -556,6 +596,7 @@ var (
 	_ Statement = DropTableStmt{}
 	_ Statement = CreateIndexStmt{}
 	_ Statement = DropIndexStmt{}
+	_ Statement = TruncateStmt{}
 	_ Statement = DropForeignKeyStmt{}
 	_ Statement = CommentOnTableStmt{}
 	_ Statement = CommentOnColumnStmt{}

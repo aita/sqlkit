@@ -217,6 +217,43 @@ func (c *Compiler) CompileDropIndex(s DropIndexStmt) (string, error) {
 	), nil
 }
 
+// CompileTruncate renders a TRUNCATE TABLE statement. RESTART IDENTITY and
+// CASCADE, and truncating more than one table, are PostgreSQL features; SQLite
+// has no TRUNCATE. The unsupported combinations are rejected rather than
+// silently mis-rendered.
+func (c *Compiler) CompileTruncate(s TruncateStmt) (string, error) {
+	if len(s.tables) == 0 {
+		return "", fmt.Errorf("sqlkit/sql: TRUNCATE requires at least one table")
+	}
+	name := c.Dialect.Name()
+	if name == "sqlite" {
+		return "", fmt.Errorf("sqlkit/sql: SQLite has no TRUNCATE; use DELETE FROM instead")
+	}
+	if len(s.tables) > 1 && name != "postgres" {
+		return "", fmt.Errorf("sqlkit/sql: the %s dialect cannot TRUNCATE multiple tables in one statement", name)
+	}
+	if s.cascade && name != "postgres" {
+		return "", fmt.Errorf("sqlkit/sql: CASCADE on TRUNCATE is supported only on the postgres dialect")
+	}
+	tables := make([]string, len(s.tables))
+	for i, t := range s.tables {
+		tables[i] = c.qualify(t)
+	}
+	var sb strings.Builder
+	sb.WriteString("TRUNCATE TABLE ")
+	sb.WriteString(strings.Join(tables, ", "))
+	// RESTART IDENTITY is explicit on PostgreSQL and the standard target; MySQL
+	// always resets AUTO_INCREMENT, so the option renders nothing there.
+	if s.restartIdentity && name != "mysql" {
+		sb.WriteString(" RESTART IDENTITY")
+	}
+	if s.cascade {
+		sb.WriteString(" CASCADE")
+	}
+	sb.WriteString(";")
+	return sb.String(), nil
+}
+
 // CompileDropForeignKey renders the drop-foreign-key statement via the dialect.
 func (c *Compiler) CompileDropForeignKey(s DropForeignKeyStmt) (string, error) {
 	return c.Dialect.DropForeignKey(c.qualify(s.table), c.Dialect.QuoteName(s.name)), nil
