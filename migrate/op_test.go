@@ -82,6 +82,43 @@ func TestOperatorAlterations(t *testing.T) {
 	assertSQLs(t, cap.sqls, want)
 }
 
+func TestOperatorCreateTemporaryTable(t *testing.T) {
+	cap := newCapture()
+	op := newOperator(context.Background(), cap, "public")
+	op.CreateTemporaryTable("scratch",
+		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+	)
+	if err := op.Err(); err != nil {
+		t.Fatalf("Err = %v", err)
+	}
+	want := []string{
+		"CREATE TEMPORARY TABLE \"public\".\"scratch\" (\n" +
+			"    \"id\" bigserial,\n" +
+			"    PRIMARY KEY (\"id\")\n" +
+			");",
+	}
+	assertSQLs(t, cap.sqls, want)
+}
+
+func TestOperatorCreateAndDropView(t *testing.T) {
+	cap := newCapture()
+	op := newOperator(context.Background(), cap, "public")
+	body := sql.Select(sql.Col("id"), sql.Col("email")).
+		From(sql.Table{Schema: "public", Name: "users"}).
+		Where(sql.Raw("active"))
+	op.CreateView("active_users", body, OrReplace())
+	op.DropView("active_users")
+	if err := op.Err(); err != nil {
+		t.Fatalf("Err = %v", err)
+	}
+	want := []string{
+		"CREATE OR REPLACE VIEW \"public\".\"active_users\" AS\n" +
+			`SELECT "id", "email" FROM "public"."users" WHERE active;`,
+		`DROP VIEW IF EXISTS "public"."active_users";`,
+	}
+	assertSQLs(t, cap.sqls, want)
+}
+
 func TestOperatorUnqualified(t *testing.T) {
 	cap := newCapture()
 	op := newOperator(context.Background(), cap, "") // no schema

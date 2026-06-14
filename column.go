@@ -164,6 +164,32 @@ func (c Column[T]) Ne(value T) Predicate { return newPredicate(sql.Ne(c, sql.Val
 // NeExpr creates a "column <> expression" predicate.
 func (c Column[T]) NeExpr(other TypedExpr[T]) Predicate { return newPredicate(sql.Ne(c, other)) }
 
+// IsDistinctFrom creates a "column IS DISTINCT FROM value" predicate, the
+// null-safe counterpart of Ne: it is true when the values differ and treats two
+// NULLs as not distinct, so unlike <> it never yields NULL. It renders as MySQL's
+// null-safe <=> operator there.
+func (c Column[T]) IsDistinctFrom(value T) Predicate {
+	return newPredicate(sql.IsDistinctFrom(c, sql.Val(value)))
+}
+
+// IsDistinctFromExpr creates a "column IS DISTINCT FROM expression" predicate.
+func (c Column[T]) IsDistinctFromExpr(other TypedExpr[T]) Predicate {
+	return newPredicate(sql.IsDistinctFrom(c, other))
+}
+
+// IsNotDistinctFrom creates a "column IS NOT DISTINCT FROM value" predicate, the
+// null-safe counterpart of Eq: it is true when the values match and treats two
+// NULLs as equal. It renders as MySQL's null-safe <=> operator there.
+func (c Column[T]) IsNotDistinctFrom(value T) Predicate {
+	return newPredicate(sql.IsNotDistinctFrom(c, sql.Val(value)))
+}
+
+// IsNotDistinctFromExpr creates a "column IS NOT DISTINCT FROM expression"
+// predicate.
+func (c Column[T]) IsNotDistinctFromExpr(other TypedExpr[T]) Predicate {
+	return newPredicate(sql.IsNotDistinctFrom(c, other))
+}
+
 // Lt creates a "column < value" predicate.
 func (c Column[T]) Lt(value T) Predicate { return newPredicate(sql.Lt(c, sql.Val(value))) }
 
@@ -190,9 +216,9 @@ func (c Column[T]) GtExpr(other TypedExpr[T]) Predicate { return newPredicate(sq
 func (c Column[T]) GeExpr(other TypedExpr[T]) Predicate { return newPredicate(sql.Ge(c, other)) }
 
 // In creates a "column IN (values...)" predicate. When it is the only predicate
-// of a Where call and the executor has auto-chunk enabled (the default), a value
-// list large enough to exceed the limit is split across several statements
-// automatically; see SelectQuery.All. The chunks are
+// of a Where call and the executor has auto-chunk enabled (off by default, see
+// WithAutoChunk), a value list large enough to exceed the limit is split across
+// several statements automatically; see SelectQuery.All. The chunks are
 // disjoint, so the combined rows are exactly those of the full list.
 func (c Column[T]) In(values ...T) Predicate {
 	items := make([]any, len(values))
@@ -213,6 +239,22 @@ func (c Column[T]) NotIn(values ...T) Predicate {
 		items[i] = sql.Val(value)
 	}
 	return newPredicate(sql.NotIn(c, items...))
+}
+
+// EqAny creates a "column = ANY($1)" predicate (PostgreSQL), the array-valued
+// form of In: it binds the whole list as a single array parameter instead of one
+// placeholder per value, so it never approaches the bind-parameter limit and
+// needs no auto-chunking. Unlike In it is PostgreSQL-only. The values are bound
+// as one []T array.
+func (c Column[T]) EqAny(values ...T) Predicate {
+	return newPredicate(sql.AnyArray(c, "=", sql.Val(values)))
+}
+
+// NeAll creates a "column <> ALL($1)" predicate (PostgreSQL), the array-valued
+// form of NotIn: true when the column equals none of the array's elements. Like
+// EqAny it binds the list as a single array parameter.
+func (c Column[T]) NeAll(values ...T) Predicate {
+	return newPredicate(sql.AllArray(c, "<>", sql.Val(values)))
 }
 
 // Between creates a "column BETWEEN low AND high" predicate (inclusive).
@@ -294,7 +336,7 @@ func (c Column[T]) Asc() sql.OrderTerm { return sql.Asc(c) }
 // Desc creates a descending ORDER BY term.
 func (c Column[T]) Desc() sql.OrderTerm { return sql.Desc(c) }
 
-// Excluded refers to this column's proposed value inside an OnConflictDoUpdate
+// Excluded refers to this column's proposed value inside an OnConflict DoUpdate
 // assignment (PostgreSQL excluded.col, MySQL VALUES(col)), e.g.
 // Users.Name.SetExpr(Users.Name.Excluded()) to overwrite with the new row.
 func (c Column[T]) Excluded() TypedExpr[T] { return typedNode[T]{sql.Excluded(c.name)} }
@@ -381,4 +423,16 @@ func NotLike(expr TypedExpr[string], pattern string) Predicate {
 // MySQL, so it is case-insensitive on both regardless of column collation.
 func ILike(expr TypedExpr[string], pattern string) Predicate {
 	return newPredicate(sql.ILike(expr, sql.Val(pattern)))
+}
+
+// SimilarTo creates a SQL-standard SIMILAR TO predicate for string expressions,
+// whose pattern extends LIKE's % and _ with regex metacharacters. It is
+// supported on PostgreSQL and the standard target; MySQL and SQLite reject it.
+func SimilarTo(expr TypedExpr[string], pattern string) Predicate {
+	return newPredicate(sql.SimilarTo(expr, sql.Val(pattern)))
+}
+
+// NotSimilarTo creates a negated SQL-standard NOT SIMILAR TO predicate.
+func NotSimilarTo(expr TypedExpr[string], pattern string) Predicate {
+	return newPredicate(sql.NotSimilarTo(expr, sql.Val(pattern)))
 }

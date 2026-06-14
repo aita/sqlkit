@@ -13,9 +13,9 @@ import (
 // both work. It does not read anything back; use InsertID when you need a
 // generated key, or InsertReturning to scan the inserted rows.
 //
-// ex is any sqlkit.Executor, satisfied by both *sqlkit.Database (auto-commit)
+// ex is any sqlkit.Querier, satisfied by both *sqlkit.Database (auto-commit)
 // and *sqlkit.Session (inside a transaction).
-func Insert(t *testing.T, ex sqlkit.Executor, table sqlkit.Table, rows ...any) {
+func Insert(t *testing.T, ex sqlkit.Querier, table sqlkit.Table, rows ...any) {
 	t.Helper()
 	if len(rows) == 0 {
 		return
@@ -31,7 +31,7 @@ func Insert(t *testing.T, ex sqlkit.Executor, table sqlkit.Table, rows ...any) {
 // falls back to Result.LastInsertId. It assumes a single auto-generated
 // integer primary-key column, which is the common test fixture; tables with a
 // composite or non-integer key are not supported.
-func InsertID(t *testing.T, ex sqlkit.Executor, table sqlkit.Table, row any) int64 {
+func InsertID(t *testing.T, ex sqlkit.Querier, table sqlkit.Table, row any) int64 {
 	t.Helper()
 	ctx := context.Background()
 	pk := table.PrimaryKey()
@@ -65,7 +65,7 @@ func InsertID(t *testing.T, ex sqlkit.Executor, table sqlkit.Table, row any) int
 // RETURNING, so it is PostgreSQL-only; on a dialect without RETURNING (MySQL) it
 // skips the test rather than silently returning unpopulated rows. Use Insert or
 // InsertID on those dialects.
-func InsertReturning[Row any](t *testing.T, ex sqlkit.Executor, table sqlkit.Table, rows ...Row) []Row {
+func InsertReturning[Row any](t *testing.T, ex sqlkit.Querier, table sqlkit.Table, rows ...Row) []Row {
 	t.Helper()
 	if !ex.Dialect().SupportsReturning() {
 		t.Skipf("dbtest: InsertReturning needs RETURNING, unsupported by %T", ex.Dialect())
@@ -87,6 +87,6 @@ func InsertReturning[Row any](t *testing.T, ex sqlkit.Executor, table sqlkit.Tab
 // compile-time assertions that both concrete handles satisfy Executor,
 // including its Dialect method, so the helpers accept either one.
 var (
-	_ sqlkit.Executor = (*sqlkit.Database)(nil)
-	_ sqlkit.Executor = (*sqlkit.Session)(nil)
+	_ sqlkit.Querier = (*sqlkit.Database)(nil)
+	_ sqlkit.Querier = (*sqlkit.Session)(nil)
 )

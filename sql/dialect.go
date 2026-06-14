@@ -125,14 +125,16 @@ type JSONObjectRenderer interface {
 
 // UpsertClause carries the already-compiled pieces of an upsert for a dialect to
 // assemble into its native syntax. Target holds the already-quoted conflict
-// columns; DoUpdate distinguishes DO UPDATE from DO NOTHING; Assignments are the
-// already-compiled "col = expr" fragments; WhereSQL is an optional already-
-// compiled predicate ("" when none).
+// columns, or TargetConstraint the already-quoted name of a conflict constraint
+// (PostgreSQL ON CONSTRAINT) — at most one is set; DoUpdate distinguishes DO
+// UPDATE from DO NOTHING; Assignments are the already-compiled "col = expr"
+// fragments; WhereSQL is an optional already-compiled predicate ("" when none).
 type UpsertClause struct {
-	Target      []string
-	DoUpdate    bool
-	Assignments []string
-	WhereSQL    string
+	Target           []string
+	TargetConstraint string
+	DoUpdate         bool
+	Assignments      []string
+	WhereSQL         string
 }
 
 // UpsertRenderer is an optional capability a Dialect implements to render an
@@ -235,6 +237,60 @@ type ValuesCaster interface {
 	ValuesCastType(value any) (sqlType string, ok bool)
 }
 
+// ArrayDialect is an optional capability for dialects with a first-class array
+// type and the ARRAY[...] constructor / "op ANY(array)" comparison (PostgreSQL).
+// MySQL and SQLite have no array type and reject array expressions
+// (ArrayExpression, QuantifiedArrayExpression) at compile time. The compiler
+// detects it with a type assertion, so it is not a breaking change to Dialect.
+type ArrayDialect interface {
+	// ArrayConstructor renders an ARRAY[...] literal from already-compiled
+	// element fragments.
+	ArrayConstructor(elements []string) string
+}
+
+// RowLocker is an optional capability a Dialect implements to render a SELECT
+// row-locking clause (SelectQuery.ForUpdate / ForShare / …). PostgreSQL and
+// MySQL (8.0+) support it; SQLite and the standard target do not, and reject it
+// at compile time. The compiler detects it with a type assertion, so it is not a
+// breaking change to Dialect. strength is "UPDATE", "SHARE", "NO KEY UPDATE", or
+// "KEY SHARE"; of is the already-quoted, comma-joined OF table list ("" when
+// none); wait is "", "NOWAIT", or "SKIP LOCKED". It returns the leading-space
+// " FOR ..." fragment, or an error when the dialect cannot express the lock.
+type RowLocker interface {
+	LockClause(strength, of, wait string) (string, error)
+}
+
+// DistinctOnDialect is an optional capability a Dialect implements to report
+// support for SELECT DISTINCT ON (exprs) (SelectQuery.DistinctOn), a PostgreSQL
+// extension with no portable equivalent. The compiler detects it with a type
+// assertion, so it is not a breaking change to Dialect; a dialect that does not
+// implement it (or returns false) rejects DISTINCT ON at compile time.
+type DistinctOnDialect interface {
+	SupportsDistinctOn() bool
+}
+
+// SimilarToMatcher is an optional capability a Dialect implements to render a
+// SQL-standard SIMILAR TO match (SimilarToExpression). PostgreSQL and the SQL
+// standard support it; MySQL and SQLite do not, and reject it at compile time
+// (the compiler detects the capability with a type assertion, so adding it is
+// not a breaking change to Dialect). left and pattern are already-compiled SQL
+// fragments; negate selects NOT SIMILAR TO.
+type SimilarToMatcher interface {
+	SimilarTo(left, pattern string, negate bool) string
+}
+
+// NullSafeEqualityDialect is an optional capability for dialects that spell the
+// null-safe comparison (DistinctPredicate, IS [NOT] DISTINCT FROM) differently
+// from the SQL standard. MySQL has no IS DISTINCT FROM and uses the null-safe
+// equality operator <=> instead. The compiler detects it with a type assertion,
+// so it is not a breaking change to Dialect; a dialect without it renders the
+// standard IS [NOT] DISTINCT FROM (PostgreSQL, SQLite, the standard target).
+// left and right are already-compiled SQL fragments; negate selects IS NOT
+// DISTINCT FROM (the null-safe equality).
+type NullSafeEqualityDialect interface {
+	IsDistinctFrom(left, right string, negate bool) string
+}
+
 // DialectByName returns the Dialect for a name: "postgres"/"postgresql" (or
 // empty, the default), "mysql", "sqlite"/"sqlite3", or "standard"/"ansi"/"sql"
 // (the SQL standard / ANSI text target). It errors on an unknown name.
@@ -268,6 +324,29 @@ func typeWithArgs(name string, length, precision, scale int, lengthTypes, decima
 // literal renders a single-quoted SQL string literal.
 func literal(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+// renderSimilarTo renders the SQL-standard SIMILAR TO / NOT SIMILAR TO match,
+// shared by PostgreSQL and the standard target (which spell it identically).
+func renderSimilarTo(left, pattern string, negate bool) string {
+	operator := "SIMILAR TO"
+	if negate {
+		operator = "NOT SIMILAR TO"
+	}
+	return "(" + left + " " + operator + " " + pattern + ")"
+}
+
+// renderLockClause renders a "FOR <strength> [OF ...] [NOWAIT|SKIP LOCKED]"
+// row-locking clause, shared by PostgreSQL and MySQL (which spell it the same).
+func renderLockClause(strength, of, wait string) string {
+	s := " FOR " + strength
+	if of != "" {
+		s += " OF " + of
+	}
+	if wait != "" {
+		s += " " + wait
+	}
+	return s
 }
 
 // jsonPathStep renders one JSON path step into the dialect-neutral parts a
@@ -451,12 +530,15 @@ func (PostgreSQLDialect) Upsert(cl UpsertClause) (string, error) {
 func renderOnConflict(cl UpsertClause, engine string) (string, error) {
 	// ON CONFLICT DO NOTHING needs no target, but DO UPDATE requires a conflict
 	// target (column list or constraint) to arbitrate.
-	if cl.DoUpdate && len(cl.Target) == 0 {
+	if cl.DoUpdate && len(cl.Target) == 0 && cl.TargetConstraint == "" {
 		return "", fmt.Errorf("sql: %s ON CONFLICT DO UPDATE requires a conflict target", engine)
 	}
 	var sb strings.Builder
 	sb.WriteString(" ON CONFLICT")
-	if len(cl.Target) > 0 {
+	if cl.TargetConstraint != "" {
+		sb.WriteString(" ON CONSTRAINT ")
+		sb.WriteString(cl.TargetConstraint)
+	} else if len(cl.Target) > 0 {
 		sb.WriteString(" (")
 		sb.WriteString(strings.Join(cl.Target, ", "))
 		sb.WriteString(")")
@@ -485,6 +567,25 @@ func (PostgreSQLDialect) Regexp(left, pattern string, negate, caseInsensitive bo
 		operator = "!" + operator
 	}
 	return "(" + left + " " + operator + " " + pattern + ")", nil
+}
+
+// SimilarTo renders PostgreSQL's SIMILAR TO / NOT SIMILAR TO operator.
+func (PostgreSQLDialect) SimilarTo(left, pattern string, negate bool) string {
+	return renderSimilarTo(left, pattern, negate)
+}
+
+// SupportsDistinctOn reports PostgreSQL's support for SELECT DISTINCT ON.
+func (PostgreSQLDialect) SupportsDistinctOn() bool { return true }
+
+// LockClause renders PostgreSQL's row-locking clause; it supports all four lock
+// strengths (UPDATE, NO KEY UPDATE, SHARE, KEY SHARE).
+func (PostgreSQLDialect) LockClause(strength, of, wait string) (string, error) {
+	return renderLockClause(strength, of, wait), nil
+}
+
+// ArrayConstructor renders PostgreSQL's ARRAY[...] literal.
+func (PostgreSQLDialect) ArrayConstructor(elements []string) string {
+	return "ARRAY[" + strings.Join(elements, ", ") + "]"
 }
 
 // JSONAccess chains the -> / ->> operators, one per path step (the last uses
@@ -659,8 +760,11 @@ func (MySQLDialect) Regexp(left, pattern string, negate, caseInsensitive bool) (
 // conflicting key, so the target is ignored; it has no DO NOTHING form and no
 // per-action WHERE, both of which are reported as errors.
 func (MySQLDialect) Upsert(cl UpsertClause) (string, error) {
+	if cl.TargetConstraint != "" {
+		return "", fmt.Errorf("sql: MySQL ON DUPLICATE KEY UPDATE cannot target a named constraint; it infers the conflicting key")
+	}
 	if !cl.DoUpdate {
-		return "", fmt.Errorf("sql: MySQL has no ON CONFLICT DO NOTHING; use INSERT IGNORE or an OnConflictDoUpdate")
+		return "", fmt.Errorf("sql: MySQL has no ON CONFLICT DO NOTHING; use INSERT IGNORE or OnConflict(DoUpdate(...))")
 	}
 	if cl.WhereSQL != "" {
 		return "", fmt.Errorf("sql: MySQL ON DUPLICATE KEY UPDATE does not support a WHERE clause")
@@ -671,6 +775,29 @@ func (MySQLDialect) Upsert(cl UpsertClause) (string, error) {
 // Excluded renders MySQL's reference to the proposed row value, VALUES(col).
 func (d MySQLDialect) Excluded(column string) string {
 	return "VALUES(" + d.QuoteName(column) + ")"
+}
+
+// LockClause renders MySQL's row-locking clause (8.0+). MySQL has only FOR
+// UPDATE and FOR SHARE; the PostgreSQL-only NO KEY UPDATE / KEY SHARE strengths
+// are rejected.
+func (MySQLDialect) LockClause(strength, of, wait string) (string, error) {
+	switch strength {
+	case "UPDATE", "SHARE":
+		return renderLockClause(strength, of, wait), nil
+	default:
+		return "", fmt.Errorf("sql: MySQL supports only FOR UPDATE and FOR SHARE, not FOR %s", strength)
+	}
+}
+
+// IsDistinctFrom renders MySQL's null-safe comparison with the <=> operator,
+// which MySQL provides in place of the SQL-standard IS [NOT] DISTINCT FROM. The
+// operator is itself IS NOT DISTINCT FROM (null-safe equality); IS DISTINCT FROM
+// is its negation.
+func (MySQLDialect) IsDistinctFrom(left, right string, negate bool) string {
+	if negate {
+		return "(" + left + " <=> " + right + ")"
+	}
+	return "(NOT (" + left + " <=> " + right + "))"
 }
 
 // JSONObject renders MySQL's flat JSON_OBJECT(key, value, ...) form, which does
@@ -893,6 +1020,11 @@ func (StandardSQLDialect) Regexp(left, pattern string, negate, caseInsensitive b
 		return "(NOT (" + expr + "))", nil
 	}
 	return "(" + expr + ")", nil
+}
+
+// SimilarTo renders the SQL-standard SIMILAR TO / NOT SIMILAR TO predicate.
+func (StandardSQLDialect) SimilarTo(left, pattern string, negate bool) string {
+	return renderSimilarTo(left, pattern, negate)
 }
 
 // RenderFunc remaps canonical function names to their SQL-standard spelling.

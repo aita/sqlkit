@@ -69,9 +69,26 @@ func (c *Compiler) CompileCreateTable(s CreateTableStmt) (string, error) {
 		}
 		defs = append(defs, "CONSTRAINT "+c.Dialect.QuoteName(check.Name)+" CHECK ("+expr+")")
 	}
+	for _, u := range s.uniques {
+		if len(u.Columns) == 0 {
+			return "", fmt.Errorf("sqlkit/sql: UNIQUE constraint requires at least one column")
+		}
+		clause := "UNIQUE (" + c.quoteAll(u.Columns) + ")"
+		if u.Name != "" {
+			clause = "CONSTRAINT " + c.Dialect.QuoteName(u.Name) + " " + clause
+		}
+		defs = append(defs, clause)
+	}
+	for _, fk := range s.foreignKeys {
+		defs = append(defs, c.foreignKeyDef(fk))
+	}
 
 	var sb strings.Builder
-	sb.WriteString("CREATE TABLE ")
+	sb.WriteString("CREATE ")
+	if s.temporary {
+		sb.WriteString("TEMPORARY ")
+	}
+	sb.WriteString("TABLE ")
 	if s.ifNotExists {
 		sb.WriteString("IF NOT EXISTS ")
 	}
@@ -113,35 +130,101 @@ func (c *Compiler) inlinesAutoIncrementPK(s CreateTableStmt) bool {
 	return false
 }
 
-// compileColumnDef renders a single column definition.
+// compileColumnDef renders a single column definition, including any inline
+// column constraints (GENERATED / IDENTITY, NOT NULL, DEFAULT, UNIQUE, REFERENCES).
 func (c *Compiler) compileColumnDef(col ColumnDef) (string, error) {
 	if col.Type == nil {
 		return "", fmt.Errorf("sqlkit/sql: column %q has no type", col.Name)
 	}
 	name := c.Dialect.QuoteName(col.Name)
+
+	// The column's type-and-value core: an auto-increment clause when the type
+	// renders one, otherwise the plain type plus a GENERATED/IDENTITY/DEFAULT.
+	var core string
+	autoInc := false
 	if col.AutoIncrement {
 		if ai, ok := col.Type.(AutoIncrementColumnType); ok {
 			if clause, ok := ai.RenderAutoIncrement(c.Dialect); ok {
-				return name + " " + clause + c.Dialect.InlineColumnComment(col.Comment), nil
+				core = clause
+				autoInc = true
 			}
 		}
 	}
-	typeClause, err := col.Type.RenderType(c.Dialect)
-	if err != nil {
-		return "", err
-	}
-	def := name + " " + typeClause
-	if col.NotNull {
-		def += " NOT NULL"
-	}
-	if col.Default != nil {
-		expr, err := CompileStatic(c.Dialect, col.Default)
+	if !autoInc {
+		typeClause, err := col.Type.RenderType(c.Dialect)
 		if err != nil {
 			return "", err
 		}
-		def += " DEFAULT " + expr
+		core = typeClause
+		switch {
+		case col.Generated != nil:
+			expr, err := CompileStatic(c.Dialect, col.Generated.Expression)
+			if err != nil {
+				return "", err
+			}
+			storage := "STORED"
+			if !col.Generated.Stored {
+				storage = "VIRTUAL"
+			}
+			core += " GENERATED ALWAYS AS (" + expr + ") " + storage
+		case col.Identity != "":
+			if err := c.requireIdentity(); err != nil {
+				return "", err
+			}
+			core += " GENERATED " + string(col.Identity) + " AS IDENTITY"
+		}
+		if col.NotNull {
+			core += " NOT NULL"
+		}
+		if col.Default != nil {
+			if col.Generated != nil || col.Identity != "" {
+				return "", fmt.Errorf("sqlkit/sql: column %q cannot have both a DEFAULT and a GENERATED/IDENTITY clause", col.Name)
+			}
+			expr, err := CompileStatic(c.Dialect, col.Default)
+			if err != nil {
+				return "", err
+			}
+			core += " DEFAULT " + expr
+		}
+	}
+
+	def := name + " " + core
+	if col.Unique {
+		def += " UNIQUE"
+	}
+	if col.References != nil {
+		ref, err := c.columnReferenceClause(*col.References)
+		if err != nil {
+			return "", err
+		}
+		def += " " + ref
 	}
 	return def + c.Dialect.InlineColumnComment(col.Comment), nil
+}
+
+// requireIdentity guards IDENTITY columns, which PostgreSQL and the standard
+// target support but MySQL and SQLite do not (they use AutoIncrement).
+func (c *Compiler) requireIdentity() error {
+	switch c.Dialect.Name() {
+	case "mysql", "sqlite":
+		return fmt.Errorf("sqlkit/sql: the %s dialect has no IDENTITY columns; use an auto-increment column instead", c.Dialect.Name())
+	}
+	return nil
+}
+
+// columnReferenceClause renders a column-level REFERENCES clause.
+func (c *Compiler) columnReferenceClause(r ColumnReference) (string, error) {
+	if r.Table == "" || r.Column == "" {
+		return "", fmt.Errorf("sqlkit/sql: a column REFERENCES needs a table and column")
+	}
+	clause := "REFERENCES " + c.qualifyName(r.Schema, r.Table) + " (" + c.Dialect.QuoteName(r.Column) + ")"
+	if r.OnDelete != "" {
+		clause += " ON DELETE " + r.OnDelete
+	}
+	if r.OnUpdate != "" {
+		clause += " ON UPDATE " + r.OnUpdate
+	}
+	return clause, nil
 }
 
 // compileRestateColumn renders an action that restates a column's full
@@ -181,14 +264,70 @@ func (c *Compiler) compileRestateColumn(col ColumnDef) (string, error) {
 	return strings.Join(clauses, ", "), nil
 }
 
-// CompileDropTable renders a DROP TABLE statement.
+// CompileDropTable renders a DROP TABLE statement over one or more tables.
 func (c *Compiler) CompileDropTable(s DropTableStmt) (string, error) {
+	if len(s.tables) == 0 {
+		return "", fmt.Errorf("sqlkit/sql: DROP TABLE requires at least one table")
+	}
+	tables := make([]string, len(s.tables))
+	for i, t := range s.tables {
+		tables[i] = c.qualify(t)
+	}
 	var sb strings.Builder
 	sb.WriteString("DROP TABLE ")
 	if s.ifExists {
 		sb.WriteString("IF EXISTS ")
 	}
-	sb.WriteString(c.qualify(s.table) + ";")
+	sb.WriteString(strings.Join(tables, ", ") + ";")
+	return sb.String(), nil
+}
+
+// CompileCreateView renders a CREATE VIEW statement. The view body compiles to
+// plain SQL text; a body that binds values is rejected, since a DDL statement
+// carries no bind arguments (inline literals with Raw).
+func (c *Compiler) CompileCreateView(s CreateViewStmt) (string, error) {
+	if s.query == nil {
+		return "", fmt.Errorf("sqlkit/sql: CREATE VIEW requires a query")
+	}
+	if s.orReplace && c.Dialect.Name() == "sqlite" {
+		return "", fmt.Errorf("sqlkit/sql: SQLite does not support CREATE OR REPLACE VIEW; drop and recreate instead")
+	}
+	body, args, err := s.query.ToSQL(c.Dialect)
+	if err != nil {
+		return "", err
+	}
+	if len(args) > 0 {
+		return "", fmt.Errorf("sqlkit/sql: CREATE VIEW body must not bind values; use Raw to inline literals")
+	}
+	var sb strings.Builder
+	sb.WriteString("CREATE ")
+	if s.orReplace {
+		sb.WriteString("OR REPLACE ")
+	}
+	sb.WriteString("VIEW ")
+	sb.WriteString(c.qualify(s.table))
+	if len(s.columns) > 0 {
+		sb.WriteString(" (" + c.quoteAll(s.columns) + ")")
+	}
+	sb.WriteString(" AS\n")
+	sb.WriteString(body)
+	sb.WriteString(";")
+	return sb.String(), nil
+}
+
+// CompileDropView renders a DROP VIEW statement (CASCADE is PostgreSQL/standard
+// only; MySQL and SQLite have no CASCADE clause for DROP VIEW).
+func (c *Compiler) CompileDropView(s DropViewStmt) (string, error) {
+	var sb strings.Builder
+	sb.WriteString("DROP VIEW ")
+	if s.ifExists {
+		sb.WriteString("IF EXISTS ")
+	}
+	sb.WriteString(c.qualify(s.table))
+	if s.cascade && c.Dialect.Name() != "mysql" && c.Dialect.Name() != "sqlite" {
+		sb.WriteString(" CASCADE")
+	}
+	sb.WriteString(";")
 	return sb.String(), nil
 }
 
@@ -215,6 +354,43 @@ func (c *Compiler) CompileDropIndex(s DropIndexStmt) (string, error) {
 		c.Dialect.QuoteName(s.name),
 		c.qualify(s.table),
 	), nil
+}
+
+// CompileTruncate renders a TRUNCATE TABLE statement. RESTART IDENTITY and
+// CASCADE, and truncating more than one table, are PostgreSQL features; SQLite
+// has no TRUNCATE. The unsupported combinations are rejected rather than
+// silently mis-rendered.
+func (c *Compiler) CompileTruncate(s TruncateStmt) (string, error) {
+	if len(s.tables) == 0 {
+		return "", fmt.Errorf("sqlkit/sql: TRUNCATE requires at least one table")
+	}
+	name := c.Dialect.Name()
+	if name == "sqlite" {
+		return "", fmt.Errorf("sqlkit/sql: SQLite has no TRUNCATE; use DELETE FROM instead")
+	}
+	if len(s.tables) > 1 && name != "postgres" {
+		return "", fmt.Errorf("sqlkit/sql: the %s dialect cannot TRUNCATE multiple tables in one statement", name)
+	}
+	if s.cascade && name != "postgres" {
+		return "", fmt.Errorf("sqlkit/sql: CASCADE on TRUNCATE is supported only on the postgres dialect")
+	}
+	tables := make([]string, len(s.tables))
+	for i, t := range s.tables {
+		tables[i] = c.qualify(t)
+	}
+	var sb strings.Builder
+	sb.WriteString("TRUNCATE TABLE ")
+	sb.WriteString(strings.Join(tables, ", "))
+	// RESTART IDENTITY is explicit on PostgreSQL and the standard target; MySQL
+	// always resets AUTO_INCREMENT, so the option renders nothing there.
+	if s.restartIdentity && name != "mysql" {
+		sb.WriteString(" RESTART IDENTITY")
+	}
+	if s.cascade {
+		sb.WriteString(" CASCADE")
+	}
+	sb.WriteString(";")
+	return sb.String(), nil
 }
 
 // CompileDropForeignKey renders the drop-foreign-key statement via the dialect.
@@ -280,6 +456,15 @@ func (c *Compiler) compileAlteration(table Table, a alteration) (string, error) 
 			return "", err
 		}
 		return "ADD CONSTRAINT " + c.Dialect.QuoteName(v.name) + " CHECK (" + expr + ")", nil
+	case addUniqueAlt:
+		if len(v.columns) == 0 {
+			return "", fmt.Errorf("sqlkit/sql: ADD UNIQUE requires at least one column")
+		}
+		clause := "ADD "
+		if v.name != "" {
+			clause += "CONSTRAINT " + c.Dialect.QuoteName(v.name) + " "
+		}
+		return clause + "UNIQUE (" + c.quoteAll(v.columns) + ")", nil
 	case dropConstraintAlt:
 		return "DROP CONSTRAINT " + c.Dialect.QuoteName(v.name), nil
 	case renameColumnAlt:
@@ -332,8 +517,16 @@ func (c *Compiler) requireColumnModify(op string) error {
 	return nil
 }
 
+// foreignKeyClause renders an ALTER TABLE "ADD CONSTRAINT ... FOREIGN KEY ..."
+// action; foreignKeyDef renders the same constraint as a CREATE TABLE definition.
 func (c *Compiler) foreignKeyClause(fk ForeignKeyConstraint) string {
-	clause := "ADD CONSTRAINT " + c.Dialect.QuoteName(fk.Name) +
+	return "ADD " + c.foreignKeyDef(fk)
+}
+
+// foreignKeyDef renders a "CONSTRAINT name FOREIGN KEY (cols) REFERENCES ..."
+// table constraint, shared by CREATE TABLE and ALTER TABLE ADD.
+func (c *Compiler) foreignKeyDef(fk ForeignKeyConstraint) string {
+	clause := "CONSTRAINT " + c.Dialect.QuoteName(fk.Name) +
 		" FOREIGN KEY (" + c.quoteAll(fk.Columns) + ")" +
 		" REFERENCES " + c.qualifyName(fk.RefSchema, fk.RefTable) +
 		" (" + c.quoteAll(fk.RefColumns) + ")"

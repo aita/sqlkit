@@ -87,12 +87,26 @@ whole table plus a column from another. For a single row, chains offer `First`
 (pushes `LIMIT 1`) and `One` (requires exactly one row, else `ErrTooManyRows`)
 alongside `All`. `Page(ctx, limit, offset)` fetches a window in one call.
 
+Row locking (PostgreSQL/MySQL 8.0+) is `ForUpdate` / `ForShare` (plus
+PostgreSQL's `ForNoKeyUpdate` / `ForKeyShare`), refined with the `SkipLocked` /
+`NoWait` / `LockOf(tables...)` options — the building block of a queue worker:
+
+```go
+err := db.Select().From(appdb.Jobs).Where(appdb.Jobs.Status.Eq("ready")).
+    Limit(10).ForUpdate(sqlkit.SkipLocked()).All(ctx).Scan(&jobs)
+```
+
 ### Predicates and filters
 
 Typed columns carry the predicate vocabulary directly: `Eq`/`Ne`/`Lt`/`Le`/
-`Gt`/`Ge`, `In`/`NotIn`, `Between`/`NotBetween`, `IsNull`/`IsNotNull`, and
-`InQuery`/`NotInQuery` for `IN (subquery)`. String columns add the free helpers
-`sqlkit.Like` / `NotLike` / `ILike` (case-insensitive on both engines).
+`Gt`/`Ge`, `In`/`NotIn`, `Between`/`NotBetween`, `IsNull`/`IsNotNull`,
+`IsDistinctFrom`/`IsNotDistinctFrom` (null-safe, `<=>` on MySQL),
+`InQuery`/`NotInQuery` for `IN (subquery)`, and `EqAny`/`NeAll` for PostgreSQL's
+array-valued `= ANY($1)` / `<> ALL($1)` (the whole list bound as one array
+parameter, so they replace a large `In`/`NotIn` without nearing the bind-param
+limit). String columns add the free helpers
+`sqlkit.Like` / `NotLike` / `ILike` (case-insensitive on both engines) and
+`sqlkit.SimilarTo` / `NotSimilarTo` (PostgreSQL/standard only).
 `sqlkit.Exists` / `NotExists` wrap a subquery, and `sqlkit.And` / `Or` / `Not`
 combine predicates.
 
@@ -123,8 +137,10 @@ err := db.Select().From(appdb.Users).
 ### Joins
 
 `Join` / `LeftJoin` / `RightJoin` / `FullJoin` take a source and an ON
-predicate; `CrossJoin` takes only a source. Wrap a source with `sql.Lateral`
-for a `LATERAL` join.
+predicate; `CrossJoin` takes only a source. `JoinUsing` / `LeftJoinUsing` join
+on equally named columns (`USING (...)`), and `NaturalJoin` / `NaturalLeftJoin`
+match every shared column implicitly. Wrap a source with `sql.Lateral` for a
+`LATERAL` join.
 
 ```go
 var posts []PostDTO
@@ -181,6 +197,13 @@ err := db.Select(
 
 // Window functions: ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY id DESC).
 rn := sql.RowNumber().Over().PartitionBy(appdb.Posts.UserID).OrderBy(appdb.Posts.ID.Desc())
+
+// A reusable window shared by several functions via the SELECT's WINDOW clause.
+db.Select(
+    sql.As(sql.Over(sql.Sum(appdb.Games.Score)).Named("w"), "running_total"),
+    sql.As(sql.Over(sql.Avg(appdb.Games.Score)).Named("w"), "running_avg"),
+).From(appdb.Games).
+    Window(sql.WindowDef("w").PartitionBy(appdb.Games.Team).OrderBy(appdb.Games.PlayedAt.Asc()))
 ```
 
 The function DSL (in `sql`) covers the conditional/NULL helpers (`Coalesce`,
@@ -190,10 +213,24 @@ string and numeric functions, date/time keywords, and JSON access
 (`sql.JSONGet` / `sql.JSONGetText` with portable path steps). `sql.Func(name,
 args...)` is the escape hatch for anything else.
 
+Distinct aggregates are spelled `sql.CountDistinct(col)` and
+`sql.DistinctFunc("SUM", col)`. CASE comes in both forms — searched
+(`sql.Case().When(cond, result).Else(...)`) and simple
+(`sql.CaseOf(col).When(value, result)…`). Other expression nodes fill out the
+vocabulary: unary operators (`sql.Neg` / `sql.Pos` / `sql.Unary`), row
+constructors (`sql.Row(a, b)`) for row-wise comparisons and `IN`, and the
+null-safe `sql.IsDistinctFrom` / `sql.IsNotDistinctFrom` (typed as
+`col.IsDistinctFrom(v)` / `col.IsNotDistinctFrom(v)`), which render as MySQL's
+`<=>` there. PostgreSQL arrays use `sql.Array(...)` for an `ARRAY[...]`
+constructor and `sql.AnyArray` / `sql.AllArray` for `op ANY(array)` /
+`op ALL(array)` comparisons.
+
 ### Set operations and CTEs
 
-`Union` / `UnionAll` / `Intersect` / `Except` combine a flat list of SELECTs;
-`db.Union(...)` binds the result so the operands need no executor of their own.
+`Union` / `UnionAll` / `Intersect` / `IntersectAll` / `Except` / `ExceptAll`
+combine a flat list of SELECTs; `db.Union(...)` binds the result so the operands
+need no executor of their own. The `…All` variants keep duplicate rows (the
+multiset forms).
 
 ```go
 err = db.Union(
@@ -205,6 +242,10 @@ err = db.Union(
 `CTE(name)` turns a query into a named common table expression; attach it with
 `WithCTE` (works on SELECT/UPDATE/DELETE). Pass `sql.Recursive()` for a
 `WITH RECURSIVE`.
+
+`sql.Values().Row(...)` builds a standalone `VALUES (...), (...)` query — usable
+on its own, as an aliased derived-table source, or as an `INSERT … SELECT`
+source.
 
 ```go
 active := db.Select(appdb.Users.ID).From(appdb.Users).
@@ -243,16 +284,18 @@ More write forms:
 - **INSERT … SELECT** — `Insert(t).Columns(...).FromSelect(query)`.
 - **Partial updates from a struct** — `Update(t).SetStruct(row, cols...)` maps a
   struct's fields to columns and emits one `SET` per column.
-- **Upsert** — `OnConflictDoNothing` / `OnConflictDoUpdate` render PostgreSQL's
-  `ON CONFLICT` and MySQL's `ON DUPLICATE KEY UPDATE`; `Column.Excluded()` refers
-  to the proposed row.
+- **Upsert** — `OnConflict(...)` renders PostgreSQL's `ON CONFLICT` and MySQL's
+  `ON DUPLICATE KEY UPDATE`, configured by options that blend GORM's single
+  clause with SQLAlchemy's actions: `OnColumns` / `OnConstraint` choose the
+  conflict target, `DoUpdate` / `DoNothing` the action, and `ConflictWhere` a
+  predicate; `Column.Excluded()` refers to the proposed row.
 - **Cross-table writes** — `Update(t).From(src...)` and `Delete(t).Using(src...)`
   add `UPDATE … FROM` / `DELETE … USING` source lists.
 
 ```go
 _, err = db.Insert(appdb.Users).Values(u).
-    OnConflictDoUpdate([]sqlkit.AnyColumn{appdb.Users.Email},
-        appdb.Users.Name.SetExpr(appdb.Users.Name.Excluded())).
+    OnConflict(sqlkit.OnColumns(appdb.Users.Email),
+        sqlkit.DoUpdate(appdb.Users.Name.SetExpr(appdb.Users.Name.Excluded()))).
     Exec(ctx)
 ```
 
@@ -270,28 +313,133 @@ err := appdb.Users.Q(db).
     JoinRel(appdb.Users.Rels.Profile).
     Where(appdb.Users.Rels.Profile.Public.Eq(true)).
     All(ctx).Scan(&authors)
+```
 
-// Avoid the N+1: SELECT posts WHERE user_id IN (…) and assign onto a Posts field.
+#### Preload: eager-loading without the N+1
+
+`Preload` is **not** a join. The base query runs first; then, at `Scan`, each
+preloaded relation is fetched in **one** follow-up `SELECT … WHERE fk IN (parent
+keys)` and the rows are assigned back onto the destination by reflection. The
+destination field is matched by the relation name (`Posts`, `User`) or a
+`preload:"…"` tag. A to-many relation fills a slice; a to-one relation fills a
+struct or pointer.
+
+```go
+// The destination's relation fields are populated by Preload; without a Preload
+// call they are simply left zero — no follow-up query runs for them.
+type UserWithPosts struct {
+    ID    int64 `sqlkit:"id"`
+    Name  string
+    Posts []Post // filled by Preload(appdb.Posts) — matched by field name "Posts"
+}
+type Post struct {
+    ID     int64 `sqlkit:"id"`
+    UserID int64 `sqlkit:"user_id"`
+    Title  string
+}
+
 var users []UserWithPosts
 err = db.Select().From(appdb.Users).Preload(appdb.Posts).All(ctx).Scan(&users)
+// 1) SELECT id, name, … FROM users
+// 2) SELECT id, user_id, title FROM posts WHERE posts.user_id IN ($1, $2, …)
+//    — one batched query for every user, then grouped onto each user's Posts.
 ```
+
+Without the `Preload` call only step 1 runs and `Posts` stays `nil` — the related
+`SELECT` is never issued. A wide parent set is automatically chunked
+(selectinload-style, 1000 keys per statement by default) to stay within the
+driver's bind-parameter limit.
+
+**Conditional preload** — extra predicates passed to `Preload` are ANDed into the
+follow-up `SELECT`, so only matching children load:
+
+```go
+err = db.Select().From(appdb.Users).
+    Preload(appdb.Posts, appdb.Posts.Published.Eq(true)).
+    All(ctx).Scan(&users)
+// 2) SELECT … FROM posts WHERE posts.published = $1 AND posts.user_id IN ($2, …)
+```
+
+**Nested preload** — pass a `RelPath` of related tables as the target and `Preload`
+eager-loads along the whole chain, creating any intermediate level not already
+registered; each hop is its own batched query and the conditions apply to the last
+table:
+
+```go
+type UserGraph struct {
+    ID    int64 `sqlkit:"id"`
+    Posts []PostWithComments // filled by the Posts hop
+}
+type PostWithComments struct {
+    ID       int64 `sqlkit:"id"`
+    UserID   int64 `sqlkit:"user_id"`
+    Comments []Comment // filled by the Comments hop
+}
+type Comment struct {
+    ID      int64 `sqlkit:"id"`
+    PostID  int64 `sqlkit:"post_id"`
+    Body    string
+}
+
+var graph []UserGraph
+err = db.Select().From(appdb.Users).
+    Preload(sqlkit.RelPath(appdb.Posts, appdb.Comments), appdb.Comments.Approved.Eq(true)).
+    All(ctx).Scan(&graph)
+// 1) SELECT … FROM users
+// 2) SELECT … FROM posts    WHERE posts.user_id IN (user ids)
+// 3) SELECT … FROM comments WHERE comments.approved = $1 AND comments.post_id IN (post ids)
+```
+
+When more than one relation reaches the same table (e.g. a self-reference's
+`Manager` and `Reports`), pass the relation explicitly with `PreloadRel` instead
+of the target table; it takes the same conditions.
 
 Relations also drive multi-table writes (`Update(t).JoinRel(rel)`,
 `Delete(t).UsingRel(rel)`) and primary-key lookups (`Get(ctx, pk...)`).
 
-### Raw SQL and streaming
+Each binding also exposes write entry points alongside `Query`/`Q`, so a
+statement can start from the table the way a `SelectQuery` does — `Insert(ex)`,
+`Update(ex)`, and `Delete(ex)` return the bound `Insert`/`Update`/`Delete`
+builders, mirroring `ex.Insert(t)`/`ex.Update(t)`/`ex.Delete(t)`. And `Filter` —
+the reusable filter bundle that narrows a `SelectQuery` — now applies to
+`Update` and `Delete` too, so one bundle narrows a read or a write:
+
+```go
+// One filter bundle, reused across a read and a write.
+active := appdb.Users.Age.Le(20)
+
+err := appdb.Users.Q(db).Filter(active).All(ctx).Scan(&authors)
+
+_, err = appdb.Users.Update(db).Filter(active).
+    Set(appdb.Users.Name.Set(&name)).Exec(ctx)
+
+_, err = appdb.Users.Delete(db).Filter(active).Exec(ctx)
+```
+
+Generating with `--relations` also emits a typed filter bundle per table — a
+`XxxFilter` struct whose fields map to columns (holding a `FilterTerm` like
+`sqlkit.Eq(…)`/`sqlkit.Le(…)` or a `Predicate`) and whose **relation fields** carry
+a nested filter on the related table. A relation filter compiles to a correlated
+`EXISTS`, so it narrows a `SELECT`, `UPDATE`, or `DELETE` without a join (and never
+duplicates rows for a to-many relation):
+
+```go
+// Users who have a published post — EXISTS over the Posts relation.
+err := appdb.Users.Q(db).Filter(appdb.UsersFilter{
+    Age:   sqlkit.Le(20),
+    Posts: &appdb.PostsFilter{Published: sqlkit.Eq(true)},
+}).All(ctx).Scan(&authors)
+// SELECT … FROM users WHERE "users"."age" <= $1
+//   AND EXISTS (SELECT 1 FROM posts WHERE posts.user_id = users.id AND posts.published = $2)
+```
+
+### Raw SQL
 
 When a query is easier by hand, `RawSQL` runs a raw string (or a built
-`sql.Query`) and scans the same way. `Records[T]` streams a large result as an
-iterator of already-scanned values instead of materializing a slice.
+`sql.Query`) and scans the same way.
 
 ```go
 err := db.RawSQL(ctx, "SELECT * FROM users WHERE id = $1", 42).Scan(&user)
-
-for user, err := range sqlkit.Records[User](db.RawSQL(ctx, query)) {
-    if err != nil { return err }
-    ...
-}
 ```
 
 ### Transactions
@@ -363,6 +511,15 @@ Indexes (`Index`/`UniqueIndex`), constraints (`Unique`/`Check`), and comments
 (`Comment`/`TableComment`) round out the catalog and carry through to the
 generated code. Because declarations are values, they compose.
 
+`Array(elem)` declares a PostgreSQL **array** column, e.g.
+`sqldef.Column("tags", sqldef.Array(sqldef.Text))` for `text[]`. The DDL renders
+`elem[]`, the inspector reads array columns back (PostgreSQL reports them as
+`_text`, `_int4`, …), and the code generator maps the column to a Go slice of the
+element's type (`[]string`, `[]int32`, and `[]T` for an element whose Go type is
+pinned). A slice is already nilable, so a nullable array stays a slice rather than
+a pointer. Arrays are a PostgreSQL feature; the column is unavailable when a
+catalog targets MySQL or SQLite.
+
 ### Generating bindings and DDL
 
 Point `sqlkit generate` at the package that declares the catalog, and
@@ -407,7 +564,10 @@ go run github.com/aita/sqlkit/cmd/sqlkit inspect \
 The `migrate` package runs schema migrations: each migration's `Up` and `Down`
 are callbacks that receive an `Operator` and perform the change with operations
 like `op.CreateTable`, `op.AddColumn`, `op.CreateIndex`, and
-`op.CreateForeignKey`. Columns are declared with the same `sqldef` DSL.
+`op.CreateForeignKey`. Session-scoped tables and views have their own operations
+too — `op.CreateTemporaryTable`, and `op.CreateView` / `op.DropView` (the view
+body is a `sql` package query, with `OrReplace()` / `ViewColumns(...)` options).
+Columns are declared with the same `sqldef` DSL.
 Migrations are self-contained — they don't import your schema catalog — and
 target PostgreSQL or MySQL through the same code.
 
@@ -540,12 +700,13 @@ Bulk inserts and large `IN` lists split themselves so a single statement never
 exceeds the database's bind-parameter limit (the driver's `BindParamLimiter`
 capability — 65535 for PostgreSQL and MySQL).
 
-Automatic splitting is **on by default**: a bulk insert sizes itself to that
-limit with no extra configuration. `WithAutoChunk(false)` turns it off, and you
-can still split a single insert by hand with `BatchSize(n)`.
+Automatic splitting is **off by default**: pass `WithAutoChunk(true)` to enable
+it, after which a bulk insert sizes itself to that limit with no extra
+configuration. With it off you can still split a single insert by hand with
+`BatchSize(n)`.
 
 ```go
-db, err := sqlkit.Open("pgx", dsn)
+db, err := sqlkit.Open("pgx", dsn, sqlkit.WithAutoChunk(true))
 // 100k rows × 5 columns is split into statements of ≤ 65535 parameters.
 _, err = db.Insert(appdb.Users).Values(users).Exec(ctx)
 ```

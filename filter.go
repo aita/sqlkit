@@ -74,8 +74,11 @@ func FilterIsNull() FilterTerm {
 
 // buildFilter turns a filter argument into predicates against base's columns.
 // It accepts a bare Predicate, or a struct whose exported, non-zero fields each
-// map to a column by `sqlkit` tag (else the snake_case field name) and hold a
-// FilterTerm or a Predicate.
+// either map to a column by `sqlkit` tag (else the snake_case field name) and
+// hold a FilterTerm or a Predicate, or name one of base's relations and hold a
+// nested filter on the related table. A relation field narrows base with a
+// correlated EXISTS over the related table (see existsForRelation), so it works
+// the same in a SELECT, UPDATE, or DELETE without a join.
 func buildFilter(base Table, filter any) ([]Predicate, error) {
 	if filter == nil {
 		return nil, nil
@@ -107,29 +110,90 @@ func buildFilter(base Table, filter any) ([]Predicate, error) {
 		if fv.IsZero() { // unset filter field
 			continue
 		}
+		iface := fv.Interface()
+
 		// A complete predicate ignores the field's column, so it need not map to
 		// one — this lets reusable filters carry computed predicates (e.g. an OR
 		// across several columns) under a non-column field name.
-		if p, ok := fv.Interface().(Predicate); ok {
+		if p, ok := iface.(Predicate); ok {
 			out = append(out, p)
 			continue
 		}
-		key := columnKey(field)
-		col, ok := cols[key]
-		if !ok {
-			return nil, fmt.Errorf("sqlkit: Filter field %q maps to no column of %s",
-				field.Name, base.Info().QualifiedName())
+
+		// A FilterTerm applies to the column the field maps to.
+		if term, ok := iface.(FilterTerm); ok {
+			col, err := filterColumn(base, cols, field)
+			if err != nil {
+				return nil, err
+			}
+			ct, ok := term.(columnTerm)
+			if !ok {
+				return nil, fmt.Errorf("sqlkit: Filter field %q has an unsupported FilterTerm", field.Name)
+			}
+			out = append(out, ct.build(col))
+			continue
 		}
-		switch term := fv.Interface().(type) {
-		case columnTerm:
-			out = append(out, term.build(col))
-		case FilterTerm:
-			return nil, fmt.Errorf("sqlkit: Filter field %q has an unsupported FilterTerm", field.Name)
-		default:
-			out = append(out, Cond(sql.Eq(col, sql.Val(term))))
+
+		// A field naming a relation holds a nested filter on the related table,
+		// applied as a correlated EXISTS.
+		if rel, ok := relationByName(base, field.Name); ok {
+			exists, err := existsForRelation(rel, iface)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, exists)
+			continue
 		}
+
+		// Otherwise a plain value maps to a column as an equality.
+		col, err := filterColumn(base, cols, field)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, Cond(sql.Eq(col, sql.Val(iface))))
 	}
 	return out, nil
+}
+
+// filterColumn resolves the column a filter field targets, erroring when the
+// field maps to none of base's columns.
+func filterColumn(base Table, cols map[string]AnyColumn, field reflect.StructField) (AnyColumn, error) {
+	col, ok := cols[columnKey(field)]
+	if !ok {
+		return nil, fmt.Errorf("sqlkit: Filter field %q maps to no column of %s",
+			field.Name, base.Info().QualifiedName())
+	}
+	return col, nil
+}
+
+// relationByName finds base's relation whose generated field name is name, when
+// base exposes its relations (a binding emitted with relations).
+func relationByName(base Table, name string) (Relation, bool) {
+	src, ok := base.(RelationSource)
+	if !ok {
+		return nil, false
+	}
+	for _, rel := range src.Relations() {
+		if rel.Name() == name {
+			return rel, true
+		}
+	}
+	return nil, false
+}
+
+// existsForRelation narrows base by sub, a nested filter on rel's target, with a
+// correlated EXISTS: EXISTS (SELECT 1 FROM target WHERE <join condition> AND
+// <sub predicates>). An empty sub leaves just the join, so the field then means
+// "base has any related row" — and a to-many relation never duplicates rows.
+func existsForRelation(rel Relation, sub any) (Predicate, error) {
+	predicates, err := buildFilter(rel.Target(), sub)
+	if err != nil {
+		return Predicate{}, err
+	}
+	where := make([]Predicate, 0, len(predicates)+1)
+	where = append(where, rel.JoinOn())
+	where = append(where, predicates...)
+	return Exists(Select(sql.Raw("1")).From(rel.Target()).Where(where...)), nil
 }
 
 // columnsByName maps a table's bare column names to their bindings.

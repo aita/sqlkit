@@ -12,7 +12,8 @@ import (
 // relationMethodNames are the methods/fields a relation name must not shadow on
 // the generated columns/table structs.
 var relationMethodNames = []string{
-	"Info", "SQLSource", "Columns", "PrimaryKey", "Defaulted", "Queryer", "Q", "Rels",
+	"Info", "SQLSource", "Columns", "PrimaryKey", "Defaulted", "Query", "Q", "Rels",
+	"Insert", "Update", "Delete",
 }
 
 // buildRelations derives the relation models for every generated table from the

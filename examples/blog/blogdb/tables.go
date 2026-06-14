@@ -19,7 +19,7 @@ type UsersColumns struct {
 }
 
 func newUsersColumns() UsersColumns {
-	info := sqlkit.TableInfo{Schema: "public", Name: "users", Checksum: "27c08a2ef030b324de75d12893731e1f715f77c27f58e0b23e5b110af27c05de", Generator: "fmt1+tple72f770b2047+sqlkit(devel)"}
+	info := sqlkit.TableInfo{Schema: "public", Name: "users", Checksum: "27c08a2ef030b324de75d12893731e1f715f77c27f58e0b23e5b110af27c05de", Generator: "fmt1+tpla0357d1a159f+sqlkit(devel)"}
 	return UsersColumns{
 		info:      info,
 		ID:        sqlkit.NewColumn[int64](info, "id"),
@@ -72,8 +72,11 @@ type UsersRels struct {
 // UsersPostsRel is the Posts relation of table public.users.
 type UsersPostsRel struct{ PostsColumns }
 
-// Target returns the related table joined in.
-func (r UsersPostsRel) Target() sqlkit.Table { return r.PostsColumns }
+// Target returns the related table joined in. For a plain relation it is the
+// target's package table var (a RelationSource, so nested filters can recurse
+// through the target's own relations); a self-referential relation keeps the
+// aliased columns value so the self-join stays unambiguous.
+func (r UsersPostsRel) Target() sqlkit.Table { return Posts }
 
 // JoinOn is the foreign-key join condition.
 func (r UsersPostsRel) JoinOn() sqlkit.Predicate {
@@ -94,8 +97,11 @@ func (r UsersPostsRel) Keys() (target, base []string) {
 // UsersProfileRel is the Profile relation of table public.users.
 type UsersProfileRel struct{ ProfilesColumns }
 
-// Target returns the related table joined in.
-func (r UsersProfileRel) Target() sqlkit.Table { return r.ProfilesColumns }
+// Target returns the related table joined in. For a plain relation it is the
+// target's package table var (a RelationSource, so nested filters can recurse
+// through the target's own relations); a self-referential relation keeps the
+// aliased columns value so the self-join stays unambiguous.
+func (r UsersProfileRel) Target() sqlkit.Table { return Profiles }
 
 // JoinOn is the foreign-key join condition.
 func (r UsersProfileRel) JoinOn() sqlkit.Predicate {
@@ -120,17 +126,44 @@ type UsersTable struct {
 	Rels UsersRels
 }
 
-// Queryer starts a SELECT over public.users bound to ex, with all columns
+// Query starts a SELECT over public.users bound to ex, with all columns
 // selected; chain JoinRel, Filter, Where, and the terminals from there.
-func (t UsersTable) Queryer(ex sqlkit.Executor) sqlkit.SelectQuery { return ex.Select().From(t) }
+func (t UsersTable) Query(ex sqlkit.Querier) sqlkit.SelectQuery { return ex.Select().From(t) }
 
-// Q is shorthand for Queryer.
-func (t UsersTable) Q(ex sqlkit.Executor) sqlkit.SelectQuery { return ex.Select().From(t) }
+// Q is shorthand for Query.
+func (t UsersTable) Q(ex sqlkit.Querier) sqlkit.SelectQuery { return ex.Select().From(t) }
+
+// Insert starts an INSERT into public.users bound to ex; feed it rows with
+// Values or a query with FromSelect.
+func (t UsersTable) Insert(ex sqlkit.Querier) sqlkit.InsertQuery { return ex.Insert(t) }
+
+// Update starts an UPDATE of public.users bound to ex; narrow it with
+// Filter or Where and choose columns with Set.
+func (t UsersTable) Update(ex sqlkit.Querier) sqlkit.UpdateQuery { return ex.Update(t) }
+
+// Delete starts a DELETE from public.users bound to ex; narrow it with
+// Filter or Where.
+func (t UsersTable) Delete(ex sqlkit.Querier) sqlkit.DeleteQuery { return ex.Delete(t) }
 
 // Relations lists the table's foreign-key relations, so Preload(target) can
 // resolve which relation reaches a related table.
 func (t UsersTable) Relations() []sqlkit.Relation {
 	return []sqlkit.Relation{t.Rels.Posts, t.Rels.Profile}
+}
+
+// UsersFilter is a reusable filter bundle for public.users: pass it to a
+// query's Filter and its set fields are AND-combined. A column field maps to its
+// column and holds a FilterTerm (sqlkit.Eq(…), sqlkit.Le(…)) or a Predicate; a
+// relation field holds a nested filter on the related table, applied as a
+// correlated EXISTS (so it works in a SELECT, UPDATE, or DELETE alike). Unset
+// (zero) fields are skipped.
+type UsersFilter struct {
+	ID        sqlkit.FilterTerm `sqlkit:"id"`
+	Email     sqlkit.FilterTerm `sqlkit:"email"`
+	Name      sqlkit.FilterTerm `sqlkit:"name"`
+	CreatedAt sqlkit.FilterTerm `sqlkit:"created_at"`
+	Posts     *PostsFilter
+	Profile   *ProfilesFilter
 }
 
 // Users provides typed access to table public.users.
@@ -155,7 +188,7 @@ type PostsColumns struct {
 }
 
 func newPostsColumns() PostsColumns {
-	info := sqlkit.TableInfo{Schema: "public", Name: "posts", Checksum: "29a5bb8d9106650c548180a1c627f3bb6cb6f78e5ec7e1e6004720da20f65cc8", Generator: "fmt1+tple72f770b2047+sqlkit(devel)"}
+	info := sqlkit.TableInfo{Schema: "public", Name: "posts", Checksum: "29a5bb8d9106650c548180a1c627f3bb6cb6f78e5ec7e1e6004720da20f65cc8", Generator: "fmt1+tpla0357d1a159f+sqlkit(devel)"}
 	return PostsColumns{
 		info:      info,
 		ID:        sqlkit.NewColumn[int64](info, "id"),
@@ -209,8 +242,11 @@ type PostsRels struct {
 // PostsUserRel is the User relation of table public.posts.
 type PostsUserRel struct{ UsersColumns }
 
-// Target returns the related table joined in.
-func (r PostsUserRel) Target() sqlkit.Table { return r.UsersColumns }
+// Target returns the related table joined in. For a plain relation it is the
+// target's package table var (a RelationSource, so nested filters can recurse
+// through the target's own relations); a self-referential relation keeps the
+// aliased columns value so the self-join stays unambiguous.
+func (r PostsUserRel) Target() sqlkit.Table { return Users }
 
 // JoinOn is the foreign-key join condition.
 func (r PostsUserRel) JoinOn() sqlkit.Predicate {
@@ -234,17 +270,44 @@ type PostsTable struct {
 	Rels PostsRels
 }
 
-// Queryer starts a SELECT over public.posts bound to ex, with all columns
+// Query starts a SELECT over public.posts bound to ex, with all columns
 // selected; chain JoinRel, Filter, Where, and the terminals from there.
-func (t PostsTable) Queryer(ex sqlkit.Executor) sqlkit.SelectQuery { return ex.Select().From(t) }
+func (t PostsTable) Query(ex sqlkit.Querier) sqlkit.SelectQuery { return ex.Select().From(t) }
 
-// Q is shorthand for Queryer.
-func (t PostsTable) Q(ex sqlkit.Executor) sqlkit.SelectQuery { return ex.Select().From(t) }
+// Q is shorthand for Query.
+func (t PostsTable) Q(ex sqlkit.Querier) sqlkit.SelectQuery { return ex.Select().From(t) }
+
+// Insert starts an INSERT into public.posts bound to ex; feed it rows with
+// Values or a query with FromSelect.
+func (t PostsTable) Insert(ex sqlkit.Querier) sqlkit.InsertQuery { return ex.Insert(t) }
+
+// Update starts an UPDATE of public.posts bound to ex; narrow it with
+// Filter or Where and choose columns with Set.
+func (t PostsTable) Update(ex sqlkit.Querier) sqlkit.UpdateQuery { return ex.Update(t) }
+
+// Delete starts a DELETE from public.posts bound to ex; narrow it with
+// Filter or Where.
+func (t PostsTable) Delete(ex sqlkit.Querier) sqlkit.DeleteQuery { return ex.Delete(t) }
 
 // Relations lists the table's foreign-key relations, so Preload(target) can
 // resolve which relation reaches a related table.
 func (t PostsTable) Relations() []sqlkit.Relation {
 	return []sqlkit.Relation{t.Rels.User}
+}
+
+// PostsFilter is a reusable filter bundle for public.posts: pass it to a
+// query's Filter and its set fields are AND-combined. A column field maps to its
+// column and holds a FilterTerm (sqlkit.Eq(…), sqlkit.Le(…)) or a Predicate; a
+// relation field holds a nested filter on the related table, applied as a
+// correlated EXISTS (so it works in a SELECT, UPDATE, or DELETE alike). Unset
+// (zero) fields are skipped.
+type PostsFilter struct {
+	ID        sqlkit.FilterTerm `sqlkit:"id"`
+	UserID    sqlkit.FilterTerm `sqlkit:"user_id"`
+	Title     sqlkit.FilterTerm `sqlkit:"title"`
+	Body      sqlkit.FilterTerm `sqlkit:"body"`
+	Published sqlkit.FilterTerm `sqlkit:"published"`
+	User      *UsersFilter
 }
 
 // Posts provides typed access to table public.posts.
@@ -267,7 +330,7 @@ type ProfilesColumns struct {
 }
 
 func newProfilesColumns() ProfilesColumns {
-	info := sqlkit.TableInfo{Schema: "public", Name: "profiles", Checksum: "7d974fc0cd8cf8f5507052bdbef150fb65aaee7092596183b7a156bb3092e0cb", Generator: "fmt1+tple72f770b2047+sqlkit(devel)"}
+	info := sqlkit.TableInfo{Schema: "public", Name: "profiles", Checksum: "7d974fc0cd8cf8f5507052bdbef150fb65aaee7092596183b7a156bb3092e0cb", Generator: "fmt1+tpla0357d1a159f+sqlkit(devel)"}
 	return ProfilesColumns{
 		info:   info,
 		ID:     sqlkit.NewColumn[int64](info, "id"),
@@ -319,8 +382,11 @@ type ProfilesRels struct {
 // ProfilesUserRel is the User relation of table public.profiles.
 type ProfilesUserRel struct{ UsersColumns }
 
-// Target returns the related table joined in.
-func (r ProfilesUserRel) Target() sqlkit.Table { return r.UsersColumns }
+// Target returns the related table joined in. For a plain relation it is the
+// target's package table var (a RelationSource, so nested filters can recurse
+// through the target's own relations); a self-referential relation keeps the
+// aliased columns value so the self-join stays unambiguous.
+func (r ProfilesUserRel) Target() sqlkit.Table { return Users }
 
 // JoinOn is the foreign-key join condition.
 func (r ProfilesUserRel) JoinOn() sqlkit.Predicate {
@@ -344,17 +410,43 @@ type ProfilesTable struct {
 	Rels ProfilesRels
 }
 
-// Queryer starts a SELECT over public.profiles bound to ex, with all columns
+// Query starts a SELECT over public.profiles bound to ex, with all columns
 // selected; chain JoinRel, Filter, Where, and the terminals from there.
-func (t ProfilesTable) Queryer(ex sqlkit.Executor) sqlkit.SelectQuery { return ex.Select().From(t) }
+func (t ProfilesTable) Query(ex sqlkit.Querier) sqlkit.SelectQuery { return ex.Select().From(t) }
 
-// Q is shorthand for Queryer.
-func (t ProfilesTable) Q(ex sqlkit.Executor) sqlkit.SelectQuery { return ex.Select().From(t) }
+// Q is shorthand for Query.
+func (t ProfilesTable) Q(ex sqlkit.Querier) sqlkit.SelectQuery { return ex.Select().From(t) }
+
+// Insert starts an INSERT into public.profiles bound to ex; feed it rows with
+// Values or a query with FromSelect.
+func (t ProfilesTable) Insert(ex sqlkit.Querier) sqlkit.InsertQuery { return ex.Insert(t) }
+
+// Update starts an UPDATE of public.profiles bound to ex; narrow it with
+// Filter or Where and choose columns with Set.
+func (t ProfilesTable) Update(ex sqlkit.Querier) sqlkit.UpdateQuery { return ex.Update(t) }
+
+// Delete starts a DELETE from public.profiles bound to ex; narrow it with
+// Filter or Where.
+func (t ProfilesTable) Delete(ex sqlkit.Querier) sqlkit.DeleteQuery { return ex.Delete(t) }
 
 // Relations lists the table's foreign-key relations, so Preload(target) can
 // resolve which relation reaches a related table.
 func (t ProfilesTable) Relations() []sqlkit.Relation {
 	return []sqlkit.Relation{t.Rels.User}
+}
+
+// ProfilesFilter is a reusable filter bundle for public.profiles: pass it to a
+// query's Filter and its set fields are AND-combined. A column field maps to its
+// column and holds a FilterTerm (sqlkit.Eq(…), sqlkit.Le(…)) or a Predicate; a
+// relation field holds a nested filter on the related table, applied as a
+// correlated EXISTS (so it works in a SELECT, UPDATE, or DELETE alike). Unset
+// (zero) fields are skipped.
+type ProfilesFilter struct {
+	ID     sqlkit.FilterTerm `sqlkit:"id"`
+	UserID sqlkit.FilterTerm `sqlkit:"user_id"`
+	Bio    sqlkit.FilterTerm `sqlkit:"bio"`
+	Public sqlkit.FilterTerm `sqlkit:"public"`
+	User   *UsersFilter
 }
 
 // Profiles provides typed access to table public.profiles.

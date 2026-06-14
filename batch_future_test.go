@@ -33,7 +33,7 @@ func TestPreloadInChunksByBindParamLimit(t *testing.T) {
 			}}, nil
 		},
 	}
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithPreloadBatchSize(2))
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true), sqlkit.WithPreloadBatchSize(2))
 
 	var users []preUser
 	if err := db.Select(Users.ID).From(Users).Preload(Posts).All(context.Background()).Scan(&users); err != nil {
@@ -149,7 +149,7 @@ func TestInsertReturningWithinLimitIsSingleQuery(t *testing.T) {
 func TestUpdateReturningSplitsByInList(t *testing.T) {
 	// SET name = $1 consumes one param; ChunkSize 2 leaves two ids per statement.
 	fake := returningFake(func(args []any) int { return len(args) - 1 })
-	db := sqlkit.WrapDB(fake.DB())
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true))
 
 	ids := []int64{1, 2, 3, 4, 5}
 	name := "x"
@@ -169,7 +169,7 @@ func TestUpdateReturningSplitsByInList(t *testing.T) {
 
 func TestDeleteReturningSplitsByInList(t *testing.T) {
 	fake := returningFake(func(args []any) int { return len(args) })
-	db := sqlkit.WrapDB(fake.DB())
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true))
 
 	ids := []int64{1, 2, 3, 4, 5}
 	var out []User
@@ -233,7 +233,7 @@ func TestWithAutoChunkFalseExplicitBatchSizeStillSplits(t *testing.T) {
 
 func TestWithSessionAutoChunkDisablesPerSession(t *testing.T) {
 	fake := &sqltest.Fake{}
-	db := sqlkit.WrapDB(fake.DB()) // database: auto-chunk on
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true)) // database: auto-chunk on
 	s := db.NewSession(sqlkit.WithSessionAutoChunk(false))
 	defer s.Close()
 
@@ -292,7 +292,7 @@ func TestPreloadBatchSizeChunksBelowLimit(t *testing.T) {
 			}}, nil
 		},
 	}
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithPreloadBatchSize(2))
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true), sqlkit.WithPreloadBatchSize(2))
 
 	var users []preUser
 	if err := db.Select(Users.ID).From(Users).Preload(Posts).All(context.Background()).Scan(&users); err != nil {
@@ -341,7 +341,7 @@ func TestPreloadBatchSizeZeroUsesHardLimitOnly(t *testing.T) {
 // user-issued Column.In query.
 func TestPreloadBatchSizeDoesNotCapUserSelect(t *testing.T) {
 	fake := idFromArgsFake()
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithPreloadBatchSize(2))
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true), sqlkit.WithPreloadBatchSize(2))
 
 	var users []User
 	if err := db.Select().From(Users).Where(Users.ID.In(1, 2, 3, 4, 5)).All(context.Background()).Scan(&users); err != nil {
@@ -357,7 +357,7 @@ func TestPreloadBatchSizeDoesNotCapUserSelect(t *testing.T) {
 func TestAutoChunkChunkSizeSplitsSelect(t *testing.T) {
 	fake := idFromArgsFake()
 	// The dialect limit is generous, so only the per-query ChunkSize drives the split.
-	db := sqlkit.WrapDB(fake.DB())
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true))
 
 	var users []User
 	if err := db.Select().From(Users).Where(Users.ID.In(1, 2, 3, 4, 5)).
@@ -389,7 +389,7 @@ func TestAutoChunkOffForcesSingleSelect(t *testing.T) {
 
 func TestAutoChunkChunkSizeSplitsDelete(t *testing.T) {
 	fake := &sqltest.Fake{}
-	db := sqlkit.WrapDB(fake.DB())
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true))
 
 	if _, err := db.Delete(Users).Where(Users.ID.In(1, 2, 3, 4, 5)).
 		AutoChunk(sqlkit.ChunkSize(2)).Exec(context.Background()); err != nil {
@@ -415,30 +415,5 @@ func TestAutoChunkOffForcesSingleUpdate(t *testing.T) {
 	// SET email = $1 plus the full 5-value IN list => 6 args in one statement.
 	if len(execs[0].Args) != 6 {
 		t.Fatalf("args = %d, want 6 (SET value + full IN list)", len(execs[0].Args))
-	}
-}
-
-// TestRecordsStreamsSplitChunks streams a split SELECT via Records: it must run
-// each chunk (not the empty statement of a batched Rows) and yield every row.
-func TestRecordsStreamsSplitChunks(t *testing.T) {
-	fake := idFromArgsFake()
-	db := sqlkit.WrapDB(fake.DB())
-
-	var ids []int64
-	for u, err := range sqlkit.Records[User](
-		db.Select().From(Users).Where(Users.ID.In(1, 2, 3, 4, 5)).AutoChunk(sqlkit.ChunkSize(2)).All(context.Background()),
-	) {
-		if err != nil {
-			t.Fatalf("Records error = %v", err)
-		}
-		ids = append(ids, u.ID)
-	}
-	// 5 ids at chunk size 2 => 3 chunks; idFromArgsFake returns one row per query
-	// whose id is the chunk's arg count, so the stream yields 2, 2, 1.
-	if len(fake.Queries()) != 3 {
-		t.Fatalf("queries = %d, want 3 (chunked)", len(fake.Queries()))
-	}
-	if len(ids) != 3 || ids[0] != 2 || ids[1] != 2 || ids[2] != 1 {
-		t.Fatalf("streamed ids = %v, want [2 2 1]", ids)
 	}
 }

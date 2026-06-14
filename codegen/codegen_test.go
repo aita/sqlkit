@@ -111,8 +111,18 @@ func TestGenerateRelationsGolden(t *testing.T) {
 
 	body := string(got)
 	for _, want := range []string{
-		"func (t UsersTable) Queryer(ex sqlkit.Executor) sqlkit.SelectQuery",
-		"func (t UsersTable) Q(ex sqlkit.Executor) sqlkit.SelectQuery",
+		"func (t UsersTable) Query(ex sqlkit.Querier) sqlkit.SelectQuery",
+		"func (t UsersTable) Q(ex sqlkit.Querier) sqlkit.SelectQuery",
+		"func (t UsersTable) Insert(ex sqlkit.Querier) sqlkit.InsertQuery",
+		"func (t UsersTable) Update(ex sqlkit.Querier) sqlkit.UpdateQuery",
+		"func (t UsersTable) Delete(ex sqlkit.Querier) sqlkit.DeleteQuery",
+		"type UsersFilter struct",
+		`sqlkit:"email"`, // column field carries its column tag
+		"*PostsFilter",   // relation field is a nested filter pointer
+		"type PostsFilter struct",
+		// Target returns the target's package var (a RelationSource), so nested
+		// relation filters can recurse through the target's own relations.
+		"func (r UsersPostsRel) Target() sqlkit.Table { return Posts }",
 		"type UsersColumns struct",
 		"func newUsersColumns() UsersColumns",
 		"Profile UsersProfileRel", // has-one (unique FK)
@@ -156,6 +166,9 @@ func TestGenerateSelfReferentialRelations(t *testing.T) {
 		"func (r EmployeesManagerRel) Cardinality() sqlkit.Cardinality { return sqlkit.ToOne }",
 		// JoinOn equates the aliased target id to the base manager_id.
 		"sqlkit.Cond(sql.Eq(r.ID, newEmployeesColumns().ManagerID))",
+		// A self-referential relation keeps the aliased columns value as Target (not
+		// the package var) so the self-join stays unambiguous.
+		"func (r EmployeesManagerRel) Target() sqlkit.Table { return r.EmployeesColumns }",
 		// Reverse has-many; alias suffixed to avoid colliding with the table name.
 		"func (r EmployeesEmployeesRel) Cardinality() sqlkit.Cardinality { return sqlkit.ToMany }",
 		`As("employees_ref")`,
@@ -169,7 +182,7 @@ func TestGenerateSelfReferentialRelations(t *testing.T) {
 
 func TestGenerateRelationsNoForeignKeysOmitsSQLImport(t *testing.T) {
 	// A relation-aware binding for a table without foreign keys emits the
-	// Queryer surface but no JoinOn expressions, so it must not import sql — an
+	// Query surface but no JoinOn expressions, so it must not import sql — an
 	// unused import would make the generated file uncompilable.
 	got := string(generateSingle(t, fixtureTables()[:1], Options{PackageName: "blogdb", EmitRelations: true}))
 	if strings.Contains(got, `"github.com/aita/sqlkit/sql"`) {
@@ -213,7 +226,7 @@ func TestBindingsAreNotAnORM(t *testing.T) {
 	body := string(generateSingle(t, fixtureTables(), Options{PackageName: "blogdb"}))
 	// The binding is metadata: no executor-bound accessors, no relation
 	// navigation methods, and plain NewColumn calls without metadata options.
-	for _, banned := range []string{"sqlkit.Executor", ") Get(", ") User()", ") Posts()", "sqlkit.With"} {
+	for _, banned := range []string{"sqlkit.Querier", ") Get(", ") User()", ") Posts()", "sqlkit.With"} {
 		if strings.Contains(body, banned) {
 			t.Errorf("generated binding should not contain %q:\n%s", banned, body)
 		}
@@ -372,6 +385,36 @@ func TestTypeMapperFuncSeesTable(t *testing.T) {
 	body := string(generateSingle(t, fixtureTables(), Options{PackageName: "blogdb", TypeMapper: mapper}))
 	if !strings.Contains(body, `sqlkit.NewColumn[headline](info, "title")`) {
 		t.Errorf("function mapper did not see the table name:\n%s", body)
+	}
+}
+
+func TestArrayTypeMapping(t *testing.T) {
+	// An array column maps to a Go slice of the element's type, through the
+	// built-in tables, the Overrides map (keyed by the element type), and a
+	// nullable array (which stays a slice, not a pointer).
+	tables := []meta.Table{{
+		Schema: meta.Schema{Name: "public"},
+		Name:   "docs",
+		Columns: []meta.Column{
+			{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true, HasDefault: true},
+			{Name: "tags", Type: meta.OfArray("postgres", "text", 0, 0, 0)},
+			{Name: "scores", Type: meta.OfArray("postgres", "int4", 0, 0, 0), Nullable: true},
+			{Name: "amounts", Type: meta.OfArray("postgres", "numeric", 0, 10, 2)},
+		},
+	}}
+	mapper := NewDefaultTypeMapper(TypeMapperConfig{Overrides: map[string]GoType{
+		"numeric": {ImportPath: "github.com/shopspring/decimal", Name: "decimal.Decimal"},
+	}})
+	body := string(generateSingle(t, tables, Options{PackageName: "docsdb", TypeMapper: mapper}))
+	for _, want := range []string{
+		`sqlkit.NewColumn[[]string](info, "tags")`,
+		`sqlkit.NewColumn[[]int32](info, "scores")`,
+		`sqlkit.NewColumn[[]decimal.Decimal](info, "amounts")`,
+		`"github.com/shopspring/decimal"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("array mapping missing %q:\n%s", want, body)
+		}
 	}
 }
 

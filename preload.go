@@ -21,6 +21,69 @@ import (
 // fills a slice field; a to-one relation fills a struct or pointer field. The
 // element type of that field determines what the children scan into, so the
 // usual sqlkit field mapping applies to them.
+//
+// Two refinements (see Preload and RelPath): predicates passed to Preload narrow
+// the follow-up SELECT to matching children (a conditional preload), and a RelPath
+// target eager-loads a whole chain of related tables, each hop its own batched
+// query (a nested preload). A nested preload runs against the just-loaded children
+// before they are copied onto their parents, so value-type child fields still
+// carry their grandchildren.
+
+// preloadSpec is one registered preload: the relation to load, the table it loads
+// (a RelationSource, so a RelPath can find this spec and resolve the next hop
+// against it), conditions narrowing the follow-up SELECT, and nested preloads run
+// against the loaded children.
+type preloadSpec struct {
+	rel    Relation
+	target Table // table this preload loads; nil for PreloadRel
+	wheres []Predicate
+	nested []preloadSpec
+}
+
+// relPath is a preload path of related tables (base → path[0] → path[1] → …),
+// built with RelPath and passed to Preload. It embeds the leaf table so it
+// satisfies Table for Preload's parameter; Preload recovers the full path.
+type relPath struct {
+	Table         // the leaf (last) table on the path
+	path  []Table // the full chain of related tables, from the base outward
+}
+
+// RelPath builds a nested preload target from a chain of related tables, each
+// related to the one before it (the first to the From table). Pass it to Preload
+// to eager-load along the whole path, creating any intermediate level not already
+// registered; the Preload conditions then apply to the final table:
+//
+//	db.Select().From(Users).
+//	    Preload(sqlkit.RelPath(Posts, Comments), Comments.Approved.Eq(true)).
+//	    All(ctx).Scan(&users)
+//	// Users → Posts → Comments, in three batched queries.
+func RelPath(tables ...Table) Table {
+	if len(tables) == 0 {
+		return relPath{} // Preload defers an empty-path error
+	}
+	return relPath{Table: tables[len(tables)-1], path: tables}
+}
+
+// relationReaching returns src's relation whose target is t and how many match,
+// so callers can report 0 (none) or >1 (ambiguous) distinctly.
+func relationReaching(src RelationSource, t Table) (Relation, int) {
+	want := t.Info()
+	var found Relation
+	matches := 0
+	for _, rel := range src.Relations() {
+		if got := rel.Target().Info(); got.Schema == want.Schema && got.Name == want.Name {
+			found, matches = rel, matches+1
+		}
+	}
+	return found, matches
+}
+
+// ambiguousRelation builds the error reported when several relations of src reach
+// target, directing the caller to PreloadRel.
+func ambiguousRelation(src, target Table) error {
+	return fmt.Errorf("sqlkit: Preload: %s has multiple relations to %s; pick one with PreloadRel",
+		src.Info().QualifiedName(), target.Info().QualifiedName())
+}
 
 // defaultPreloadChunkSize is the default cap on parent keys per follow-up IN query
 // of a Preload (WithPreloadBatchSize overrides it), echoing SQLAlchemy
@@ -29,7 +92,7 @@ const defaultPreloadChunkSize = 1000
 
 // preloadChunkOf reports the executor's configured preload chunk size, or the
 // default when the executor does not expose one.
-func preloadChunkOf(ex Executor) int {
+func preloadChunkOf(ex executorBinding) int {
 	if p, ok := ex.(interface{ preloadChunkSize() int }); ok {
 		return p.preloadChunkSize()
 	}
@@ -37,18 +100,19 @@ func preloadChunkOf(ex Executor) int {
 }
 
 // applyPreloads runs every registered preload against the just-scanned dest.
-func applyPreloads(ctx context.Context, ex Executor, dest any, rels []Relation) error {
-	for _, rel := range rels {
-		if err := preloadRelation(ctx, ex, dest, rel); err != nil {
+func applyPreloads(ctx context.Context, ex executorBinding, dest any, specs []preloadSpec) error {
+	for _, spec := range specs {
+		if err := preloadRelation(ctx, ex, dest, spec); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// preloadRelation eager-loads rel onto dest, which is the Scan destination: a
+// preloadRelation eager-loads spec.rel onto dest, which is the Scan destination: a
 // pointer to a slice of parents (every row) or to a single parent (First/One).
-func preloadRelation(ctx context.Context, ex Executor, dest any, rel Relation) error {
+func preloadRelation(ctx context.Context, ex executorBinding, dest any, spec preloadSpec) error {
+	rel := spec.rel
 	rv := reflect.ValueOf(dest)
 	if rv.Kind() != reflect.Pointer || rv.IsNil() {
 		return fmt.Errorf("sqlkit: Preload requires a pointer destination, got %T", dest)
@@ -133,17 +197,28 @@ func preloadRelation(ctx context.Context, ex Executor, dest any, rel Relation) e
 		vals = append(vals, sql.Val(key))
 	}
 
-	// Scan children into a fresh []childElem, then group them by target key. The
-	// IN carries chunk metadata (newInPredicate), so a parent set large enough to
-	// exceed the executor's bind-parameter limit is split across statements and its
-	// rows concatenated, just like a user-issued Column.In query. AutoChunk caps the
-	// keys per follow-up query at the configured preload batch size (selectinload
-	// style) so a wide eager-load runs several plan-cache-friendly statements.
+	// Scan children into a fresh []childElem. Conditions are added before the IN so
+	// the IN stays the lone deferred predicate (newInPredicate carries chunk
+	// metadata): AutoChunk caps each follow-up at the preload batch size, splitting a
+	// wide parent set across plan-cache-friendly statements like a user Column.In.
 	childrenPtr := reflect.New(reflect.SliceOf(childElem))
-	rows := ex.Select().From(target).Where(newInPredicate(fkCol, vals)).
-		AutoChunk(ChunkSize(preloadChunkOf(ex))).All(ctx)
+	q := Select().From(target)
+	if len(spec.wheres) > 0 {
+		q = q.Where(spec.wheres...)
+	}
+	q = q.Where(newInPredicate(fkCol, vals)).AutoChunk(ChunkSize(preloadChunkOf(ex)))
+	q.ex = ex
+	rows := q.All(ctx)
 	if err := rows.Scan(childrenPtr.Interface()); err != nil {
 		return err
+	}
+	// Recurse before assignment: a to-many relation copies child structs into the
+	// parent's slice, so the grandchildren must already be loaded onto the children
+	// here for value-type fields to carry them.
+	if len(spec.nested) > 0 {
+		if err := applyPreloads(ctx, ex, childrenPtr.Interface(), spec.nested); err != nil {
+			return err
+		}
 	}
 	children := childrenPtr.Elem()
 	childByKey := map[any][]reflect.Value{}

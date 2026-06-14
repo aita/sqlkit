@@ -102,11 +102,11 @@ func (m DefaultTypeMapper) GoTypeFor(table meta.Table, column meta.Column, diale
 	}
 	dataType := strings.ToLower(strings.TrimSpace(engine.Name))
 	if gt, ok := m.cfg.Overrides[dataType]; ok {
-		return applyNullable(gt, column), nil
+		return resolvedType(gt, engine, column), nil
 	}
 	if typed, ok := column.Type.(meta.GoTyped); ok {
 		if gt, ok := typed.GoType(dialect); ok {
-			return applyNullable(gt, column), nil
+			return resolvedType(gt, engine, column), nil
 		}
 	}
 	stdTable, label := tableForDialect(dialect)
@@ -114,7 +114,18 @@ func (m DefaultTypeMapper) GoTypeFor(table meta.Table, column meta.Column, diale
 	if !ok {
 		return meta.GoType{}, fmt.Errorf("codegen: unsupported %s type %q (column %q); add a type override via NewDefaultTypeMapper or pin one with sqldef's DataType.Go", label, engine.Name, column.Name)
 	}
-	return applyNullable(gt, column), nil
+	return resolvedType(gt, engine, column), nil
+}
+
+// resolvedType finishes a Go type resolved from the column's SQL type (the
+// Overrides map, a pinned meta.GoTyped, or the built-in tables): it wraps an
+// array element in a Go slice and applies nullability. Column-level overrides
+// (OverrideFunc, ColumnOverrides) bypass it — they spell the full Go type.
+func resolvedType(gt meta.GoType, engine meta.Engine, column meta.Column) meta.GoType {
+	if engine.Array {
+		gt.Name = "[]" + gt.Name
+	}
+	return applyNullable(gt, column)
 }
 
 // columnOverride looks up a name-based override for the column, trying the

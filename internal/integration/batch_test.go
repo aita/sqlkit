@@ -45,6 +45,7 @@ func TestBindParamSplittingEndToEnd(t *testing.T) {
 		counter := &stmtCounter{}
 		sdb := sqlkit.WrapDB(db.SQL(),
 			sqlkit.WithDialect(db.Dialect()),
+			sqlkit.WithAutoChunk(true),
 			sqlkit.WithInterceptor(counter))
 
 		const n = 50

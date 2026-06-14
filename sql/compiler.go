@@ -60,6 +60,50 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		}
 		args := append(leftArgs, rightArgs...)
 		return "(" + leftSQL + " " + e.Operator + " " + rightSQL + ")", args, nil
+	case UnaryExpression:
+		if e.Operator == "" {
+			return "", nil, fmt.Errorf("sqlkit/sql: unary expression requires an operator")
+		}
+		operandSQL, args, err := c.CompileExpression(e.Operand)
+		if err != nil {
+			return "", nil, err
+		}
+		return "(" + e.Operator + operandSQL + ")", args, nil
+	case RowExpression:
+		if len(e.Elements) == 0 {
+			return "", nil, fmt.Errorf("sqlkit/sql: row expression requires at least one element")
+		}
+		parts := make([]string, len(e.Elements))
+		var args []any
+		for i, element := range e.Elements {
+			elementSQL, elementArgs, err := c.CompileExpression(element)
+			if err != nil {
+				return "", nil, err
+			}
+			parts[i] = elementSQL
+			args = append(args, elementArgs...)
+		}
+		return "(" + strings.Join(parts, ", ") + ")", args, nil
+	case DistinctPredicate:
+		leftSQL, args, err := c.CompileExpression(e.Left)
+		if err != nil {
+			return "", nil, err
+		}
+		rightSQL, rightArgs, err := c.CompileExpression(e.Right)
+		if err != nil {
+			return "", nil, err
+		}
+		args = append(args, rightArgs...)
+		if nse, ok := c.Dialect.(NullSafeEqualityDialect); ok {
+			return nse.IsDistinctFrom(leftSQL, rightSQL, e.Negate), args, nil
+		}
+		// SQL standard IS [NOT] DISTINCT FROM (PostgreSQL, SQLite, the standard
+		// target); MySQL overrides via NullSafeEqualityDialect with <=>.
+		operator := "IS DISTINCT FROM"
+		if e.Negate {
+			operator = "IS NOT DISTINCT FROM"
+		}
+		return "(" + leftSQL + " " + operator + " " + rightSQL + ")", args, nil
 	case LogicalExpression:
 		if len(e.Operands) == 0 {
 			return "", nil, fmt.Errorf("sqlkit/sql: %s requires at least one operand", e.Operator)
@@ -212,6 +256,39 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		}
 		args = append(args, subArgs...)
 		return "(" + leftSQL + " " + e.Operator + " " + e.Quantifier + " (" + subSQL + "))", args, nil
+	case ArrayExpression:
+		arr, ok := c.Dialect.(ArrayDialect)
+		if !ok {
+			return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support arrays", c.Dialect.Name())
+		}
+		elements := make([]string, len(e.Elements))
+		var args []any
+		for i, element := range e.Elements {
+			elementSQL, elementArgs, err := c.CompileExpression(element)
+			if err != nil {
+				return "", nil, err
+			}
+			elements[i] = elementSQL
+			args = append(args, elementArgs...)
+		}
+		return arr.ArrayConstructor(elements), args, nil
+	case QuantifiedArrayExpression:
+		if e.Array == nil {
+			return "", nil, fmt.Errorf("sqlkit/sql: %s(array) requires an array operand", e.Quantifier)
+		}
+		if _, ok := c.Dialect.(ArrayDialect); !ok {
+			return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support arrays", c.Dialect.Name())
+		}
+		leftSQL, args, err := c.CompileExpression(e.Left)
+		if err != nil {
+			return "", nil, err
+		}
+		arraySQL, arrayArgs, err := c.CompileExpression(e.Array)
+		if err != nil {
+			return "", nil, err
+		}
+		args = append(args, arrayArgs...)
+		return "(" + leftSQL + " " + e.Operator + " " + e.Quantifier + "(" + arraySQL + "))", args, nil
 	case ExcludedExpression:
 		if e.Column == "" {
 			return "", nil, fmt.Errorf("sqlkit/sql: Excluded requires a column name")
@@ -273,6 +350,21 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 			return "", nil, err
 		}
 		return out, args, nil
+	case SimilarToExpression:
+		leftSQL, args, err := c.CompileExpression(e.Left)
+		if err != nil {
+			return "", nil, err
+		}
+		patternSQL, patternArgs, err := c.CompileExpression(e.Pattern)
+		if err != nil {
+			return "", nil, err
+		}
+		args = append(args, patternArgs...)
+		matcher, ok := c.Dialect.(SimilarToMatcher)
+		if !ok {
+			return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support SIMILAR TO", c.Dialect.Name())
+		}
+		return matcher.SimilarTo(leftSQL, patternSQL, e.Negate), args, nil
 	case NullPredicate:
 		operandSQL, args, err := c.CompileExpression(e.Operand)
 		if err != nil {
@@ -296,13 +388,21 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		}
 		// A FuncRenderer dialect may remap a canonical function name/form to its
 		// native spelling; an unknown name (or a dialect without the capability)
-		// falls through to the default name(args...) rendering unchanged.
-		if fr, ok := c.Dialect.(FuncRenderer); ok {
-			if out, handled := fr.RenderFunc(e.Name, compiled); handled {
-				return out, args, nil
+		// falls through to the default name(args...) rendering unchanged. DISTINCT
+		// aggregates skip the remap: the remapped names are scalar functions, not
+		// aggregates, so DISTINCT never applies to them.
+		if !e.Distinct {
+			if fr, ok := c.Dialect.(FuncRenderer); ok {
+				if out, handled := fr.RenderFunc(e.Name, compiled); handled {
+					return out, args, nil
+				}
 			}
 		}
-		return e.Name + "(" + strings.Join(compiled, ", ") + ")", args, nil
+		distinct := ""
+		if e.Distinct {
+			distinct = "DISTINCT "
+		}
+		return e.Name + "(" + distinct + strings.Join(compiled, ", ") + ")", args, nil
 	case ExtractExpression:
 		if e.Field == "" {
 			return "", nil, fmt.Errorf("sqlkit/sql: EXTRACT requires a field")
@@ -355,6 +455,9 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		if err != nil {
 			return "", nil, err
 		}
+		if e.Distinct {
+			return "COUNT(DISTINCT " + target + ")", args, nil
+		}
 		return "COUNT(" + target + ")", args, nil
 	case CaseExpression:
 		if len(e.Whens) == 0 {
@@ -363,6 +466,15 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		var sb strings.Builder
 		var args []any
 		sb.WriteString("CASE")
+		if e.Operand != nil {
+			operandSQL, operandArgs, err := c.CompileExpression(e.Operand)
+			if err != nil {
+				return "", nil, err
+			}
+			sb.WriteString(" ")
+			sb.WriteString(operandSQL)
+			args = append(args, operandArgs...)
+		}
 		for _, when := range e.Whens {
 			conditionSQL, conditionArgs, err := c.CompileExpression(when.Condition)
 			if err != nil {
@@ -398,49 +510,24 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		if err != nil {
 			return "", nil, err
 		}
-		var sb strings.Builder
-		sb.WriteString(fnSQL)
-		sb.WriteString(" OVER (")
-		var parts []string
-		if len(e.Partitions) > 0 {
-			var partition strings.Builder
-			partition.WriteString("PARTITION BY ")
-			for i, expr := range e.Partitions {
-				if i > 0 {
-					partition.WriteString(", ")
-				}
-				exprSQL, exprArgs, err := c.CompileExpression(expr)
-				if err != nil {
-					return "", nil, err
-				}
-				partition.WriteString(exprSQL)
-				args = append(args, exprArgs...)
+		body, bodyArgs, err := c.compileWindowParts(e.Partitions, e.OrderByTerms, e.FrameClause)
+		if err != nil {
+			return "", nil, err
+		}
+		args = append(args, bodyArgs...)
+		// A bare reference to a named window: "fn OVER w".
+		if e.Name != "" && body == "" {
+			return fnSQL + " OVER " + c.Dialect.QuoteName(e.Name), args, nil
+		}
+		inner := body
+		if e.Name != "" {
+			// Extending a named window with further clauses: "fn OVER (w ...)".
+			inner = c.Dialect.QuoteName(e.Name)
+			if body != "" {
+				inner += " " + body
 			}
-			parts = append(parts, partition.String())
 		}
-		if len(e.OrderByTerms) > 0 {
-			var order strings.Builder
-			order.WriteString("ORDER BY ")
-			for i, term := range e.OrderByTerms {
-				if i > 0 {
-					order.WriteString(", ")
-				}
-				termSQL, termArgs, err := c.CompileExpression(term.Expr)
-				if err != nil {
-					return "", nil, err
-				}
-				order.WriteString(termSQL)
-				writeOrderModifiers(&order, term)
-				args = append(args, termArgs...)
-			}
-			parts = append(parts, order.String())
-		}
-		if e.FrameClause != "" {
-			parts = append(parts, e.FrameClause)
-		}
-		sb.WriteString(strings.Join(parts, " "))
-		sb.WriteString(")")
-		return sb.String(), args, nil
+		return fnSQL + " OVER (" + inner + ")", args, nil
 	case interface{ Reference() string }:
 		return c.Dialect.QuoteIdent(e.Reference()), nil, nil
 	case interface{ UnwrapExpression() Expression }:
@@ -618,14 +705,32 @@ func (c *Compiler) compileSubquery(query Query) (string, []any, error) {
 	return query.ToSQL(c.Dialect)
 }
 
-// CompileJoin compiles a JOIN clause.
+// CompileJoin compiles a JOIN clause. A join's condition is mutually exclusive:
+// NATURAL (no ON/USING), USING (a column list), or ON (a predicate).
 func (c *Compiler) CompileJoin(join JoinClause) (string, []any, error) {
+	if join.Natural && (join.On != nil || len(join.Using) > 0) {
+		return "", nil, fmt.Errorf("sqlkit/sql: a NATURAL join cannot also carry ON or USING")
+	}
+	if join.On != nil && len(join.Using) > 0 {
+		return "", nil, fmt.Errorf("sqlkit/sql: a join cannot carry both ON and USING")
+	}
 	sourceSQL, args, err := c.CompileSource(join.Source)
 	if err != nil {
 		return "", nil, err
 	}
-	compiled := join.Kind + " " + sourceSQL
-	if join.On != nil {
+	kind := join.Kind
+	if join.Natural {
+		kind = "NATURAL " + kind
+	}
+	compiled := kind + " " + sourceSQL
+	switch {
+	case len(join.Using) > 0:
+		columns := make([]string, len(join.Using))
+		for i, column := range join.Using {
+			columns[i] = c.Dialect.QuoteName(column)
+		}
+		compiled += " USING (" + strings.Join(columns, ", ") + ")"
+	case join.On != nil:
 		onSQL, onArgs, err := c.CompileExpression(join.On)
 		if err != nil {
 			return "", nil, err
@@ -702,7 +807,25 @@ func (c *Compiler) CompileSelect(q SelectQuery) (string, []any, error) {
 	sb.WriteString(withSQL)
 	args = append(args, withArgs...)
 	sb.WriteString("SELECT ")
-	if q.distinct {
+	if len(q.distinctOn) > 0 {
+		d, ok := c.Dialect.(DistinctOnDialect)
+		if !ok || !d.SupportsDistinctOn() {
+			return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support DISTINCT ON", c.Dialect.Name())
+		}
+		sb.WriteString("DISTINCT ON (")
+		for i, expr := range q.distinctOn {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			exprSQL, exprArgs, err := c.CompileExpression(expr)
+			if err != nil {
+				return "", nil, err
+			}
+			sb.WriteString(exprSQL)
+			args = append(args, exprArgs...)
+		}
+		sb.WriteString(") ")
+	} else if q.distinct {
 		sb.WriteString("DISTINCT ")
 	}
 	if len(q.columns) == 0 {
@@ -776,6 +899,26 @@ func (c *Compiler) CompileSelect(q SelectQuery) (string, []any, error) {
 		sb.WriteString(havingSQL)
 		args = append(args, havingArgs...)
 	}
+	if len(q.windows) > 0 {
+		sb.WriteString(" WINDOW ")
+		for i, w := range q.windows {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			if w.Name == "" {
+				return "", nil, fmt.Errorf("sqlkit/sql: WINDOW definition requires a name")
+			}
+			body, bodyArgs, err := c.compileWindowParts(w.Partitions, w.OrderByTerms, w.FrameClause)
+			if err != nil {
+				return "", nil, err
+			}
+			sb.WriteString(c.Dialect.QuoteName(w.Name))
+			sb.WriteString(" AS (")
+			sb.WriteString(body)
+			sb.WriteString(")")
+			args = append(args, bodyArgs...)
+		}
+	}
 	if len(q.orderBy) > 0 {
 		sb.WriteString(" ORDER BY ")
 		for i, term := range q.orderBy {
@@ -798,6 +941,21 @@ func (c *Compiler) CompileSelect(q SelectQuery) (string, []any, error) {
 	if q.hasOffset {
 		sb.WriteString(" OFFSET ")
 		sb.WriteString(strconv.Itoa(q.offset))
+	}
+	if q.lock != nil {
+		locker, ok := c.Dialect.(RowLocker)
+		if !ok {
+			return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support row-locking clauses", c.Dialect.Name())
+		}
+		of := make([]string, len(q.lock.of))
+		for i, table := range q.lock.of {
+			of[i] = c.Dialect.QuoteIdent(table)
+		}
+		frag, err := locker.LockClause(q.lock.strength, strings.Join(of, ", "), q.lock.wait)
+		if err != nil {
+			return "", nil, err
+		}
+		sb.WriteString(frag)
 	}
 	return sb.String(), args, nil
 }
@@ -893,9 +1051,16 @@ func (c *Compiler) writeUpsert(sb *strings.Builder, args *[]any, conflict *confl
 	if conflict.doUpdate && len(conflict.sets) == 0 {
 		return fmt.Errorf("sqlkit/sql: ON CONFLICT DO UPDATE requires at least one assignment")
 	}
+	if len(conflict.target) > 0 && conflict.targetConstraint != "" {
+		return fmt.Errorf("sqlkit/sql: ON CONFLICT cannot target both columns and a named constraint")
+	}
 	target := make([]string, len(conflict.target))
 	for i, col := range conflict.target {
 		target[i] = c.Dialect.QuoteName(col)
+	}
+	targetConstraint := ""
+	if conflict.targetConstraint != "" {
+		targetConstraint = c.Dialect.QuoteName(conflict.targetConstraint)
 	}
 	assignments := make([]string, 0, len(conflict.sets))
 	for _, assignment := range conflict.sets {
@@ -918,10 +1083,11 @@ func (c *Compiler) writeUpsert(sb *strings.Builder, args *[]any, conflict *confl
 		*args = append(*args, whereArgs...)
 	}
 	clause, err := renderer.Upsert(UpsertClause{
-		Target:      target,
-		DoUpdate:    conflict.doUpdate,
-		Assignments: assignments,
-		WhereSQL:    whereSQL,
+		Target:           target,
+		TargetConstraint: targetConstraint,
+		DoUpdate:         conflict.doUpdate,
+		Assignments:      assignments,
+		WhereSQL:         whereSQL,
 	})
 	if err != nil {
 		return err
@@ -1182,6 +1348,53 @@ func (c *Compiler) writeReturning(sb *strings.Builder, args *[]any, returning []
 func (c *Compiler) nextPlaceholder() string {
 	c.ordinal++
 	return c.Dialect.Placeholder(c.ordinal)
+}
+
+// compileWindowParts compiles the inner clauses of a window — PARTITION BY,
+// ORDER BY, and a raw frame clause — into the space-joined body that sits inside
+// an OVER (...) clause or a WINDOW "name AS (...)" definition. It returns "" when
+// the window carries no clauses. It is shared by WindowExpression and the
+// SELECT-level WINDOW clause so both render identically.
+func (c *Compiler) compileWindowParts(partitions []Expression, order []OrderTerm, frame string) (string, []any, error) {
+	var parts []string
+	var args []any
+	if len(partitions) > 0 {
+		var b strings.Builder
+		b.WriteString("PARTITION BY ")
+		for i, expr := range partitions {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			exprSQL, exprArgs, err := c.CompileExpression(expr)
+			if err != nil {
+				return "", nil, err
+			}
+			b.WriteString(exprSQL)
+			args = append(args, exprArgs...)
+		}
+		parts = append(parts, b.String())
+	}
+	if len(order) > 0 {
+		var b strings.Builder
+		b.WriteString("ORDER BY ")
+		for i, term := range order {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			termSQL, termArgs, err := c.CompileExpression(term.Expr)
+			if err != nil {
+				return "", nil, err
+			}
+			b.WriteString(termSQL)
+			writeOrderModifiers(&b, term)
+			args = append(args, termArgs...)
+		}
+		parts = append(parts, b.String())
+	}
+	if frame != "" {
+		parts = append(parts, frame)
+	}
+	return strings.Join(parts, " "), args, nil
 }
 
 // writeOrderModifiers appends the direction and NULLS ordering of an ORDER BY

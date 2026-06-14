@@ -14,7 +14,8 @@ import (
 // UpdateQuery is an UPDATE statement. Assignments come from typed columns, so
 // it does not need to be generic over the row type.
 type UpdateQuery struct {
-	ex           Executor
+	ex           executorBinding
+	base         Table // the target table, kept so Filter can resolve its columns
 	def          sql.TableDef
 	query        sql.UpdateQuery
 	returning    []sql.Selection
@@ -36,7 +37,7 @@ type UpdateQuery struct {
 // Executing it returns an error; start from a Database or Session to run it.
 func Update(table Table) UpdateQuery {
 	def := tableDef(table)
-	return UpdateQuery{def: def, query: sql.Update(def.Table)}
+	return UpdateQuery{base: table, def: def, query: sql.Update(def.Table)}
 }
 
 // AutoChunk configures how a lone WHERE column IN whose value list exceeds the
@@ -170,6 +171,23 @@ func (q UpdateQuery) JoinRel(rel Relation) UpdateQuery {
 	return q.Join(rel.Target(), rel.JoinOn())
 }
 
+// Filter narrows the UPDATE with a reusable filter bundle applied against the
+// target table's columns: either a Predicate, or a struct whose set fields map
+// to columns by name and hold FilterTerm values (sqlkit.Le(20), …) or
+// predicates. It is the UPDATE counterpart of SelectQuery.Filter, so one filter
+// bundle narrows a read or a write alike. A mapping error is deferred to the
+// terminal.
+func (q UpdateQuery) Filter(filter any) UpdateQuery {
+	predicates, err := buildFilter(q.base, filter)
+	if err != nil {
+		if q.err == nil {
+			q.err = err
+		}
+		return q
+	}
+	return q.Where(predicates...)
+}
+
 // Where adds predicates, combined with AND. A lone column IN whose value
 // list is large enough to exceed the executor's bind-parameter limit is held
 // back and split across statements by Exec; see WithAutoChunk.
@@ -248,7 +266,7 @@ func (q UpdateQuery) Exec(ctx context.Context) (stdsql.Result, error) {
 // value list exceeds the executor's bind-parameter limit into one statement per
 // chunk, each carrying the RETURNING clause when set. It honors AutoChunk
 // (ChunkSize caps the chunk; ChunkOff returns ok=false). Updates are always writes.
-func (q UpdateQuery) splitStatements(ex Executor) ([]compiledStmt, bool, bool, error) {
+func (q UpdateQuery) splitStatements(ex executorBinding) ([]compiledStmt, bool, bool, error) {
 	if q.err != nil {
 		return nil, false, true, q.err
 	}

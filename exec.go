@@ -5,42 +5,86 @@ import (
 	stdsql "database/sql"
 	"errors"
 	"fmt"
-	"iter"
 	"reflect"
 
 	"github.com/aita/sqlkit/sql"
 )
 
-// Executor starts and runs queries. Both *Database (auto-commit) and
+// Querier starts typed query chains. Both *Database (auto-commit) and
 // *Session (a single transaction) implement it. Chains are bound to the
-// executor they start from, so terminals take only a context:
+// querier they start from, so terminals take only a context:
 //
 //	db.Select().From(Users).All(ctx).Scan(&users)
 //	session.Update(Users).Set(...).Exec(ctx)
-type Executor interface {
-	// Select starts a typed SELECT bound to this executor. With no arguments
+type Querier interface {
+	// Select starts a typed SELECT bound to this querier. With no arguments
 	// it selects every column of the From source.
 	Select(selections ...sql.Selection) SelectQuery
 
-	// Insert starts an INSERT bound to this executor. Feed it rows with
+	// Insert starts an INSERT bound to this querier. Feed it rows with
 	// Values, or a query with FromSelect.
 	Insert(table Table) InsertQuery
 
-	// Update starts an UPDATE bound to this executor.
+	// Update starts an UPDATE bound to this querier.
 	Update(table Table) UpdateQuery
 
-	// Delete starts a DELETE bound to this executor.
+	// Delete starts a DELETE bound to this querier.
 	Delete(table Table) DeleteQuery
 
 	// RawSQL prepares a hand-written SQL string (with args) or a built
 	// sql.Query; materialize it with Scan.
 	RawSQL(ctx context.Context, query any, args ...any) Rows
 
-	// Dialect returns the SQL dialect the executor compiles against. Both
-	// *Database and *Session expose it, so helpers bound to an Executor can
+	// Dialect returns the SQL dialect the querier compiles against. Both
+	// *Database and *Session expose it, so helpers bound to a Querier can
 	// branch on dialect capabilities (see Dialect.SupportsReturning).
 	Dialect() sql.Dialect
+}
 
+// Executor runs a single compiled Statement against the database. It is the
+// terminal of the interceptor chain — its Query and Exec methods have the same
+// shapes as QueryHandler and ExecHandler — so a custom Executor slots in as the
+// innermost handler, beneath any registered interceptors. Supply one with
+// WrapExecutor to route, instrument, or fake statement execution; the default
+// runs against the wrapped database/sql handle (or a Session's transaction).
+type Executor interface {
+	// Query runs a read statement and returns its rows.
+	Query(ctx context.Context, stmt Statement) (*stdsql.Rows, error)
+	// Exec runs a write statement and returns its result.
+	Exec(ctx context.Context, stmt Statement) (stdsql.Result, error)
+}
+
+// Tx is a transaction-scoped Executor: its Query and Exec run inside the
+// transaction, and Commit or Rollback ends it. It is what TxExecutor.Begin
+// returns.
+type Tx interface {
+	Executor
+	// Commit commits the transaction.
+	Commit() error
+	// Rollback aborts the transaction, discarding its work.
+	Rollback() error
+}
+
+// TxExecutor is an Executor that can begin a transaction. A Session opened over a
+// terminal that implements it runs inside a real transaction — Commit, Rollback,
+// and savepoints take effect; over a terminal that does not, the session runs
+// statements directly with no managed transaction. The default database/sql
+// handle implements it (so WrapDB and Open sessions are transactional); a
+// WrapExecutor terminal may implement it to give its own sessions transactions.
+type TxExecutor interface {
+	Executor
+	// Begin starts a transaction with the given options (nil for the driver
+	// default) and returns it as a Tx.
+	Begin(ctx context.Context, opts *stdsql.TxOptions) (Tx, error)
+}
+
+// executorBinding is the execution context a query chain is bound to: the
+// dialect it compiles for, the interceptors and bind-parameter limit that shape
+// execution, and the terminal Executor that runs the compiled statement. Both
+// *Database and *Session implement it, and the typed builders (SelectQuery,
+// InsertQuery, ...) and Rows depend only on it — not on Querier's building
+// methods.
+type executorBinding interface {
 	sqlDialect() sql.Dialect
 	interceptors() []Interceptor
 	// maxBindParams is the bind-parameter limit driving automatic splitting, or 0
@@ -48,8 +92,12 @@ type Executor interface {
 	// automatic split. Explicit chunking (AutoChunk, InBatches) does
 	// not consult it.
 	maxBindParams() int
-	queryContext(ctx context.Context, query string, args ...any) (*stdsql.Rows, error)
-	execContext(ctx context.Context, query string, args ...any) (stdsql.Result, error)
+	// executor returns the terminal that runs compiled statements: the
+	// connection-backed default, or a WrapExecutor database's custom one.
+	executor() Executor
+	// resultObservers returns the observers run over each scanned result,
+	// registered with WithResultObserver.
+	resultObservers() []ResultObserver
 }
 
 // ErrNoRows is returned when a single-row Scan finds no row.
@@ -63,13 +111,19 @@ var ErrTooManyRows = errors.New("sqlkit: query returned more than one row")
 var errNoExecutor = errors.New(
 	"sqlkit: query is not bound to an executor; start the chain from a Database or Session (db.Select(), session.Insert(), ...)")
 
+// errNoTx is returned by a session's savepoint methods when the session is not
+// backed by a transaction — its terminal Executor does not implement TxExecutor
+// (a WrapExecutor terminal with only Query/Exec), so there is no transaction to
+// scope a savepoint to.
+var errNoTx = errors.New(
+	"sqlkit: savepoints require a transaction; this session's executor does not implement TxExecutor")
+
 // Rows is a pending query result. It is produced by All, First, One, and
-// RawSQL, and materialized with Scan, or streamed row by row with the
-// package-level Records function. Execution is deferred until either
-// terminal, so build and query errors surface there.
+// RawSQL, and materialized with Scan. Execution is deferred until Scan, so
+// build and query errors surface there.
 type Rows struct {
 	ctx     context.Context
-	ex      Executor
+	ex      executorBinding
 	query   sql.Query
 	sqlText string
 	args    []any
@@ -79,7 +133,7 @@ type Rows struct {
 	exactlyOne bool
 	// preloads are relations eager-loaded after a successful Scan, set by
 	// SelectQuery terminals when Preload was registered.
-	preloads []Relation
+	preloads []preloadSpec
 	// batches, when non-empty, holds several compiled statements whose rows Scan
 	// concatenates into the destination slice. It is set by All when a large IN
 	// list is split to stay within the bind-parameter limit; sqlText/args are
@@ -91,7 +145,7 @@ type Rows struct {
 	batchWrite bool
 }
 
-func newRows(ctx context.Context, ex Executor, query sql.Query) Rows {
+func newRows(ctx context.Context, ex executorBinding, query sql.Query) Rows {
 	if ex == nil {
 		return Rows{err: errNoExecutor}
 	}
@@ -126,7 +180,7 @@ func (r Rows) statement() Statement {
 // Scan call, matching how the typed builders surface compilation errors.
 func ErrRows(err error) Rows { return Rows{err: err} }
 
-func newRawRows(ctx context.Context, ex Executor, query any, args []any) Rows {
+func newRawRows(ctx context.Context, ex executorBinding, query any, args []any) Rows {
 	sqlText, sqlArgs, err := resolveQuery(ex.sqlDialect(), query, args)
 	// Carry the AST for interceptors when one was supplied; a raw string has none.
 	ast, _ := query.(sql.Query)
@@ -159,6 +213,9 @@ func (r Rows) Scan(dest any) error {
 		return scanInto(rows, dest)
 	}(); err != nil {
 		return err
+	}
+	if obs := r.ex.resultObservers(); len(obs) > 0 {
+		observeResult(r.ctx, obs, r.statement(), dest)
 	}
 	// Eager-load any registered relations onto the just-scanned destination.
 	if len(r.preloads) > 0 {
@@ -198,6 +255,10 @@ func (r Rows) scanBatched(dest any) (err error) {
 		acc = reflect.AppendSlice(acc, tmp.Elem())
 	}
 	dv.Elem().Set(acc)
+	// A split query's result is the union of its chunks; observe it once, whole.
+	if obs := ex.resultObservers(); len(obs) > 0 {
+		observeResult(r.ctx, obs, Statement{Op: OpQuery, Dialect: dialect}, dest)
+	}
 	if len(r.preloads) > 0 {
 		return applyPreloads(r.ctx, ex, dest, r.preloads)
 	}
@@ -212,7 +273,7 @@ func (r Rows) scanBatched(dest any) (err error) {
 // REPEATABLE READ by WithBatchWriteSnapshot), while a read batch (split SELECT)
 // runs under the read-only REPEATABLE READ snapshot when WithBatchReadSnapshot is
 // on, else directly on the database.
-func (r Rows) batchExecutor() (Executor, func(error) error) {
+func (r Rows) batchExecutor() (executorBinding, func(error) error) {
 	noop := func(err error) error { return err }
 	db, ok := r.ex.(*Database)
 	if !ok {
@@ -298,99 +359,8 @@ func scanInto(rows *stdsql.Rows, dest any) error {
 	return nil
 }
 
-// Records runs the query and streams each row as an already-scanned T:
-//
-//	for user, err := range sqlkit.Records[User](db.RawSQL(ctx, query)) {
-//		if err != nil { return err }
-//		...
-//	}
-//
-// T may be a struct, a pointer to struct, or a scalar, with columns matched
-// to fields by the same rules as Rows.Scan. Rows are fetched on demand and
-// scanned one at a time — the result set is never materialized as a whole —
-// and breaking out of the loop releases it. It is a generic function rather
-// than a method on Rows because Go methods cannot have type parameters.
-// Like Scan, each range over the iterator executes the query anew.
-func Records[T any](r Rows) iter.Seq2[T, error] {
-	return func(yield func(T, error) bool) {
-		var zero T
-		if r.err != nil {
-			yield(zero, r.err)
-			return
-		}
-
-		elemType := reflect.TypeFor[T]()
-		pointerElems := elemType.Kind() == reflect.Pointer
-		baseType := elemType
-		if pointerElems {
-			baseType = elemType.Elem()
-		}
-
-		// A split Rows (a large IN list, or a bulk RETURNING write) streams chunk by
-		// chunk under the same executor/transaction Scan would use; an unsplit Rows
-		// streams its single statement.
-		ex := r.ex
-		finish := func(error) error { return nil }
-		var statements []Statement
-		if len(r.batches) > 0 {
-			ex, finish = r.batchExecutor()
-			dialect := ex.sqlDialect()
-			statements = make([]Statement, len(r.batches))
-			for i, b := range r.batches {
-				statements[i] = Statement{Op: OpQuery, SQL: b.sql, Args: b.args, Dialect: dialect}
-			}
-		} else {
-			statements = []Statement{r.statement()}
-		}
-		var streamErr error
-		defer func() { _ = finish(streamErr) }()
-
-		for _, stmt := range statements {
-			rows, err := runQuery(r.ctx, ex, stmt)
-			if err != nil {
-				streamErr = err
-				yield(zero, err)
-				return
-			}
-			scan, err := rowScanner(rows, baseType)
-			if err != nil {
-				rows.Close()
-				streamErr = err
-				yield(zero, err)
-				return
-			}
-			for rows.Next() {
-				item := reflect.New(baseType)
-				if err := scan(item.Elem()); err != nil {
-					rows.Close()
-					streamErr = err
-					yield(zero, err)
-					return
-				}
-				var value T
-				if pointerElems {
-					value = item.Interface().(T)
-				} else {
-					value = item.Elem().Interface().(T)
-				}
-				if !yield(value, nil) {
-					rows.Close()
-					return
-				}
-			}
-			if err := rows.Err(); err != nil {
-				rows.Close()
-				streamErr = err
-				yield(zero, err)
-				return
-			}
-			rows.Close()
-		}
-	}
-}
-
 // runExec compiles and runs a statement, returning the database/sql result.
-func runExec(ctx context.Context, ex Executor, query sql.Query) (stdsql.Result, error) {
+func runExec(ctx context.Context, ex executorBinding, query sql.Query) (stdsql.Result, error) {
 	if ex == nil {
 		return nil, errNoExecutor
 	}

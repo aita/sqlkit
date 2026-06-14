@@ -391,26 +391,6 @@ func TestUpdateAndDelete(t *testing.T) {
 	})
 }
 
-func TestRecordsStreaming(t *testing.T) {
-	eachEngine(t, func(t *testing.T, eng engine, db *sqlkit.Database) {
-		ctx := context.Background()
-		seedBlog(t, db, eng)
-
-		var seen []string
-		for title, err := range sqlkit.Records[string](
-			db.Select(blogdb.Posts.Title).From(blogdb.Posts).OrderBy(blogdb.Posts.Title.Asc()).All(ctx),
-		) {
-			if err != nil {
-				t.Fatalf("stream: %v", err)
-			}
-			seen = append(seen, title)
-		}
-		if len(seen) != 3 || seen[0] != "Bob's first" {
-			t.Fatalf("streamed titles = %#v", seen)
-		}
-	})
-}
-
 func TestRawSQL(t *testing.T) {
 	eachEngine(t, func(t *testing.T, eng engine, db *sqlkit.Database) {
 		ctx := context.Background()

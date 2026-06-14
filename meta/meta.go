@@ -79,6 +79,11 @@ type Engine struct {
 	// decimal(10, 2); 0 when not applicable.
 	Precision int
 	Scale     int
+	// Array reports that the column is a one-dimensional array of the named
+	// element type (PostgreSQL only). The Name/Length/Precision/Scale describe the
+	// element; the DDL renderer appends "[]" and the code generator maps the
+	// column to a Go slice of the element's type.
+	Array bool
 }
 
 // Type is a portable column type. It commits to an engine type name only when
@@ -110,6 +115,14 @@ type GoTyped interface {
 // meta.Column by hand for a single target dialect.
 func Of(dialect, name string, length, precision, scale int) Type {
 	return single{dialect: dialect, eng: Engine{Name: name, Length: length, Precision: precision, Scale: scale}}
+}
+
+// OfArray is Of for a one-dimensional array column whose elements are the named
+// engine type (PostgreSQL only): the resolved Engine carries Array=true, so the
+// DDL renderer appends "[]" and the code generator maps the column to a Go slice
+// of the element's type. It is what the inspector produces from an array column.
+func OfArray(dialect, name string, length, precision, scale int) Type {
+	return single{dialect: dialect, eng: Engine{Name: name, Length: length, Precision: precision, Scale: scale, Array: true}}
 }
 
 type single struct {

@@ -23,7 +23,7 @@ type compiledStmt struct {
 // newRows the chunks are writes (RETURNING — a writable atomic transaction) rather
 // than reads (SELECT — an optional read snapshot).
 type splitter interface {
-	splitStatements(ex Executor) (stmts []compiledStmt, ok bool, write bool, err error)
+	splitStatements(ex executorBinding) (stmts []compiledStmt, ok bool, write bool, err error)
 }
 
 // chunkConfig holds a query's per-call auto-chunking settings, set by AutoChunk.
@@ -100,7 +100,7 @@ func (r *batchResult) RowsAffected() (int64, error) {
 // run and the executor auto-commits (a *Database), they run inside one
 // transaction so a mid-batch failure rolls the whole set back; a *Session reuses
 // its in-flight transaction, and any other executor runs them sequentially.
-func execStatements(ctx context.Context, ex Executor, stmts []compiledStmt) (stdsql.Result, error) {
+func execStatements(ctx context.Context, ex executorBinding, stmts []compiledStmt) (stdsql.Result, error) {
 	if ex == nil {
 		return nil, errNoExecutor
 	}
@@ -122,7 +122,7 @@ func execStatements(ctx context.Context, ex Executor, stmts []compiledStmt) (std
 	return execOn(ctx, ex, stmts)
 }
 
-func execOn(ctx context.Context, ex Executor, stmts []compiledStmt) (stdsql.Result, error) {
+func execOn(ctx context.Context, ex executorBinding, stmts []compiledStmt) (stdsql.Result, error) {
 	result := &batchResult{}
 	dialect := ex.sqlDialect()
 	for _, st := range stmts {
@@ -155,8 +155,10 @@ func resolveBindParamLimit(dialect sql.Dialect) int {
 //
 // maxChunk, when positive, additionally caps the values per chunk (the per-query
 // AutoChunk size or the preload default) — it can only make chunks smaller than
-// the bind-parameter limit allows, never larger.
-func splitInStatements(ex Executor, batch *batchIn, maxChunk int, compile func(in sql.Expression) (string, []any, error)) (stmts []compiledStmt, ok bool, err error) {
+// the bind-parameter limit allows, never larger. With automatic splitting off
+// the limit is 0 and the IN list runs as a single statement, so a per-query
+// AutoChunk(ChunkSize) only takes effect while splitting is enabled.
+func splitInStatements(ex executorBinding, batch *batchIn, maxChunk int, compile func(in sql.Expression) (string, []any, error)) (stmts []compiledStmt, ok bool, err error) {
 	if batch == nil || ex == nil {
 		return nil, false, nil
 	}
@@ -191,21 +193,22 @@ func splitInStatements(ex Executor, batch *batchIn, maxChunk int, compile func(i
 }
 
 // InBatches splits values into chunks small enough that build's per-chunk query
-// stays within ex's configured bind-parameter limit, runs each chunk, and
+// stays within q's configured bind-parameter limit, runs each chunk, and
 // concatenates the scanned rows into dest (a pointer to a slice). It is the
 // manual counterpart to the automatic IN-list chunking the typed builders apply
 // to a column's In: reach for it when the query the builder cannot split
 // on its own — a hand-built IN, or one combined with ORDER BY/LIMIT — must still
 // run a large value list. build receives each chunk and should return the Rows
-// for it (typically db.Select()...Where(col.In(chunk...)).All(ctx)).
+// for it (typically q.Select()...Where(col.In(chunk...)).All(ctx)).
 //
-// chunkSize defaults to ex's bind-parameter limit; pass a positive override to
-// cap it lower (e.g. to leave room for the query's other parameters). With no
-// limit configured and no override, every value goes in a single chunk.
-func InBatches[V any](ctx context.Context, ex Executor, values []V, build func(chunk []V) Rows, dest any, chunkSize ...int) error {
+// q is the *Database or *Session the per-chunk queries run against. chunkSize
+// defaults to its bind-parameter limit; pass a positive override to cap it lower
+// (e.g. to leave room for the query's other parameters). With no limit available
+// and no override, every value goes in a single chunk.
+func InBatches[V any](ctx context.Context, q Querier, values []V, build func(chunk []V) Rows, dest any, chunkSize ...int) error {
 	size := 0
-	if ex != nil {
-		size = ex.maxBindParams()
+	if b, ok := q.(executorBinding); ok {
+		size = b.maxBindParams()
 	}
 	if len(chunkSize) > 0 && chunkSize[0] > 0 {
 		size = chunkSize[0]

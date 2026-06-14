@@ -136,6 +136,17 @@ func TestDropTable(t *testing.T) {
 	}
 }
 
+func TestDropTableMultiple(t *testing.T) {
+	stmt := sql.DropTable(
+		sql.Table{Schema: "public", Name: "users"},
+		sql.Table{Schema: "public", Name: "posts"},
+	).IfExists()
+	got := mustDDL(t, stmt, "postgres")
+	if want := `DROP TABLE IF EXISTS "public"."users", "public"."posts";`; got != want {
+		t.Errorf("DropTable(multiple) = %q, want %q", got, want)
+	}
+}
+
 func TestCreateIndex(t *testing.T) {
 	users := sql.Table{Schema: "public", Name: "users"}
 	got := mustDDL(t, sql.CreateIndex("uq_users_email", users, "email").Unique(), "postgres")
@@ -294,6 +305,76 @@ func TestRestateColumn(t *testing.T) {
 	}
 }
 
+func TestCreateTableTemporary(t *testing.T) {
+	stmt := sql.CreateTable(sql.Table{Name: "scratch"}).
+		Column(sql.ColumnDef{Name: "id", Type: sql.RawType("bigint")}).
+		Temporary()
+	got := mustDDL(t, stmt, "postgres")
+	want := `CREATE TEMPORARY TABLE "scratch" (
+    "id" bigint
+);`
+	if got != want {
+		t.Errorf("CreateTable().Temporary() =\n%s\nwant\n%s", got, want)
+	}
+	// The TEMPORARY keyword composes with IF NOT EXISTS and renders on MySQL too.
+	got = mustDDL(t, stmt.IfNotExists(), "mysql")
+	if want := "CREATE TEMPORARY TABLE IF NOT EXISTS `scratch` (\n    `id` bigint\n);"; got != want {
+		t.Errorf("CreateTable().Temporary().IfNotExists(mysql) =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestCreateView(t *testing.T) {
+	body := sql.Select(sql.Col("id"), sql.Col("email")).
+		From(sql.Table{Schema: "public", Name: "users"}).
+		Where(sql.Raw("active"))
+
+	got := mustDDL(t, sql.CreateView(sql.Table{Schema: "public", Name: "active_users"}, body), "postgres")
+	want := "CREATE VIEW \"public\".\"active_users\" AS\n" +
+		`SELECT "id", "email" FROM "public"."users" WHERE active;`
+	if got != want {
+		t.Errorf("CreateView() =\n%s\nwant\n%s", got, want)
+	}
+
+	// OR REPLACE and explicit column names.
+	got = mustDDL(t, sql.CreateView(sql.Table{Name: "v"}, body).OrReplace().Columns("a", "b"), "mysql")
+	want = "CREATE OR REPLACE VIEW `v` (`a`, `b`) AS\n" +
+		"SELECT `id`, `email` FROM `public`.`users` WHERE active;"
+	if got != want {
+		t.Errorf("CreateView().OrReplace().Columns() =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestCreateViewRejectsBoundValues(t *testing.T) {
+	// A view body that binds a value cannot be a DDL statement (no bind args);
+	// the literal must be inlined with Raw.
+	body := sql.Select(sql.Star()).From(sql.Table{Name: "t"}).Where(sql.Eq(sql.Col("x"), sql.Int(5)))
+	if _, _, err := sql.CreateView(sql.Table{Name: "v"}, body).ToSQL(mustDialect(t, "postgres")); err == nil {
+		t.Error("CreateView with a value-binding body: expected error")
+	}
+	// SQLite has no OR REPLACE for views.
+	ok := sql.Select(sql.Star()).From(sql.Table{Name: "t"})
+	if _, _, err := sql.CreateView(sql.Table{Name: "v"}, ok).OrReplace().ToSQL(mustDialect(t, "sqlite")); err == nil {
+		t.Error("CreateView().OrReplace() on sqlite: expected error")
+	}
+}
+
+func TestDropView(t *testing.T) {
+	v := sql.Table{Schema: "public", Name: "active_users"}
+	if got, want := mustDDL(t, sql.DropView(v).IfExists(), "postgres"),
+		`DROP VIEW IF EXISTS "public"."active_users";`; got != want {
+		t.Errorf("DropView().IfExists(postgres) = %q, want %q", got, want)
+	}
+	if got, want := mustDDL(t, sql.DropView(v).IfExists().Cascade(), "postgres"),
+		`DROP VIEW IF EXISTS "public"."active_users" CASCADE;`; got != want {
+		t.Errorf("DropView().Cascade(postgres) = %q, want %q", got, want)
+	}
+	// MySQL has no CASCADE clause for DROP VIEW; the flag is ignored.
+	if got, want := mustDDL(t, sql.DropView(v).Cascade(), "mysql"),
+		"DROP VIEW `public`.`active_users`;"; got != want {
+		t.Errorf("DropView().Cascade(mysql) = %q, want %q", got, want)
+	}
+}
+
 func TestPrimaryKeyAlterations(t *testing.T) {
 	add := sql.AlterTable(sql.Table{Name: "t"}).AddPrimaryKey("a", "b")
 	if got, want := mustDDL(t, add, "postgres"), `ALTER TABLE "t" ADD PRIMARY KEY ("a", "b");`; got != want {
@@ -305,5 +386,73 @@ func TestPrimaryKeyAlterations(t *testing.T) {
 	}
 	if got, want := mustDDL(t, drop, "postgres"), `ALTER TABLE "t" DROP CONSTRAINT "t_pkey";`; got != want {
 		t.Errorf("DropPrimaryKey(postgres) =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestSQLiteDDL covers SQLite's DDL rendering, which differs from PostgreSQL on
+// the statements SQLite cannot express: dropping a single foreign key requires
+// rebuilding the table (so it is a no-op here) and SQLite has no COMMENT syntax.
+func TestSQLiteDDL(t *testing.T) {
+	users := sql.Table{Schema: "public", Name: "users"}
+	posts := sql.Table{Schema: "public", Name: "posts"}
+
+	if got, want := mustDDL(t, sql.DropTable(users).IfExists(), "sqlite"),
+		`DROP TABLE IF EXISTS "public"."users";`; got != want {
+		t.Errorf("DropTable(sqlite) = %q, want %q", got, want)
+	}
+	if got, want := mustDDL(t, sql.DropIndex("uq_users_email", users), "sqlite"),
+		`DROP INDEX IF EXISTS "public"."uq_users_email";`; got != want {
+		t.Errorf("DropIndex(sqlite) = %q, want %q", got, want)
+	}
+	// SQLite cannot drop a single FK in place: the statement renders empty.
+	if got := mustDDL(t, sql.DropForeignKey(posts, "fk_posts_user_id"), "sqlite"); got != "" {
+		t.Errorf("DropForeignKey(sqlite) = %q, want empty (unsupported)", got)
+	}
+	// SQLite has no COMMENT syntax, inline or standalone.
+	if got := mustDDL(t, sql.CommentOnTable(users, "hi"), "sqlite"); got != "" {
+		t.Errorf("CommentOnTable(sqlite) = %q, want empty", got)
+	}
+	if got := mustDDL(t, sql.CommentOnColumn(users, "email", "addr"), "sqlite"); got != "" {
+		t.Errorf("CommentOnColumn(sqlite) = %q, want empty", got)
+	}
+}
+
+// TestStandardSQLDDL covers the ANSI/standard dialect's DDL rendering: it drops
+// a foreign key with the standard DROP CONSTRAINT and an index without the
+// vendor-specific IF EXISTS / ON table clauses, and has no COMMENT syntax.
+func TestStandardSQLDDL(t *testing.T) {
+	users := sql.Table{Schema: "public", Name: "users"}
+	posts := sql.Table{Schema: "public", Name: "posts"}
+
+	if got, want := mustDDL(t, sql.DropTable(users).IfExists(), "standard"),
+		`DROP TABLE IF EXISTS "public"."users";`; got != want {
+		t.Errorf("DropTable(standard) = %q, want %q", got, want)
+	}
+	if got, want := mustDDL(t, sql.DropIndex("uq_users_email", users), "standard"),
+		`DROP INDEX "public"."uq_users_email";`; got != want {
+		t.Errorf("DropIndex(standard) = %q, want %q", got, want)
+	}
+	if got, want := mustDDL(t, sql.DropForeignKey(posts, "fk_posts_user_id"), "standard"),
+		`ALTER TABLE "public"."posts" DROP CONSTRAINT "fk_posts_user_id";`; got != want {
+		t.Errorf("DropForeignKey(standard) = %q, want %q", got, want)
+	}
+	if got := mustDDL(t, sql.CommentOnTable(users, "hi"), "standard"); got != "" {
+		t.Errorf("CommentOnTable(standard) = %q, want empty", got)
+	}
+	if got := mustDDL(t, sql.CommentOnColumn(users, "email", "addr"), "standard"); got != "" {
+		t.Errorf("CommentOnColumn(standard) = %q, want empty", got)
+	}
+}
+
+// TestMySQLCommentStatementsAreInline covers MySQL's standalone comment
+// statements rendering empty: MySQL carries comments inline in the column/table
+// definition, so CommentOnTable/CommentOnColumn produce no separate statement.
+func TestMySQLCommentStatementsAreInline(t *testing.T) {
+	users := sql.Table{Schema: "public", Name: "users"}
+	if got := mustDDL(t, sql.CommentOnTable(users, "hi"), "mysql"); got != "" {
+		t.Errorf("CommentOnTable(mysql) = %q, want empty (comments are inline)", got)
+	}
+	if got := mustDDL(t, sql.CommentOnColumn(users, "email", "addr"), "mysql"); got != "" {
+		t.Errorf("CommentOnColumn(mysql) = %q, want empty (comments are inline)", got)
 	}
 }

@@ -66,6 +66,16 @@ func (o *Operator) table(name string) sql.Table {
 // indexes and comments. Foreign keys belong in CreateForeignKey (referenced by
 // name), not inline.
 func (o *Operator) CreateTable(name string, elements ...sqldef.TableElement) {
+	o.createTable(name, false, elements...)
+}
+
+// CreateTemporaryTable creates a session-scoped TEMPORARY table, otherwise
+// identical to CreateTable. The engine drops it at the end of the session.
+func (o *Operator) CreateTemporaryTable(name string, elements ...sqldef.TableElement) {
+	o.createTable(name, true, elements...)
+}
+
+func (o *Operator) createTable(name string, temporary bool, elements ...sqldef.TableElement) {
 	if o.err != nil {
 		return
 	}
@@ -74,7 +84,11 @@ func (o *Operator) CreateTable(name string, elements ...sqldef.TableElement) {
 		o.fail(err)
 		return
 	}
-	o.emit(tbl.CreateStatement())
+	create := tbl.CreateStatement()
+	if temporary {
+		create = create.Temporary()
+	}
+	o.emit(create)
 	for _, ix := range tbl.Indexes {
 		o.emit(ix.CreateStatement(tbl))
 	}
@@ -89,6 +103,36 @@ func (o *Operator) CreateTable(name string, elements ...sqldef.TableElement) {
 // DropTable drops a table if it exists.
 func (o *Operator) DropTable(name string) {
 	o.emit(sql.DropTable(o.table(name)).IfExists())
+}
+
+// CreateView creates a view named by name whose body is query (a SELECT built
+// with the sql package). Pass OrReplace / ViewColumns options to redefine an
+// existing view or name its columns explicitly. The body binds no values; inline
+// any literals with sql.Raw.
+func (o *Operator) CreateView(name string, query sql.Query, opts ...ViewOption) {
+	stmt := sql.CreateView(o.table(name), query)
+	for _, opt := range opts {
+		stmt = opt(stmt)
+	}
+	o.emit(stmt)
+}
+
+// DropView drops a view if it exists.
+func (o *Operator) DropView(name string) {
+	o.emit(sql.DropView(o.table(name)).IfExists())
+}
+
+// ViewOption configures a view created with CreateView.
+type ViewOption func(sql.CreateViewStmt) sql.CreateViewStmt
+
+// OrReplace makes CreateView emit CREATE OR REPLACE VIEW (PostgreSQL/MySQL).
+func OrReplace() ViewOption {
+	return func(s sql.CreateViewStmt) sql.CreateViewStmt { return s.OrReplace() }
+}
+
+// ViewColumns sets explicit view column names.
+func ViewColumns(columns ...string) ViewOption {
+	return func(s sql.CreateViewStmt) sql.CreateViewStmt { return s.Columns(columns...) }
 }
 
 // AddColumn adds a column, declared with a single sqldef.Column element.
