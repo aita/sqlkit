@@ -68,10 +68,20 @@ func columnDefault(def sql.NullString, serial bool) (bool, sqlast.Expression) {
 }
 
 // columnType builds the column's portable type from the single dialect the
-// inspector read it on, clearing precision/scale on non-decimal types.
+// inspector read it on, clearing precision/scale on non-decimal types. A
+// PostgreSQL array column reports its udt_name as the element type prefixed with
+// an underscore (e.g. "_int4", "_text"); that prefix is stripped and the type is
+// flagged as an array of the element.
 func columnType(dialect, name string, length, precision, scale int) meta.Type {
+	array := dialect == "postgres" && strings.HasPrefix(name, "_")
+	if array {
+		name = name[1:]
+	}
 	if !decimalTypes[name] {
 		precision, scale = 0, 0
+	}
+	if array {
+		return meta.OfArray(dialect, name, length, precision, scale)
 	}
 	return meta.Of(dialect, name, length, precision, scale)
 }

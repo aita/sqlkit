@@ -127,6 +127,45 @@ func TestInspectPostgres(t *testing.T) {
 	}
 }
 
+// TestInspectPostgresArray: PostgreSQL reports array columns with an
+// underscore-prefixed udt_name (e.g. "_int4", "_text"); the inspector strips the
+// prefix and resolves an array of the element type.
+func TestInspectPostgresArray(t *testing.T) {
+	fake := &sqltest.Fake{
+		QueryFunc: func(query string, args []any) (sqltest.Result, error) {
+			if strings.Contains(query, "information_schema.columns") {
+				return sqltest.Result{
+					Columns: []string{"table_name", "column_name", "udt_name", "nullable", "column_default", "is_identity", "length", "precision", "scale"},
+					Rows: [][]driver.Value{
+						{"docs", "id", "int8", false, nil, false, 0, 64, 0},
+						{"docs", "tags", "_text", false, nil, false, 0, 0, 0},
+						{"docs", "scores", "_int4", true, nil, false, 0, 0, 0},
+					},
+				}, nil
+			}
+			return sqltest.Result{}, nil
+		},
+	}
+
+	got, err := Inspect(context.Background(), fake.DB(), "postgres", "public")
+	if err != nil {
+		t.Fatalf("Inspect() error = %v", err)
+	}
+	cols := got.Tables[0].Columns
+	want := []meta.Column{
+		{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0)},
+		{Name: "tags", Type: meta.OfArray("postgres", "text", 0, 0, 0)},
+		{Name: "scores", Type: meta.OfArray("postgres", "int4", 0, 0, 0), Nullable: true},
+	}
+	if !reflect.DeepEqual(cols, want) {
+		t.Fatalf("array columns = %#v,\nwant %#v", cols, want)
+	}
+	// The resolved engine carries the array flag, so DDL and codegen render slices.
+	if eng, _ := cols[1].Type.Engine("postgres"); !eng.Array || eng.Name != "text" {
+		t.Errorf("tags engine = %+v, want {Name:text, Array:true}", eng)
+	}
+}
+
 func TestInspectMySQL(t *testing.T) {
 	fake := &sqltest.Fake{
 		QueryFunc: func(sql string, args []any) (sqltest.Result, error) {

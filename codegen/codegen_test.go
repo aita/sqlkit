@@ -388,6 +388,36 @@ func TestTypeMapperFuncSeesTable(t *testing.T) {
 	}
 }
 
+func TestArrayTypeMapping(t *testing.T) {
+	// An array column maps to a Go slice of the element's type, through the
+	// built-in tables, the Overrides map (keyed by the element type), and a
+	// nullable array (which stays a slice, not a pointer).
+	tables := []meta.Table{{
+		Schema: meta.Schema{Name: "public"},
+		Name:   "docs",
+		Columns: []meta.Column{
+			{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true, HasDefault: true},
+			{Name: "tags", Type: meta.OfArray("postgres", "text", 0, 0, 0)},
+			{Name: "scores", Type: meta.OfArray("postgres", "int4", 0, 0, 0), Nullable: true},
+			{Name: "amounts", Type: meta.OfArray("postgres", "numeric", 0, 10, 2)},
+		},
+	}}
+	mapper := NewDefaultTypeMapper(TypeMapperConfig{Overrides: map[string]GoType{
+		"numeric": {ImportPath: "github.com/shopspring/decimal", Name: "decimal.Decimal"},
+	}})
+	body := string(generateSingle(t, tables, Options{PackageName: "docsdb", TypeMapper: mapper}))
+	for _, want := range []string{
+		`sqlkit.NewColumn[[]string](info, "tags")`,
+		`sqlkit.NewColumn[[]int32](info, "scores")`,
+		`sqlkit.NewColumn[[]decimal.Decimal](info, "amounts")`,
+		`"github.com/shopspring/decimal"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("array mapping missing %q:\n%s", want, body)
+		}
+	}
+}
+
 func TestMySQLTypeMapping(t *testing.T) {
 	tables := []meta.Table{{
 		Schema: meta.Schema{Name: "app"},

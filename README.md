@@ -468,6 +468,15 @@ Indexes (`Index`/`UniqueIndex`), constraints (`Unique`/`Check`), and comments
 (`Comment`/`TableComment`) round out the catalog and carry through to the
 generated code. Because declarations are values, they compose.
 
+`Array(elem)` declares a PostgreSQL **array** column, e.g.
+`sqldef.Column("tags", sqldef.Array(sqldef.Text))` for `text[]`. The DDL renders
+`elem[]`, the inspector reads array columns back (PostgreSQL reports them as
+`_text`, `_int4`, …), and the code generator maps the column to a Go slice of the
+element's type (`[]string`, `[]int32`, and `[]T` for an element whose Go type is
+pinned). A slice is already nilable, so a nullable array stays a slice rather than
+a pointer. Arrays are a PostgreSQL feature; the column is unavailable when a
+catalog targets MySQL or SQLite.
+
 ### Generating bindings and DDL
 
 Point `sqlkit generate` at the package that declares the catalog, and
