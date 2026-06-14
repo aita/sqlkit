@@ -1,0 +1,70 @@
+package postgres_test
+
+import "testing"
+
+func TestInsertValues(t *testing.T) {
+	assertRoundTrip(t,
+		"INSERT INTO users (id, name) VALUES (1, 'a'), (2, 'b')",
+		`INSERT INTO "users" ("id", "name") VALUES ($1, $2), ($3, $4)`,
+		1, "a", 2, "b")
+}
+
+func TestInsertFromSelect(t *testing.T) {
+	assertRoundTrip(t,
+		"INSERT INTO archive (id) SELECT id FROM users WHERE active",
+		`INSERT INTO "archive" ("id") SELECT "id" FROM "users" WHERE "active"`)
+}
+
+func TestInsertOnConflictDoNothing(t *testing.T) {
+	assertRoundTrip(t,
+		"INSERT INTO users (id) VALUES (1) ON CONFLICT (id) DO NOTHING",
+		`INSERT INTO "users" ("id") VALUES ($1) ON CONFLICT ("id") DO NOTHING`,
+		1)
+}
+
+func TestInsertOnConflictDoUpdate(t *testing.T) {
+	assertRoundTrip(t,
+		"INSERT INTO users (id, name) VALUES (1, 'a') ON CONFLICT (id) DO UPDATE SET name = excluded.name RETURNING id",
+		`INSERT INTO "users" ("id", "name") VALUES ($1, $2) ON CONFLICT ("id") DO UPDATE SET "name" = excluded."name" RETURNING "id"`,
+		1, "a")
+}
+
+func TestUpdateSetWhere(t *testing.T) {
+	assertRoundTrip(t,
+		"UPDATE users SET name = 'x', n = n + 1 WHERE id = 5",
+		`UPDATE "users" SET "name" = $1, "n" = ("n" + $2) WHERE ("id" = $3)`,
+		"x", 1, 5)
+}
+
+func TestUpdateFrom(t *testing.T) {
+	assertRoundTrip(t,
+		"UPDATE users SET name = o.name FROM orders o WHERE o.uid = users.id",
+		`UPDATE "users" SET "name" = "o"."name" FROM "orders" AS "o" WHERE ("o"."uid" = "users"."id")`)
+}
+
+func TestUpdateReturning(t *testing.T) {
+	assertRoundTrip(t,
+		"UPDATE users SET active = false WHERE id = 1 RETURNING id, active",
+		`UPDATE "users" SET "active" = $1 WHERE ("id" = $2) RETURNING "id", "active"`,
+		false, 1)
+}
+
+func TestDeleteWhere(t *testing.T) {
+	assertRoundTrip(t,
+		"DELETE FROM users WHERE id = 5",
+		`DELETE FROM "users" WHERE ("id" = $1)`,
+		5)
+}
+
+func TestDeleteUsing(t *testing.T) {
+	assertRoundTrip(t,
+		"DELETE FROM users USING orders o WHERE o.uid = users.id",
+		`DELETE FROM "users" USING "orders" AS "o" WHERE ("o"."uid" = "users"."id")`)
+}
+
+func TestDeleteReturning(t *testing.T) {
+	assertRoundTrip(t,
+		"DELETE FROM users WHERE id = 1 RETURNING id",
+		`DELETE FROM "users" WHERE ("id" = $1) RETURNING "id"`,
+		1)
+}
