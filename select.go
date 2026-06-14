@@ -460,9 +460,21 @@ func (q SelectQuery) Intersect(other SelectQuery) UnionQuery {
 	return UnionQuery{ex: q.ex, query: q.finalQuery().Intersect(other.finalQuery())}
 }
 
+// IntersectAll combines this query with another using INTERSECT ALL, keeping
+// duplicate rows.
+func (q SelectQuery) IntersectAll(other SelectQuery) UnionQuery {
+	return UnionQuery{ex: q.ex, query: q.finalQuery().IntersectAll(other.finalQuery())}
+}
+
 // Except combines this query with another using EXCEPT.
 func (q SelectQuery) Except(other SelectQuery) UnionQuery {
 	return UnionQuery{ex: q.ex, query: q.finalQuery().Except(other.finalQuery())}
+}
+
+// ExceptAll combines this query with another using EXCEPT ALL, keeping duplicate
+// rows.
+func (q SelectQuery) ExceptAll(other SelectQuery) UnionQuery {
+	return UnionQuery{ex: q.ex, query: q.finalQuery().ExceptAll(other.finalQuery())}
 }
 
 // Star is the "table.*" select-list item — every column of table, qualified by

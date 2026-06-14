@@ -190,10 +190,22 @@ string and numeric functions, date/time keywords, and JSON access
 (`sql.JSONGet` / `sql.JSONGetText` with portable path steps). `sql.Func(name,
 args...)` is the escape hatch for anything else.
 
+Distinct aggregates are spelled `sql.CountDistinct(col)` and
+`sql.DistinctFunc("SUM", col)`. CASE comes in both forms — searched
+(`sql.Case().When(cond, result).Else(...)`) and simple
+(`sql.CaseOf(col).When(value, result)…`). Other expression nodes fill out the
+vocabulary: unary operators (`sql.Neg` / `sql.Pos` / `sql.Unary`), row
+constructors (`sql.Row(a, b)`) for row-wise comparisons and `IN`, and the
+null-safe `sql.IsDistinctFrom` / `sql.IsNotDistinctFrom` (typed as
+`col.IsDistinctFrom(v)` / `col.IsNotDistinctFrom(v)`), which render as MySQL's
+`<=>` there.
+
 ### Set operations and CTEs
 
-`Union` / `UnionAll` / `Intersect` / `Except` combine a flat list of SELECTs;
-`db.Union(...)` binds the result so the operands need no executor of their own.
+`Union` / `UnionAll` / `Intersect` / `IntersectAll` / `Except` / `ExceptAll`
+combine a flat list of SELECTs; `db.Union(...)` binds the result so the operands
+need no executor of their own. The `…All` variants keep duplicate rows (the
+multiset forms).
 
 ```go
 err = db.Union(

@@ -164,6 +164,32 @@ func (c Column[T]) Ne(value T) Predicate { return newPredicate(sql.Ne(c, sql.Val
 // NeExpr creates a "column <> expression" predicate.
 func (c Column[T]) NeExpr(other TypedExpr[T]) Predicate { return newPredicate(sql.Ne(c, other)) }
 
+// IsDistinctFrom creates a "column IS DISTINCT FROM value" predicate, the
+// null-safe counterpart of Ne: it is true when the values differ and treats two
+// NULLs as not distinct, so unlike <> it never yields NULL. It renders as MySQL's
+// null-safe <=> operator there.
+func (c Column[T]) IsDistinctFrom(value T) Predicate {
+	return newPredicate(sql.IsDistinctFrom(c, sql.Val(value)))
+}
+
+// IsDistinctFromExpr creates a "column IS DISTINCT FROM expression" predicate.
+func (c Column[T]) IsDistinctFromExpr(other TypedExpr[T]) Predicate {
+	return newPredicate(sql.IsDistinctFrom(c, other))
+}
+
+// IsNotDistinctFrom creates a "column IS NOT DISTINCT FROM value" predicate, the
+// null-safe counterpart of Eq: it is true when the values match and treats two
+// NULLs as equal. It renders as MySQL's null-safe <=> operator there.
+func (c Column[T]) IsNotDistinctFrom(value T) Predicate {
+	return newPredicate(sql.IsNotDistinctFrom(c, sql.Val(value)))
+}
+
+// IsNotDistinctFromExpr creates a "column IS NOT DISTINCT FROM expression"
+// predicate.
+func (c Column[T]) IsNotDistinctFromExpr(other TypedExpr[T]) Predicate {
+	return newPredicate(sql.IsNotDistinctFrom(c, other))
+}
+
 // Lt creates a "column < value" predicate.
 func (c Column[T]) Lt(value T) Predicate { return newPredicate(sql.Lt(c, sql.Val(value))) }
 

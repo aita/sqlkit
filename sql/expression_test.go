@@ -493,6 +493,14 @@ func TestIntersectAndExcept(t *testing.T) {
 	assertSQL(t, a.Except(b), `(SELECT "id" FROM "a") EXCEPT (SELECT "id" FROM "b")`, nil)
 }
 
+func TestIntersectAndExceptAll(t *testing.T) {
+	a := Select(Col("id")).From(Table{Name: "a"})
+	b := Select(Col("id")).From(Table{Name: "b"})
+
+	assertSQL(t, a.IntersectAll(b), `(SELECT "id" FROM "a") INTERSECT ALL (SELECT "id" FROM "b")`, nil)
+	assertSQL(t, a.ExceptAll(b), `(SELECT "id" FROM "a") EXCEPT ALL (SELECT "id" FROM "b")`, nil)
+}
+
 func TestIntersectAndExceptChained(t *testing.T) {
 	a := Select(Col("id")).From(Table{Name: "a"})
 	b := Select(Col("id")).From(Table{Name: "b"})

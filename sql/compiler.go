@@ -60,6 +60,50 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		}
 		args := append(leftArgs, rightArgs...)
 		return "(" + leftSQL + " " + e.Operator + " " + rightSQL + ")", args, nil
+	case UnaryExpression:
+		if e.Operator == "" {
+			return "", nil, fmt.Errorf("sqlkit/sql: unary expression requires an operator")
+		}
+		operandSQL, args, err := c.CompileExpression(e.Operand)
+		if err != nil {
+			return "", nil, err
+		}
+		return "(" + e.Operator + operandSQL + ")", args, nil
+	case RowExpression:
+		if len(e.Elements) == 0 {
+			return "", nil, fmt.Errorf("sqlkit/sql: row expression requires at least one element")
+		}
+		parts := make([]string, len(e.Elements))
+		var args []any
+		for i, element := range e.Elements {
+			elementSQL, elementArgs, err := c.CompileExpression(element)
+			if err != nil {
+				return "", nil, err
+			}
+			parts[i] = elementSQL
+			args = append(args, elementArgs...)
+		}
+		return "(" + strings.Join(parts, ", ") + ")", args, nil
+	case DistinctPredicate:
+		leftSQL, args, err := c.CompileExpression(e.Left)
+		if err != nil {
+			return "", nil, err
+		}
+		rightSQL, rightArgs, err := c.CompileExpression(e.Right)
+		if err != nil {
+			return "", nil, err
+		}
+		args = append(args, rightArgs...)
+		if nse, ok := c.Dialect.(NullSafeEqualityDialect); ok {
+			return nse.IsDistinctFrom(leftSQL, rightSQL, e.Negate), args, nil
+		}
+		// SQL standard IS [NOT] DISTINCT FROM (PostgreSQL, SQLite, the standard
+		// target); MySQL overrides via NullSafeEqualityDialect with <=>.
+		operator := "IS DISTINCT FROM"
+		if e.Negate {
+			operator = "IS NOT DISTINCT FROM"
+		}
+		return "(" + leftSQL + " " + operator + " " + rightSQL + ")", args, nil
 	case LogicalExpression:
 		if len(e.Operands) == 0 {
 			return "", nil, fmt.Errorf("sqlkit/sql: %s requires at least one operand", e.Operator)
@@ -296,13 +340,21 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		}
 		// A FuncRenderer dialect may remap a canonical function name/form to its
 		// native spelling; an unknown name (or a dialect without the capability)
-		// falls through to the default name(args...) rendering unchanged.
-		if fr, ok := c.Dialect.(FuncRenderer); ok {
-			if out, handled := fr.RenderFunc(e.Name, compiled); handled {
-				return out, args, nil
+		// falls through to the default name(args...) rendering unchanged. DISTINCT
+		// aggregates skip the remap: the remapped names are scalar functions, not
+		// aggregates, so DISTINCT never applies to them.
+		if !e.Distinct {
+			if fr, ok := c.Dialect.(FuncRenderer); ok {
+				if out, handled := fr.RenderFunc(e.Name, compiled); handled {
+					return out, args, nil
+				}
 			}
 		}
-		return e.Name + "(" + strings.Join(compiled, ", ") + ")", args, nil
+		distinct := ""
+		if e.Distinct {
+			distinct = "DISTINCT "
+		}
+		return e.Name + "(" + distinct + strings.Join(compiled, ", ") + ")", args, nil
 	case ExtractExpression:
 		if e.Field == "" {
 			return "", nil, fmt.Errorf("sqlkit/sql: EXTRACT requires a field")
@@ -355,6 +407,9 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		if err != nil {
 			return "", nil, err
 		}
+		if e.Distinct {
+			return "COUNT(DISTINCT " + target + ")", args, nil
+		}
 		return "COUNT(" + target + ")", args, nil
 	case CaseExpression:
 		if len(e.Whens) == 0 {
@@ -363,6 +418,15 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		var sb strings.Builder
 		var args []any
 		sb.WriteString("CASE")
+		if e.Operand != nil {
+			operandSQL, operandArgs, err := c.CompileExpression(e.Operand)
+			if err != nil {
+				return "", nil, err
+			}
+			sb.WriteString(" ")
+			sb.WriteString(operandSQL)
+			args = append(args, operandArgs...)
+		}
 		for _, when := range e.Whens {
 			conditionSQL, conditionArgs, err := c.CompileExpression(when.Condition)
 			if err != nil {

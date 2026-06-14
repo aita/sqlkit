@@ -121,6 +121,76 @@ func binary(left any, operator string, right any) BinaryExpression {
 	return BinaryExpression{Left: Expr(left), Operator: operator, Right: Expr(right)}
 }
 
+// UnaryExpression applies a prefix unary operator to an operand, such as the
+// arithmetic negation -x or unary plus +x. It renders as the operator
+// immediately followed by the parenthesized operand, e.g. (-"x").
+type UnaryExpression struct {
+	Operator string
+	Operand  Expression
+}
+
+func (UnaryExpression) SQLExpression() {}
+func (UnaryExpression) SQLSelection()  {}
+
+// Unary creates a prefix unary operator expression. A non-expression operand
+// becomes a bind value.
+func Unary(operator string, operand any) UnaryExpression {
+	return UnaryExpression{Operator: operator, Operand: Expr(operand)}
+}
+
+// Neg creates a "-operand" arithmetic negation. A non-expression operand becomes
+// a bind value.
+func Neg(operand any) UnaryExpression { return Unary("-", operand) }
+
+// Pos creates a "+operand" unary plus. A non-expression operand becomes a bind
+// value.
+func Pos(operand any) UnaryExpression { return Unary("+", operand) }
+
+// RowExpression is a row value constructor: a parenthesized list of expressions
+// such as (a, b). It backs row-wise comparisons ((a, b) = (c, d)) and row-wise
+// membership ((a, b) IN ((1, 2), (3, 4))), where it can stand on either side of
+// the operator and as each IN item.
+type RowExpression struct{ Elements []Expression }
+
+func (RowExpression) SQLExpression() {}
+
+// Row creates a row value constructor (a, b, ...). Non-expression elements
+// become bind values.
+func Row(elements ...any) RowExpression {
+	exprs := make([]Expression, len(elements))
+	for i, element := range elements {
+		exprs[i] = Expr(element)
+	}
+	return RowExpression{Elements: exprs}
+}
+
+// DistinctPredicate compares two operands with IS DISTINCT FROM / IS NOT DISTINCT
+// FROM, the null-safe counterparts of <> and =: two NULLs are not distinct, and a
+// NULL is distinct from any non-NULL value, so the result is never itself NULL.
+// It renders per dialect: the SQL-standard IS [NOT] DISTINCT FROM (PostgreSQL,
+// SQLite, the standard target) and, through a NullSafeEqualityDialect, MySQL's
+// null-safe equality operator <=> (a <=> b for IS NOT DISTINCT FROM, NOT (a <=>
+// b) for IS DISTINCT FROM).
+type DistinctPredicate struct {
+	Left   Expression
+	Right  Expression
+	Negate bool // true selects IS NOT DISTINCT FROM
+}
+
+func (DistinctPredicate) SQLExpression() {}
+
+// IsDistinctFrom creates "left IS DISTINCT FROM right", a null-safe inequality.
+// Non-expression operands become bind values.
+func IsDistinctFrom(left, right any) DistinctPredicate {
+	return DistinctPredicate{Left: Expr(left), Right: Expr(right)}
+}
+
+// IsNotDistinctFrom creates "left IS NOT DISTINCT FROM right", a null-safe
+// equality. Non-expression operands become bind values.
+func IsNotDistinctFrom(left, right any) DistinctPredicate {
+	return DistinctPredicate{Left: Expr(left), Right: Expr(right), Negate: true}
+}
+
 // ConcatExpression concatenates strings. It renders per dialect: the standard
 // || operator on PostgreSQL, and CONCAT(...) on MySQL, whose || means logical
 // OR instead.
@@ -435,9 +505,13 @@ type WhenClause struct {
 	Result    Expression
 }
 
-// CaseExpression is a searched CASE expression:
-// CASE WHEN cond THEN result [...] [ELSE result] END.
+// CaseExpression is a CASE expression in either form. With Operand nil it is a
+// searched CASE — CASE WHEN cond THEN result [...] [ELSE result] END — whose When
+// arms hold boolean conditions. With Operand set it is a simple CASE — CASE
+// operand WHEN value THEN result [...] [ELSE result] END — whose When arms hold
+// values compared for equality against the operand.
 type CaseExpression struct {
+	Operand   Expression
 	Whens     []WhenClause
 	ElseValue Expression
 }
@@ -445,10 +519,16 @@ type CaseExpression struct {
 func (CaseExpression) SQLExpression() {}
 func (CaseExpression) SQLSelection()  {}
 
-// Case starts a CASE expression; chain When and Else to build it.
+// Case starts a searched CASE expression; chain When and Else to build it.
 func Case() CaseExpression { return CaseExpression{} }
 
-// When appends a WHEN condition THEN result arm.
+// CaseOf starts a simple CASE expression that compares operand for equality
+// against each When value: CASE operand WHEN value THEN result ... END. A
+// non-expression operand becomes a bind value.
+func CaseOf(operand any) CaseExpression { return CaseExpression{Operand: Expr(operand)} }
+
+// When appends a WHEN condition THEN result arm. In a simple CASE (CaseOf) the
+// condition is the value compared against the operand.
 func (e CaseExpression) When(condition, result any) CaseExpression {
 	e.Whens = append(append([]WhenClause(nil), e.Whens...),
 		WhenClause{Condition: Expr(condition), Result: Expr(result)})

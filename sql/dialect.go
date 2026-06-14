@@ -235,6 +235,18 @@ type ValuesCaster interface {
 	ValuesCastType(value any) (sqlType string, ok bool)
 }
 
+// NullSafeEqualityDialect is an optional capability for dialects that spell the
+// null-safe comparison (DistinctPredicate, IS [NOT] DISTINCT FROM) differently
+// from the SQL standard. MySQL has no IS DISTINCT FROM and uses the null-safe
+// equality operator <=> instead. The compiler detects it with a type assertion,
+// so it is not a breaking change to Dialect; a dialect without it renders the
+// standard IS [NOT] DISTINCT FROM (PostgreSQL, SQLite, the standard target).
+// left and right are already-compiled SQL fragments; negate selects IS NOT
+// DISTINCT FROM (the null-safe equality).
+type NullSafeEqualityDialect interface {
+	IsDistinctFrom(left, right string, negate bool) string
+}
+
 // DialectByName returns the Dialect for a name: "postgres"/"postgresql" (or
 // empty, the default), "mysql", "sqlite"/"sqlite3", or "standard"/"ansi"/"sql"
 // (the SQL standard / ANSI text target). It errors on an unknown name.
@@ -671,6 +683,17 @@ func (MySQLDialect) Upsert(cl UpsertClause) (string, error) {
 // Excluded renders MySQL's reference to the proposed row value, VALUES(col).
 func (d MySQLDialect) Excluded(column string) string {
 	return "VALUES(" + d.QuoteName(column) + ")"
+}
+
+// IsDistinctFrom renders MySQL's null-safe comparison with the <=> operator,
+// which MySQL provides in place of the SQL-standard IS [NOT] DISTINCT FROM. The
+// operator is itself IS NOT DISTINCT FROM (null-safe equality); IS DISTINCT FROM
+// is its negation.
+func (MySQLDialect) IsDistinctFrom(left, right string, negate bool) string {
+	if negate {
+		return "(" + left + " <=> " + right + ")"
+	}
+	return "(NOT (" + left + " <=> " + right + "))"
 }
 
 // JSONObject renders MySQL's flat JSON_OBJECT(key, value, ...) form, which does
