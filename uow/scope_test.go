@@ -204,6 +204,50 @@ func TestExplicitUpdateWritesAllColumns(t *testing.T) {
 	}
 }
 
+func TestAttachUpdatesOnlyChangedColumns(t *testing.T) {
+	fake := &sqltest.Fake{}
+	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()))
+	u := &userRow{ID: 7, Email: "a@x", Name: "Alice"} // detached, e.g. from a cache
+	if err := scope.Attach(newUsers(), u); err != nil {
+		t.Fatal(err)
+	}
+	u.Name = "Bob" // only name changes
+	if err := scope.Flush(ctx()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if got := verbs(fake.Execs()); len(got) != 1 || got[0] != "UPDATE" {
+		t.Fatalf("verbs = %v, want one UPDATE", got)
+	}
+	upd := fake.Execs()[0]
+	// Only the name column is set, then the PK predicate: args == ["Bob", 7].
+	if len(upd.Args) != 2 || upd.Args[0] != "Bob" || upd.Args[1] != int64(7) {
+		t.Fatalf("update args = %v, want [Bob, 7]", upd.Args)
+	}
+}
+
+func TestAttachNoChangeEmitsNothing(t *testing.T) {
+	fake := &sqltest.Fake{}
+	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()))
+	u := &userRow{ID: 7, Email: "a@x", Name: "Alice"}
+	if err := scope.Attach(newUsers(), u); err != nil {
+		t.Fatal(err)
+	}
+	if err := scope.Flush(ctx()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if got := len(fake.Execs()); got != 0 {
+		t.Fatalf("got %d execs, want 0 (no change): %v", got, fake.Statements())
+	}
+}
+
+func TestAttachRejectsNonPointer(t *testing.T) {
+	scope := uow.NewScope(sqlkit.WrapDB((&sqltest.Fake{}).DB()))
+	err := scope.Attach(newUsers(), userRow{ID: 7, Email: "a@x", Name: "Alice"})
+	if !errors.Is(err, uow.ErrAttachRequiresPointer) {
+		t.Fatalf("Attach(value) error = %v, want ErrAttachRequiresPointer", err)
+	}
+}
+
 func TestRemoveDeletesByPrimaryKey(t *testing.T) {
 	fake := &sqltest.Fake{}
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()))
