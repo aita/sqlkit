@@ -270,11 +270,86 @@ err := appdb.Users.Q(db).
     JoinRel(appdb.Users.Rels.Profile).
     Where(appdb.Users.Rels.Profile.Public.Eq(true)).
     All(ctx).Scan(&authors)
+```
 
-// Avoid the N+1: SELECT posts WHERE user_id IN (…) and assign onto a Posts field.
+#### Preload: eager-loading without the N+1
+
+`Preload` is **not** a join. The base query runs first; then, at `Scan`, each
+preloaded relation is fetched in **one** follow-up `SELECT … WHERE fk IN (parent
+keys)` and the rows are assigned back onto the destination by reflection. The
+destination field is matched by the relation name (`Posts`, `User`) or a
+`preload:"…"` tag. A to-many relation fills a slice; a to-one relation fills a
+struct or pointer.
+
+```go
+// The destination's relation fields are populated by Preload; without a Preload
+// call they are simply left zero — no follow-up query runs for them.
+type UserWithPosts struct {
+    ID    int64 `sqlkit:"id"`
+    Name  string
+    Posts []Post // filled by Preload(appdb.Posts) — matched by field name "Posts"
+}
+type Post struct {
+    ID     int64 `sqlkit:"id"`
+    UserID int64 `sqlkit:"user_id"`
+    Title  string
+}
+
 var users []UserWithPosts
 err = db.Select().From(appdb.Users).Preload(appdb.Posts).All(ctx).Scan(&users)
+// 1) SELECT id, name, … FROM users
+// 2) SELECT id, user_id, title FROM posts WHERE posts.user_id IN ($1, $2, …)
+//    — one batched query for every user, then grouped onto each user's Posts.
 ```
+
+Without the `Preload` call only step 1 runs and `Posts` stays `nil` — the related
+`SELECT` is never issued. A wide parent set is automatically chunked
+(selectinload-style, 1000 keys per statement by default) to stay within the
+driver's bind-parameter limit.
+
+**Conditional preload** — extra predicates passed to `Preload` are ANDed into the
+follow-up `SELECT`, so only matching children load:
+
+```go
+err = db.Select().From(appdb.Users).
+    Preload(appdb.Posts, appdb.Posts.Published.Eq(true)).
+    All(ctx).Scan(&users)
+// 2) SELECT … FROM posts WHERE posts.published = $1 AND posts.user_id IN ($2, …)
+```
+
+**Nested preload** — pass a `RelPath` of related tables as the target and `Preload`
+eager-loads along the whole chain, creating any intermediate level not already
+registered; each hop is its own batched query and the conditions apply to the last
+table:
+
+```go
+type UserGraph struct {
+    ID    int64 `sqlkit:"id"`
+    Posts []PostWithComments // filled by the Posts hop
+}
+type PostWithComments struct {
+    ID       int64 `sqlkit:"id"`
+    UserID   int64 `sqlkit:"user_id"`
+    Comments []Comment // filled by the Comments hop
+}
+type Comment struct {
+    ID      int64 `sqlkit:"id"`
+    PostID  int64 `sqlkit:"post_id"`
+    Body    string
+}
+
+var graph []UserGraph
+err = db.Select().From(appdb.Users).
+    Preload(sqlkit.RelPath(appdb.Posts, appdb.Comments), appdb.Comments.Approved.Eq(true)).
+    All(ctx).Scan(&graph)
+// 1) SELECT … FROM users
+// 2) SELECT … FROM posts    WHERE posts.user_id IN (user ids)
+// 3) SELECT … FROM comments WHERE comments.approved = $1 AND comments.post_id IN (post ids)
+```
+
+When more than one relation reaches the same table (e.g. a self-reference's
+`Manager` and `Reports`), pass the relation explicitly with `PreloadRel` instead
+of the target table; it takes the same conditions.
 
 Relations also drive multi-table writes (`Update(t).JoinRel(rel)`,
 `Delete(t).UsingRel(rel)`) and primary-key lookups (`Get(ctx, pk...)`).
