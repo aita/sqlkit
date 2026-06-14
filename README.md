@@ -600,7 +600,11 @@ The mapper's hooks are consulted most-specific first (`OverrideFunc`, then
 `ColumnOverrides`, then `Overrides`), falling through to the built-in type
 tables; nullability is applied on top, so overrides pin the bare type. A
 runnable end-to-end version — custom type mapper, programmatic enum types, and a
-custom DTO namer — lives in [`examples/codegen`](examples/codegen).
+custom DTO namer — lives in [`examples/codegen`](examples/codegen), with its
+committed generated output under
+[`examples/codegen/appdb`](examples/codegen/appdb). (To stay dependency-free it
+maps to domain types declared in that package rather than `decimal`/`uuid`, but
+the hooks take third-party types the same way.)
 
 ### Bootstrapping from an existing database
 

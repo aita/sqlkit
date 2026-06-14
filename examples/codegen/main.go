@@ -8,18 +8,26 @@
 // mapping (codegen.TypeMapper) and the DTO naming scheme (Options.DTOName).
 //
 // This program declares a small catalog, then generates bindings + DTOs from it
-// with a customized type mapper and DTO namer, and prints the result to stdout
-// so you can see the effect of each customization. Run it with:
+// with a customized type mapper and DTO namer, and writes them to the appdb
+// package next to this file. The customizations map columns to the domain types
+// declared by hand in appdb/types.go (UUID, Decimal, UserStatus, OrderStatus)
+// and to encoding/json.RawMessage, so the generated package compiles with no
+// extra dependencies. Regenerate them with:
 //
-//	go run ./examples/codegen
+//	go generate ./examples/codegen
 //
-// To write the files to disk instead of printing them, swap the print loop at
-// the end for codegen.Write (see the comment there).
+// The same hooks accept third-party types just as well, e.g.
+// {ImportPath: "github.com/google/uuid", Name: "uuid.UUID"}; this example sticks
+// to local types only to keep the module dependency-free.
 package main
+
+//go:generate go run .
 
 import (
 	"fmt"
 	"log"
+	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/aita/sqlkit/codegen"
@@ -38,14 +46,14 @@ func catalog() *sqldef.Catalog {
 	users := public.Table("users",
 		sqldef.TableComment("Registered accounts"),
 		// A uuid primary key: by default codegen maps uuid -> string. We override
-		// it to a real uuid.UUID below via ColumnOverrides.
+		// it to the appdb.UUID domain type below via ColumnOverrides.
 		sqldef.Column("id", sqldef.UUID, sqldef.PrimaryKey()),
 		sqldef.Column("email", sqldef.VarChar(255), sqldef.Unique()),
 		// A money amount: numeric defaults to string. We map every numeric column
-		// to shopspring/decimal below via Overrides.
+		// to appdb.Decimal below via Overrides.
 		sqldef.Column("balance", sqldef.Decimal(18, 2), sqldef.Default(sql.Raw("0"))),
 		// A free-form JSON blob: jsonb defaults to []byte. We map it to
-		// json.RawMessage below, again via ColumnOverrides.
+		// json.RawMessage below via ColumnOverrides.
 		sqldef.Column("metadata", sqldef.JSON, sqldef.Default(sql.Raw("'{}'"))),
 		// A status column we map to a typed Go enum via OverrideFunc.
 		sqldef.Column("status", sqldef.VarChar(32), sqldef.Default(sql.Raw("'active'"))),
@@ -73,20 +81,23 @@ func catalog() *sqldef.Catalog {
 // Anything not matched falls through to the built-in type tables, so we only
 // have to spell the columns we care about. Nullability is applied on top of the
 // resolved type (a nullable column becomes a pointer), so overrides pin the
-// bare type.
+// bare type. A type whose GoType has no ImportPath is emitted unqualified, so it
+// resolves to a type declared in the generated package itself — that is how the
+// appdb.UUID / appdb.Decimal / *Status domain types below are wired in.
 func typeMapper() codegen.TypeMapper {
 	return codegen.NewDefaultTypeMapper(codegen.TypeMapperConfig{
-		// Map every numeric/decimal column to a decimal type rather than string.
+		// Map every numeric/decimal column to the appdb.Decimal domain type
+		// rather than string.
 		Overrides: map[string]codegen.GoType{
-			"numeric": {ImportPath: "github.com/shopspring/decimal", Name: "decimal.Decimal"},
-			"decimal": {ImportPath: "github.com/shopspring/decimal", Name: "decimal.Decimal"},
+			"numeric": {Name: "Decimal"},
+			"decimal": {Name: "Decimal"},
 		},
 		// Pin specific columns regardless of their SQL type. Keys may be fully
 		// qualified or bare; the most specific match wins.
 		ColumnOverrides: map[string]codegen.GoType{
-			"users.id":       {ImportPath: "github.com/google/uuid", Name: "uuid.UUID"},
-			"orders.id":      {ImportPath: "github.com/google/uuid", Name: "uuid.UUID"},
-			"orders.user_id": {ImportPath: "github.com/google/uuid", Name: "uuid.UUID"},
+			"users.id":       {Name: "UUID"},
+			"orders.id":      {Name: "UUID"},
+			"orders.user_id": {Name: "UUID"},
 			"metadata":       {ImportPath: "encoding/json", Name: "json.RawMessage"},
 		},
 		// Decide programmatically: map any column named "status" to a typed enum
@@ -94,8 +105,7 @@ func typeMapper() codegen.TypeMapper {
 		// plain varchar. Returning ok=false falls through to the maps above.
 		OverrideFunc: func(table meta.Table, column meta.Column, _ string) (codegen.GoType, bool, error) {
 			if column.Name == "status" {
-				name := codegenGoName(table.Name) + "Status"
-				return codegen.GoType{Name: name}, true, nil
+				return codegen.GoType{Name: goName(singular(table.Name)) + "Status"}, true, nil
 			}
 			return codegen.GoType{}, false, nil
 		},
@@ -106,7 +116,7 @@ func typeMapper() codegen.TypeMapper {
 // table name ("users" -> "User"); here we add a "Record" suffix to match a
 // house style ("users" -> "UserRecord").
 func dtoName(table meta.Table) string {
-	return codegenGoName(singular(table.Name)) + "Record"
+	return goName(singular(table.Name)) + "Record"
 }
 
 func main() {
@@ -132,22 +142,32 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// 3. Use the result. Here we print each file to stdout to show the effect of
-	//    the customizations; a real generator writes them with:
-	//
-	//	if err := codegen.Write("appdb", files); err != nil {
-	//		log.Fatal(err)
-	//	}
+	// 3. Write the result next to this source file, into the appdb package whose
+	//    hand-written types.go declares the domain types the bindings reference.
+	outDir := filepath.Join(sourceDir(), "appdb")
+	if err := codegen.Write(outDir, files); err != nil {
+		log.Fatal(err)
+	}
 	for _, file := range files {
-		fmt.Printf("// ===== %s =====\n%s\n", file.Name, file.Content)
+		fmt.Printf("wrote %s\n", filepath.Join("appdb", file.Name))
 	}
 }
 
-// codegenGoName converts a snake_case identifier to an exported Go name, the
-// same way codegen names its generated identifiers. codegen keeps its own
-// version of this unexported, so we reimplement the slice of it we need for the
-// DTO namer and the enum-type names above.
-func codegenGoName(name string) string {
+// sourceDir returns the directory of this source file, so generation targets the
+// example's appdb package regardless of the working directory it runs from.
+func sourceDir() string {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		return "."
+	}
+	return filepath.Dir(file)
+}
+
+// goName converts a snake_case identifier to an exported Go name, the same way
+// codegen names its generated identifiers. codegen keeps its own version
+// unexported, so we reimplement the slice of it we need for the DTO namer and
+// the enum-type names above.
+func goName(name string) string {
 	var sb strings.Builder
 	for _, part := range strings.FieldsFunc(name, func(r rune) bool {
 		return r == '_' || r == ' ' || r == '-'
