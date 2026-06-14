@@ -10,6 +10,41 @@ import (
 // drop helpers, QuoteName) so engine differences stay in one place, and they
 // reproduce the exact formatting the meta package depends on.
 
+// CompileCreateSchema renders a CREATE SCHEMA statement. PostgreSQL and MySQL
+// share the syntax (on MySQL a schema is a database and CREATE SCHEMA is its
+// synonym), so it renders directly through QuoteName.
+func (c *Compiler) CompileCreateSchema(s CreateSchemaStmt) (string, error) {
+	if s.name == "" {
+		return "", fmt.Errorf("sqlkit/sql: CREATE SCHEMA requires a name")
+	}
+	var sb strings.Builder
+	sb.WriteString("CREATE SCHEMA ")
+	if s.ifNotExists {
+		sb.WriteString("IF NOT EXISTS ")
+	}
+	sb.WriteString(c.Dialect.QuoteName(s.name) + ";")
+	return sb.String(), nil
+}
+
+// CompileDropSchema renders a DROP SCHEMA statement (shared syntax; CASCADE is
+// PostgreSQL-only, as MySQL's DROP SCHEMA always drops the database's contents).
+func (c *Compiler) CompileDropSchema(s DropSchemaStmt) (string, error) {
+	if s.name == "" {
+		return "", fmt.Errorf("sqlkit/sql: DROP SCHEMA requires a name")
+	}
+	var sb strings.Builder
+	sb.WriteString("DROP SCHEMA ")
+	if s.ifExists {
+		sb.WriteString("IF EXISTS ")
+	}
+	sb.WriteString(c.Dialect.QuoteName(s.name))
+	if s.cascade && c.Dialect.Name() != "mysql" {
+		sb.WriteString(" CASCADE")
+	}
+	sb.WriteString(";")
+	return sb.String(), nil
+}
+
 // CompileCreateTable renders a CREATE TABLE statement.
 func (c *Compiler) CompileCreateTable(s CreateTableStmt) (string, error) {
 	var defs []string

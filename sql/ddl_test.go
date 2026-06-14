@@ -27,6 +27,40 @@ func mustDDL(t *testing.T, s sql.Statement, dialect string) string {
 	return out
 }
 
+func TestCreateSchema(t *testing.T) {
+	if got, want := mustDDL(t, sql.CreateSchema("auth"), "postgres"), `CREATE SCHEMA "auth";`; got != want {
+		t.Errorf("CreateSchema(postgres) = %q, want %q", got, want)
+	}
+	if got, want := mustDDL(t, sql.CreateSchema("auth").IfNotExists(), "postgres"), `CREATE SCHEMA IF NOT EXISTS "auth";`; got != want {
+		t.Errorf("CreateSchema().IfNotExists(postgres) = %q, want %q", got, want)
+	}
+	if got, want := mustDDL(t, sql.CreateSchema("auth").IfNotExists(), "mysql"), "CREATE SCHEMA IF NOT EXISTS `auth`;"; got != want {
+		t.Errorf("CreateSchema().IfNotExists(mysql) = %q, want %q", got, want)
+	}
+}
+
+func TestDropSchema(t *testing.T) {
+	if got, want := mustDDL(t, sql.DropSchema("auth").IfExists(), "postgres"), `DROP SCHEMA IF EXISTS "auth";`; got != want {
+		t.Errorf("DropSchema().IfExists(postgres) = %q, want %q", got, want)
+	}
+	if got, want := mustDDL(t, sql.DropSchema("auth").IfExists().Cascade(), "postgres"), `DROP SCHEMA IF EXISTS "auth" CASCADE;`; got != want {
+		t.Errorf("DropSchema().Cascade(postgres) = %q, want %q", got, want)
+	}
+	// MySQL has no CASCADE clause; the flag is ignored.
+	if got, want := mustDDL(t, sql.DropSchema("auth").IfExists().Cascade(), "mysql"), "DROP SCHEMA IF EXISTS `auth`;"; got != want {
+		t.Errorf("DropSchema().Cascade(mysql) = %q, want %q", got, want)
+	}
+}
+
+func TestSchemaStmtRequiresName(t *testing.T) {
+	if _, _, err := sql.CreateSchema("").ToSQL(mustDialect(t, "postgres")); err == nil {
+		t.Error("CreateSchema(\"\"): expected error")
+	}
+	if _, _, err := sql.DropSchema("").ToSQL(mustDialect(t, "postgres")); err == nil {
+		t.Error("DropSchema(\"\"): expected error")
+	}
+}
+
 func TestCreateTablePostgres(t *testing.T) {
 	stmt := sql.CreateTable(sql.Table{Schema: "public", Name: "users"}).
 		Column(sql.ColumnDef{Name: "id", Type: sql.EngineType{Name: "int8"}, NotNull: true, AutoIncrement: true}).

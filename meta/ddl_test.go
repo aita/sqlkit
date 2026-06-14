@@ -74,7 +74,9 @@ func TestDDLPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSQL() error = %v", err)
 	}
-	want := `CREATE TABLE "public"."users" (
+	want := `CREATE SCHEMA IF NOT EXISTS "public";
+
+CREATE TABLE "public"."users" (
     "id" bigserial,
     "email" varchar(255) NOT NULL,
     "name" text,
@@ -145,6 +147,57 @@ func TestDDLUnqualified(t *testing.T) {
 	}
 	if !strings.Contains(got, `CREATE TABLE "items" (`) {
 		t.Errorf("unqualified table name expected:\n%s", got)
+	}
+	// The unnamed default schema has no CREATE SCHEMA to emit.
+	if strings.Contains(got, "CREATE SCHEMA") {
+		t.Errorf("default schema should not emit CREATE SCHEMA:\n%s", got)
+	}
+	if strings.Contains(md.DropSQL(mustDialect(t, "postgres")), "DROP SCHEMA") {
+		t.Errorf("default schema should not emit DROP SCHEMA")
+	}
+}
+
+// TestDDLSchemaDependency verifies CreateSQL declares each distinct named schema
+// (once, in first-seen order) before the tables that depend on it, and DropSQL
+// drops the schemas last, after the tables they hold.
+func TestDDLSchemaDependency(t *testing.T) {
+	intType := meta.Of("postgres", "int8", 0, 0, 0)
+	auth := meta.Schema{Name: "auth"}
+	billing := meta.Schema{Name: "billing"}
+	md := meta.Metadata{
+		Tables: []meta.Table{
+			{Schema: auth, Name: "users", Columns: []meta.Column{{Name: "id", Type: intType, PrimaryKey: true}}},
+			{Schema: billing, Name: "invoices", Columns: []meta.Column{{Name: "id", Type: intType, PrimaryKey: true}}},
+			{Schema: auth, Name: "sessions", Columns: []meta.Column{{Name: "id", Type: intType, PrimaryKey: true}}},
+		},
+	}
+	pg := mustDialect(t, "postgres")
+
+	got, err := md.CreateSQL(pg)
+	if err != nil {
+		t.Fatalf("CreateSQL() error = %v", err)
+	}
+	// Each schema declared once, before any table.
+	if c := strings.Count(got, "CREATE SCHEMA"); c != 2 {
+		t.Errorf("CREATE SCHEMA count = %d, want 2:\n%s", c, got)
+	}
+	for _, s := range []string{`CREATE SCHEMA IF NOT EXISTS "auth";`, `CREATE SCHEMA IF NOT EXISTS "billing";`} {
+		idx := strings.Index(got, s)
+		if idx < 0 {
+			t.Fatalf("missing %q:\n%s", s, got)
+		}
+		if idx > strings.Index(got, "CREATE TABLE") {
+			t.Errorf("%q must precede the first CREATE TABLE:\n%s", s, got)
+		}
+	}
+	// First-seen order: auth before billing.
+	if strings.Index(got, `"auth"`) > strings.Index(got, `"billing"`) {
+		t.Errorf("schemas not in first-seen order:\n%s", got)
+	}
+
+	drop := md.DropSQL(pg)
+	if last := strings.LastIndex(drop, "DROP TABLE"); last > strings.Index(drop, "DROP SCHEMA") {
+		t.Errorf("DROP SCHEMA must follow all DROP TABLE statements:\n%s", drop)
 	}
 }
 
@@ -234,6 +287,8 @@ func TestDropDDLPostgres(t *testing.T) {
 DROP TABLE IF EXISTS "public"."users";
 
 DROP TABLE IF EXISTS "public"."posts";
+
+DROP SCHEMA IF EXISTS "public";
 `
 	if got != want {
 		t.Errorf("DropSQL() =\n%s\nwant\n%s", got, want)
@@ -245,7 +300,8 @@ func TestDropDDLMySQL(t *testing.T) {
 	got := md.DropSQL(mustDialect(t, "mysql"))
 	want := "ALTER TABLE `public`.`posts` DROP FOREIGN KEY `fk_posts_user_id`;\n\n" +
 		"DROP TABLE IF EXISTS `public`.`users`;\n\n" +
-		"DROP TABLE IF EXISTS `public`.`posts`;\n"
+		"DROP TABLE IF EXISTS `public`.`posts`;\n\n" +
+		"DROP SCHEMA IF EXISTS `public`;\n"
 	if got != want {
 		t.Errorf("DropSQL() =\n%s\nwant\n%s", got, want)
 	}
