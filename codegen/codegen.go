@@ -571,7 +571,24 @@ var _ sqlkit.Table = {{.VarName}}
 // (so callers reach target columns through the relation) without forming a
 // recursive struct type; building every value from the new*Columns constructors
 // keeps the package-level vars free of initialization cycles.
-var relationalBindingTemplate = template.Must(template.New("relbinding").Parse(relationalBindingTemplateSrc))
+var relationalBindingTemplate = template.Must(template.New("relbinding").Funcs(template.FuncMap{
+	// bq emits a backtick, so the template (itself a backtick-delimited raw
+	// string) can render the backtick-quoted struct tags of the filter bundle.
+	"bq": func() string { return "`" },
+	// filterType maps a relation's target columns type (e.g. "PostsColumns") to
+	// the target's filter bundle type (e.g. "PostsFilter"), so a relation field
+	// in a filter bundle is typed as a pointer to the related table's filter.
+	"filterType": func(columnsType string) string {
+		return strings.TrimSuffix(columnsType, "Columns") + "Filter"
+	},
+	// colVar maps a columns type (e.g. "PostsColumns") to its package-level table
+	// var (e.g. "Posts") — the full table binding, which (unlike the bare columns
+	// value) also implements RelationSource, so a relation's Target exposes the
+	// related table's own relations for nested filters.
+	"colVar": func(columnsType string) string {
+		return strings.TrimSuffix(columnsType, "Columns")
+	},
+}).Parse(relationalBindingTemplateSrc))
 
 const relationalBindingTemplateSrc = `// {{.ColumnsType}} holds the typed column bindings for table {{.Qualified}}.
 type {{.ColumnsType}} struct {
@@ -637,8 +654,11 @@ type {{.RelsType}} struct {
 // {{.RelType}} is the {{.Field}} relation of table {{$.Qualified}}.
 type {{.RelType}} struct{ {{.TargetColumns}} }
 
-// Target returns the related table joined in.
-func (r {{.RelType}}) Target() sqlkit.Table { return r.{{.TargetColumns}} }
+// Target returns the related table joined in. For a plain relation it is the
+// target's package table var (a RelationSource, so nested filters can recurse
+// through the target's own relations); a self-referential relation keeps the
+// aliased columns value so the self-join stays unambiguous.
+func (r {{.RelType}}) Target() sqlkit.Table { return {{if .Alias}}r.{{.TargetColumns}}{{else}}{{colVar .TargetColumns}}{{end}} }
 
 // JoinOn is the foreign-key join condition.
 func (r {{.RelType}}) JoinOn() sqlkit.Predicate { return {{.JoinOn}} }
@@ -672,6 +692,18 @@ func (t {{.TypeName}}) Query(ex sqlkit.Querier) sqlkit.SelectQuery { return ex.S
 // Q is shorthand for Query.
 func (t {{.TypeName}}) Q(ex sqlkit.Querier) sqlkit.SelectQuery { return ex.Select().From(t) }
 
+// Insert starts an INSERT into {{.Qualified}} bound to ex; feed it rows with
+// Values or a query with FromSelect.
+func (t {{.TypeName}}) Insert(ex sqlkit.Querier) sqlkit.InsertQuery { return ex.Insert(t) }
+
+// Update starts an UPDATE of {{.Qualified}} bound to ex; narrow it with
+// Filter or Where and choose columns with Set.
+func (t {{.TypeName}}) Update(ex sqlkit.Querier) sqlkit.UpdateQuery { return ex.Update(t) }
+
+// Delete starts a DELETE from {{.Qualified}} bound to ex; narrow it with
+// Filter or Where.
+func (t {{.TypeName}}) Delete(ex sqlkit.Querier) sqlkit.DeleteQuery { return ex.Delete(t) }
+
 // Relations lists the table's foreign-key relations, so Preload(target) can
 // resolve which relation reaches a related table.
 func (t {{.TypeName}}) Relations() []sqlkit.Relation {
@@ -679,6 +711,21 @@ func (t {{.TypeName}}) Relations() []sqlkit.Relation {
 	return []sqlkit.Relation{ {{- range $i, $r := .Relations}}{{if $i}}, {{end}}t.Rels.{{$r.Field}}{{end}} }
 {{- else}}
 	return nil
+{{- end}}
+}
+
+// {{.VarName}}Filter is a reusable filter bundle for {{.Qualified}}: pass it to a
+// query's Filter and its set fields are AND-combined. A column field maps to its
+// column and holds a FilterTerm (sqlkit.Eq(…), sqlkit.Le(…)) or a Predicate; a
+// relation field holds a nested filter on the related table, applied as a
+// correlated EXISTS (so it works in a SELECT, UPDATE, or DELETE alike). Unset
+// (zero) fields are skipped.
+type {{.VarName}}Filter struct {
+{{- range .Columns}}
+	{{.Field}} sqlkit.FilterTerm {{bq}}sqlkit:"{{.Name}}"{{bq}}
+{{- end}}
+{{- range .Relations}}
+	{{.Field}} *{{filterType .TargetColumns}}
 {{- end}}
 }
 
