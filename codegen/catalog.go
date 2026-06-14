@@ -296,6 +296,16 @@ func fkActionArgs(fk meta.ForeignKey) string {
 // migration autogenerator, which renders the same sqldef vocabulary.
 func SqldefTypeExpr(column meta.Column, dialect string) string {
 	engine, _ := column.Type.Engine(dialect)
+	expr := sqldefElementTypeExpr(engine, dialect)
+	if engine.Array {
+		return "sqldef.Array(" + expr + ")"
+	}
+	return expr
+}
+
+// sqldefElementTypeExpr renders the sqldef expression for a (non-array) engine
+// type; SqldefTypeExpr wraps it in sqldef.Array for array columns.
+func sqldefElementTypeExpr(engine meta.Engine, dialect string) string {
 	dataType := strings.ToLower(strings.TrimSpace(engine.Name))
 	if dialect == "mysql" {
 		switch dataType {

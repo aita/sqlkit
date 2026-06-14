@@ -35,6 +35,10 @@ type DataType struct {
 	// Go/GoFor and read back through meta.GoTyped; nil when unpinned, so the
 	// generator falls back to its built-in type tables.
 	goTypes map[string]meta.GoType
+	// array marks a one-dimensional array of the element type (PostgreSQL only),
+	// set by Array. The kind/names/length/precision/scale/goTypes describe the
+	// element; Engine resolves the element name and flags Array.
+	array bool
 }
 
 // dbTypeRegistry maps a canonical type kind to its engine type name per dialect.
@@ -108,8 +112,18 @@ func (t DataType) Engine(dialect string) (meta.Engine, bool) {
 	if !ok || name == "" {
 		return meta.Engine{}, false
 	}
-	return meta.Engine{Name: name, Length: t.length, Precision: t.precision, Scale: t.scale}, true
+	if t.array && !arrayDialect(dialect) {
+		// Arrays are a PostgreSQL feature; the column is unavailable elsewhere, so
+		// targeting another dialect reports the type as missing rather than
+		// rendering an invalid "elem[]".
+		return meta.Engine{}, false
+	}
+	return meta.Engine{Name: name, Length: t.length, Precision: t.precision, Scale: t.scale, Array: t.array}, true
 }
+
+// arrayDialect reports whether the dialect supports array column types. Only
+// PostgreSQL does; the inspector and registry both spell it "postgres".
+func arrayDialect(dialect string) bool { return dialect == "postgres" }
 
 // engineName resolves the engine type name for the dialect: an inline names pin
 // first, then the registry, then the bare kind verbatim for an unregistered
@@ -217,6 +231,19 @@ func Char(n int) DataType {
 // Decimal is an exact numeric with the given precision and scale.
 func Decimal(precision, scale int) DataType {
 	return DataType{kind: "decimal", precision: precision, scale: scale}
+}
+
+// Array declares a one-dimensional array of the element type, e.g.
+// Array(Text) for text[] or Array(Int) for int4[]. Arrays are a PostgreSQL
+// feature: the column is unavailable on other dialects (the generators report it
+// as a missing type when targeting them). The code generator maps the column to
+// a Go slice of the element's type ([]string, []int32, ...), honoring any Go
+// type pinned on the element with Go/GoFor. Nullability is irrelevant to the Go
+// type — a slice is already nilable — so a nullable array stays a slice, not a
+// pointer.
+func Array(elem DataType) DataType {
+	elem.array = true
+	return elem
 }
 
 // Type declares a column type by its kind name. A registered kind (the built-in

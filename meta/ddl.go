@@ -129,7 +129,11 @@ func (ct columnType) RenderType(d sql.Dialect) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("column %q has no type on dialect %s", ct.name, d.Name())
 	}
-	return d.ColumnType(eng.Name, eng.Length, eng.Precision, eng.Scale), nil
+	rendered := d.ColumnType(eng.Name, eng.Length, eng.Precision, eng.Scale)
+	if eng.Array {
+		rendered += "[]"
+	}
+	return rendered, nil
 }
 
 // RenderAutoIncrement resolves the auto-incrementing clause for the dialect.

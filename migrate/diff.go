@@ -264,8 +264,9 @@ func columnAlterations(alter *sql.AlterTableStmt, oc, nc meta.Column, d sql.Dial
 	}
 
 	if typeChanged {
-		eng, _ := nc.Type.Engine(d.Name())
-		*alter = alter.AlterColumnType(nc.Name, sql.EngineType{Name: eng.Name, Length: eng.Length, Precision: eng.Precision, Scale: eng.Scale})
+		// Use the column's own ColumnDef type, which renders array columns as
+		// "elem[]"; it is byte-identical to a plain EngineType for scalar columns.
+		*alter = alter.AlterColumnType(nc.Name, nc.ColumnDef().Type)
 	}
 	if nullChanged {
 		if nc.Nullable {

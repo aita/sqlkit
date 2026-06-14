@@ -56,6 +56,31 @@ func TestGenerateCatalogMySQL(t *testing.T) {
 	}
 }
 
+func TestGenerateCatalogArray(t *testing.T) {
+	tables := []meta.Table{{
+		Schema: meta.Schema{Name: "public"},
+		Name:   "docs",
+		Columns: []meta.Column{
+			{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true, HasDefault: true},
+			{Name: "tags", Type: meta.OfArray("postgres", "text", 0, 0, 0)},
+			{Name: "scores", Type: meta.OfArray("postgres", "int4", 0, 0, 0), Nullable: true},
+		},
+	}}
+	file, err := GenerateCatalog(meta.Metadata{Tables: tables}, CatalogOptions{PackageName: "schema"})
+	if err != nil {
+		t.Fatalf("GenerateCatalog() error = %v", err)
+	}
+	got := string(file.Content)
+	for _, want := range []string{
+		`sqldef.Column("tags", sqldef.Array(sqldef.Text)),`,
+		`sqldef.Column("scores", sqldef.Array(sqldef.Int), sqldef.Nullable()),`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated catalog missing %q\n%s", want, got)
+		}
+	}
+}
+
 func TestGenerateCatalogForeignKeys(t *testing.T) {
 	tables := []meta.Table{
 		{

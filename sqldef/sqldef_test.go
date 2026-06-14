@@ -567,6 +567,84 @@ func TestTypeUnavailableOnDialect(t *testing.T) {
 	}
 }
 
+// TestArrayColumns: Array(elem) declares a PostgreSQL array column. Its engine
+// resolves to the element type flagged as an array on PostgreSQL (so DDL renders
+// "elem[]"), is unavailable on MySQL/SQLite, and codegen maps it to a Go slice.
+func TestArrayColumns(t *testing.T) {
+	tags := sqldef.Array(sqldef.Text)
+	eng, ok := tags.Engine("postgres")
+	if !ok || eng.Name != "text" || !eng.Array {
+		t.Errorf("Array(Text).Engine(postgres) = %+v, ok=%v; want {Name:text, Array:true}", eng, ok)
+	}
+	if _, ok := tags.Engine("mysql"); ok {
+		t.Error("Array(Text).Engine(mysql) should be unavailable")
+	}
+	if _, ok := tags.Engine("sqlite"); ok {
+		t.Error("Array(Text).Engine(sqlite) should be unavailable")
+	}
+
+	c := sqldef.NewCatalog()
+	c.Table("docs",
+		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+		sqldef.Column("tags", sqldef.Array(sqldef.Text)),
+		sqldef.Column("scores", sqldef.Array(sqldef.Int), sqldef.Nullable()),
+	)
+	md, err := c.Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	ddl, err := md.CreateSQL(querysql.PostgreSQLDialect{})
+	if err != nil {
+		t.Fatalf("CreateSQL() error = %v", err)
+	}
+	if !strings.Contains(ddl, `"tags" text[] NOT NULL`) {
+		t.Errorf("DDL missing text[] column:\n%s", ddl)
+	}
+	if !strings.Contains(ddl, `"scores" integer[]`) {
+		t.Errorf("DDL missing integer[] column:\n%s", ddl)
+	}
+
+	// Arrays are PostgreSQL-only: targeting MySQL reports the type as missing.
+	if _, err := md.CreateSQL(querysql.MySQLDialect{}); err == nil || !strings.Contains(err.Error(), "no type on dialect mysql") {
+		t.Errorf("CreateSQL(mysql) error = %v, want unavailable-type error", err)
+	}
+
+	files, err := codegen.Generate(md, codegen.Options{PackageName: "docsdb"})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	body := string(files[0].Content)
+	if !strings.Contains(body, `sqlkit.NewColumn[[]string](info, "tags")`) {
+		t.Errorf("generated tags column is not []string:\n%s", body)
+	}
+	// A nullable array stays a slice, not a pointer.
+	if !strings.Contains(body, `sqlkit.NewColumn[[]int32](info, "scores")`) {
+		t.Errorf("generated scores column is not []int32:\n%s", body)
+	}
+}
+
+// TestArrayPinnedGoType: a Go type pinned on the element flows through codegen as
+// a slice of the pinned type.
+func TestArrayPinnedGoType(t *testing.T) {
+	c := sqldef.NewCatalog()
+	c.Table("things",
+		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+		sqldef.Column("ids", sqldef.Array(sqldef.UUID.Go(sqldef.GoTypeOf[string]()))),
+	)
+	md, err := c.Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	files, err := codegen.Generate(md, codegen.Options{PackageName: "x"})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if body := string(files[0].Content); !strings.Contains(body, `sqlkit.NewColumn[[]string](info, "ids")`) {
+		t.Errorf("pinned element type not used for array:\n%s", body)
+	}
+}
+
 func TestUnsupportedDialect(t *testing.T) {
 	_, err := querysql.DialectByName("oracle")
 	if err == nil || !strings.Contains(err.Error(), "unsupported dialect") {
