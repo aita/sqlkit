@@ -291,6 +291,25 @@ More write forms:
   predicate; `Column.Excluded()` refers to the proposed row.
 - **Cross-table writes** — `Update(t).From(src...)` and `Delete(t).Using(src...)`
   add `UPDATE … FROM` / `DELETE … USING` source lists.
+- **Optimistic locking** — `Update(t).CheckVersion(t.Version, current)` guards the
+  statement with `WHERE version = current` and bumps `SET version = version + 1`;
+  `Exec` returns `ErrVersionConflict` when no row matches, so a concurrent writer
+  that already advanced the version is detected rather than silently overwritten.
+
+```go
+_, err := db.Update(appdb.Users).
+    SetStruct(u, appdb.Users.Name).
+    Where(appdb.Users.ID.Eq(u.ID)).
+    CheckVersion(appdb.Users.Version, u.Version).
+    Exec(ctx)
+if errors.Is(err, sqlkit.ErrVersionConflict) {
+    // reload the row and retry
+}
+```
+
+This pairs with the pessimistic row locks (`ForUpdate` / `ForShare`, see [row
+locking](#querying-and-scanning)): take a row lock to serialize writers in a
+transaction, or check a version to detect a lost update without holding a lock.
 
 ```go
 _, err = db.Insert(appdb.Users).Values(u).

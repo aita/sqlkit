@@ -106,6 +106,12 @@ var ErrNoRows = stdsql.ErrNoRows
 // ErrTooManyRows is returned when a One query yields more than one row.
 var ErrTooManyRows = errors.New("sqlkit: query returned more than one row")
 
+// ErrVersionConflict is returned by an optimistic-locking UPDATE
+// (UpdateQuery.CheckVersion) whose Exec matches no row, meaning another writer
+// advanced the version column first or the row no longer exists. Test for it
+// with errors.Is to reload and retry.
+var ErrVersionConflict = errors.New("sqlkit: optimistic lock conflict: row was modified concurrently")
+
 // errNoExecutor is returned when a chain built from the package-level
 // constructors (meant for subqueries and ToSQL) is executed.
 var errNoExecutor = errors.New(

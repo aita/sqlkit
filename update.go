@@ -30,6 +30,9 @@ type UpdateQuery struct {
 	// forces a single statement.
 	chunkSize int
 	chunkOff  bool
+	// versionGuard records that CheckVersion added an optimistic-lock guard, so
+	// Exec reports ErrVersionConflict when the statement matches no row.
+	versionGuard bool
 }
 
 // Update creates an unbound UPDATE builder, for ToSQL or tests. Assignments
@@ -135,6 +138,27 @@ func (q UpdateQuery) structAssignments(row any, columns []AnyColumn) ([]sql.Assi
 			rv.Type(), q.def.Table.QualifiedName())
 	}
 	return assignments, nil
+}
+
+// CheckVersion enables optimistic locking on the UPDATE using col as the
+// version column. It guards the statement with WHERE col = current and bumps
+// SET col = col + 1, so a row another transaction already advanced past current
+// matches nothing. Exec then returns ErrVersionConflict when the statement
+// affects no row — the row was modified concurrently (or no longer exists) —
+// letting the caller reload and retry:
+//
+//	res, err := db.Update(Users).SetStruct(u, Users.Name).
+//	    Where(Users.ID.Eq(u.ID)).CheckVersion(Users.Version, u.Version).Exec(ctx)
+//	if errors.Is(err, sqlkit.ErrVersionConflict) { /* reload and retry */ }
+//
+// Pair it with Where to identify the row (typically by primary key); the version
+// guard is ANDed onto that predicate. The version column is referenced unqualified,
+// so CheckVersion targets a single-table UPDATE.
+func (q UpdateQuery) CheckVersion(col AnyColumn, current any) UpdateQuery {
+	name := col.ColumnName()
+	q.query = q.query.Set(sql.Set(name, sql.Add(sql.Col(name), sql.Val(1))))
+	q.versionGuard = true
+	return q.Where(Cond(sql.Eq(sql.Col(name), sql.Val(current))))
 }
 
 // WithCTE prepends common table expressions to the UPDATE, emitting a leading
@@ -259,7 +283,20 @@ func (q UpdateQuery) Exec(ctx context.Context) (stdsql.Result, error) {
 	}
 	// runExec consults splitStatements; a split runs the chunks atomically and
 	// sums their RowsAffected, otherwise the statement runs as one.
-	return runExec(ctx, q.ex, q)
+	res, err := runExec(ctx, q.ex, q)
+	if err != nil || !q.versionGuard {
+		return res, err
+	}
+	// An optimistic-lock guard (CheckVersion) matched no row: another writer
+	// advanced the version first, or the row is gone. Report the conflict.
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return res, err
+	}
+	if affected == 0 {
+		return res, ErrVersionConflict
+	}
+	return res, nil
 }
 
 // splitStatements implements splitter: it splits a lone WHERE column IN whose
