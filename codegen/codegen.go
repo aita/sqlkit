@@ -71,8 +71,8 @@ type Options struct {
 	// table bindings.
 	DTOSeparateFile bool
 
-	// TypeMapper customizes the SQL→Go type mapping. Defaults to
-	// DefaultTypeMapper{}.
+	// TypeMapper customizes the SQL→Go type mapping. Defaults to the zero
+	// DefaultTypeMapper (equivalent to NewDefaultTypeMapper(TypeMapperConfig{})).
 	TypeMapper TypeMapper
 
 	// DTOName derives the DTO type name from a table. Defaults to a singular,
@@ -267,7 +267,7 @@ func buildTable(table meta.Table, dialect string, mapper TypeMapper) (*tableMode
 		RelsType:    varName + "Rels",
 	}
 	for _, column := range table.Columns {
-		goType, err := mapper.GoTypeFor(column, dialect)
+		goType, err := mapper.GoTypeFor(table, column, dialect)
 		if err != nil {
 			return nil, fmt.Errorf("codegen: table %s: %w", table.Name, err)
 		}

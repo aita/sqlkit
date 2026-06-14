@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aita/sqlkit/codegen"
 	"github.com/aita/sqlkit/meta"
@@ -518,7 +519,7 @@ func TestBuildErrors(t *testing.T) {
 // has no engine name for.
 func TestTypeUnavailableOnDialect(t *testing.T) {
 	c := sqldef.NewCatalog()
-	c.Table("users", sqldef.Column("tags", sqldef.TypeFor("citext", "")))
+	c.Table("users", sqldef.Column("tags", sqldef.TypeFor(map[string]string{"postgres": "citext"})))
 	md, err := c.Build()
 	if err != nil {
 		t.Fatalf("Build() should not resolve types: %v", err)
@@ -532,5 +533,109 @@ func TestUnsupportedDialect(t *testing.T) {
 	_, err := querysql.DialectByName("oracle")
 	if err == nil || !strings.Contains(err.Error(), "unsupported dialect") {
 		t.Errorf("DialectByName(oracle) error = %v, want unsupported dialect", err)
+	}
+}
+
+// TestDataTypePinnedGoType: a DataType fixes the DB type and pins the Go type
+// (DataType.Go), so the DB type still resolves per dialect for DDL while the
+// pinned Go type flows through codegen — without a separate TypeMapper override.
+func TestDataTypePinnedGoType(t *testing.T) {
+	// Go implements meta.GoTyped.
+	var _ meta.GoTyped = sqldef.Type("citext")
+
+	citext := sqldef.Type("citext").Go(sqldef.GoTypeOf[string]())
+	if gt, ok := citext.GoType("postgres"); !ok || gt.Name != "string" {
+		t.Errorf("GoType(postgres) = %+v, %v; want string", gt, ok)
+	}
+	// The DB type is still fixed and resolves per dialect (verbatim for an
+	// unregistered kind).
+	if eng, _ := citext.Engine("postgres"); eng.Name != "citext" {
+		t.Errorf("Engine(postgres) = %q, want citext", eng.Name)
+	}
+
+	c := sqldef.NewCatalog()
+	c.Table("things",
+		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+		sqldef.Column("tag", citext),
+		sqldef.Column("ref", sqldef.TypeFor(map[string]string{"postgres": "uuid", "mysql": "char"}).
+			Go(sqldef.GoType(reflect.TypeOf(time.Time{})))),
+	)
+	md := buildCatalog(t, c)
+	files, err := codegen.Generate(md, codegen.Options{PackageName: "x"})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	body := string(files[0].Content)
+	if !strings.Contains(body, `sqlkit.NewColumn[string](info, "tag")`) {
+		t.Errorf("pinned Go type for citext not used:\n%s", body)
+	}
+	if !strings.Contains(body, `sqlkit.NewColumn[time.Time](info, "ref")`) {
+		t.Errorf("reflect-derived pinned type not used:\n%s", body)
+	}
+}
+
+// TestDataTypeGoForPerDialect: GoFor pins a distinct Go type per dialect.
+func TestDataTypeGoForPerDialect(t *testing.T) {
+	dt := sqldef.Type("json").
+		GoFor("postgres", meta.GoType{ImportPath: "encoding/json", Name: "json.RawMessage"}).
+		GoFor("mysql", meta.GoType{Name: "string"})
+	if gt, ok := dt.GoType("postgres"); !ok || gt.Name != "json.RawMessage" {
+		t.Errorf("GoType(postgres) = %+v, %v; want json.RawMessage", gt, ok)
+	}
+	if gt, ok := dt.GoType("mysql"); !ok || gt.Name != "string" {
+		t.Errorf("GoType(mysql) = %+v, %v; want string", gt, ok)
+	}
+	// Pinning is copy-on-write: the base type is not mutated.
+	if _, ok := sqldef.Type("json").GoType("postgres"); ok {
+		t.Errorf("base Type(json) should have no pinned Go type")
+	}
+}
+
+// TestRegisterTypeAndDialects: a custom kind registered for postgres/mysql/sqlite
+// resolves per dialect, and registering can extend a built-in kind with a new
+// dialect.
+func TestRegisterTypeAndDialects(t *testing.T) {
+	sqldef.RegisterType("geometry", map[string]string{
+		"postgres": "geometry", "mysql": "geometry", "sqlite": "blob",
+	})
+	geo := sqldef.Type("geometry")
+	for dialect, want := range map[string]string{"postgres": "geometry", "mysql": "geometry", "sqlite": "blob"} {
+		if eng, ok := geo.Engine(dialect); !ok || eng.Name != want {
+			t.Errorf("geometry Engine(%s) = %q (ok=%v), want %q", dialect, eng.Name, ok, want)
+		}
+	}
+
+	// Built-in BigInt resolves sqlite from the default registration.
+	if eng, ok := sqldef.BigInt.Engine("sqlite"); !ok || eng.Name != "integer" {
+		t.Errorf("BigInt Engine(sqlite) = %q (ok=%v), want integer", eng.Name, ok)
+	}
+	// A dialect not registered for a kind is unavailable.
+	if _, ok := geo.Engine("oracle"); ok {
+		t.Errorf("geometry should be unavailable on an unregistered dialect")
+	}
+}
+
+// TestSQLiteEndToEnd: a catalog of built-in types generates SQLite bindings.
+func TestSQLiteEndToEnd(t *testing.T) {
+	c := sqldef.NewCatalog()
+	c.Table("items",
+		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey()),
+		sqldef.Column("label", sqldef.Text),
+		sqldef.Column("active", sqldef.Bool),
+	)
+	md := buildCatalog(t, c)
+	files, err := codegen.Generate(md, codegen.Options{PackageName: "x", Dialect: "sqlite"})
+	if err != nil {
+		t.Fatalf("Generate(sqlite) error = %v", err)
+	}
+	body := string(files[0].Content)
+	for _, want := range []string{
+		`sqlkit.NewColumn[int64](info, "id")`,
+		`sqlkit.NewColumn[string](info, "label")`,
+		`sqlkit.NewColumn[bool](info, "active")`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("SQLite end-to-end missing %q:\n%s", want, body)
+		}
 	}
 }

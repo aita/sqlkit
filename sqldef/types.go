@@ -1,77 +1,244 @@
 package sqldef
 
-import "github.com/aita/sqlkit/meta"
+import (
+	"reflect"
+	"sync"
 
-// DataType is a portable column type implementing meta.Type: it knows the
-// engine type name on each dialect plus any length/precision modifiers, and
-// resolves to one when a generator picks a dialect. The DSL's type
-// constructors return it; sqldef owns the per-dialect knowledge so meta stays
-// dialect-free.
+	"github.com/aita/sqlkit/meta"
+)
+
+// DataType is a portable column type implementing meta.Type. It names a
+// canonical type kind (e.g. "bigint", "varchar") plus any length/precision
+// modifiers; the per-dialect engine type name is resolved through the type
+// registry when a generator picks a dialect, so meta stays dialect-free and new
+// dialects (sqlite, ...) are added by registering, not by changing this type.
+//
+// A DataType fixes the DB type — Type names a registered kind (or, for an
+// unregistered name, one used verbatim on every dialect) and TypeFor pins a
+// distinct engine name per dialect inline — and can additionally pin the Go type
+// the code generator maps it to with Go/GoFor, so a custom column type is fully
+// specified at the schema source.
 type DataType struct {
-	postgres  string
-	mysql     string
+	// kind is the canonical type kind, resolved through the registry; when no
+	// names map is set and the kind is unregistered it is used verbatim on every
+	// dialect (the Type escape hatch).
+	kind string
+	// names pins the engine type name per dialect inline (TypeFor), overriding
+	// the registry; a dialect missing from it makes the type unavailable there.
+	names map[string]string
+	// length/precision/scale carry the type modifiers, e.g. varchar(length) or
+	// decimal(precision, scale).
 	length    int
 	precision int
 	scale     int
+	// goTypes pins the Go type per dialect ("" key = every dialect), set by
+	// Go/GoFor and read back through meta.GoTyped; nil when unpinned, so the
+	// generator falls back to its built-in type tables.
+	goTypes map[string]meta.GoType
+}
+
+// dbTypeRegistry maps a canonical type kind to its engine type name per dialect.
+// RegisterType writes it and DataType.Engine reads it; built-in standard types
+// are registered in init. It is guarded by a mutex so registration from
+// different packages' init functions is safe.
+var (
+	dbTypeMu       sync.RWMutex
+	dbTypeRegistry = map[string]map[string]string{}
+)
+
+// RegisterType registers (or extends) the engine type names a type kind resolves
+// to per dialect, so a custom type or a new dialect is added in one place rather
+// than by changing the DSL. names is keyed by dialect ("postgres", "mysql",
+// "sqlite", ...); entries merge into any existing registration for the kind, so
+// a later call can add a dialect to a built-in kind. After registering, declare
+// columns of the kind with Type(kind):
+//
+//	sqldef.RegisterType("uuid", map[string]string{"sqlite": "text"})
+//	sqldef.RegisterType("geometry", map[string]string{
+//		"postgres": "geometry", "mysql": "geometry", "sqlite": "blob",
+//	})
+//	sqldef.Column("shape", sqldef.Type("geometry"))
+func RegisterType(kind string, names map[string]string) {
+	dbTypeMu.Lock()
+	defer dbTypeMu.Unlock()
+	existing := dbTypeRegistry[kind]
+	if existing == nil {
+		existing = make(map[string]string, len(names))
+		dbTypeRegistry[kind] = existing
+	}
+	for dialect, name := range names {
+		existing[dialect] = name
+	}
+}
+
+// lookupDBType returns the registered per-dialect names for a kind.
+func lookupDBType(kind string) (map[string]string, bool) {
+	dbTypeMu.RLock()
+	defer dbTypeMu.RUnlock()
+	m, ok := dbTypeRegistry[kind]
+	return m, ok
+}
+
+func init() {
+	for kind, names := range map[string]map[string]string{
+		"bool":      {"postgres": "bool", "mysql": "boolean", "sqlite": "boolean"},
+		"smallint":  {"postgres": "int2", "mysql": "smallint", "sqlite": "integer"},
+		"int":       {"postgres": "int4", "mysql": "int", "sqlite": "integer"},
+		"bigint":    {"postgres": "int8", "mysql": "bigint", "sqlite": "integer"},
+		"float":     {"postgres": "float4", "mysql": "float", "sqlite": "real"},
+		"double":    {"postgres": "float8", "mysql": "double", "sqlite": "real"},
+		"text":      {"postgres": "text", "mysql": "text", "sqlite": "text"},
+		"bytes":     {"postgres": "bytea", "mysql": "blob", "sqlite": "blob"},
+		"json":      {"postgres": "jsonb", "mysql": "json", "sqlite": "text"},
+		"uuid":      {"postgres": "uuid", "mysql": "char", "sqlite": "text"},
+		"date":      {"postgres": "date", "mysql": "date", "sqlite": "text"},
+		"time":      {"postgres": "time", "mysql": "time", "sqlite": "text"},
+		"timestamp": {"postgres": "timestamptz", "mysql": "datetime", "sqlite": "datetime"},
+		"varchar":   {"postgres": "varchar", "mysql": "varchar", "sqlite": "text"},
+		"char":      {"postgres": "bpchar", "mysql": "char", "sqlite": "text"},
+		"decimal":   {"postgres": "numeric", "mysql": "decimal", "sqlite": "numeric"},
+	} {
+		RegisterType(kind, names)
+	}
 }
 
 // Engine implements meta.Type.
 func (t DataType) Engine(dialect string) (meta.Engine, bool) {
-	name := t.postgres
-	if dialect == "mysql" {
-		name = t.mysql
-	}
-	if name == "" {
+	name, ok := t.engineName(dialect)
+	if !ok || name == "" {
 		return meta.Engine{}, false
 	}
 	return meta.Engine{Name: name, Length: t.length, Precision: t.precision, Scale: t.scale}, true
 }
 
-// Portable column types. Each knows the engine type name of both dialects; the
-// generators pick the one for the dialect they render.
+// engineName resolves the engine type name for the dialect: an inline names pin
+// first, then the registry, then the bare kind verbatim for an unregistered
+// name (the Type escape hatch).
+func (t DataType) engineName(dialect string) (string, bool) {
+	if t.names != nil {
+		name, ok := t.names[dialect]
+		return name, ok
+	}
+	if reg, ok := lookupDBType(t.kind); ok {
+		name, ok := reg[dialect]
+		return name, ok
+	}
+	return t.kind, t.kind != ""
+}
+
+// GoType implements meta.GoTyped: it reports the Go type pinned for the dialect
+// (with Go/GoFor), so codegen's DefaultTypeMapper maps the column to it without
+// a separate override. ok is false when no type is pinned, falling back to the
+// generator's tables.
+func (t DataType) GoType(dialect string) (meta.GoType, bool) {
+	if t.goTypes == nil {
+		return meta.GoType{}, false
+	}
+	if gt, ok := t.goTypes[dialect]; ok {
+		return gt, true
+	}
+	gt, ok := t.goTypes[""]
+	return gt, ok
+}
+
+// Go pins the Go type the code generator maps this column type to on every
+// dialect, returning a copy of the type. Build the meta.GoType with the GoType
+// or GoTypeOf helpers, e.g. to fix the mapping of a custom DB type at the schema
+// source:
+//
+//	sqldef.Type("citext").Go(sqldef.GoTypeOf[string]())
+//	sqldef.Type("uuid").Go(sqldef.GoTypeOf[uuid.UUID]())
+//
+// For a nullable column the generator still applies the pointer; pin the bare
+// type. GoFor pins a different type per dialect.
+func (t DataType) Go(gt meta.GoType) DataType {
+	return t.GoFor("", gt)
+}
+
+// GoFor pins the Go type for a single dialect ("postgres", "mysql", ...); an
+// empty dialect pins the default used when a dialect has no specific pin. Chain
+// calls to pin dialects distinctly. It returns a copy of the type.
+func (t DataType) GoFor(dialect string, gt meta.GoType) DataType {
+	pinned := make(map[string]meta.GoType, len(t.goTypes)+1)
+	for k, v := range t.goTypes {
+		pinned[k] = v
+	}
+	pinned[dialect] = gt
+	t.goTypes = pinned
+	return t
+}
+
+// GoType derives a meta.GoType from a Go type for pinning a column's Go type
+// (DataType.Go): the import path comes from the type's package and the name from
+// its source spelling (e.g. "uuid.UUID", "string"). GoTypeOf is the generic,
+// reflection-free spelling of the common case.
+//
+//	sqldef.GoType(reflect.TypeOf(uuid.UUID{})) // {ImportPath: "github.com/google/uuid", Name: "uuid.UUID"}
+func GoType(t reflect.Type) meta.GoType {
+	return meta.GoType{ImportPath: t.PkgPath(), Name: t.String()}
+}
+
+// GoTypeOf derives a meta.GoType from the type parameter T, e.g.
+// sqldef.GoTypeOf[uuid.UUID](). It is GoType applied to reflect.TypeOf a T.
+func GoTypeOf[T any]() meta.GoType {
+	return GoType(reflect.TypeOf((*T)(nil)).Elem())
+}
+
+// Portable column types. Each names a registered kind, resolved to the engine
+// name of the chosen dialect by the generators.
 var (
-	Bool     = TypeFor("bool", "boolean")
-	SmallInt = TypeFor("int2", "smallint")
-	Int      = TypeFor("int4", "int")
-	BigInt   = TypeFor("int8", "bigint")
-	Float    = TypeFor("float4", "float")
-	Double   = TypeFor("float8", "double")
-	Text     = TypeFor("text", "text")
-	Bytes    = TypeFor("bytea", "blob")
-	JSON     = TypeFor("jsonb", "json")
-	UUID     = DataType{postgres: "uuid", mysql: "char", length: 36}
-	Date     = TypeFor("date", "date")
-	Time     = TypeFor("time", "time")
+	Bool     = Type("bool")
+	SmallInt = Type("smallint")
+	Int      = Type("int")
+	BigInt   = Type("bigint")
+	Float    = Type("float")
+	Double   = Type("double")
+	Text     = Type("text")
+	Bytes    = Type("bytes")
+	JSON     = Type("json")
+	UUID     = DataType{kind: "uuid", length: 36}
+	Date     = Type("date")
+	Time     = Type("time")
 	// Timestamp is a point in time: timestamptz on PostgreSQL, datetime on
 	// MySQL. Use Type("timestamp") for the engines' bare timestamp types.
-	Timestamp = TypeFor("timestamptz", "datetime")
+	Timestamp = Type("timestamp")
 )
 
 // VarChar is a variable-length string of at most n characters.
 func VarChar(n int) DataType {
-	return DataType{postgres: "varchar", mysql: "varchar", length: n}
+	return DataType{kind: "varchar", length: n}
 }
 
 // Char is a fixed-length string of n characters.
 func Char(n int) DataType {
-	return DataType{postgres: "bpchar", mysql: "char", length: n}
+	return DataType{kind: "char", length: n}
 }
 
 // Decimal is an exact numeric with the given precision and scale.
 func Decimal(precision, scale int) DataType {
-	return DataType{postgres: "numeric", mysql: "decimal", precision: precision, scale: scale}
+	return DataType{kind: "decimal", precision: precision, scale: scale}
 }
 
-// Type declares a column type by its engine type name, used verbatim on every
-// dialect (e.g. Type("citext")). The name must be one the code generator's
-// type mapper knows, or be covered by a TypeMapper override.
+// Type declares a column type by its kind name. A registered kind (the built-in
+// standard types, or one added with RegisterType) resolves to its engine name
+// per dialect; an unregistered name is used verbatim on every dialect (e.g.
+// Type("citext")). For a custom type the generator's tables don't know, pin its
+// Go type with Go/GoFor (e.g. Type("citext").Go(sqldef.GoTypeOf[string]())).
 func Type(name string) DataType {
-	return TypeFor(name, name)
+	return DataType{kind: name}
 }
 
-// TypeFor declares a column type with a distinct engine type name per
-// dialect. An empty name makes the type unavailable on that dialect, which the
-// generators report as an error when targeting it.
-func TypeFor(postgres, mysql string) DataType {
-	return DataType{postgres: postgres, mysql: mysql}
+// TypeFor declares a column type with a distinct, fixed engine type name per
+// dialect inline, keyed by dialect name ("postgres", "mysql", "sqlite", ...). A
+// dialect absent from names makes the type unavailable there, which the
+// generators report as an error when targeting it. For a reusable type, prefer
+// RegisterType plus Type. Chain Go/GoFor to also pin the Go type.
+//
+//	sqldef.TypeFor(map[string]string{"postgres": "uuid", "mysql": "char"})
+func TypeFor(names map[string]string) DataType {
+	pinned := make(map[string]string, len(names))
+	for dialect, name := range names {
+		pinned[dialect] = name
+	}
+	return DataType{names: pinned}
 }

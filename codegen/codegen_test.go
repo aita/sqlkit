@@ -2,6 +2,7 @@ package codegen
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -237,13 +238,140 @@ func TestDTONameCollisionForSingularTable(t *testing.T) {
 }
 
 func TestCustomTypeMapper(t *testing.T) {
-	mapper := DefaultTypeMapper{Overrides: map[string]GoType{
+	mapper := NewDefaultTypeMapper(TypeMapperConfig{Overrides: map[string]GoType{
 		"timestamptz": {ImportPath: "time", Name: "time.Time"},
 		"int8":        {Name: "uint64"},
-	}}
+	}})
 	body := string(generateSingle(t, fixtureTables(), Options{PackageName: "blogdb", TypeMapper: mapper}))
 	if !strings.Contains(body, "sqlkit.Column[uint64]") {
 		t.Fatalf("custom type mapper override not applied:\n%s", body)
+	}
+}
+
+func TestColumnNameTypeMapper(t *testing.T) {
+	mapper := NewDefaultTypeMapper(TypeMapperConfig{ColumnOverrides: map[string]GoType{
+		// Fully qualified: only public.users.id, not posts.id.
+		"public.users.id": {ImportPath: "github.com/google/uuid", Name: "uuid.UUID"},
+		// Bare column name: every "title" column.
+		"title": {Name: "myString"},
+	}})
+	body := string(generateSingle(t, fixtureTables(), Options{PackageName: "blogdb", TypeMapper: mapper}))
+	if !strings.Contains(body, `sqlkit.NewColumn[uuid.UUID](info, "id")`) {
+		t.Errorf("qualified column override not applied to users.id:\n%s", body)
+	}
+	// posts.id is not overridden, so it stays the default int64.
+	if !strings.Contains(body, `sqlkit.NewColumn[int64](info, "id")`) {
+		t.Errorf("posts.id should keep the default int64 mapping:\n%s", body)
+	}
+	if !strings.Contains(body, `sqlkit.NewColumn[myString](info, "title")`) {
+		t.Errorf("bare column override not applied to title:\n%s", body)
+	}
+	if !strings.Contains(body, `"github.com/google/uuid"`) {
+		t.Errorf("override import not emitted:\n%s", body)
+	}
+}
+
+func TestColumnOverrideNullablePointer(t *testing.T) {
+	// A name-based override on a nullable column still becomes a pointer.
+	mapper := NewDefaultTypeMapper(TypeMapperConfig{ColumnOverrides: map[string]GoType{
+		"name": {ImportPath: "github.com/google/uuid", Name: "uuid.UUID"},
+	}})
+	body := string(generateSingle(t, fixtureTables(), Options{PackageName: "blogdb", TypeMapper: mapper}))
+	if !strings.Contains(body, `sqlkit.NewColumn[*uuid.UUID](info, "name")`) {
+		t.Errorf("nullable column override should be a pointer:\n%s", body)
+	}
+}
+
+// pinnedType is a meta.Type that fixes an engine name and pins a Go type,
+// mirroring what sqldef's DataType.Go produces, to exercise the GoTyped path of
+// DefaultTypeMapper without importing sqldef.
+type pinnedType struct {
+	name   string
+	goType meta.GoType
+}
+
+func (p pinnedType) Engine(string) (meta.Engine, bool) { return meta.Engine{Name: p.name}, true }
+func (p pinnedType) GoType(string) (meta.GoType, bool) { return p.goType, true }
+
+func TestPinnedGoTypeFromType(t *testing.T) {
+	// A column whose meta.Type pins a Go type generates without an override, even
+	// for an engine type the built-in tables don't know.
+	tables := []meta.Table{{
+		Schema: meta.Schema{Name: "public"},
+		Name:   "things",
+		Columns: []meta.Column{
+			{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true},
+			{Name: "tag", Type: pinnedType{name: "citext", goType: meta.GoType{Name: "string"}}},
+			{Name: "ref", Type: pinnedType{name: "uuid", goType: meta.GoType{ImportPath: "github.com/google/uuid", Name: "uuid.UUID"}}},
+		},
+	}}
+	body := string(generateSingle(t, tables, Options{PackageName: "x"}))
+	if !strings.Contains(body, `sqlkit.NewColumn[string](info, "tag")`) {
+		t.Errorf("pinned string type not used for citext:\n%s", body)
+	}
+	if !strings.Contains(body, `sqlkit.NewColumn[uuid.UUID](info, "ref")`) {
+		t.Errorf("pinned uuid.UUID type not used:\n%s", body)
+	}
+}
+
+func TestExplicitOverrideBeatsPinnedType(t *testing.T) {
+	// A codegen-side Override wins over a Go type pinned on the meta.Type.
+	tables := []meta.Table{{
+		Schema:  meta.Schema{Name: "public"},
+		Name:    "things",
+		Columns: []meta.Column{{Name: "tag", Type: pinnedType{name: "citext", goType: meta.GoType{Name: "string"}}}},
+	}}
+	mapper := NewDefaultTypeMapper(TypeMapperConfig{Overrides: map[string]GoType{"citext": {Name: "myText"}}})
+	body := string(generateSingle(t, tables, Options{PackageName: "x", TypeMapper: mapper}))
+	if !strings.Contains(body, `sqlkit.NewColumn[myText](info, "tag")`) {
+		t.Errorf("explicit override should beat pinned type:\n%s", body)
+	}
+}
+
+func TestTypeMapperConfigOverrideFunc(t *testing.T) {
+	// OverrideFunc is consulted first; ok=false falls through to the rest.
+	mapper := NewDefaultTypeMapper(TypeMapperConfig{
+		Overrides: map[string]GoType{"int8": {Name: "shouldNotWin"}},
+		OverrideFunc: func(table meta.Table, column meta.Column, dialect string) (GoType, bool, error) {
+			if column.Name == "id" {
+				return GoType{ImportPath: "github.com/google/uuid", Name: "uuid.UUID"}, true, nil
+			}
+			return GoType{}, false, nil
+		},
+	})
+	body := string(generateSingle(t, fixtureTables(), Options{PackageName: "blogdb", TypeMapper: mapper}))
+	// OverrideFunc wins for id, even over the int8 Override.
+	if !strings.Contains(body, `sqlkit.NewColumn[uuid.UUID](info, "id")`) {
+		t.Errorf("OverrideFunc should resolve id:\n%s", body)
+	}
+	// title falls through OverrideFunc (ok=false) to the default string mapping.
+	if !strings.Contains(body, `sqlkit.NewColumn[string](info, "title")`) {
+		t.Errorf("OverrideFunc fallthrough should reach the default mapping:\n%s", body)
+	}
+}
+
+func TestTypeMapperConfigOverrideFuncError(t *testing.T) {
+	mapper := NewDefaultTypeMapper(TypeMapperConfig{
+		OverrideFunc: func(table meta.Table, column meta.Column, dialect string) (GoType, bool, error) {
+			return GoType{}, false, fmt.Errorf("boom")
+		},
+	})
+	if _, err := Generate(meta.Metadata{Tables: fixtureTables()}, Options{PackageName: "x", TypeMapper: mapper}); err == nil {
+		t.Fatal("Generate() should propagate the OverrideFunc error")
+	}
+}
+
+func TestTypeMapperFuncSeesTable(t *testing.T) {
+	// The mapper receives the table, so a function mapper can key on its name.
+	mapper := TypeMapperFunc(func(table meta.Table, column meta.Column, dialect string) (GoType, error) {
+		if table.Name == "posts" && column.Name == "title" {
+			return GoType{Name: "headline"}, nil
+		}
+		return DefaultTypeMapper{}.GoTypeFor(table, column, dialect)
+	})
+	body := string(generateSingle(t, fixtureTables(), Options{PackageName: "blogdb", TypeMapper: mapper}))
+	if !strings.Contains(body, `sqlkit.NewColumn[headline](info, "title")`) {
+		t.Errorf("function mapper did not see the table name:\n%s", body)
 	}
 }
 
@@ -262,6 +390,32 @@ func TestMySQLTypeMapping(t *testing.T) {
 	for _, want := range []string{"sqlkit.Column[int64]", "sqlkit.Column[int32]", "sqlkit.Column[string]", "sqlkit.Column[time.Time]"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("MySQL mapping missing %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestSQLiteTypeMapping(t *testing.T) {
+	tables := []meta.Table{{
+		Schema: meta.Schema{Name: ""},
+		Name:   "items",
+		Columns: []meta.Column{
+			{Name: "id", Type: meta.Of("sqlite", "integer", 0, 0, 0), PrimaryKey: true, HasDefault: true},
+			{Name: "ratio", Type: meta.Of("sqlite", "real", 0, 0, 0)},
+			{Name: "label", Type: meta.Of("sqlite", "text", 0, 0, 0)},
+			{Name: "active", Type: meta.Of("sqlite", "boolean", 0, 0, 0)},
+			{Name: "created_at", Type: meta.Of("sqlite", "datetime", 0, 0, 0)},
+		},
+	}}
+	body := string(generateSingle(t, tables, Options{PackageName: "appdb", Dialect: "sqlite"}))
+	for _, want := range []string{
+		`sqlkit.NewColumn[int64](info, "id")`,
+		`sqlkit.NewColumn[float64](info, "ratio")`,
+		`sqlkit.NewColumn[string](info, "label")`,
+		`sqlkit.NewColumn[bool](info, "active")`,
+		`sqlkit.NewColumn[time.Time](info, "created_at")`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("SQLite mapping missing %q:\n%s", want, body)
 		}
 	}
 }
