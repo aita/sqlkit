@@ -2,6 +2,7 @@ package sql_test
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	. "github.com/aita/sqlkit/sql"
@@ -190,5 +191,59 @@ func TestJoinWithoutSourceFails(t *testing.T) {
 	query := Select(Col("id")).Join(Table{Name: "users"}, Eq(Col("a"), Col("b")))
 	if _, _, err := query.ToSQL(PostgreSQLDialect{}); err == nil {
 		t.Fatal("JOIN without FROM compiled, want error")
+	}
+}
+
+func TestJoinUsing(t *testing.T) {
+	assertSQL(t,
+		Select(Col("id")).From(Table{Name: "users"}).
+			JoinUsing(Table{Name: "accounts"}, "user_id", "tenant_id"),
+		`SELECT "id" FROM "users" JOIN "accounts" USING ("user_id", "tenant_id")`, nil)
+
+	assertSQL(t,
+		Select(Col("id")).From(Table{Name: "users"}).
+			LeftJoinUsing(Table{Name: "accounts"}, "user_id"),
+		`SELECT "id" FROM "users" LEFT JOIN "accounts" USING ("user_id")`, nil)
+}
+
+func TestNaturalJoin(t *testing.T) {
+	assertSQL(t,
+		Select(Col("id")).From(Table{Name: "users"}).NaturalJoin(Table{Name: "accounts"}),
+		`SELECT "id" FROM "users" NATURAL JOIN "accounts"`, nil)
+
+	assertSQL(t,
+		Select(Col("id")).From(Table{Name: "users"}).NaturalLeftJoin(Table{Name: "accounts"}),
+		`SELECT "id" FROM "users" NATURAL LEFT JOIN "accounts"`, nil)
+}
+
+func TestJoinRejectsConflictingConditions(t *testing.T) {
+	c := NewCompiler(PostgreSQLDialect{})
+
+	// A NATURAL join carrying USING is contradictory.
+	natural := JoinClause{Kind: "JOIN", Source: Table{Name: "b"}, Natural: true, Using: []string{"id"}}
+	if _, _, err := c.CompileJoin(natural); err == nil || !strings.Contains(err.Error(), "NATURAL") {
+		t.Fatalf("CompileJoin(NATURAL+USING) error = %v, want NATURAL rejection", err)
+	}
+
+	// ON and USING are mutually exclusive.
+	both := JoinClause{Kind: "JOIN", Source: Table{Name: "b"}, On: Eq(Col("a.id"), Col("b.id")), Using: []string{"id"}}
+	if _, _, err := c.CompileJoin(both); err == nil || !strings.Contains(err.Error(), "ON and USING") {
+		t.Fatalf("CompileJoin(ON+USING) error = %v, want ON/USING rejection", err)
+	}
+}
+
+func TestDistinctOn(t *testing.T) {
+	assertSQL(t,
+		Select(Col("user_id"), Col("amount")).From(Table{Name: "orders"}).
+			DistinctOn(Col("user_id")).
+			OrderBy(Asc(Col("user_id")), Desc(Col("created_at"))),
+		`SELECT DISTINCT ON ("user_id") "user_id", "amount" FROM "orders" ORDER BY "user_id", "created_at" DESC`,
+		nil)
+}
+
+func TestDistinctOnRejectedOnMySQL(t *testing.T) {
+	q := Select(Col("user_id")).From(Table{Name: "orders"}).DistinctOn(Col("user_id"))
+	if _, _, err := q.ToSQL(MySQLDialect{}); err == nil || !strings.Contains(err.Error(), "DISTINCT ON") {
+		t.Fatalf("ToSQL(mysql) error = %v, want DISTINCT ON rejection", err)
 	}
 }

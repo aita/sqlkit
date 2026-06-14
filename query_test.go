@@ -979,3 +979,64 @@ func TestUpdateWithoutReturningHasNoAll(t *testing.T) {
 		`UPDATE "public"."users" SET "email" = $1 WHERE ("public"."users"."id" = $2)`,
 		[]any{"x@example.com", int64(1)})
 }
+
+func TestColumnIsDistinctFrom(t *testing.T) {
+	// IS DISTINCT FROM against a value and against another typed column.
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).Where(Users.Email.IsDistinctFrom("a@x.com")),
+		`SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."email" IS DISTINCT FROM $1)`,
+		[]any{"a@x.com"})
+
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).Where(Users.ID.IsNotDistinctFromExpr(Posts.UserID)),
+		`SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" IS NOT DISTINCT FROM "public"."posts"."user_id")`,
+		nil)
+}
+
+func TestColumnEqAnyAndNeAll(t *testing.T) {
+	// EqAny binds the whole list as one array parameter (PostgreSQL's IN
+	// replacement), so a single $1 carries all values.
+	q := sqlkit.Select(Users.ID).From(Users).Where(Users.ID.EqAny(1, 2, 3))
+	gotSQL, args, err := q.ToSQL(sql.PostgreSQLDialect{})
+	if err != nil {
+		t.Fatalf("ToSQL() error = %v", err)
+	}
+	wantSQL := `SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" = ANY($1))`
+	if gotSQL != wantSQL {
+		t.Fatalf("ToSQL() = %q, want %q", gotSQL, wantSQL)
+	}
+	if want := []any{[]int64{1, 2, 3}}; !reflect.DeepEqual(args, want) {
+		t.Fatalf("args = %#v, want %#v", args, want)
+	}
+
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).Where(Users.ID.NeAll(4, 5)),
+		`SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" <> ALL($1))`,
+		[]any{[]int64{4, 5}})
+}
+
+func TestColumnSimilarTo(t *testing.T) {
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).Where(sqlkit.SimilarTo(Users.Email, "%@example.com")),
+		`SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."email" SIMILAR TO $1)`,
+		[]any{"%@example.com"})
+}
+
+func TestSelectJoinUsingAndNatural(t *testing.T) {
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).JoinUsing(Posts, "id"),
+		`SELECT "public"."users"."id" FROM "public"."users" JOIN "public"."posts" USING ("id")`, nil)
+
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).NaturalLeftJoin(Posts),
+		`SELECT "public"."users"."id" FROM "public"."users" NATURAL LEFT JOIN "public"."posts"`, nil)
+}
+
+func TestSelectDistinctOn(t *testing.T) {
+	assertToSQL(t,
+		sqlkit.Select(Posts.UserID, Posts.Title).From(Posts).
+			DistinctOn(Posts.UserID).
+			OrderBy(Posts.UserID.Asc(), Posts.ID.Desc()),
+		`SELECT DISTINCT ON ("public"."posts"."user_id") "public"."posts"."user_id", "public"."posts"."title" `+
+			`FROM "public"."posts" ORDER BY "public"."posts"."user_id", "public"."posts"."id" DESC`, nil)
+}

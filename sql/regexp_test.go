@@ -89,3 +89,24 @@ func TestRegexpStandard(t *testing.T) {
 		}
 	}
 }
+
+func TestSimilarTo(t *testing.T) {
+	assertSQL(t,
+		Select(Col("id")).From(Table{Name: "t"}).Where(SimilarTo(Col("name"), Val("%(foo|bar)%"))),
+		`SELECT "id" FROM "t" WHERE ("name" SIMILAR TO $1)`, []any{"%(foo|bar)%"})
+
+	assertSQL(t,
+		Select(Col("id")).From(Table{Name: "t"}).Where(NotSimilarTo(Col("name"), Val("a%"))),
+		`SELECT "id" FROM "t" WHERE ("name" NOT SIMILAR TO $1)`, []any{"a%"})
+
+	assertStandard(t,
+		Select(Col("id")).From(Table{Name: "t"}).Where(SimilarTo(Col("name"), Val("a%"))),
+		`SELECT "id" FROM "t" WHERE ("name" SIMILAR TO ?)`, []any{"a%"})
+}
+
+func TestSimilarToRejectedOnMySQL(t *testing.T) {
+	q := Select(Col("id")).From(Table{Name: "t"}).Where(SimilarTo(Col("name"), Val("a%")))
+	if _, _, err := q.ToSQL(MySQLDialect{}); err == nil || !strings.Contains(err.Error(), "SIMILAR TO") {
+		t.Fatalf("ToSQL(mysql) error = %v, want SIMILAR TO rejection", err)
+	}
+}
