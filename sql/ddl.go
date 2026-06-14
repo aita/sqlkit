@@ -201,6 +201,7 @@ type CreateTableStmt struct {
 	checks      []TableCheck
 	comment     string
 	ifNotExists bool
+	temporary   bool
 }
 
 // CreateTable starts a CREATE TABLE builder for a table.
@@ -234,6 +235,16 @@ func (s CreateTableStmt) Comment(text string) CreateTableStmt {
 // IfNotExists adds IF NOT EXISTS.
 func (s CreateTableStmt) IfNotExists() CreateTableStmt {
 	s.ifNotExists = true
+	return s
+}
+
+// Temporary makes it a CREATE TEMPORARY TABLE: a session-scoped table that the
+// engine drops at the end of the session (PostgreSQL/MySQL/SQLite all spell it
+// TEMPORARY). A temporary table usually lives in a session-private namespace, so
+// the table is best referenced unqualified (an explicit schema is the engine's
+// to reject).
+func (s CreateTableStmt) Temporary() CreateTableStmt {
+	s.temporary = true
 	return s
 }
 
@@ -271,6 +282,81 @@ func (s DropTableStmt) compileDDL(c *Compiler) (string, error) {
 	return c.CompileDropTable(s)
 }
 func (DropTableStmt) ddlStatement() {}
+
+// CreateViewStmt builds a CREATE VIEW statement whose body is a query (a SELECT
+// builder, or any Query). Like the other DDL nodes a view binds no values, so
+// the body must compile to plain SQL text — inline any literals with Raw rather
+// than as bound parameters.
+type CreateViewStmt struct {
+	table     Table
+	query     Query
+	columns   []string
+	orReplace bool
+}
+
+// CreateView starts a CREATE VIEW builder for a view defined by query.
+func CreateView(table Table, query Query) CreateViewStmt {
+	return CreateViewStmt{table: table, query: query}
+}
+
+// OrReplace makes it CREATE OR REPLACE VIEW, redefining an existing view in
+// place (PostgreSQL/MySQL). SQLite has no OR REPLACE for views and rejects it at
+// compile time; drop and recreate there instead.
+func (s CreateViewStmt) OrReplace() CreateViewStmt {
+	s.orReplace = true
+	return s
+}
+
+// Columns sets explicit view column names (CREATE VIEW v (a, b) AS ...),
+// overriding the names the body's select list would otherwise supply.
+func (s CreateViewStmt) Columns(columns ...string) CreateViewStmt {
+	s.columns = columns
+	return s
+}
+
+// ToSQL compiles the CREATE VIEW statement.
+func (s CreateViewStmt) ToSQL(d Dialect) (string, []any, error) {
+	out, err := s.compileDDL(NewCompiler(d))
+	return out, nil, err
+}
+func (s CreateViewStmt) compileDDL(c *Compiler) (string, error) {
+	return c.CompileCreateView(s)
+}
+func (CreateViewStmt) ddlStatement() {}
+
+// DropViewStmt builds a DROP VIEW statement.
+type DropViewStmt struct {
+	table    Table
+	ifExists bool
+	cascade  bool
+}
+
+// DropView starts a DROP VIEW builder for a view.
+func DropView(table Table) DropViewStmt { return DropViewStmt{table: table} }
+
+// IfExists adds IF EXISTS.
+func (s DropViewStmt) IfExists() DropViewStmt {
+	s.ifExists = true
+	return s
+}
+
+// Cascade adds CASCADE, dropping objects that depend on the view (PostgreSQL /
+// standard SQL). MySQL and SQLite have no CASCADE clause for DROP VIEW, so the
+// flag is ignored there.
+func (s DropViewStmt) Cascade() DropViewStmt {
+	s.cascade = true
+	return s
+}
+
+// ToSQL compiles the DROP VIEW statement.
+func (s DropViewStmt) ToSQL(d Dialect) (string, []any, error) {
+	out, err := s.compileDDL(NewCompiler(d))
+	return out, nil, err
+}
+func (s DropViewStmt) compileDDL(c *Compiler) (string, error) {
+	return c.CompileDropView(s)
+}
+func (DropViewStmt) ddlStatement() {}
 
 // CreateIndexStmt builds a CREATE INDEX statement.
 type CreateIndexStmt struct {
@@ -554,6 +640,8 @@ var (
 	_ Statement = DropSchemaStmt{}
 	_ Statement = CreateTableStmt{}
 	_ Statement = DropTableStmt{}
+	_ Statement = CreateViewStmt{}
+	_ Statement = DropViewStmt{}
 	_ Statement = CreateIndexStmt{}
 	_ Statement = DropIndexStmt{}
 	_ Statement = DropForeignKeyStmt{}

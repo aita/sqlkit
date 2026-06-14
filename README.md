@@ -437,7 +437,10 @@ go run github.com/aita/sqlkit/cmd/sqlkit inspect \
 The `migrate` package runs schema migrations: each migration's `Up` and `Down`
 are callbacks that receive an `Operator` and perform the change with operations
 like `op.CreateTable`, `op.AddColumn`, `op.CreateIndex`, and
-`op.CreateForeignKey`. Columns are declared with the same `sqldef` DSL.
+`op.CreateForeignKey`. Session-scoped tables and views have their own operations
+too — `op.CreateTemporaryTable`, and `op.CreateView` / `op.DropView` (the view
+body is a `sql` package query, with `OrReplace()` / `ViewColumns(...)` options).
+Columns are declared with the same `sqldef` DSL.
 Migrations are self-contained — they don't import your schema catalog — and
 target PostgreSQL or MySQL through the same code.
 
