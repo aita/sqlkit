@@ -43,6 +43,10 @@ type Fake struct {
 	// LastInsertID is reported by the Result of every ExecContext call, so the
 	// RETURNING-less write-back path (MySQL-style LastInsertId) is testable.
 	LastInsertID int64
+	// RowsAffected, when non-nil, is reported by the Result of every ExecContext
+	// call (otherwise 1), so the optimistic-locking conflict path (zero rows
+	// affected) is testable.
+	RowsAffected *int64
 }
 
 // DB opens a database/sql handle backed by this fake.
@@ -171,7 +175,11 @@ func (c *conn) ExecContext(_ context.Context, query string, args []driver.NamedV
 			return nil, err
 		}
 	}
-	return execResult{lastInsertID: c.f.LastInsertID, rowsAffected: 1}, nil
+	affected := int64(1)
+	if c.f.RowsAffected != nil {
+		affected = *c.f.RowsAffected
+	}
+	return execResult{lastInsertID: c.f.LastInsertID, rowsAffected: affected}, nil
 }
 
 // execResult is a driver.Result that reports a configurable LastInsertId.
