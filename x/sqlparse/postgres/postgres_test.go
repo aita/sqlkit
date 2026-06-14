@@ -10,16 +10,23 @@ import (
 	"github.com/aita/sqlkit/x/sqlparse/postgres"
 )
 
-// assertRoundTrip parses input, compiles the result under PostgreSQLDialect, and
-// checks the compiled SQL and bind arguments. Because sqlkit parameterizes
-// literals, the recompiled SQL replaces constants with $N placeholders.
-func assertRoundTrip(t *testing.T, input, wantSQL string, wantArgs ...any) {
+// assertRoundTrip parses input and checks it both ways, for maximum precision:
+//   - the parsed query is structurally identical to want (reflect.DeepEqual,
+//     unexported fields included), proving the parser builds the expected AST
+//     nodes — not merely an SQL string that recompiles the same way;
+//   - that query compiles under PostgreSQLDialect to wantSQL with wantArgs,
+//     documenting the output and guarding the sql-core rendering. Because sqlkit
+//     parameterizes literals, the recompiled SQL replaces constants with $N.
+func assertRoundTrip(t *testing.T, input string, want sql.Query, wantSQL string, wantArgs ...any) {
 	t.Helper()
-	query, err := postgres.ParseOne(input)
+	got, err := postgres.ParseOne(input)
 	if err != nil {
 		t.Fatalf("ParseOne(%q) error = %v", input, err)
 	}
-	gotSQL, args, err := query.ToSQL(sql.PostgreSQLDialect{})
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("AST mismatch for %q\n got: %#v\nwant: %#v", input, got, want)
+	}
+	gotSQL, args, err := got.ToSQL(sql.PostgreSQLDialect{})
 	if err != nil {
 		t.Fatalf("ToSQL() error = %v", err)
 	}
