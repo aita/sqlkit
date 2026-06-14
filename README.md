@@ -986,12 +986,52 @@ err = db.Select(ids2.Col("id")).From(ids2).All(ctx).Scan(&dst)
 Pass a query directly to `From` when you don't need to reference its columns by
 alias, or use `sql.Alias(query, alias)` for an ad-hoc aliased source.
 
-`Coalesce`, `NullIf`, `Greatest`, `Least`, `Sum`, `Avg`, `Min`, `Max`,
-`Rank`, `DenseRank`, `Lag`, `Lead`, and generic `sql.Func(name, args...)` are
-available. For JSON, `sql.JSONArray(...)`, `sql.JSONObject(key, val, ...)`,
+The function DSL lives in `sql/func.go`: the generic `sql.Func(name, args...)`
+escape hatch plus named builders for the functions the SQL standard, PostgreSQL,
+and MySQL share. For JSON, `sql.JSONArray(...)`, `sql.JSONObject(key, val, ...)`,
 `sql.JSONArrayAgg(expr)`, and `sql.JSONObjectAgg(key, val)` build the SQL/JSON
 standard functions (PostgreSQL 16+, MySQL 5.7+); older PostgreSQL exposes the
 classic `json_build_array` / `json_agg` names through `sql.Func`.
+
+Conditional and aggregate builders:
+
+- **Conditional / NULL**: `Coalesce`, `NullIf`, `Greatest`, `Least`.
+- **Aggregates**: `Sum`, `Avg`, `Min`, `Max`, `Count` / `CountAll`, `BitAnd`,
+  `BitOr`, `StdDev`, `StdDevPop`, `StdDevSamp`, `Variance`, `VarPop`, `VarSamp`,
+  and `StringAgg` (see below).
+- **Window / ranking** (turn into a window with `.Over()`; MySQL needs 8.0+):
+  `RowNumber`, `Rank`, `DenseRank`, `PercentRank`, `CumeDist`, `Ntile`, `Lag`,
+  `Lead`, `FirstValue`, `LastValue`, `NthValue`.
+
+A batch of common scalar functions ships as thin `sql.Func` wrappers whose
+comma form is identical in the SQL standard, PostgreSQL, and MySQL:
+
+- **String**: `Lower`, `Upper`, `Length` (bytes on MySQL — prefer `CharLength`
+  for a portable character count), `CharLength`, `Trim`, `Ltrim`, `Rtrim`,
+  `Replace`, `Substring`, `Left`, `Right`, `Reverse`, `Repeat`, `Lpad`, `Rpad`,
+  `ConcatWs`, `Md5`, `Ascii`.
+- **Numeric**: `Abs`, `Ceil`, `Floor`, `Round`, `Power`, `Sqrt`, `Exp`, `Ln`,
+  `Sign`, `Pi`, and the trigonometric `Sin`, `Cos`, `Tan`, `Cot`, `Asin`,
+  `Acos`, `Atan`, `Atan2`, `Degrees`, `Radians`.
+- **Date/time**: `Now()` (renders `NOW()`), and the niladic keywords
+  `CurrentDate()`, `CurrentTime()`, `CurrentTimestamp()` (rendered without
+  parentheses, as the standard and PostgreSQL require).
+
+```go
+// SELECT UPPER("name"), ROUND("rate", $1) FROM "t"
+db.Select(sql.Upper(appdb.Users.Name), sql.Round(appdb.Users.Rate, 2)).From(appdb.Users)
+```
+
+A few functions whose spelling diverges get their own portable builders:
+
+- `sql.Extract(field, expr)` renders the standard `EXTRACT(field FROM expr)`,
+  which both engines accept, e.g. `sql.Extract("year", appdb.Events.CreatedAt)`.
+- `sql.Position(substr, str)` renders the standard `POSITION(substr IN str)` (the
+  comma forms `STRPOS` / `LOCATE` diverge, so this is the portable spelling).
+- `sql.StringAgg(expr, ", ")` aggregates strings into one delimited value —
+  `STRING_AGG(expr, ', ')` on PostgreSQL, `GROUP_CONCAT(expr SEPARATOR ', ')` on
+  MySQL. The delimiter is a constant string literal (MySQL's `SEPARATOR` rejects
+  a bind placeholder).
 
 `sql.Concat(a, b, ...)` concatenates strings portably — the standard `||`
 operator on PostgreSQL, `CONCAT(...)` on MySQL (whose `||` means logical OR).

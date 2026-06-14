@@ -58,6 +58,29 @@ func TestMySQLILike(t *testing.T) {
 		"SELECT `id` FROM `users` WHERE (LOWER(`email`) LIKE LOWER(?))", []any{"%@EXAMPLE.com"})
 }
 
+func TestMySQLStringAgg(t *testing.T) {
+	// MySQL spells STRING_AGG as GROUP_CONCAT with a SEPARATOR keyword.
+	assertMySQL(t,
+		Select(As(StringAgg(Col("name"), ", "), "names")).From(Table{Name: "users"}).GroupBy(Col("org_id")),
+		"SELECT GROUP_CONCAT(`name` SEPARATOR ', ') AS `names` FROM `users` GROUP BY `org_id`", nil)
+}
+
+func TestMySQLScalarFunctions(t *testing.T) {
+	// The scalar string/numeric/date functions and the EXTRACT and POSITION
+	// special forms share one rendering across dialects (only the identifier
+	// quoting and placeholders differ).
+	assertMySQL(t,
+		Select(
+			Upper(Col("name")),
+			Round(Col("rate"), 2),
+			As(CurrentDate(), "today"),
+			As(Extract("year", Col("created_at")), "yr"),
+			As(Position("@", Col("email")), "at"),
+		).From(Table{Name: "t"}),
+		"SELECT UPPER(`name`), ROUND(`rate`, ?), CURRENT_DATE AS `today`, EXTRACT(year FROM `created_at`) AS `yr`, POSITION(? IN `email`) AS `at` FROM `t`",
+		[]any{2, "@"})
+}
+
 func TestMySQLJSONAccess(t *testing.T) {
 	assertMySQL(t,
 		Select(As(JSONGet(Col("data"), "name"), "n")).From(Table{Name: "events"}),

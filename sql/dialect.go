@@ -100,6 +100,16 @@ type Concatenator interface {
 	Concat(operands []string) string
 }
 
+// StringAggregator is an optional capability for dialects whose ordered string
+// aggregation is not the SQL standard STRING_AGG(expr, 'delim') (MySQL spells it
+// GROUP_CONCAT(expr SEPARATOR 'delim')). The compiler detects it with a type
+// assertion, so it is not a breaking change to Dialect; a dialect without it
+// uses the standard STRING_AGG form. arg is the already-compiled expression and
+// delimiter is an already-quoted SQL string literal.
+type StringAggregator interface {
+	StringAgg(arg, delimiter string) string
+}
+
 // JSONObjectRenderer is an optional capability for dialects whose JSON object
 // constructor does not use the SQL/JSON standard "key VALUE value" separator
 // (MySQL takes a flat JSON_OBJECT(key, value, ...) list). The compiler detects
@@ -429,6 +439,12 @@ func (MySQLDialect) DropIndex(_, quotedIndex, qualifiedTable string) string {
 // Concat renders MySQL string concatenation, whose || operator means logical OR.
 func (MySQLDialect) Concat(operands []string) string {
 	return "CONCAT(" + strings.Join(operands, ", ") + ")"
+}
+
+// StringAgg renders MySQL's GROUP_CONCAT, whose SEPARATOR keyword takes the
+// delimiter literal in place of the standard STRING_AGG second argument.
+func (MySQLDialect) StringAgg(arg, delimiter string) string {
+	return "GROUP_CONCAT(" + arg + " SEPARATOR " + delimiter + ")"
 }
 
 // Upsert renders MySQL's ON DUPLICATE KEY UPDATE clause. MySQL infers the

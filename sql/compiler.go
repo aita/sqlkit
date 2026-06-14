@@ -282,6 +282,41 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		}
 		sb.WriteString(")")
 		return sb.String(), args, nil
+	case ExtractExpression:
+		if e.Field == "" {
+			return "", nil, fmt.Errorf("sqlkit/sql: EXTRACT requires a field")
+		}
+		operandSQL, args, err := c.CompileExpression(e.Operand)
+		if err != nil {
+			return "", nil, err
+		}
+		return "EXTRACT(" + e.Field + " FROM " + operandSQL + ")", args, nil
+	case PositionExpression:
+		substringSQL, args, err := c.CompileExpression(e.Substring)
+		if err != nil {
+			return "", nil, err
+		}
+		stringSQL, stringArgs, err := c.CompileExpression(e.String)
+		if err != nil {
+			return "", nil, err
+		}
+		args = append(args, stringArgs...)
+		return "POSITION(" + substringSQL + " IN " + stringSQL + ")", args, nil
+	case StringAggExpression:
+		if e.Arg == nil {
+			return "", nil, fmt.Errorf("sqlkit/sql: STRING_AGG requires an expression")
+		}
+		argSQL, args, err := c.CompileExpression(e.Arg)
+		if err != nil {
+			return "", nil, err
+		}
+		delimiter := literal(e.Delimiter)
+		if sa, ok := c.Dialect.(StringAggregator); ok {
+			return sa.StringAgg(argSQL, delimiter), args, nil
+		}
+		// SQL standard STRING_AGG(expr, 'delim') (PostgreSQL); MySQL overrides via
+		// StringAggregator with GROUP_CONCAT(expr SEPARATOR 'delim').
+		return "STRING_AGG(" + argSQL + ", " + delimiter + ")", args, nil
 	case CastExpression:
 		if e.Type == "" {
 			return "", nil, fmt.Errorf("sqlkit/sql: CAST requires a target type")
