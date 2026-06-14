@@ -942,6 +942,21 @@ func (c *Compiler) CompileSelect(q SelectQuery) (string, []any, error) {
 		sb.WriteString(" OFFSET ")
 		sb.WriteString(strconv.Itoa(q.offset))
 	}
+	if q.lock != nil {
+		locker, ok := c.Dialect.(RowLocker)
+		if !ok {
+			return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support row-locking clauses", c.Dialect.Name())
+		}
+		of := make([]string, len(q.lock.of))
+		for i, table := range q.lock.of {
+			of[i] = c.Dialect.QuoteIdent(table)
+		}
+		frag, err := locker.LockClause(q.lock.strength, strings.Join(of, ", "), q.lock.wait)
+		if err != nil {
+			return "", nil, err
+		}
+		sb.WriteString(frag)
+	}
 	return sb.String(), args, nil
 }
 

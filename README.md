@@ -87,6 +87,15 @@ whole table plus a column from another. For a single row, chains offer `First`
 (pushes `LIMIT 1`) and `One` (requires exactly one row, else `ErrTooManyRows`)
 alongside `All`. `Page(ctx, limit, offset)` fetches a window in one call.
 
+Row locking (PostgreSQL/MySQL 8.0+) is `ForUpdate` / `ForShare` (plus
+PostgreSQL's `ForNoKeyUpdate` / `ForKeyShare`), refined with `SkipLocked` /
+`NoWait` and `LockOf(tables...)` — the building block of a queue worker:
+
+```go
+err := db.Select().From(appdb.Jobs).Where(appdb.Jobs.Status.Eq("ready")).
+    Limit(10).ForUpdate().SkipLocked().All(ctx).Scan(&jobs)
+```
+
 ### Predicates and filters
 
 Typed columns carry the predicate vocabulary directly: `Eq`/`Ne`/`Lt`/`Le`/

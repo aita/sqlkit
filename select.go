@@ -347,6 +347,52 @@ func (q SelectQuery) Offset(n int) SelectQuery {
 	return q
 }
 
+// ForUpdate adds a FOR UPDATE row-locking clause; chain SkipLocked / NoWait /
+// LockOf to refine it. Row locking is PostgreSQL/MySQL (8.0+) only.
+func (q SelectQuery) ForUpdate() SelectQuery {
+	q.query = q.query.ForUpdate()
+	return q
+}
+
+// ForShare adds a FOR SHARE row-locking clause (a shared lock).
+func (q SelectQuery) ForShare() SelectQuery {
+	q.query = q.query.ForShare()
+	return q
+}
+
+// ForNoKeyUpdate adds a FOR NO KEY UPDATE clause (PostgreSQL only).
+func (q SelectQuery) ForNoKeyUpdate() SelectQuery {
+	q.query = q.query.ForNoKeyUpdate()
+	return q
+}
+
+// ForKeyShare adds a FOR KEY SHARE clause (PostgreSQL only).
+func (q SelectQuery) ForKeyShare() SelectQuery {
+	q.query = q.query.ForKeyShare()
+	return q
+}
+
+// SkipLocked adds SKIP LOCKED to the row-locking clause, skipping rows another
+// transaction has locked. It defaults the lock to FOR UPDATE.
+func (q SelectQuery) SkipLocked() SelectQuery {
+	q.query = q.query.SkipLocked()
+	return q
+}
+
+// NoWait adds NOWAIT to the row-locking clause, erroring instead of waiting on a
+// locked row. It defaults the lock to FOR UPDATE.
+func (q SelectQuery) NoWait() SelectQuery {
+	q.query = q.query.NoWait()
+	return q
+}
+
+// LockOf restricts the row-locking clause to the named tables/aliases
+// (FOR UPDATE OF t). It defaults the lock to FOR UPDATE.
+func (q SelectQuery) LockOf(tables ...string) SelectQuery {
+	q.query = q.query.LockOf(tables...)
+	return q
+}
+
 // Distinct marks the query as SELECT DISTINCT.
 func (q SelectQuery) Distinct() SelectQuery {
 	q.query = q.query.Distinct()

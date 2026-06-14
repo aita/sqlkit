@@ -1041,6 +1041,17 @@ func TestSelectDistinctOn(t *testing.T) {
 			`FROM "public"."posts" ORDER BY "public"."posts"."user_id", "public"."posts"."id" DESC`, nil)
 }
 
+func TestSelectForUpdateSkipLocked(t *testing.T) {
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).Where(Users.ID.Gt(0)).ForUpdate().SkipLocked(),
+		`SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" > $1) FOR UPDATE SKIP LOCKED`,
+		[]any{int64(0)})
+
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).ForShare().NoWait(),
+		`SELECT "public"."users"."id" FROM "public"."users" FOR SHARE NOWAIT`, nil)
+}
+
 // TestPredicateMethodCombinators covers the And/Or methods on Predicate, which
 // combine a receiver predicate with others.
 func TestPredicateMethodCombinators(t *testing.T) {

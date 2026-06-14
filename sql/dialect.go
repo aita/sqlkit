@@ -248,6 +248,18 @@ type ArrayDialect interface {
 	ArrayConstructor(elements []string) string
 }
 
+// RowLocker is an optional capability a Dialect implements to render a SELECT
+// row-locking clause (SelectQuery.ForUpdate / ForShare / …). PostgreSQL and
+// MySQL (8.0+) support it; SQLite and the standard target do not, and reject it
+// at compile time. The compiler detects it with a type assertion, so it is not a
+// breaking change to Dialect. strength is "UPDATE", "SHARE", "NO KEY UPDATE", or
+// "KEY SHARE"; of is the already-quoted, comma-joined OF table list ("" when
+// none); wait is "", "NOWAIT", or "SKIP LOCKED". It returns the leading-space
+// " FOR ..." fragment, or an error when the dialect cannot express the lock.
+type RowLocker interface {
+	LockClause(strength, of, wait string) (string, error)
+}
+
 // DistinctOnDialect is an optional capability a Dialect implements to report
 // support for SELECT DISTINCT ON (exprs) (SelectQuery.DistinctOn), a PostgreSQL
 // extension with no portable equivalent. The compiler detects it with a type
@@ -322,6 +334,19 @@ func renderSimilarTo(left, pattern string, negate bool) string {
 		operator = "NOT SIMILAR TO"
 	}
 	return "(" + left + " " + operator + " " + pattern + ")"
+}
+
+// renderLockClause renders a "FOR <strength> [OF ...] [NOWAIT|SKIP LOCKED]"
+// row-locking clause, shared by PostgreSQL and MySQL (which spell it the same).
+func renderLockClause(strength, of, wait string) string {
+	s := " FOR " + strength
+	if of != "" {
+		s += " OF " + of
+	}
+	if wait != "" {
+		s += " " + wait
+	}
+	return s
 }
 
 // jsonPathStep renders one JSON path step into the dialect-neutral parts a
@@ -552,6 +577,12 @@ func (PostgreSQLDialect) SimilarTo(left, pattern string, negate bool) string {
 // SupportsDistinctOn reports PostgreSQL's support for SELECT DISTINCT ON.
 func (PostgreSQLDialect) SupportsDistinctOn() bool { return true }
 
+// LockClause renders PostgreSQL's row-locking clause; it supports all four lock
+// strengths (UPDATE, NO KEY UPDATE, SHARE, KEY SHARE).
+func (PostgreSQLDialect) LockClause(strength, of, wait string) (string, error) {
+	return renderLockClause(strength, of, wait), nil
+}
+
 // ArrayConstructor renders PostgreSQL's ARRAY[...] literal.
 func (PostgreSQLDialect) ArrayConstructor(elements []string) string {
 	return "ARRAY[" + strings.Join(elements, ", ") + "]"
@@ -744,6 +775,18 @@ func (MySQLDialect) Upsert(cl UpsertClause) (string, error) {
 // Excluded renders MySQL's reference to the proposed row value, VALUES(col).
 func (d MySQLDialect) Excluded(column string) string {
 	return "VALUES(" + d.QuoteName(column) + ")"
+}
+
+// LockClause renders MySQL's row-locking clause (8.0+). MySQL has only FOR
+// UPDATE and FOR SHARE; the PostgreSQL-only NO KEY UPDATE / KEY SHARE strengths
+// are rejected.
+func (MySQLDialect) LockClause(strength, of, wait string) (string, error) {
+	switch strength {
+	case "UPDATE", "SHARE":
+		return renderLockClause(strength, of, wait), nil
+	default:
+		return "", fmt.Errorf("sql: MySQL supports only FOR UPDATE and FOR SHARE, not FOR %s", strength)
+	}
 }
 
 // IsDistinctFrom renders MySQL's null-safe comparison with the <=> operator,
