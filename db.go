@@ -25,13 +25,6 @@ type Database struct {
 
 	ics []Interceptor
 
-	// bindParamLimit caps the bind parameters a single statement may carry. When
-	// positive it drives automatic statement splitting: bulk INSERTs are chunked
-	// into several statements and large IN lists are split, so a statement never
-	// exceeds it. Zero (the default) disables automatic splitting.
-	bindParamLimit int
-	// autoBindParams requests detecting the limit from the database at Open.
-	autoBindParams bool
 	// batchReadSnapshot runs a split SELECT's chunk queries inside one REPEATABLE
 	// READ transaction so they observe a single consistent snapshot, as an
 	// unsplit statement would. It defaults to true (active only when splitting is
@@ -44,6 +37,19 @@ type Database struct {
 	// chunks. It defaults to false because it can surface serialization failures
 	// the caller must retry; WithBatchWriteSnapshot(true) opts in.
 	batchWriteSnapshot bool
+	// autoChunk enables automatic, limit-driven statement splitting. It defaults
+	// to true, so splitting is active at the dialect's bind-parameter limit (the
+	// BindParamLimiter capability, 65535 for PostgreSQL/MySQL); WithAutoChunk(false)
+	// turns every automatic split off. Explicit requests (AutoChunk, InBatches) are
+	// unaffected. A session inherits this and may override it with
+	// WithSessionAutoChunk.
+	autoChunk bool
+	// preloadChunkSize caps the parent keys per follow-up IN query of a Preload, so
+	// an eager-load over many parents runs several smaller, plan-cache-friendly
+	// statements (like SQLAlchemy selectinload) rather than one huge IN — on top of
+	// the dialect's bind-parameter limit. It defaults to 1000; 0 leaves only that
+	// hard limit.
+	preloadChunk int
 }
 
 // DatabaseOption configures a Database.
@@ -80,27 +86,6 @@ func WithInterceptor(interceptors ...Interceptor) DatabaseOption {
 	return func(d *Database) { d.ics = append(d.ics, interceptors...) }
 }
 
-// WithMaxBindParams sets the maximum number of bind parameters a single
-// statement may carry. When positive it turns on automatic statement splitting:
-// bulk INSERTs (Insert(...).Values(...).Exec) are chunked into several
-// statements and large IN lists (col.In on Select/Update/Delete) are split
-// so no statement exceeds the limit. n <= 0 (the default) disables splitting.
-//
-// Pass it to keep control of the value, or use WithAutoMaxBindParams to detect a
-// safe one from the database at Open.
-func WithMaxBindParams(n int) DatabaseOption {
-	return func(d *Database) { d.bindParamLimit = n }
-}
-
-// WithAutoMaxBindParams configures the Database, at Open, to query the database
-// for a safe bind-parameter limit (PostgreSQL and MySQL both cap a statement at
-// 65535) and enable automatic statement splitting at it. Open returns the
-// database's ping error if it is unreachable. It is ignored by WrapDB, which has
-// no driver round-trip to make; call DetectMaxBindParams there instead.
-func WithAutoMaxBindParams() DatabaseOption {
-	return func(d *Database) { d.autoBindParams = true }
-}
-
 // WithBatchReadSnapshot controls whether a split SELECT (a large IN list chunked
 // to stay within the bind-parameter limit) runs its chunk queries inside one
 // REPEATABLE READ transaction, so they observe a single consistent snapshot just
@@ -127,6 +112,26 @@ func WithBatchWriteSnapshot(enabled bool) DatabaseOption {
 	return func(d *Database) { d.batchWriteSnapshot = enabled }
 }
 
+// WithAutoChunk enables or disables automatic statement splitting. It is on by
+// default, so bulk INSERTs, large IN lists, RETURNING writes, and uow flushes are
+// split to stay within the dialect's bind-parameter limit (the BindParamLimiter
+// capability, 65535 for PostgreSQL/MySQL). Pass false to turn every automatic
+// split off; explicit chunking via AutoChunk and InBatches still works. Sessions
+// inherit the setting and can override it with WithSessionAutoChunk.
+func WithAutoChunk(enabled bool) DatabaseOption {
+	return func(d *Database) { d.autoChunk = enabled }
+}
+
+// WithPreloadBatchSize sets the maximum number of parent keys per follow-up IN
+// query a Preload issues, so an eager-load over many parents runs several smaller
+// statements (like SQLAlchemy's selectinload) instead of one large IN. It applies
+// in addition to the dialect's bind-parameter limit and only when auto-split is
+// enabled. The default is 1000; pass 0 to chunk only at that hard limit. Sessions
+// inherit the setting.
+func WithPreloadBatchSize(n int) DatabaseOption {
+	return func(d *Database) { d.preloadChunk = n }
+}
+
 // Open opens a database/sql handle from a driver name and DSN string. The
 // dialect is inferred from the driver name (see DialectForDriver); pass
 // WithDialect to override.
@@ -139,17 +144,12 @@ func Open(driverName, dsn string, opts ...DatabaseOption) (*Database, error) {
 	if d.metaErr != nil {
 		return nil, d.metaErr
 	}
-	if d.autoBindParams {
-		if _, err := d.DetectMaxBindParams(context.Background()); err != nil {
-			return nil, err
-		}
-	}
 	return d, nil
 }
 
 // WrapDB creates a sqlkit database handle from an existing database/sql handle.
 func WrapDB(db *stdsql.DB, opts ...DatabaseOption) *Database {
-	d := &Database{db: db, dialect: sql.PostgreSQLDialect{}, batchReadSnapshot: true}
+	d := &Database{db: db, dialect: sql.PostgreSQLDialect{}, batchReadSnapshot: true, autoChunk: true, preloadChunk: defaultPreloadChunkSize}
 	for _, opt := range opts {
 		opt(d)
 	}
@@ -175,25 +175,6 @@ func (d *Database) batchWriteSessionOptions() []SessionOption {
 	}
 	return []SessionOption{WithTxOptions(TxOptions{Isolation: stdsql.LevelRepeatableRead})}
 }
-
-// DetectMaxBindParams queries the database for a safe maximum number of bind
-// parameters per statement, configures the Database to split statements at it,
-// and returns it. PostgreSQL and MySQL both cap a statement at 65535 parameters
-// (a 16-bit protocol field), so the round-trip mainly confirms the connection is
-// usable. After it returns, bulk INSERTs are chunked and large IN lists are
-// split automatically. WithAutoMaxBindParams calls it for you at Open.
-func (d *Database) DetectMaxBindParams(ctx context.Context) (int, error) {
-	limit, err := detectBindParamLimit(ctx, d.db, d.dialect)
-	if err != nil {
-		return 0, err
-	}
-	d.bindParamLimit = limit
-	return limit, nil
-}
-
-// MaxBindParams returns the configured bind-parameter limit driving automatic
-// statement splitting, or 0 when splitting is disabled.
-func (d *Database) MaxBindParams() int { return d.bindParamLimit }
 
 // SQL returns the wrapped database/sql handle.
 func (d *Database) SQL() *stdsql.DB { return d.db }
@@ -282,7 +263,11 @@ func (d *Database) NewSession(opts ...SessionOption) *Session {
 	for _, opt := range opts {
 		opt(&options)
 	}
-	return &Session{db: d.db, txOpts: options.tx, dialect: d.dialect, identities: d.identities, ics: d.ics, bindParamLimit: d.bindParamLimit}
+	autoChunk := d.autoChunk
+	if options.autoChunk != nil {
+		autoChunk = *options.autoChunk
+	}
+	return &Session{db: d.db, txOpts: options.tx, dialect: d.dialect, identities: d.identities, ics: d.ics, autoChunk: autoChunk, preloadChunk: d.preloadChunk}
 }
 
 // WithSession runs fn inside a session and commits when fn returns nil; on
@@ -317,12 +302,21 @@ func (d *Database) WithSession(fn func(s *Session) error, opts ...SessionOption)
 type SessionOption func(*sessionOptions)
 
 type sessionOptions struct {
-	tx *stdsql.TxOptions
+	tx        *stdsql.TxOptions
+	autoChunk *bool
 }
 
 // WithTxOptions sets transaction options for the session.
 func WithTxOptions(options TxOptions) SessionOption {
 	return func(o *sessionOptions) { o.tx = options.ToSQL() }
+}
+
+// WithSessionAutoChunk overrides, for this session, whether automatic
+// limit-driven statement splitting is enabled. Without it a session inherits the
+// database's WithAutoChunk setting; pass true or false to force it on or off for
+// statements run through the session (and uow scopes opened over it).
+func WithSessionAutoChunk(enabled bool) SessionOption {
+	return func(o *sessionOptions) { o.autoChunk = &enabled }
 }
 
 // Exec compiles and runs a statement outside a session (auto-commit). It
@@ -351,7 +345,21 @@ func (d *Database) sqlDialect() sql.Dialect { return d.dialect }
 
 func (d *Database) interceptors() []Interceptor { return d.ics }
 
-func (d *Database) maxBindParams() int { return d.bindParamLimit }
+// maxBindParams is the single splitting chokepoint: the dialect's bind-parameter
+// limit when auto-chunk is on, or 0 when it is off (suppressing every automatic
+// split).
+func (d *Database) maxBindParams() int {
+	if !d.autoChunk {
+		return 0
+	}
+	return resolveBindParamLimit(d.dialect)
+}
+
+// AutoChunkEnabled reports whether automatic, limit-driven statement splitting is
+// enabled for this database (WithAutoChunk).
+func (d *Database) AutoChunkEnabled() bool { return d.autoChunk }
+
+func (d *Database) preloadChunkSize() int { return d.preloadChunk }
 
 func (d *Database) queryContext(ctx context.Context, query string, args ...any) (*stdsql.Rows, error) {
 	return d.db.QueryContext(ctx, query, args...)

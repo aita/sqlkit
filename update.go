@@ -24,6 +24,11 @@ type UpdateQuery struct {
 	// value list across statements when the bind-parameter limit would be
 	// exceeded; finalQuery folds it back in for ToSQL and RETURNING.
 	batch *batchIn
+	// chunkSize/chunkOff are the per-query AutoChunk settings for splitting the
+	// deferred IN: a positive chunkSize caps the values per statement; chunkOff
+	// forces a single statement.
+	chunkSize int
+	chunkOff  bool
 }
 
 // Update creates an unbound UPDATE builder, for ToSQL or tests. Assignments
@@ -32,6 +37,15 @@ type UpdateQuery struct {
 func Update(table Table) UpdateQuery {
 	def := tableDef(table)
 	return UpdateQuery{def: def, query: sql.Update(def.Table)}
+}
+
+// AutoChunk configures how a lone WHERE column IN whose value list exceeds the
+// executor's bind-parameter limit is split across statements: ChunkSize(n) caps
+// each statement at n values, ChunkOff() runs it as one statement. The chunks run
+// atomically and their RowsAffected sum; ToSQL is unaffected.
+func (q UpdateQuery) AutoChunk(opts ...ChunkOption) UpdateQuery {
+	q.chunkSize, q.chunkOff = applyChunkOptions(q.chunkSize, q.chunkOff, opts)
+	return q
 }
 
 // Set appends SET assignments.
@@ -158,7 +172,7 @@ func (q UpdateQuery) JoinRel(rel Relation) UpdateQuery {
 
 // Where adds predicates, combined with AND. A lone column IN whose value
 // list is large enough to exceed the executor's bind-parameter limit is held
-// back and split across statements by Exec; see WithMaxBindParams.
+// back and split across statements by Exec; see WithAutoChunk.
 func (q UpdateQuery) Where(predicates ...Predicate) UpdateQuery {
 	flush, fold, deferred := resolveWhere(predicates, q.batch)
 	if flush != nil {
@@ -198,18 +212,23 @@ func (q UpdateQuery) ToSQL(dialect sql.Dialect) (string, []any, error) {
 	}
 	query := q.finalQuery()
 	if q.hasReturning {
-		if len(q.returning) > 0 {
-			query = query.Returning(q.returning...)
-		} else {
-			query = query.Returning(q.def.Selections()...)
-		}
+		query = query.Returning(q.returningSelections()...)
 	}
 	return query.ToSQL(dialect)
 }
 
+// returningSelections resolves the RETURNING columns: the explicit ones, or every
+// table column when Returning was called with no arguments.
+func (q UpdateQuery) returningSelections() []sql.Selection {
+	if len(q.returning) > 0 {
+		return q.returning
+	}
+	return q.def.Selections()
+}
+
 // Exec runs the UPDATE statement and returns the database/sql result. When a
 // lone column IN in the WHERE carries more values than the executor's
-// bind-parameter limit (WithMaxBindParams) allows, the value list is split
+// bind-parameter limit allows, the value list is split
 // across several statements run atomically (one transaction through a Database,
 // the session's transaction through a Session); the returned result then sums
 // their RowsAffected.
@@ -220,21 +239,32 @@ func (q UpdateQuery) Exec(ctx context.Context) (stdsql.Result, error) {
 	if q.ex == nil {
 		return nil, errNoExecutor
 	}
-	if !q.hasReturning {
-		dialect := q.ex.sqlDialect()
-		stmts, ok, err := splitInStatements(q.ex, q.batch, func(in sql.Expression) (string, []any, error) {
-			query := q.query
-			if in != nil {
-				query = query.Where(in)
-			}
-			return query.ToSQL(dialect)
-		})
-		if err != nil {
-			return nil, err
-		}
-		if ok {
-			return execStatements(ctx, q.ex, stmts)
-		}
-	}
+	// runExec consults splitStatements; a split runs the chunks atomically and
+	// sums their RowsAffected, otherwise the statement runs as one.
 	return runExec(ctx, q.ex, q)
+}
+
+// splitStatements implements splitter: it splits a lone WHERE column IN whose
+// value list exceeds the executor's bind-parameter limit into one statement per
+// chunk, each carrying the RETURNING clause when set. It honors AutoChunk
+// (ChunkSize caps the chunk; ChunkOff returns ok=false). Updates are always writes.
+func (q UpdateQuery) splitStatements(ex Executor) ([]compiledStmt, bool, bool, error) {
+	if q.err != nil {
+		return nil, false, true, q.err
+	}
+	if q.chunkOff {
+		return nil, false, true, nil
+	}
+	dialect := ex.sqlDialect()
+	stmts, ok, err := splitInStatements(ex, q.batch, q.chunkSize, func(in sql.Expression) (string, []any, error) {
+		query := q.query
+		if in != nil {
+			query = query.Where(in)
+		}
+		if q.hasReturning {
+			query = query.Returning(q.returningSelections()...)
+		}
+		return query.ToSQL(dialect)
+	})
+	return stmts, ok, true, err
 }

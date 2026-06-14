@@ -37,6 +37,11 @@ type SelectQuery struct {
 	// HAVING) whose semantics concatenating split results cannot preserve, so the
 	// IN runs as a single statement instead.
 	batchUnsafe bool
+	// chunkSize/chunkOff are the per-query AutoChunk settings for splitting the
+	// deferred IN at All: a positive chunkSize caps the values per statement
+	// (also set internally for preload); chunkOff forces a single statement.
+	chunkSize int
+	chunkOff  bool
 }
 
 // Select starts an unbound SELECT builder for use as a subquery (FromSelect,
@@ -74,7 +79,7 @@ func (q SelectQuery) fail(err error) SelectQuery {
 
 // Where adds predicates, combined with AND. A lone column IN whose value
 // list is large enough to exceed the executor's bind-parameter limit is held
-// back and split across statements by All; see WithMaxBindParams.
+// back and split across statements by All; see WithAutoChunk.
 func (q SelectQuery) Where(predicates ...Predicate) SelectQuery {
 	flush, fold, deferred := resolveWhere(predicates, q.batch)
 	if flush != nil {
@@ -84,6 +89,15 @@ func (q SelectQuery) Where(predicates ...Predicate) SelectQuery {
 		q.query = q.query.Where(fold)
 	}
 	q.batch = deferred
+	return q
+}
+
+// AutoChunk configures how a lone WHERE column IN whose value list exceeds the
+// executor's bind-parameter limit is split across statements by All: ChunkSize(n)
+// caps each statement at n values, ChunkOff() runs it as one statement. The chunk
+// rows are concatenated; ToSQL and the single-row terminals are unaffected.
+func (q SelectQuery) AutoChunk(opts ...ChunkOption) SelectQuery {
+	q.chunkSize, q.chunkOff = applyChunkOptions(q.chunkSize, q.chunkOff, opts)
 	return q
 }
 
@@ -316,7 +330,7 @@ func (q SelectQuery) ToSQL(dialect sql.Dialect) (string, []any, error) {
 // surface there.
 //
 // When a lone column IN carries more values than the executor's
-// bind-parameter limit (WithMaxBindParams) allows in one statement, the value
+// bind-parameter limit allows in one statement, the value
 // list is split across several statements and Scan concatenates their rows. The
 // split is skipped, running a single statement, when the query also carries
 // ORDER BY, GROUP BY, DISTINCT, HAVING, or LIMIT/OFFSET, whose semantics
@@ -325,35 +339,30 @@ func (q SelectQuery) All(ctx context.Context) Rows {
 	if q.err != nil {
 		return ErrRows(q.err)
 	}
-	if rows, ok := q.batchedRows(ctx); ok {
-		return q.withPreloads(rows)
-	}
-	return q.withPreloads(newRows(ctx, q.ex, q.finalQuery()))
+	// Pass the builder (not finalQuery) so newRows can consult splitStatements; the
+	// non-split path compiles SelectQuery.ToSQL, which folds the IN identically.
+	return q.withPreloads(newRows(ctx, q.ex, q))
 }
 
-// batchedRows splits a deferred IN across statements when its value list would
-// exceed the executor's bind-parameter limit, returning the multi-statement Rows
-// and true. It returns false when no split applies (no deferred IN, unsafe
-// clauses present, no limit configured, or the values already fit).
-func (q SelectQuery) batchedRows(ctx context.Context) (Rows, bool) {
-	if q.batchUnsafe || q.ex == nil {
-		return Rows{}, false
+// splitStatements implements splitter: it splits a deferred lone column IN across
+// statements when its value list would exceed the executor's bind-parameter limit,
+// concatenated at scan. It returns ok=false — running one statement — when no split
+// applies (unsafe clauses present, ChunkOff, no deferred IN/limit, or the values
+// fit). AutoChunk's ChunkSize additionally caps the values per statement. Reads are
+// never writes.
+func (q SelectQuery) splitStatements(ex Executor) ([]compiledStmt, bool, bool, error) {
+	if q.batchUnsafe || q.chunkOff {
+		return nil, false, false, nil
 	}
-	dialect := q.ex.sqlDialect()
-	stmts, ok, err := splitInStatements(q.ex, q.batch, func(in sql.Expression) (string, []any, error) {
+	dialect := ex.sqlDialect()
+	stmts, ok, err := splitInStatements(ex, q.batch, q.chunkSize, func(in sql.Expression) (string, []any, error) {
 		query := q.query
 		if in != nil {
 			query = query.Where(in)
 		}
 		return query.ToSQL(dialect)
 	})
-	if err != nil {
-		return ErrRows(err), true
-	}
-	if !ok {
-		return Rows{}, false
-	}
-	return Rows{ctx: ctx, ex: q.ex, batches: stmts}, true
+	return stmts, ok, false, err
 }
 
 // withPreloads attaches the registered preloads to a Rows so Scan eager-loads

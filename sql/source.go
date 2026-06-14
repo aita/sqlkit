@@ -9,12 +9,29 @@ type Source interface {
 type SourceExpression struct {
 	Name    string
 	Query   Query
+	Values  *ValuesClause
 	Alias   string
 	Lateral bool
 }
 
 // SQLSource marks SourceExpression as a Source.
 func (s SourceExpression) SQLSource() SourceExpression { return s }
+
+// ValuesClause is an inline VALUES row constructor — a list of value rows with an
+// optional column-name list — used as a derived-table source via ValuesSource.
+type ValuesClause struct {
+	Rows    [][]Expression
+	Columns []string
+}
+
+// ValuesSource builds a derived-table FROM/JOIN source from inline VALUES rows,
+// rendered as (VALUES (...),(...)) AS alias(columns) — or, on dialects that
+// cannot alias VALUES columns (MySQL, via DerivedValuesUnionDialect), an
+// equivalent UNION ALL of SELECTs whose first arm names the columns. Each row
+// must hold one value per column. It backs bulk UPDATE ... FROM (VALUES ...).
+func ValuesSource(rows [][]Expression, alias string, columns ...string) SourceExpression {
+	return SourceExpression{Values: &ValuesClause{Rows: rows, Columns: columns}, Alias: alias}
+}
 
 // Table is a table reference usable in FROM/JOIN clauses.
 type Table struct {

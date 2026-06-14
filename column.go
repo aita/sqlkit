@@ -190,17 +190,16 @@ func (c Column[T]) GtExpr(other TypedExpr[T]) Predicate { return newPredicate(sq
 func (c Column[T]) GeExpr(other TypedExpr[T]) Predicate { return newPredicate(sql.Ge(c, other)) }
 
 // In creates a "column IN (values...)" predicate. When it is the only predicate
-// of a Where call and the executor has a bind-parameter limit configured
-// (WithMaxBindParams), a value list large enough to exceed the limit is split
-// across several statements automatically; see SelectQuery.All. The chunks are
+// of a Where call and the executor has auto-chunk enabled (the default), a value
+// list large enough to exceed the limit is split across several statements
+// automatically; see SelectQuery.All. The chunks are
 // disjoint, so the combined rows are exactly those of the full list.
 func (c Column[T]) In(values ...T) Predicate {
 	items := make([]any, len(values))
 	for i, value := range values {
 		items[i] = sql.Val(value)
 	}
-	b := &batchIn{col: c, values: items}
-	return Predicate{expr: b.exprFor(items), batch: b}
+	return newInPredicate(c, items)
 }
 
 // NotIn creates a "column NOT IN (values...)" predicate. Unlike In it is not

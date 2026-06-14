@@ -43,8 +43,10 @@ type Executor interface {
 
 	sqlDialect() sql.Dialect
 	interceptors() []Interceptor
-	// maxBindParams reports the configured bind-parameter limit driving automatic
-	// statement splitting, or 0 when splitting is disabled.
+	// maxBindParams is the bind-parameter limit driving automatic splitting, or 0
+	// when auto-chunk is off (WithAutoChunk) so a single <= 0 check disables every
+	// automatic split. Explicit chunking (AutoChunk, InBatches) does
+	// not consult it.
 	maxBindParams() int
 	queryContext(ctx context.Context, query string, args ...any) (*stdsql.Rows, error)
 	execContext(ctx context.Context, query string, args ...any) (stdsql.Result, error)
@@ -83,11 +85,26 @@ type Rows struct {
 	// list is split to stay within the bind-parameter limit; sqlText/args are
 	// then unused.
 	batches []compiledStmt
+	// batchWrite marks the batches as RETURNING writes (split bulk
+	// INSERT/UPDATE/DELETE) rather than reads, so Scan runs them in one writable
+	// transaction for atomicity instead of the read-only snapshot session.
+	batchWrite bool
 }
 
 func newRows(ctx context.Context, ex Executor, query sql.Query) Rows {
 	if ex == nil {
 		return Rows{err: errNoExecutor}
+	}
+	// A builder that splits itself (a large IN list, or a bulk RETURNING write)
+	// runs as several chunked statements whose rows Scan concatenates.
+	if s, ok := query.(splitter); ok {
+		stmts, split, write, err := s.splitStatements(ex)
+		if err != nil {
+			return Rows{err: err}
+		}
+		if split {
+			return Rows{ctx: ctx, ex: ex, batches: stmts, batchWrite: write}
+		}
 	}
 	sqlText, args, err := query.ToSQL(ex.sqlDialect())
 	return Rows{ctx: ctx, ex: ex, query: query, sqlText: sqlText, args: args, err: err}
@@ -160,38 +177,23 @@ func (r Rows) scanBatched(dest any) (err error) {
 	if dv.Kind() != reflect.Pointer || dv.IsNil() || dv.Elem().Kind() != reflect.Slice {
 		return fmt.Errorf("sqlkit: a split query scans into a pointer to a slice, got %T", dest)
 	}
-	// Run every chunk (and any preloads) under one REPEATABLE READ snapshot when
-	// the executor is an auto-committing Database and the snapshot is enabled, so
-	// the combined result is consistent as an unsplit statement's would be. A
-	// Session already provides the surrounding transaction.
-	ex := r.ex
-	if db, ok := r.ex.(*Database); ok {
-		if session, on := db.newBatchReadSession(); on {
-			ex = session
-			defer func() {
-				if err != nil {
-					_ = session.Rollback()
-					return
-				}
-				err = session.Commit()
-			}()
-		}
-	}
+	ex, finish := r.batchExecutor()
+	defer func() { err = finish(err) }()
 
 	sliceType := dv.Elem().Type()
 	dialect := ex.sqlDialect()
 	acc := reflect.MakeSlice(sliceType, 0, 0)
 	for _, batch := range r.batches {
-		rows, err := runQuery(r.ctx, ex, Statement{Op: OpQuery, SQL: batch.sql, Args: batch.args, Dialect: dialect})
-		if err != nil {
-			return err
+		rows, runErr := runQuery(r.ctx, ex, Statement{Op: OpQuery, SQL: batch.sql, Args: batch.args, Dialect: dialect})
+		if runErr != nil {
+			return runErr
 		}
 		tmp := reflect.New(sliceType)
-		if err := func() error {
+		if scanErr := func() error {
 			defer rows.Close()
 			return scanInto(rows, tmp.Interface())
-		}(); err != nil {
-			return err
+		}(); scanErr != nil {
+			return scanErr
 		}
 		acc = reflect.AppendSlice(acc, tmp.Elem())
 	}
@@ -200,6 +202,38 @@ func (r Rows) scanBatched(dest any) (err error) {
 		return applyPreloads(r.ctx, ex, dest, r.preloads)
 	}
 	return nil
+}
+
+// batchExecutor chooses the executor that runs this Rows' chunk statements and a
+// finish function that commits or rolls back any transaction it opened (a no-op
+// otherwise). A Session executor is reused as-is — its own transaction already
+// wraps the chunks. Through an auto-committing Database, a write batch (RETURNING)
+// always runs in one writable transaction so the chunks are atomic (raised to
+// REPEATABLE READ by WithBatchWriteSnapshot), while a read batch (split SELECT)
+// runs under the read-only REPEATABLE READ snapshot when WithBatchReadSnapshot is
+// on, else directly on the database.
+func (r Rows) batchExecutor() (Executor, func(error) error) {
+	noop := func(err error) error { return err }
+	db, ok := r.ex.(*Database)
+	if !ok {
+		return r.ex, noop
+	}
+	var session *Session
+	if r.batchWrite {
+		session = db.NewSession(db.batchWriteSessionOptions()...)
+	} else if s, on := db.newBatchReadSession(); on {
+		session = s
+	}
+	if session == nil {
+		return db, noop
+	}
+	return session, func(err error) error {
+		if err != nil {
+			_ = session.Rollback()
+			return err
+		}
+		return session.Commit()
+	}
 }
 
 // scanExactlyOne scans the single result row into dest, requiring exactly
@@ -284,12 +318,6 @@ func Records[T any](r Rows) iter.Seq2[T, error] {
 			yield(zero, r.err)
 			return
 		}
-		rows, err := runQuery(r.ctx, r.ex, r.statement())
-		if err != nil {
-			yield(zero, err)
-			return
-		}
-		defer rows.Close()
 
 		elemType := reflect.TypeFor[T]()
 		pointerElems := elemType.Kind() == reflect.Pointer
@@ -297,29 +325,66 @@ func Records[T any](r Rows) iter.Seq2[T, error] {
 		if pointerElems {
 			baseType = elemType.Elem()
 		}
-		scan, err := rowScanner(rows, baseType)
-		if err != nil {
-			yield(zero, err)
-			return
+
+		// A split Rows (a large IN list, or a bulk RETURNING write) streams chunk by
+		// chunk under the same executor/transaction Scan would use; an unsplit Rows
+		// streams its single statement.
+		ex := r.ex
+		finish := func(error) error { return nil }
+		var statements []Statement
+		if len(r.batches) > 0 {
+			ex, finish = r.batchExecutor()
+			dialect := ex.sqlDialect()
+			statements = make([]Statement, len(r.batches))
+			for i, b := range r.batches {
+				statements[i] = Statement{Op: OpQuery, SQL: b.sql, Args: b.args, Dialect: dialect}
+			}
+		} else {
+			statements = []Statement{r.statement()}
 		}
-		for rows.Next() {
-			item := reflect.New(baseType)
-			if err := scan(item.Elem()); err != nil {
+		var streamErr error
+		defer func() { _ = finish(streamErr) }()
+
+		for _, stmt := range statements {
+			rows, err := runQuery(r.ctx, ex, stmt)
+			if err != nil {
+				streamErr = err
 				yield(zero, err)
 				return
 			}
-			var value T
-			if pointerElems {
-				value = item.Interface().(T)
-			} else {
-				value = item.Elem().Interface().(T)
-			}
-			if !yield(value, nil) {
+			scan, err := rowScanner(rows, baseType)
+			if err != nil {
+				rows.Close()
+				streamErr = err
+				yield(zero, err)
 				return
 			}
-		}
-		if err := rows.Err(); err != nil {
-			yield(zero, err)
+			for rows.Next() {
+				item := reflect.New(baseType)
+				if err := scan(item.Elem()); err != nil {
+					rows.Close()
+					streamErr = err
+					yield(zero, err)
+					return
+				}
+				var value T
+				if pointerElems {
+					value = item.Interface().(T)
+				} else {
+					value = item.Elem().Interface().(T)
+				}
+				if !yield(value, nil) {
+					rows.Close()
+					return
+				}
+			}
+			if err := rows.Err(); err != nil {
+				rows.Close()
+				streamErr = err
+				yield(zero, err)
+				return
+			}
+			rows.Close()
 		}
 	}
 }
@@ -328,6 +393,17 @@ func Records[T any](r Rows) iter.Seq2[T, error] {
 func runExec(ctx context.Context, ex Executor, query sql.Query) (stdsql.Result, error) {
 	if ex == nil {
 		return nil, errNoExecutor
+	}
+	// A builder that splits itself (a bulk INSERT, or a large WHERE IN) runs its
+	// chunks atomically; execStatements merges their result.
+	if s, ok := query.(splitter); ok {
+		stmts, split, _, err := s.splitStatements(ex)
+		if err != nil {
+			return nil, err
+		}
+		if split {
+			return execStatements(ctx, ex, stmts)
+		}
 	}
 	sqlText, args, err := query.ToSQL(ex.sqlDialect())
 	if err != nil {

@@ -19,11 +19,12 @@ import (
 // Session implements Executor, so query chains start from it and run inside
 // its transaction: session.Select().From(t).All(ctx).Scan(&dst).
 type Session struct {
-	db             *stdsql.DB
-	txOpts         *stdsql.TxOptions
-	dialect        sql.Dialect
-	ics            []Interceptor
-	bindParamLimit int
+	db           *stdsql.DB
+	txOpts       *stdsql.TxOptions
+	dialect      sql.Dialect
+	ics          []Interceptor
+	autoChunk    bool
+	preloadChunk int
 
 	// identities is inherited from the Database (see WithMetadata): a uow.Scope
 	// opened over this session validates its bindings against it automatically.
@@ -228,7 +229,20 @@ func (s *Session) sqlDialect() sql.Dialect { return s.dialect }
 
 func (s *Session) interceptors() []Interceptor { return s.ics }
 
-func (s *Session) maxBindParams() int { return s.bindParamLimit }
+// maxBindParams is the single splitting chokepoint: the dialect's bind-parameter
+// limit when auto-chunk is on for this session, or 0 when it is off.
+func (s *Session) maxBindParams() int {
+	if !s.autoChunk {
+		return 0
+	}
+	return resolveBindParamLimit(s.dialect)
+}
+
+// AutoChunkEnabled reports whether automatic, limit-driven statement splitting is
+// enabled for this session (WithAutoChunk / WithSessionAutoChunk).
+func (s *Session) AutoChunkEnabled() bool { return s.autoChunk }
+
+func (s *Session) preloadChunkSize() int { return s.preloadChunk }
 
 func (s *Session) queryContext(ctx context.Context, query string, args ...any) (*stdsql.Rows, error) {
 	tx, err := s.ensureTx(ctx)

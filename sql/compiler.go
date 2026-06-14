@@ -489,6 +489,13 @@ func (c *Compiler) CompileSource(source Source) (string, []any, error) {
 	if s.Lateral {
 		lateral = "LATERAL "
 	}
+	if s.Values != nil {
+		out, args, err := c.compileValuesSource(s)
+		if err != nil {
+			return "", nil, err
+		}
+		return lateral + out, args, nil
+	}
 	if s.Query != nil {
 		sql, args, err := c.compileSubquery(s.Query)
 		if err != nil {
@@ -508,6 +515,98 @@ func (c *Compiler) CompileSource(source Source) (string, []any, error) {
 		compiled += " AS " + c.Dialect.QuoteIdent(s.Alias)
 	}
 	return compiled, nil, nil
+}
+
+// compileValuesSource compiles an inline VALUES row constructor used as a derived
+// table. The standard form is (VALUES (...),(...)) AS alias("c1","c2"); a dialect
+// that cannot alias VALUES columns (DerivedValuesUnionDialect, MySQL) gets an
+// equivalent (SELECT v AS c1, … UNION ALL SELECT …) AS alias instead.
+func (c *Compiler) compileValuesSource(s SourceExpression) (string, []any, error) {
+	v := s.Values
+	if len(v.Rows) == 0 || len(v.Rows[0]) == 0 {
+		return "", nil, fmt.Errorf("sqlkit/sql: VALUES source requires at least one non-empty row")
+	}
+	width := len(v.Rows[0])
+	if len(v.Columns) > 0 && len(v.Columns) != width {
+		return "", nil, fmt.Errorf("sqlkit/sql: VALUES source has %d column names for %d-wide rows", len(v.Columns), width)
+	}
+	union := false
+	if d, ok := c.Dialect.(DerivedValuesUnionDialect); ok && d.UsesValuesUnion() {
+		union = true
+	}
+	if union && len(v.Columns) != width {
+		return "", nil, fmt.Errorf("sqlkit/sql: VALUES source needs a column name per value for this dialect")
+	}
+
+	var sb strings.Builder
+	var args []any
+	sb.WriteString("(")
+	for ri, row := range v.Rows {
+		if len(row) != width {
+			return "", nil, fmt.Errorf("sqlkit/sql: VALUES source row %d has %d values, want %d", ri, len(row), width)
+		}
+		if union {
+			if ri > 0 {
+				sb.WriteString(" UNION ALL ")
+			}
+			sb.WriteString("SELECT ")
+		} else {
+			if ri == 0 {
+				sb.WriteString("VALUES ")
+			} else {
+				sb.WriteString(", ")
+			}
+			sb.WriteString("(")
+		}
+		for ci, value := range row {
+			if ci > 0 {
+				sb.WriteString(", ")
+			}
+			valueSQL, valueArgs, err := c.CompileExpression(value)
+			if err != nil {
+				return "", nil, err
+			}
+			// PostgreSQL infers an unannotated VALUES parameter as text, which
+			// breaks a join/assignment against a non-text column. Type the first
+			// row's values so the server infers each column's type; other rows
+			// inherit it. (MySQL renders the union form and is not a ValuesCaster.)
+			if !union && ri == 0 {
+				if caster, ok := c.Dialect.(ValuesCaster); ok {
+					if ve, ok := value.(ValueExpression); ok {
+						if castType, ok := caster.ValuesCastType(ve.Value); ok {
+							valueSQL = "CAST(" + valueSQL + " AS " + castType + ")"
+						}
+					}
+				}
+			}
+			sb.WriteString(valueSQL)
+			// Only the first UNION arm names the columns; the rest inherit them.
+			if union && ri == 0 {
+				sb.WriteString(" AS ")
+				sb.WriteString(c.Dialect.QuoteIdent(v.Columns[ci]))
+			}
+			args = append(args, valueArgs...)
+		}
+		if !union {
+			sb.WriteString(")")
+		}
+	}
+	sb.WriteString(")")
+	if s.Alias != "" {
+		sb.WriteString(" AS ")
+		sb.WriteString(c.Dialect.QuoteIdent(s.Alias))
+		if !union && len(v.Columns) == width {
+			sb.WriteString("(")
+			for ci, col := range v.Columns {
+				if ci > 0 {
+					sb.WriteString(", ")
+				}
+				sb.WriteString(c.Dialect.QuoteIdent(col))
+			}
+			sb.WriteString(")")
+		}
+	}
+	return sb.String(), args, nil
 }
 
 // compileSubquery compiles a nested query through this compiler when possible

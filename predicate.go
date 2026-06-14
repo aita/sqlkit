@@ -30,6 +30,22 @@ func (b *batchIn) exprFor(values []any) sql.Expression {
 	return sql.In(b.col, values...)
 }
 
+// newInPredicate builds a chunkable "col IN (values)" predicate: it carries the
+// batchIn metadata so a lone such predicate is split across statements when the
+// value list would exceed the executor's bind-parameter limit. It backs both the
+// typed Column[T].In and the untyped sqlkit.In escape hatch.
+func newInPredicate(col sql.Expression, values []any) Predicate {
+	b := &batchIn{col: col, values: values}
+	return Predicate{expr: b.exprFor(values), batch: b}
+}
+
+// InValues builds a chunkable "col IN (values)" predicate from an untyped column
+// expression — the escape-hatch counterpart to Column[T].In for cases the typed
+// layer does not cover (such as a primary-key column resolved at runtime). Unlike
+// Cond(sql.In(...)), the result carries the metadata needed to auto-split a large
+// value list across statements; see WithAutoChunk.
+func InValues(col sql.Expression, values ...any) Predicate { return newInPredicate(col, values) }
+
 // Expression returns the underlying untyped SQL expression.
 func (p Predicate) Expression() sql.Expression { return p.expr }
 

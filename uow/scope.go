@@ -89,6 +89,12 @@ type Scope struct {
 	// Insert statements of at most this many rows (see WithBatchSize).
 	batchSize int
 
+	// autoChunk overrides, when non-nil, whether the flush batches UPDATE/DELETE
+	// work (merging deletes into chunked IN lists and updating via a VALUES join)
+	// and sizes it to the bind-parameter limit. nil inherits the executor's
+	// WithAutoChunk setting. See WithAutoChunk.
+	autoChunk *bool
+
 	// nesting
 	parent    *Scope
 	savepoint string
@@ -113,6 +119,19 @@ func WithIdentities(identities *meta.IdentityMap) Option {
 // nested scopes.
 func WithBatchSize(n int) Option {
 	return func(s *Scope) { s.batchSize = n }
+}
+
+// WithAutoChunk overrides, for this scope, whether the flush automatically
+// batches its writes within the dialect's bind-parameter limit: removals of
+// rows with a single-column primary key are merged into chunked DELETE ... WHERE
+// pk IN (...) statements, and updates are applied with a chunked UPDATE ... FROM
+// (VALUES ...) join instead of one statement per row. Without it a scope inherits
+// the executor's WithAutoChunk setting; pass false to keep the per-row flush even
+// when the executor enables splitting, or true to batch over an executor that has
+// it off. Composite-key tables always flush per row. The setting is inherited by
+// nested scopes.
+func WithAutoChunk(enabled bool) Option {
+	return func(s *Scope) { s.autoChunk = &enabled }
 }
 
 // NewScope creates a Unit of Work that loads and flushes through ex. Pass a
@@ -143,6 +162,7 @@ func (s *Scope) NewScope() *Scope {
 		ex:         s.ex,
 		identities: s.identities,
 		batchSize:  s.batchSize,
+		autoChunk:  s.autoChunk,
 		tables:     map[string]*tableState{},
 		parent:     s,
 	}
@@ -388,7 +408,7 @@ func (s *Scope) flushInserts(ctx context.Context, ts *tableState) error {
 		batch = append(batch, row)
 	}
 	if len(batch) > 0 {
-		if _, err := s.ex.Insert(ts.table).Values(batch...).BatchSize(s.batchSize).Exec(ctx); err != nil {
+		if _, err := s.ex.Insert(ts.table).Values(batch...).AutoChunk(sqlkit.ChunkSize(s.batchSize)).Exec(ctx); err != nil {
 			return fmt.Errorf("uow: insert into %s: %w", ts.key, err)
 		}
 	}
@@ -421,6 +441,9 @@ func (s *Scope) insertWithWriteback(ctx context.Context, ts *tableState, row any
 }
 
 func (s *Scope) flushManaged(ctx context.Context, ts *tableState) error {
+	auto, limit := s.splitConfig()
+	bulk := auto && len(ts.table.PrimaryKey()) == 1
+	var pending []pendingUpdate
 	for _, tr := range ts.managed {
 		pk, err := sqlkit.PrimaryKeyValues(ts.table, tr.ptr)
 		if err != nil {
@@ -437,14 +460,21 @@ func (s *Scope) flushManaged(ctx context.Context, ts *tableState) error {
 		if len(assignments) == 0 {
 			continue
 		}
-		if _, err := s.ex.Update(ts.table).Set(assignments...).Where(pkPredicates(ts.table, tr.pk)...).Exec(ctx); err != nil {
-			return fmt.Errorf("uow: update %s: %w", ts.key, err)
+		if !bulk || hasNullAssignment(assignments) {
+			if err := s.execRowUpdate(ctx, ts, tr.pk, assignments); err != nil {
+				return err
+			}
+			continue
 		}
+		pending = append(pending, pendingUpdate{pk: tr.pk, assignments: assignments})
 	}
-	return nil
+	return s.flushBulkUpdates(ctx, ts, pending, limit)
 }
 
 func (s *Scope) flushUpdates(ctx context.Context, ts *tableState) error {
+	auto, limit := s.splitConfig()
+	bulk := auto && len(ts.table.PrimaryKey()) == 1
+	var pending []pendingUpdate
 	for _, row := range ts.updates {
 		pk, err := sqlkit.PrimaryKeyValues(ts.table, row)
 		if err != nil {
@@ -457,18 +487,120 @@ func (s *Scope) flushUpdates(ctx context.Context, ts *tableState) error {
 		if len(assignments) == 0 {
 			continue
 		}
-		if _, err := s.ex.Update(ts.table).Set(assignments...).Where(pkPredicates(ts.table, pk)...).Exec(ctx); err != nil {
-			return fmt.Errorf("uow: update %s: %w", ts.key, err)
+		if !bulk || hasNullAssignment(assignments) {
+			if err := s.execRowUpdate(ctx, ts, pk, assignments); err != nil {
+				return err
+			}
+			continue
+		}
+		pending = append(pending, pendingUpdate{pk: pk, assignments: assignments})
+	}
+	return s.flushBulkUpdates(ctx, ts, pending, limit)
+}
+
+func (s *Scope) flushRemovals(ctx context.Context, ts *tableState) error {
+	if len(ts.removed) == 0 {
+		return nil
+	}
+	auto, limit := s.splitConfig()
+	cols := ts.table.PrimaryKey()
+	// Merge single-column-PK removals into chunked DELETE ... WHERE pk IN (...)
+	// statements when batching is on; composite keys flush one row at a time.
+	if len(cols) == 1 && (auto || s.batchSize > 0) {
+		vals := make([]any, len(ts.removed))
+		for i, r := range ts.removed {
+			vals[i] = r.pk[0]
+		}
+		for _, part := range chunkSlice(vals, s.chunkSize(1, auto, limit)) {
+			if _, err := s.ex.Delete(ts.table).Where(sqlkit.InValues(cols[0], part...)).Exec(ctx); err != nil {
+				return fmt.Errorf("uow: delete from %s: %w", ts.key, err)
+			}
+		}
+		return nil
+	}
+	for _, r := range ts.removed {
+		if _, err := s.ex.Delete(ts.table).Where(pkPredicates(ts.table, r.pk)...).Exec(ctx); err != nil {
+			return fmt.Errorf("uow: delete from %s: %w", ts.key, err)
 		}
 	}
 	return nil
 }
 
-func (s *Scope) flushRemovals(ctx context.Context, ts *tableState) error {
-	for _, r := range ts.removed {
-		if _, err := s.ex.Delete(ts.table).Where(pkPredicates(ts.table, r.pk)...).Exec(ctx); err != nil {
-			return fmt.Errorf("uow: delete from %s: %w", ts.key, err)
+// pendingUpdate is a managed/explicit update deferred so several rows can be
+// applied together in one UPDATE ... FROM (VALUES ...) statement.
+type pendingUpdate struct {
+	pk          []any
+	assignments []sql.Assignment
+}
+
+// execRowUpdate runs one single-row UPDATE by primary key — the unbatched path.
+func (s *Scope) execRowUpdate(ctx context.Context, ts *tableState, pk []any, assignments []sql.Assignment) error {
+	if _, err := s.ex.Update(ts.table).Set(assignments...).Where(pkPredicates(ts.table, pk)...).Exec(ctx); err != nil {
+		return fmt.Errorf("uow: update %s: %w", ts.key, err)
+	}
+	return nil
+}
+
+// flushBulkUpdates applies the deferred updates with a VALUES-join UPDATE. Rows
+// are grouped by their set of changed columns (each group updates a fixed column
+// list) and each group is chunked to the bind-parameter limit; a group of one row
+// degrades to a plain single-row UPDATE.
+func (s *Scope) flushBulkUpdates(ctx context.Context, ts *tableState, pending []pendingUpdate, limit int) error {
+	if len(pending) == 0 {
+		return nil
+	}
+	pkCol := ts.table.PrimaryKey()[0]
+	groups, order := groupBySignature(pending)
+	for _, sig := range order {
+		group := groups[sig]
+		if len(group) == 1 {
+			if err := s.execRowUpdate(ctx, ts, group[0].pk, group[0].assignments); err != nil {
+				return err
+			}
+			continue
 		}
+		colNames := assignmentColumns(group[0].assignments)
+		for _, part := range chunkSlice(group, s.chunkSize(1+len(colNames), true, limit)) {
+			if err := s.execValuesUpdate(ctx, ts, pkCol, colNames, part); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// execValuesUpdate runs one UPDATE ... SET col = v.cN FROM (VALUES (...)) AS
+// v(k, c0, c1, …) WHERE pk = v.k for a chunk of rows sharing colNames. The VALUES
+// columns use synthetic names (k for the key, cN for each value) so they never
+// collide with the target table's column names — keeping the SET targets bare
+// (required by PostgreSQL) and unambiguous (required by MySQL).
+func (s *Scope) execValuesUpdate(ctx context.Context, ts *tableState, pkCol sqlkit.AnyColumn, colNames []string, group []pendingUpdate) error {
+	valueCols := make([]string, 0, 1+len(colNames))
+	valueCols = append(valueCols, "k")
+	for i := range colNames {
+		valueCols = append(valueCols, fmt.Sprintf("c%d", i))
+	}
+	rows := make([][]sql.Expression, len(group))
+	for i, p := range group {
+		byCol := make(map[string]sql.Expression, len(p.assignments))
+		for _, a := range p.assignments {
+			byCol[a.Column] = a.Value
+		}
+		row := make([]sql.Expression, 0, len(valueCols))
+		row = append(row, sql.Val(p.pk[0]))
+		for _, cn := range colNames {
+			row = append(row, byCol[cn])
+		}
+		rows[i] = row
+	}
+	setCols := make([]sql.Assignment, len(colNames))
+	for i, cn := range colNames {
+		setCols[i] = sql.Set(cn, sql.Col("v."+valueCols[i+1]))
+	}
+	source := sql.ValuesSource(rows, "v", valueCols...)
+	join := sqlkit.Cond(sql.Eq(pkCol, sql.Col("v.k")))
+	if _, err := s.ex.Update(ts.table).Set(setCols...).From(source).Where(join).Exec(ctx); err != nil {
+		return fmt.Errorf("uow: update %s: %w", ts.key, err)
 	}
 	return nil
 }
@@ -575,6 +707,94 @@ func updateAssignments(table sqlkit.Table, row any) ([]sql.Assignment, error) {
 		assignments = append(assignments, sql.Set(name, sql.Val(values[i])))
 	}
 	return assignments, nil
+}
+
+// splitConfig resolves whether the flush should batch its UPDATE/DELETE work and
+// the dialect's bind-parameter limit to size it by, letting a scope-level
+// WithAutoChunk override the executor's setting.
+func (s *Scope) splitConfig() (auto bool, limit int) {
+	if cfg, ok := s.ex.(interface{ AutoChunkEnabled() bool }); ok {
+		auto = cfg.AutoChunkEnabled()
+	}
+	if d, ok := s.ex.(dialecter); ok {
+		if bp, ok := d.Dialect().(sql.BindParamLimiter); ok {
+			limit = bp.MaxBindParams()
+		}
+	}
+	if s.autoChunk != nil {
+		auto = *s.autoChunk
+	}
+	return auto, limit
+}
+
+// chunkSize returns the maximum rows per batched statement: the scope's batch
+// size, lowered to floor(limit/paramsPerRow) when auto-splitting is on so the
+// parameters never exceed the limit. 0 means a single chunk.
+func (s *Scope) chunkSize(paramsPerRow int, auto bool, limit int) int {
+	size := s.batchSize
+	if auto && limit > 0 && paramsPerRow > 0 {
+		perStmt := limit / paramsPerRow
+		if perStmt < 1 {
+			perStmt = 1
+		}
+		if size <= 0 || perStmt < size {
+			size = perStmt
+		}
+	}
+	return size
+}
+
+// chunkSlice splits items into consecutive chunks of at most size; size <= 0
+// yields a single chunk.
+func chunkSlice[T any](items []T, size int) [][]T {
+	if size <= 0 || len(items) <= size {
+		return [][]T{items}
+	}
+	out := make([][]T, 0, (len(items)+size-1)/size)
+	for start := 0; start < len(items); start += size {
+		end := start + size
+		if end > len(items) {
+			end = len(items)
+		}
+		out = append(out, items[start:end])
+	}
+	return out
+}
+
+// groupBySignature groups pending updates by their set of changed columns (in
+// column order), so each group updates a single fixed column list; order keeps
+// the groups in first-seen order for a deterministic flush.
+func groupBySignature(pending []pendingUpdate) (groups map[string][]pendingUpdate, order []string) {
+	groups = map[string][]pendingUpdate{}
+	for _, p := range pending {
+		sig := strings.Join(assignmentColumns(p.assignments), "\x00")
+		if _, ok := groups[sig]; !ok {
+			order = append(order, sig)
+		}
+		groups[sig] = append(groups[sig], p)
+	}
+	return groups, order
+}
+
+// assignmentColumns returns the assignment column names in order.
+func assignmentColumns(assignments []sql.Assignment) []string {
+	cols := make([]string, len(assignments))
+	for i, a := range assignments {
+		cols[i] = a.Column
+	}
+	return cols
+}
+
+// hasNullAssignment reports whether any assignment sets a column to a NULL bind
+// value. Such rows are flushed individually rather than through a VALUES join,
+// where an all-unknown VALUES column would have no inferable type.
+func hasNullAssignment(assignments []sql.Assignment) bool {
+	for _, a := range assignments {
+		if v, ok := a.Value.(sql.ValueExpression); ok && v.Value == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // pkPredicates builds the "pk_col = value" predicates that target a single row.

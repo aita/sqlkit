@@ -19,11 +19,11 @@ var repeatableRead = driver.IsolationLevel(stdsql.LevelRepeatableRead)
 
 func TestInsertAutoSplitsByBindParamLimit(t *testing.T) {
 	fake := &sqltest.Fake{}
-	// limit 4 / 2 columns (email, name) => at most 2 rows per statement.
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithMaxBindParams(4))
+	// 2 rows per statement (old limit 4 / 2 columns) via a per-query chunk size.
+	db := sqlkit.WrapDB(fake.DB())
 
 	rows := []User{{Email: "a"}, {Email: "b"}, {Email: "c"}, {Email: "d"}, {Email: "e"}}
-	res, err := db.Insert(Users).Values(rows).Exec(context.Background())
+	res, err := db.Insert(Users).Values(rows).AutoChunk(sqlkit.ChunkSize(2)).Exec(context.Background())
 	if err != nil {
 		t.Fatalf("Exec() error = %v", err)
 	}
@@ -50,20 +50,6 @@ func TestInsertAutoSplitsByBindParamLimit(t *testing.T) {
 	}
 }
 
-func TestInsertBatchSizeCappedByLimit(t *testing.T) {
-	fake := &sqltest.Fake{}
-	// Explicit BatchSize 4 but the limit only allows 2 rows per statement.
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithMaxBindParams(4))
-
-	rows := []User{{Email: "a"}, {Email: "b"}, {Email: "c"}, {Email: "d"}}
-	if _, err := db.Insert(Users).Values(rows).BatchSize(4).Exec(context.Background()); err != nil {
-		t.Fatalf("Exec() error = %v", err)
-	}
-	if n := len(fake.Execs()); n != 2 {
-		t.Fatalf("execs = %d, want 2 (limit caps BatchSize to 2 rows)", n)
-	}
-}
-
 func TestInsertNoLimitNoBatchSizeIsSingleStatement(t *testing.T) {
 	fake := &sqltest.Fake{}
 	db := sqlkit.WrapDB(fake.DB()) // no limit configured
@@ -82,7 +68,7 @@ func TestInsertNoLimitNoBatchSizeIsSingleStatement(t *testing.T) {
 
 func TestInsertWithinLimitIsSingleStatement(t *testing.T) {
 	fake := &sqltest.Fake{}
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithMaxBindParams(65535))
+	db := sqlkit.WrapDB(fake.DB())
 
 	rows := []User{{Email: "a"}, {Email: "b"}}
 	if _, err := db.Insert(Users).Values(rows).Exec(context.Background()); err != nil {
@@ -113,11 +99,11 @@ func idFromArgsFake() *sqltest.Fake {
 
 func TestSelectInChunksByBindParamLimit(t *testing.T) {
 	fake := idFromArgsFake()
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithMaxBindParams(3))
+	db := sqlkit.WrapDB(fake.DB())
 
 	ids := []int64{1, 2, 3, 4, 5, 6, 7}
 	var users []User
-	err := db.Select().From(Users).Where(Users.ID.In(ids...)).All(context.Background()).Scan(&users)
+	err := db.Select().From(Users).Where(Users.ID.In(ids...)).AutoChunk(sqlkit.ChunkSize(3)).All(context.Background()).Scan(&users)
 	if err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
@@ -140,11 +126,11 @@ func TestSelectInChunksByBindParamLimit(t *testing.T) {
 
 func TestSelectInChunksRunUnderRepeatableReadSnapshot(t *testing.T) {
 	fake := idFromArgsFake()
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithMaxBindParams(3))
+	db := sqlkit.WrapDB(fake.DB())
 
 	ids := []int64{1, 2, 3, 4, 5, 6, 7}
 	var users []User
-	if err := db.Select().From(Users).Where(Users.ID.In(ids...)).All(context.Background()).Scan(&users); err != nil {
+	if err := db.Select().From(Users).Where(Users.ID.In(ids...)).AutoChunk(sqlkit.ChunkSize(3)).All(context.Background()).Scan(&users); err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
 	// The 3 chunk queries run inside one snapshot transaction by default.
@@ -158,11 +144,11 @@ func TestSelectInChunksRunUnderRepeatableReadSnapshot(t *testing.T) {
 
 func TestSelectInChunksWithoutSnapshotRunIndependently(t *testing.T) {
 	fake := idFromArgsFake()
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithMaxBindParams(3), sqlkit.WithBatchReadSnapshot(false))
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithBatchReadSnapshot(false))
 
 	ids := []int64{1, 2, 3, 4, 5, 6, 7}
 	var users []User
-	if err := db.Select().From(Users).Where(Users.ID.In(ids...)).All(context.Background()).Scan(&users); err != nil {
+	if err := db.Select().From(Users).Where(Users.ID.In(ids...)).AutoChunk(sqlkit.ChunkSize(3)).All(context.Background()).Scan(&users); err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
 	// With the snapshot off, the chunks run as independent reads (no transaction).
@@ -176,7 +162,7 @@ func TestSelectInChunksWithoutSnapshotRunIndependently(t *testing.T) {
 
 func TestSelectInSingleQueryNoSnapshotTx(t *testing.T) {
 	fake := idFromArgsFake()
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithMaxBindParams(10))
+	db := sqlkit.WrapDB(fake.DB())
 
 	// Values fit in one statement, so no splitting and no snapshot transaction.
 	var users []User
@@ -190,7 +176,7 @@ func TestSelectInSingleQueryNoSnapshotTx(t *testing.T) {
 
 func TestSelectInWithinLimitIsSingleQuery(t *testing.T) {
 	fake := idFromArgsFake()
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithMaxBindParams(10))
+	db := sqlkit.WrapDB(fake.DB())
 
 	var users []User
 	err := db.Select().From(Users).Where(Users.ID.In(1, 2, 3)).All(context.Background()).Scan(&users)
@@ -204,13 +190,13 @@ func TestSelectInWithinLimitIsSingleQuery(t *testing.T) {
 
 func TestSelectInOrderByRunsSingleQuery(t *testing.T) {
 	fake := idFromArgsFake()
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithMaxBindParams(3))
+	db := sqlkit.WrapDB(fake.DB())
 
 	ids := []int64{1, 2, 3, 4, 5}
 	var users []User
 	// ORDER BY makes concatenating split results unsafe, so it stays one query.
 	err := db.Select().From(Users).Where(Users.ID.In(ids...)).OrderBy(Users.ID.Asc()).
-		All(context.Background()).Scan(&users)
+		AutoChunk(sqlkit.ChunkSize(3)).All(context.Background()).Scan(&users)
 	if err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
@@ -239,12 +225,12 @@ func TestSelectInNoLimitIsSingleQuery(t *testing.T) {
 
 func TestSelectNotInRunsSingleQuery(t *testing.T) {
 	fake := idFromArgsFake()
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithMaxBindParams(3))
+	db := sqlkit.WrapDB(fake.DB())
 
 	ids := []int64{1, 2, 3, 4, 5}
 	var users []User
 	// NOT IN cannot be partitioned across statements, so it is never split.
-	if err := db.Select().From(Users).Where(Users.ID.NotIn(ids...)).All(context.Background()).Scan(&users); err != nil {
+	if err := db.Select().From(Users).Where(Users.ID.NotIn(ids...)).AutoChunk(sqlkit.ChunkSize(3)).All(context.Background()).Scan(&users); err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
 	queries := fake.Queries()
@@ -279,12 +265,12 @@ func TestSelectInCombinedWithFilterToSQLUnchanged(t *testing.T) {
 
 func TestUpdateInChunksByBindParamLimit(t *testing.T) {
 	fake := &sqltest.Fake{}
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithMaxBindParams(3))
+	db := sqlkit.WrapDB(fake.DB())
 
 	ids := []int64{1, 2, 3, 4, 5, 6, 7}
 	name := "x"
-	// SET name=$1 uses 1 of the 3 params, leaving room for 2 ids per statement.
-	res, err := db.Update(Users).Set(Users.Name.Set(&name)).Where(Users.ID.In(ids...)).Exec(context.Background())
+	// ChunkSize 2 => 2 ids per statement (old limit 3 minus one SET param).
+	res, err := db.Update(Users).Set(Users.Name.Set(&name)).Where(Users.ID.In(ids...)).AutoChunk(sqlkit.ChunkSize(2)).Exec(context.Background())
 	if err != nil {
 		t.Fatalf("Exec() error = %v", err)
 	}
@@ -307,10 +293,10 @@ func TestUpdateInChunksByBindParamLimit(t *testing.T) {
 
 func TestDeleteInChunksByBindParamLimit(t *testing.T) {
 	fake := &sqltest.Fake{}
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithMaxBindParams(3))
+	db := sqlkit.WrapDB(fake.DB())
 
 	ids := []int64{1, 2, 3, 4, 5, 6, 7}
-	if _, err := db.Delete(Users).Where(Users.ID.In(ids...)).Exec(context.Background()); err != nil {
+	if _, err := db.Delete(Users).Where(Users.ID.In(ids...)).AutoChunk(sqlkit.ChunkSize(3)).Exec(context.Background()); err != nil {
 		t.Fatalf("Exec() error = %v", err)
 	}
 	execs := fake.Execs()
@@ -328,12 +314,12 @@ func TestDeleteInChunksByBindParamLimit(t *testing.T) {
 // opening a new one.
 func TestUpdateInChunksJoinsSessionTransaction(t *testing.T) {
 	fake := &sqltest.Fake{}
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithMaxBindParams(3))
+	db := sqlkit.WrapDB(fake.DB())
 	session := db.NewSession()
 	t.Cleanup(func() { _ = session.Close() })
 
 	ids := []int64{1, 2, 3, 4, 5}
-	if _, err := session.Delete(Users).Where(Users.ID.In(ids...)).Exec(context.Background()); err != nil {
+	if _, err := session.Delete(Users).Where(Users.ID.In(ids...)).AutoChunk(sqlkit.ChunkSize(3)).Exec(context.Background()); err != nil {
 		t.Fatalf("Exec() error = %v", err)
 	}
 	if err := session.Commit(); err != nil {
@@ -351,7 +337,7 @@ func TestUpdateInChunksJoinsSessionTransaction(t *testing.T) {
 // the same way, each chunk re-running the full statement for its id subset.
 func TestReferenceUpdateInChunks(t *testing.T) {
 	fake := &sqltest.Fake{}
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithMaxBindParams(3))
+	db := sqlkit.WrapDB(fake.DB())
 
 	ids := []int64{1, 2, 3, 4, 5, 6, 7}
 	_, err := db.Update(Posts).
@@ -359,6 +345,7 @@ func TestReferenceUpdateInChunks(t *testing.T) {
 		From(Users).
 		Where(Posts.UserID.EqExpr(Users.ID)).
 		Where(Posts.ID.In(ids...)).
+		AutoChunk(sqlkit.ChunkSize(2)).
 		Exec(context.Background())
 	if err != nil {
 		t.Fatalf("Exec() error = %v", err)
@@ -383,10 +370,10 @@ func TestReferenceUpdateInChunks(t *testing.T) {
 func TestBatchWriteSnapshotUsesRepeatableRead(t *testing.T) {
 	fake := &sqltest.Fake{}
 	db := sqlkit.WrapDB(fake.DB(),
-		sqlkit.WithMaxBindParams(3), sqlkit.WithBatchWriteSnapshot(true))
+		sqlkit.WithBatchWriteSnapshot(true))
 
 	ids := []int64{1, 2, 3, 4, 5}
-	if _, err := db.Delete(Users).Where(Users.ID.In(ids...)).Exec(context.Background()); err != nil {
+	if _, err := db.Delete(Users).Where(Users.ID.In(ids...)).AutoChunk(sqlkit.ChunkSize(3)).Exec(context.Background()); err != nil {
 		t.Fatalf("Exec() error = %v", err)
 	}
 	opts := fake.BeginOptions()
@@ -403,11 +390,11 @@ func TestBatchWriteSnapshotUsesRepeatableRead(t *testing.T) {
 
 func TestBatchReadSnapshotIsReadOnlyRepeatableRead(t *testing.T) {
 	fake := idFromArgsFake()
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithMaxBindParams(3))
+	db := sqlkit.WrapDB(fake.DB())
 
 	ids := []int64{1, 2, 3, 4, 5}
 	var users []User
-	if err := db.Select().From(Users).Where(Users.ID.In(ids...)).All(context.Background()).Scan(&users); err != nil {
+	if err := db.Select().From(Users).Where(Users.ID.In(ids...)).AutoChunk(sqlkit.ChunkSize(3)).All(context.Background()).Scan(&users); err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
 	opts := fake.BeginOptions()
@@ -433,17 +420,17 @@ func TestSplitStatementsPassThroughInterceptors(t *testing.T) {
 		}
 		return stmt, nil
 	})
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithMaxBindParams(3), sqlkit.WithInterceptor(count))
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithInterceptor(count))
 
 	ids := []int64{1, 2, 3, 4, 5, 6, 7}
 	var users []User
-	if err := db.Select().From(Users).Where(Users.ID.In(ids...)).All(context.Background()).Scan(&users); err != nil {
+	if err := db.Select().From(Users).Where(Users.ID.In(ids...)).AutoChunk(sqlkit.ChunkSize(3)).All(context.Background()).Scan(&users); err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
 	if queries != 3 {
 		t.Fatalf("intercepted queries = %d, want 3 (one per chunk)", queries)
 	}
-	if _, err := db.Delete(Users).Where(Users.ID.In(ids...)).Exec(context.Background()); err != nil {
+	if _, err := db.Delete(Users).Where(Users.ID.In(ids...)).AutoChunk(sqlkit.ChunkSize(3)).Exec(context.Background()); err != nil {
 		t.Fatalf("Exec() error = %v", err)
 	}
 	if execs != 3 {
@@ -451,38 +438,21 @@ func TestSplitStatementsPassThroughInterceptors(t *testing.T) {
 	}
 }
 
-// --- Database limit configuration.
-
-func TestDetectMaxBindParamsConfiguresLimit(t *testing.T) {
-	fake := &sqltest.Fake{}
-	db := sqlkit.WrapDB(fake.DB())
-	if db.MaxBindParams() != 0 {
-		t.Fatalf("MaxBindParams = %d, want 0 before detection", db.MaxBindParams())
-	}
-	limit, err := db.DetectMaxBindParams(context.Background())
-	if err != nil {
-		t.Fatalf("DetectMaxBindParams() error = %v", err)
-	}
-	if limit != 65535 || db.MaxBindParams() != 65535 {
-		t.Fatalf("detected = %d, MaxBindParams = %d, want 65535/65535", limit, db.MaxBindParams())
-	}
-}
-
 // --- InBatches helper.
 
 func TestInBatchesConcatenatesChunks(t *testing.T) {
 	fake := idFromArgsFake()
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithMaxBindParams(2))
+	db := sqlkit.WrapDB(fake.DB())
 
 	ids := []int64{10, 20, 30, 40, 50}
 	var users []User
 	err := sqlkit.InBatches(context.Background(), db, ids, func(chunk []int64) sqlkit.Rows {
 		return db.Select().From(Users).Where(Users.ID.In(chunk...)).All(context.Background())
-	}, &users)
+	}, &users, 2)
 	if err != nil {
 		t.Fatalf("InBatches() error = %v", err)
 	}
-	// chunkSize defaults to the limit (2): 2+2+1 => 3 chunks, one row each.
+	// Explicit chunk size 2: 2+2+1 => 3 chunks, one row each.
 	if len(users) != 3 {
 		t.Fatalf("users = %d, want 3 (one row per chunk)", len(users))
 	}

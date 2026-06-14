@@ -10,12 +10,12 @@ import (
 	"github.com/aita/sqlkit/examples/blog/blogdb"
 )
 
-// These tests drive the bind-parameter splitting feature end to end against the
-// real engines: a Database configured with a small WithMaxBindParams must split
-// bulk INSERTs and large IN lists into several statements yet produce the same
-// result as an unsplit run. A counting interceptor confirms the split actually
-// happened (more than one statement reached the database), and the row counts
-// confirm it stayed correct.
+// These tests drive the auto-chunking feature end to end against the real
+// engines: queries with a small per-query AutoChunk(ChunkSize) must split bulk
+// INSERTs and large IN lists into several statements yet produce the same result
+// as an unsplit run. A counting interceptor confirms the split actually happened
+// (more than one statement reached the database), and the row counts confirm it
+// stayed correct.
 
 // stmtCounter counts the query and exec statements that reach the database,
 // including each split chunk (interceptors wrap every statement actually sent).
@@ -39,14 +39,12 @@ func TestBindParamSplittingEndToEnd(t *testing.T) {
 	eachEngine(t, func(t *testing.T, eng engine, db *sqlkit.Database) {
 		ctx := context.Background()
 
-		// A handle over the same pool that splits statements at a small limit and
-		// counts how many actually run. users insert binds a few columns per row,
-		// so a limit of 10 forces both the bulk insert and the IN lists below to
-		// span several statements.
+		// A handle over the same pool that counts how many statements actually run.
+		// Each query below carries a small per-query AutoChunk(ChunkSize), forcing
+		// both the bulk insert and the IN lists to span several statements.
 		counter := &stmtCounter{}
 		sdb := sqlkit.WrapDB(db.SQL(),
 			sqlkit.WithDialect(db.Dialect()),
-			sqlkit.WithMaxBindParams(10),
 			sqlkit.WithInterceptor(counter))
 
 		const n = 50
@@ -57,7 +55,7 @@ func TestBindParamSplittingEndToEnd(t *testing.T) {
 
 		// Bulk INSERT splits into several statements but inserts every row.
 		execBefore := counter.execs
-		if _, err := sdb.Insert(blogdb.Users).Values(users).Exec(ctx); err != nil {
+		if _, err := sdb.Insert(blogdb.Users).Values(users).AutoChunk(sqlkit.ChunkSize(5)).Exec(ctx); err != nil {
 			t.Fatalf("bulk insert: %v", err)
 		}
 		if got := counter.execs - execBefore; got < 2 {
@@ -87,6 +85,7 @@ func TestBindParamSplittingEndToEnd(t *testing.T) {
 		var got []userRow
 		if err := sdb.Select().From(blogdb.Users).
 			Where(blogdb.Users.ID.In(ids...)).
+			AutoChunk(sqlkit.ChunkSize(10)).
 			All(ctx).Scan(&got); err != nil {
 			t.Fatalf("select IN: %v", err)
 		}
@@ -109,6 +108,7 @@ func TestBindParamSplittingEndToEnd(t *testing.T) {
 		res, err := sdb.Update(blogdb.Users).
 			Set(blogdb.Users.Name.Set(ptr("renamed"))).
 			Where(blogdb.Users.ID.In(ids...)).
+			AutoChunk(sqlkit.ChunkSize(9)).
 			Exec(ctx)
 		if err != nil {
 			t.Fatalf("update IN: %v", err)
@@ -128,7 +128,7 @@ func TestBindParamSplittingEndToEnd(t *testing.T) {
 
 		// DELETE ... WHERE id IN (half) splits and removes exactly that half.
 		half := ids[:n/2]
-		res, err = sdb.Delete(blogdb.Users).Where(blogdb.Users.ID.In(half...)).Exec(ctx)
+		res, err = sdb.Delete(blogdb.Users).Where(blogdb.Users.ID.In(half...)).AutoChunk(sqlkit.ChunkSize(10)).Exec(ctx)
 		if err != nil {
 			t.Fatalf("delete IN: %v", err)
 		}
@@ -151,8 +151,7 @@ func TestInBatchesEndToEnd(t *testing.T) {
 	eachEngine(t, func(t *testing.T, eng engine, db *sqlkit.Database) {
 		ctx := context.Background()
 		sdb := sqlkit.WrapDB(db.SQL(),
-			sqlkit.WithDialect(db.Dialect()),
-			sqlkit.WithMaxBindParams(8))
+			sqlkit.WithDialect(db.Dialect()))
 
 		const n = 30
 		users := make([]userRow, n)
@@ -168,12 +167,12 @@ func TestInBatchesEndToEnd(t *testing.T) {
 			t.Fatalf("select ids: %v", err)
 		}
 
-		// InBatches splits the value slice (chunk size defaults to the configured
-		// limit) and concatenates each chunk's rows.
+		// InBatches splits the value slice (explicit chunk size 8) and concatenates
+		// each chunk's rows.
 		var out []userRow
 		err := sqlkit.InBatches(ctx, sdb, ids, func(chunk []int64) sqlkit.Rows {
 			return sdb.Select().From(blogdb.Users).Where(blogdb.Users.ID.In(chunk...)).All(ctx)
-		}, &out)
+		}, &out, 8)
 		if err != nil {
 			t.Fatalf("InBatches: %v", err)
 		}

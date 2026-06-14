@@ -22,6 +22,20 @@ import (
 // element type of that field determines what the children scan into, so the
 // usual sqlkit field mapping applies to them.
 
+// defaultPreloadChunkSize is the default cap on parent keys per follow-up IN query
+// of a Preload (WithPreloadBatchSize overrides it), echoing SQLAlchemy
+// selectinload's fixed-size batching for plan-cache friendliness.
+const defaultPreloadChunkSize = 1000
+
+// preloadChunkOf reports the executor's configured preload chunk size, or the
+// default when the executor does not expose one.
+func preloadChunkOf(ex Executor) int {
+	if p, ok := ex.(interface{ preloadChunkSize() int }); ok {
+		return p.preloadChunkSize()
+	}
+	return defaultPreloadChunkSize
+}
+
 // applyPreloads runs every registered preload against the just-scanned dest.
 func applyPreloads(ctx context.Context, ex Executor, dest any, rels []Relation) error {
 	for _, rel := range rels {
@@ -119,9 +133,15 @@ func preloadRelation(ctx context.Context, ex Executor, dest any, rel Relation) e
 		vals = append(vals, sql.Val(key))
 	}
 
-	// Scan children into a fresh []childElem, then group them by target key.
+	// Scan children into a fresh []childElem, then group them by target key. The
+	// IN carries chunk metadata (newInPredicate), so a parent set large enough to
+	// exceed the executor's bind-parameter limit is split across statements and its
+	// rows concatenated, just like a user-issued Column.In query. AutoChunk caps the
+	// keys per follow-up query at the configured preload batch size (selectinload
+	// style) so a wide eager-load runs several plan-cache-friendly statements.
 	childrenPtr := reflect.New(reflect.SliceOf(childElem))
-	rows := ex.Select().From(target).Where(Cond(sql.In(fkCol, vals...))).All(ctx)
+	rows := ex.Select().From(target).Where(newInPredicate(fkCol, vals)).
+		AutoChunk(ChunkSize(preloadChunkOf(ex))).All(ctx)
 	if err := rows.Scan(childrenPtr.Interface()); err != nil {
 		return err
 	}
