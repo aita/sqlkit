@@ -241,6 +241,22 @@ func (c Column[T]) NotIn(values ...T) Predicate {
 	return newPredicate(sql.NotIn(c, items...))
 }
 
+// EqAny creates a "column = ANY($1)" predicate (PostgreSQL), the array-valued
+// form of In: it binds the whole list as a single array parameter instead of one
+// placeholder per value, so it never approaches the bind-parameter limit and
+// needs no auto-chunking. Unlike In it is PostgreSQL-only. The values are bound
+// as one []T array.
+func (c Column[T]) EqAny(values ...T) Predicate {
+	return newPredicate(sql.AnyArray(c, "=", sql.Val(values)))
+}
+
+// NeAll creates a "column <> ALL($1)" predicate (PostgreSQL), the array-valued
+// form of NotIn: true when the column equals none of the array's elements. Like
+// EqAny it binds the list as a single array parameter.
+func (c Column[T]) NeAll(values ...T) Predicate {
+	return newPredicate(sql.AllArray(c, "<>", sql.Val(values)))
+}
+
 // Between creates a "column BETWEEN low AND high" predicate (inclusive).
 func (c Column[T]) Between(low, high T) Predicate {
 	return newPredicate(sql.Between(c, sql.Val(low), sql.Val(high)))

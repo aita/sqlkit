@@ -235,6 +235,17 @@ type ValuesCaster interface {
 	ValuesCastType(value any) (sqlType string, ok bool)
 }
 
+// ArrayDialect is an optional capability for dialects with a first-class array
+// type and the ARRAY[...] constructor / "op ANY(array)" comparison (PostgreSQL).
+// MySQL and SQLite have no array type and reject array expressions
+// (ArrayExpression, QuantifiedArrayExpression) at compile time. The compiler
+// detects it with a type assertion, so it is not a breaking change to Dialect.
+type ArrayDialect interface {
+	// ArrayConstructor renders an ARRAY[...] literal from already-compiled
+	// element fragments.
+	ArrayConstructor(elements []string) string
+}
+
 // DistinctOnDialect is an optional capability a Dialect implements to report
 // support for SELECT DISTINCT ON (exprs) (SelectQuery.DistinctOn), a PostgreSQL
 // extension with no portable equivalent. The compiler detects it with a type
@@ -535,6 +546,11 @@ func (PostgreSQLDialect) SimilarTo(left, pattern string, negate bool) string {
 
 // SupportsDistinctOn reports PostgreSQL's support for SELECT DISTINCT ON.
 func (PostgreSQLDialect) SupportsDistinctOn() bool { return true }
+
+// ArrayConstructor renders PostgreSQL's ARRAY[...] literal.
+func (PostgreSQLDialect) ArrayConstructor(elements []string) string {
+	return "ARRAY[" + strings.Join(elements, ", ") + "]"
+}
 
 // JSONAccess chains the -> / ->> operators, one per path step (the last uses
 // ->> when asText), e.g. (("data" -> 'a') -> 0) ->> 'b'.

@@ -323,6 +323,14 @@ func (q SelectQuery) DistinctOn(exprs ...sql.Expression) SelectQuery {
 	return q
 }
 
+// Window adds named window definitions to the SELECT's WINDOW clause, referenced
+// from an OVER clause with sql.Over(fn).Named(name). Build a definition with
+// sql.WindowDef(name).PartitionBy(...).OrderBy(...).
+func (q SelectQuery) Window(defs ...sql.NamedWindow) SelectQuery {
+	q.query = q.query.Window(defs...)
+	return q
+}
+
 // CTE wraps this SELECT as a common table expression named name, for use as a
 // FROM source and column handle, and attached to a statement with WithCTE. Pass
 // sql.Recursive() / sql.Columns(...) options to configure it.

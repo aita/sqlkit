@@ -91,8 +91,11 @@ alongside `All`. `Page(ctx, limit, offset)` fetches a window in one call.
 
 Typed columns carry the predicate vocabulary directly: `Eq`/`Ne`/`Lt`/`Le`/
 `Gt`/`Ge`, `In`/`NotIn`, `Between`/`NotBetween`, `IsNull`/`IsNotNull`,
-`IsDistinctFrom`/`IsNotDistinctFrom` (null-safe, `<=>` on MySQL), and
-`InQuery`/`NotInQuery` for `IN (subquery)`. String columns add the free helpers
+`IsDistinctFrom`/`IsNotDistinctFrom` (null-safe, `<=>` on MySQL),
+`InQuery`/`NotInQuery` for `IN (subquery)`, and `EqAny`/`NeAll` for PostgreSQL's
+array-valued `= ANY($1)` / `<> ALL($1)` (the whole list bound as one array
+parameter, so they replace a large `In`/`NotIn` without nearing the bind-param
+limit). String columns add the free helpers
 `sqlkit.Like` / `NotLike` / `ILike` (case-insensitive on both engines) and
 `sqlkit.SimilarTo` / `NotSimilarTo` (PostgreSQL/standard only).
 `sqlkit.Exists` / `NotExists` wrap a subquery, and `sqlkit.And` / `Or` / `Not`
@@ -185,6 +188,13 @@ err := db.Select(
 
 // Window functions: ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY id DESC).
 rn := sql.RowNumber().Over().PartitionBy(appdb.Posts.UserID).OrderBy(appdb.Posts.ID.Desc())
+
+// A reusable window shared by several functions via the SELECT's WINDOW clause.
+db.Select(
+    sql.As(sql.Over(sql.Sum(appdb.Games.Score)).Named("w"), "running_total"),
+    sql.As(sql.Over(sql.Avg(appdb.Games.Score)).Named("w"), "running_avg"),
+).From(appdb.Games).
+    Window(sql.WindowDef("w").PartitionBy(appdb.Games.Team).OrderBy(appdb.Games.PlayedAt.Asc()))
 ```
 
 The function DSL (in `sql`) covers the conditional/NULL helpers (`Coalesce`,
@@ -202,7 +212,9 @@ vocabulary: unary operators (`sql.Neg` / `sql.Pos` / `sql.Unary`), row
 constructors (`sql.Row(a, b)`) for row-wise comparisons and `IN`, and the
 null-safe `sql.IsDistinctFrom` / `sql.IsNotDistinctFrom` (typed as
 `col.IsDistinctFrom(v)` / `col.IsNotDistinctFrom(v)`), which render as MySQL's
-`<=>` there.
+`<=>` there. PostgreSQL arrays use `sql.Array(...)` for an `ARRAY[...]`
+constructor and `sql.AnyArray` / `sql.AllArray` for `op ANY(array)` /
+`op ALL(array)` comparisons.
 
 ### Set operations and CTEs
 

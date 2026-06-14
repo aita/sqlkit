@@ -27,6 +27,7 @@ type SelectQuery struct {
 	hasOffset  bool
 	distinct   bool
 	distinctOn []Expression
+	windows    []NamedWindow
 }
 
 // JoinClause represents a JOIN clause. Its condition is given in exactly one
@@ -145,6 +146,14 @@ func (q SelectQuery) GroupBy(exprs ...Expression) SelectQuery {
 // Having sets the HAVING predicate.
 func (q SelectQuery) Having(expr Expression) SelectQuery {
 	q.having = expr
+	return q
+}
+
+// Window adds named window definitions to the SELECT's WINDOW clause, referenced
+// from an OVER clause with WindowExpression.Named, e.g.
+// Window(WindowDef("w").PartitionBy(Col("team")).OrderBy(Desc(Col("score")))).
+func (q SelectQuery) Window(defs ...NamedWindow) SelectQuery {
+	q.windows = append(append([]NamedWindow(nil), q.windows...), defs...)
 	return q
 }
 

@@ -421,6 +421,54 @@ func ScalarSubquery(query Query) ScalarSubqueryExpression {
 	return ScalarSubqueryExpression{Query: query}
 }
 
+// ArrayExpression is an ARRAY[...] constructor. Arrays are non-portable —
+// PostgreSQL has a first-class array type, MySQL and SQLite do not — so it
+// renders through an ArrayDialect and a dialect without that capability rejects
+// it at compile time.
+type ArrayExpression struct{ Elements []Expression }
+
+func (ArrayExpression) SQLExpression() {}
+func (ArrayExpression) SQLSelection()  {}
+
+// Array creates an ARRAY[...] constructor. Non-expression elements become bind
+// values.
+func Array(elements ...any) ArrayExpression {
+	exprs := make([]Expression, len(elements))
+	for i, element := range elements {
+		exprs[i] = Expr(element)
+	}
+	return ArrayExpression{Elements: exprs}
+}
+
+// QuantifiedArrayExpression compares an operand against the elements of an array
+// with a quantifier — ANY (a synonym for SOME) or ALL — as in "x = ANY(array)".
+// Unlike QuantifiedExpression, which quantifies over a subquery's rows, this
+// quantifies over an array value: an ARRAY[...] constructor or a single bound
+// array parameter. "x = ANY($1)" is the idiomatic PostgreSQL form of "x IN
+// (...)" that binds the whole list as one parameter, and "x <> ALL($1)" of "x
+// NOT IN (...)". Arrays are non-portable, so it is gated by ArrayDialect.
+type QuantifiedArrayExpression struct {
+	Left       Expression
+	Operator   string // comparison operator, e.g. "=", ">", "<>"
+	Quantifier string // "ANY" or "ALL"
+	Array      Expression
+}
+
+func (QuantifiedArrayExpression) SQLExpression() {}
+
+// AnyArray creates a "left <operator> ANY(array)" expression: true when the
+// comparison holds for at least one array element. A non-expression left operand
+// becomes a bind value; array is an ArrayExpression or a bound array value.
+func AnyArray(left any, operator string, array Expression) QuantifiedArrayExpression {
+	return QuantifiedArrayExpression{Left: Expr(left), Operator: operator, Quantifier: "ANY", Array: array}
+}
+
+// AllArray creates a "left <operator> ALL(array)" expression: true when the
+// comparison holds for every array element (and, vacuously, for an empty array).
+func AllArray(left any, operator string, array Expression) QuantifiedArrayExpression {
+	return QuantifiedArrayExpression{Left: Expr(left), Operator: operator, Quantifier: "ALL", Array: array}
+}
+
 // QuantifiedExpression compares an operand against the rows of a subquery with a
 // quantifier — ANY (a synonym for SOME) or ALL — as in "x > ALL (subquery)". It
 // generalizes IN/NOT IN, which are "= ANY"/"<> ALL", to the ordering operators.
@@ -575,8 +623,12 @@ func If(condition, then, els any) CaseExpression {
 }
 
 // WindowExpression applies a window (OVER clause) to a function or aggregate.
+// With Name set it references a window defined in the SELECT's WINDOW clause:
+// "fn OVER name" when it adds no clauses of its own, or "fn OVER (name ...)"
+// when it extends that base window with further ORDER BY / frame clauses.
 type WindowExpression struct {
 	Fn           Expression
+	Name         string
 	Partitions   []Expression
 	OrderByTerms []OrderTerm
 	FrameClause  string
@@ -587,6 +639,46 @@ func (WindowExpression) SQLSelection()  {}
 
 // Over creates a window expression over a function or aggregate.
 func Over(fn Expression) WindowExpression { return WindowExpression{Fn: fn} }
+
+// Named references a window defined in the SELECT's WINDOW clause by name, as in
+// Sum(Col("x")).Over().Named("w") for "SUM(x) OVER w". Adding PartitionBy /
+// OrderBy / Frame on top extends that base window (PostgreSQL "OVER (w ...)").
+func (e WindowExpression) Named(name string) WindowExpression {
+	e.Name = name
+	return e
+}
+
+// NamedWindow defines a reusable window in a SELECT's WINDOW clause, referenced
+// from an OVER clause by name (WindowExpression.Named). It renders as
+// "name AS (PARTITION BY ... ORDER BY ... frame)".
+type NamedWindow struct {
+	Name         string
+	Partitions   []Expression
+	OrderByTerms []OrderTerm
+	FrameClause  string
+}
+
+// WindowDef starts a named window definition for a SELECT's WINDOW clause; chain
+// PartitionBy / OrderBy / Frame to build it.
+func WindowDef(name string) NamedWindow { return NamedWindow{Name: name} }
+
+// PartitionBy adds PARTITION BY expressions to the window definition.
+func (w NamedWindow) PartitionBy(exprs ...Expression) NamedWindow {
+	w.Partitions = append(append([]Expression(nil), w.Partitions...), exprs...)
+	return w
+}
+
+// OrderBy adds ORDER BY terms to the window definition.
+func (w NamedWindow) OrderBy(terms ...OrderTerm) NamedWindow {
+	w.OrderByTerms = append(append([]OrderTerm(nil), w.OrderByTerms...), terms...)
+	return w
+}
+
+// Frame sets a raw frame clause such as "ROWS BETWEEN 1 PRECEDING AND CURRENT ROW".
+func (w NamedWindow) Frame(frame string) NamedWindow {
+	w.FrameClause = frame
+	return w
+}
 
 // PartitionBy adds PARTITION BY expressions to the window.
 func (e WindowExpression) PartitionBy(exprs ...Expression) WindowExpression {
