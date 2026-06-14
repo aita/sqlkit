@@ -11,10 +11,13 @@ package sql
 // get their own expression node and render per dialect (see compiler.go and
 // dialect.go).
 
-// FuncExpression is a function call such as COALESCE(a, b) or SUM(x).
+// FuncExpression is a function call such as COALESCE(a, b) or SUM(x). With
+// Distinct set it renders an aggregate over distinct values, name(DISTINCT
+// args...), as in SUM(DISTINCT x); DISTINCT is meaningful only for aggregates.
 type FuncExpression struct {
-	Name string
-	Args []Expression
+	Name     string
+	Args     []Expression
+	Distinct bool
 }
 
 func (FuncExpression) SQLExpression() {}
@@ -28,6 +31,15 @@ func Func(name string, args ...any) FuncExpression {
 		expressions[i] = Expr(arg)
 	}
 	return FuncExpression{Name: name, Args: expressions}
+}
+
+// DistinctFunc creates name(DISTINCT args...), an aggregate over distinct values,
+// as in DistinctFunc("SUM", Col("x")) for SUM(DISTINCT x). Non-expression
+// arguments become bind values.
+func DistinctFunc(name string, args ...any) FuncExpression {
+	f := Func(name, args...)
+	f.Distinct = true
+	return f
 }
 
 // Over turns the function into a window expression, e.g.
@@ -89,10 +101,11 @@ var (
 	VarSamp = makeFunc("VAR_SAMP")
 )
 
-// CountExpression represents COUNT(expr) or COUNT(*).
+// CountExpression represents COUNT(expr), COUNT(*), or COUNT(DISTINCT expr).
 type CountExpression struct {
-	Target Selection
-	All    bool
+	Target   Selection
+	All      bool
+	Distinct bool
 }
 
 func (CountExpression) SQLExpression() {}
@@ -106,6 +119,12 @@ func Count(target Selection) CountExpression { return CountExpression{Target: ta
 
 // CountAll creates a COUNT(*) aggregate.
 func CountAll() CountExpression { return CountExpression{All: true} }
+
+// CountDistinct creates a COUNT(DISTINCT selection) aggregate, counting the
+// distinct non-NULL values of selection.
+func CountDistinct(target Selection) CountExpression {
+	return CountExpression{Target: target, Distinct: true}
+}
 
 // StringAggExpression concatenates the grouped string values of an aggregate
 // into one delimited string. Its spelling diverges by engine — PostgreSQL uses

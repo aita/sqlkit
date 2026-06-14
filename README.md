@@ -87,12 +87,26 @@ whole table plus a column from another. For a single row, chains offer `First`
 (pushes `LIMIT 1`) and `One` (requires exactly one row, else `ErrTooManyRows`)
 alongside `All`. `Page(ctx, limit, offset)` fetches a window in one call.
 
+Row locking (PostgreSQL/MySQL 8.0+) is `ForUpdate` / `ForShare` (plus
+PostgreSQL's `ForNoKeyUpdate` / `ForKeyShare`), refined with the `SkipLocked` /
+`NoWait` / `LockOf(tables...)` options — the building block of a queue worker:
+
+```go
+err := db.Select().From(appdb.Jobs).Where(appdb.Jobs.Status.Eq("ready")).
+    Limit(10).ForUpdate(sqlkit.SkipLocked()).All(ctx).Scan(&jobs)
+```
+
 ### Predicates and filters
 
 Typed columns carry the predicate vocabulary directly: `Eq`/`Ne`/`Lt`/`Le`/
-`Gt`/`Ge`, `In`/`NotIn`, `Between`/`NotBetween`, `IsNull`/`IsNotNull`, and
-`InQuery`/`NotInQuery` for `IN (subquery)`. String columns add the free helpers
-`sqlkit.Like` / `NotLike` / `ILike` (case-insensitive on both engines).
+`Gt`/`Ge`, `In`/`NotIn`, `Between`/`NotBetween`, `IsNull`/`IsNotNull`,
+`IsDistinctFrom`/`IsNotDistinctFrom` (null-safe, `<=>` on MySQL),
+`InQuery`/`NotInQuery` for `IN (subquery)`, and `EqAny`/`NeAll` for PostgreSQL's
+array-valued `= ANY($1)` / `<> ALL($1)` (the whole list bound as one array
+parameter, so they replace a large `In`/`NotIn` without nearing the bind-param
+limit). String columns add the free helpers
+`sqlkit.Like` / `NotLike` / `ILike` (case-insensitive on both engines) and
+`sqlkit.SimilarTo` / `NotSimilarTo` (PostgreSQL/standard only).
 `sqlkit.Exists` / `NotExists` wrap a subquery, and `sqlkit.And` / `Or` / `Not`
 combine predicates.
 
@@ -123,8 +137,10 @@ err := db.Select().From(appdb.Users).
 ### Joins
 
 `Join` / `LeftJoin` / `RightJoin` / `FullJoin` take a source and an ON
-predicate; `CrossJoin` takes only a source. Wrap a source with `sql.Lateral`
-for a `LATERAL` join.
+predicate; `CrossJoin` takes only a source. `JoinUsing` / `LeftJoinUsing` join
+on equally named columns (`USING (...)`), and `NaturalJoin` / `NaturalLeftJoin`
+match every shared column implicitly. Wrap a source with `sql.Lateral` for a
+`LATERAL` join.
 
 ```go
 var posts []PostDTO
@@ -181,6 +197,13 @@ err := db.Select(
 
 // Window functions: ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY id DESC).
 rn := sql.RowNumber().Over().PartitionBy(appdb.Posts.UserID).OrderBy(appdb.Posts.ID.Desc())
+
+// A reusable window shared by several functions via the SELECT's WINDOW clause.
+db.Select(
+    sql.As(sql.Over(sql.Sum(appdb.Games.Score)).Named("w"), "running_total"),
+    sql.As(sql.Over(sql.Avg(appdb.Games.Score)).Named("w"), "running_avg"),
+).From(appdb.Games).
+    Window(sql.WindowDef("w").PartitionBy(appdb.Games.Team).OrderBy(appdb.Games.PlayedAt.Asc()))
 ```
 
 The function DSL (in `sql`) covers the conditional/NULL helpers (`Coalesce`,
@@ -190,10 +213,24 @@ string and numeric functions, date/time keywords, and JSON access
 (`sql.JSONGet` / `sql.JSONGetText` with portable path steps). `sql.Func(name,
 args...)` is the escape hatch for anything else.
 
+Distinct aggregates are spelled `sql.CountDistinct(col)` and
+`sql.DistinctFunc("SUM", col)`. CASE comes in both forms — searched
+(`sql.Case().When(cond, result).Else(...)`) and simple
+(`sql.CaseOf(col).When(value, result)…`). Other expression nodes fill out the
+vocabulary: unary operators (`sql.Neg` / `sql.Pos` / `sql.Unary`), row
+constructors (`sql.Row(a, b)`) for row-wise comparisons and `IN`, and the
+null-safe `sql.IsDistinctFrom` / `sql.IsNotDistinctFrom` (typed as
+`col.IsDistinctFrom(v)` / `col.IsNotDistinctFrom(v)`), which render as MySQL's
+`<=>` there. PostgreSQL arrays use `sql.Array(...)` for an `ARRAY[...]`
+constructor and `sql.AnyArray` / `sql.AllArray` for `op ANY(array)` /
+`op ALL(array)` comparisons.
+
 ### Set operations and CTEs
 
-`Union` / `UnionAll` / `Intersect` / `Except` combine a flat list of SELECTs;
-`db.Union(...)` binds the result so the operands need no executor of their own.
+`Union` / `UnionAll` / `Intersect` / `IntersectAll` / `Except` / `ExceptAll`
+combine a flat list of SELECTs; `db.Union(...)` binds the result so the operands
+need no executor of their own. The `…All` variants keep duplicate rows (the
+multiset forms).
 
 ```go
 err = db.Union(
@@ -205,6 +242,10 @@ err = db.Union(
 `CTE(name)` turns a query into a named common table expression; attach it with
 `WithCTE` (works on SELECT/UPDATE/DELETE). Pass `sql.Recursive()` for a
 `WITH RECURSIVE`.
+
+`sql.Values().Row(...)` builds a standalone `VALUES (...), (...)` query — usable
+on its own, as an aliased derived-table source, or as an `INSERT … SELECT`
+source.
 
 ```go
 active := db.Select(appdb.Users.ID).From(appdb.Users).
@@ -243,16 +284,18 @@ More write forms:
 - **INSERT … SELECT** — `Insert(t).Columns(...).FromSelect(query)`.
 - **Partial updates from a struct** — `Update(t).SetStruct(row, cols...)` maps a
   struct's fields to columns and emits one `SET` per column.
-- **Upsert** — `OnConflictDoNothing` / `OnConflictDoUpdate` render PostgreSQL's
-  `ON CONFLICT` and MySQL's `ON DUPLICATE KEY UPDATE`; `Column.Excluded()` refers
-  to the proposed row.
+- **Upsert** — `OnConflict(...)` renders PostgreSQL's `ON CONFLICT` and MySQL's
+  `ON DUPLICATE KEY UPDATE`, configured by options that blend GORM's single
+  clause with SQLAlchemy's actions: `OnColumns` / `OnConstraint` choose the
+  conflict target, `DoUpdate` / `DoNothing` the action, and `ConflictWhere` a
+  predicate; `Column.Excluded()` refers to the proposed row.
 - **Cross-table writes** — `Update(t).From(src...)` and `Delete(t).Using(src...)`
   add `UPDATE … FROM` / `DELETE … USING` source lists.
 
 ```go
 _, err = db.Insert(appdb.Users).Values(u).
-    OnConflictDoUpdate([]sqlkit.AnyColumn{appdb.Users.Email},
-        appdb.Users.Name.SetExpr(appdb.Users.Name.Excluded())).
+    OnConflict(sqlkit.OnColumns(appdb.Users.Email),
+        sqlkit.DoUpdate(appdb.Users.Name.SetExpr(appdb.Users.Name.Excluded()))).
     Exec(ctx)
 ```
 

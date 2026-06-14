@@ -40,6 +40,12 @@ func Intersect(first, second SelectQuery, rest ...SelectQuery) UnionQuery {
 	return foldSetOp(first.Intersect(second), UnionQuery.Intersect, rest)
 }
 
+// IntersectAll is Intersect with INTERSECT ALL, the multiset intersection that
+// keeps duplicate rows. See Union for operand and executor rules.
+func IntersectAll(first, second SelectQuery, rest ...SelectQuery) UnionQuery {
+	return foldSetOp(first.IntersectAll(second), UnionQuery.IntersectAll, rest)
+}
+
 // Except combines two or more SELECT queries with EXCEPT, keeping rows of the
 // first operand absent from the rest. See Union for operand and executor rules.
 //
@@ -47,6 +53,13 @@ func Intersect(first, second SelectQuery, rest ...SelectQuery) UnionQuery {
 // (a EXCEPT b) EXCEPT c.
 func Except(first, second SelectQuery, rest ...SelectQuery) UnionQuery {
 	return foldSetOp(first.Except(second), UnionQuery.Except, rest)
+}
+
+// ExceptAll is Except with EXCEPT ALL, the multiset difference that drops a left
+// row once per matching right row rather than entirely. See Union for operand
+// and executor rules.
+func ExceptAll(first, second SelectQuery, rest ...SelectQuery) UnionQuery {
+	return foldSetOp(first.ExceptAll(second), UnionQuery.ExceptAll, rest)
 }
 
 // foldSetOp left-folds the remaining operands into an already-started compound,
@@ -73,9 +86,19 @@ func (q UnionQuery) Intersect(other SelectQuery) UnionQuery {
 	return UnionQuery{ex: q.ex, query: q.query.Intersect(other.query)}
 }
 
+// IntersectAll appends another INTERSECT ALL operand.
+func (q UnionQuery) IntersectAll(other SelectQuery) UnionQuery {
+	return UnionQuery{ex: q.ex, query: q.query.IntersectAll(other.query)}
+}
+
 // Except appends another EXCEPT operand.
 func (q UnionQuery) Except(other SelectQuery) UnionQuery {
 	return UnionQuery{ex: q.ex, query: q.query.Except(other.query)}
+}
+
+// ExceptAll appends another EXCEPT ALL operand.
+func (q UnionQuery) ExceptAll(other SelectQuery) UnionQuery {
+	return UnionQuery{ex: q.ex, query: q.query.ExceptAll(other.query)}
 }
 
 // OrderBy adds ORDER BY terms applied to the combined result. In a set

@@ -34,9 +34,22 @@ func (q SelectQuery) Intersect(other Query) CompoundQuery {
 	return CompoundQuery{left: q, operator: "INTERSECT", right: other}
 }
 
+// IntersectAll combines this query with another using INTERSECT ALL, which keeps
+// duplicate rows (the multiset intersection) rather than collapsing them.
+func (q SelectQuery) IntersectAll(other Query) CompoundQuery {
+	return CompoundQuery{left: q, operator: "INTERSECT ALL", right: other}
+}
+
 // Except combines this query with another using EXCEPT.
 func (q SelectQuery) Except(other Query) CompoundQuery {
 	return CompoundQuery{left: q, operator: "EXCEPT", right: other}
+}
+
+// ExceptAll combines this query with another using EXCEPT ALL, the multiset
+// difference: a row in the left result is dropped once per matching right row
+// rather than entirely.
+func (q SelectQuery) ExceptAll(other Query) CompoundQuery {
+	return CompoundQuery{left: q, operator: "EXCEPT ALL", right: other}
 }
 
 // Union appends another UNION operand.
@@ -54,9 +67,19 @@ func (q CompoundQuery) Intersect(other Query) CompoundQuery {
 	return CompoundQuery{left: q, operator: "INTERSECT", right: other}
 }
 
+// IntersectAll appends another INTERSECT ALL operand.
+func (q CompoundQuery) IntersectAll(other Query) CompoundQuery {
+	return CompoundQuery{left: q, operator: "INTERSECT ALL", right: other}
+}
+
 // Except appends another EXCEPT operand.
 func (q CompoundQuery) Except(other Query) CompoundQuery {
 	return CompoundQuery{left: q, operator: "EXCEPT", right: other}
+}
+
+// ExceptAll appends another EXCEPT ALL operand.
+func (q CompoundQuery) ExceptAll(other Query) CompoundQuery {
+	return CompoundQuery{left: q, operator: "EXCEPT ALL", right: other}
 }
 
 // OrderBy adds ORDER BY terms applied to the combined result.

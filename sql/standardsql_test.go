@@ -67,7 +67,7 @@ func TestStandardRejectsReturning(t *testing.T) {
 
 func TestStandardRejectsUpsert(t *testing.T) {
 	insert := InsertInto(Table{Name: "users"}).Columns("email", "name").Values("a@x.com", "Alice").
-		OnConflictDoUpdate([]string{"email"}, Set("name", Excluded("name")))
+		OnConflict(OnColumns("email"), DoUpdate(Set("name", Excluded("name"))))
 	_, _, err := insert.ToSQL(StandardSQLDialect{})
 	if err == nil || !strings.Contains(err.Error(), "upsert") {
 		t.Fatalf("ToSQL() error = %v, want upsert rejection", err)

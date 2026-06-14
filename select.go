@@ -141,6 +141,31 @@ func (q SelectQuery) CrossJoin(source sql.Source) SelectQuery {
 	return q
 }
 
+// JoinUsing adds an INNER JOIN ... USING (columns) on the equally named columns.
+func (q SelectQuery) JoinUsing(source sql.Source, columns ...string) SelectQuery {
+	q.query = q.query.JoinUsing(source, columns...)
+	return q
+}
+
+// LeftJoinUsing adds a LEFT JOIN ... USING (columns).
+func (q SelectQuery) LeftJoinUsing(source sql.Source, columns ...string) SelectQuery {
+	q.query = q.query.LeftJoinUsing(source, columns...)
+	return q
+}
+
+// NaturalJoin adds a NATURAL JOIN, an inner join on every column the sources
+// share by name. It takes no condition.
+func (q SelectQuery) NaturalJoin(source sql.Source) SelectQuery {
+	q.query = q.query.NaturalJoin(source)
+	return q
+}
+
+// NaturalLeftJoin adds a NATURAL LEFT JOIN.
+func (q SelectQuery) NaturalLeftJoin(source sql.Source) SelectQuery {
+	q.query = q.query.NaturalLeftJoin(source)
+	return q
+}
+
 // RightJoinRel adds a RIGHT JOIN to a relation's target on its foreign-key
 // condition.
 func (q SelectQuery) RightJoinRel(rel Relation) SelectQuery {
@@ -322,10 +347,68 @@ func (q SelectQuery) Offset(n int) SelectQuery {
 	return q
 }
 
+// LockOption refines a SELECT row-locking clause (ForUpdate / ForShare / …); use
+// SkipLocked, NoWait, and LockOf.
+type LockOption = sql.LockOption
+
+// SkipLocked adds SKIP LOCKED, skipping rows another transaction has already
+// locked rather than waiting (the queue-worker pattern).
+func SkipLocked() LockOption { return sql.SkipLocked() }
+
+// NoWait adds NOWAIT, erroring immediately instead of waiting on a locked row.
+func NoWait() LockOption { return sql.NoWait() }
+
+// LockOf restricts the lock to rows from the named tables/aliases
+// (FOR UPDATE OF t).
+func LockOf(tables ...string) LockOption { return sql.LockOf(tables...) }
+
+// ForUpdate adds a FOR UPDATE row-locking clause, refined with the SkipLocked /
+// NoWait / LockOf options. Row locking is PostgreSQL/MySQL (8.0+) only.
+func (q SelectQuery) ForUpdate(opts ...LockOption) SelectQuery {
+	q.query = q.query.ForUpdate(opts...)
+	return q
+}
+
+// ForShare adds a FOR SHARE row-locking clause (a shared lock).
+func (q SelectQuery) ForShare(opts ...LockOption) SelectQuery {
+	q.query = q.query.ForShare(opts...)
+	return q
+}
+
+// ForNoKeyUpdate adds a FOR NO KEY UPDATE clause (PostgreSQL only).
+func (q SelectQuery) ForNoKeyUpdate(opts ...LockOption) SelectQuery {
+	q.query = q.query.ForNoKeyUpdate(opts...)
+	return q
+}
+
+// ForKeyShare adds a FOR KEY SHARE clause (PostgreSQL only).
+func (q SelectQuery) ForKeyShare(opts ...LockOption) SelectQuery {
+	q.query = q.query.ForKeyShare(opts...)
+	return q
+}
+
 // Distinct marks the query as SELECT DISTINCT.
 func (q SelectQuery) Distinct() SelectQuery {
 	q.query = q.query.Distinct()
 	q.batchUnsafe = true
+	return q
+}
+
+// DistinctOn marks the query as SELECT DISTINCT ON (exprs...), keeping the first
+// row of each group equal on the given expressions (PostgreSQL only). Pair it
+// with an ORDER BY beginning with the same expressions to make "first"
+// deterministic.
+func (q SelectQuery) DistinctOn(exprs ...sql.Expression) SelectQuery {
+	q.query = q.query.DistinctOn(exprs...)
+	q.batchUnsafe = true
+	return q
+}
+
+// Window adds named window definitions to the SELECT's WINDOW clause, referenced
+// from an OVER clause with sql.Over(fn).Named(name). Build a definition with
+// sql.WindowDef(name).PartitionBy(...).OrderBy(...).
+func (q SelectQuery) Window(defs ...sql.NamedWindow) SelectQuery {
+	q.query = q.query.Window(defs...)
 	return q
 }
 
@@ -501,9 +584,21 @@ func (q SelectQuery) Intersect(other SelectQuery) UnionQuery {
 	return UnionQuery{ex: q.ex, query: q.finalQuery().Intersect(other.finalQuery())}
 }
 
+// IntersectAll combines this query with another using INTERSECT ALL, keeping
+// duplicate rows.
+func (q SelectQuery) IntersectAll(other SelectQuery) UnionQuery {
+	return UnionQuery{ex: q.ex, query: q.finalQuery().IntersectAll(other.finalQuery())}
+}
+
 // Except combines this query with another using EXCEPT.
 func (q SelectQuery) Except(other SelectQuery) UnionQuery {
 	return UnionQuery{ex: q.ex, query: q.finalQuery().Except(other.finalQuery())}
+}
+
+// ExceptAll combines this query with another using EXCEPT ALL, keeping duplicate
+// rows.
+func (q SelectQuery) ExceptAll(other SelectQuery) UnionQuery {
+	return UnionQuery{ex: q.ex, query: q.finalQuery().ExceptAll(other.finalQuery())}
 }
 
 // Star is the "table.*" select-list item — every column of table, qualified by
