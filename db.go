@@ -48,11 +48,11 @@ type Database struct {
 	// the caller must retry; WithBatchWriteSnapshot(true) opts in.
 	batchWriteSnapshot bool
 	// autoChunk enables automatic, limit-driven statement splitting. It defaults
-	// to true, so splitting is active at the dialect's bind-parameter limit (the
-	// BindParamLimiter capability, 65535 for PostgreSQL/MySQL); WithAutoChunk(false)
-	// turns every automatic split off. Explicit requests (AutoChunk, InBatches) are
-	// unaffected. A session inherits this and may override it with
-	// WithSessionAutoChunk.
+	// to false, so statements run unsplit unless WithAutoChunk(true) turns
+	// splitting on, after which it is active at the dialect's bind-parameter limit
+	// (the BindParamLimiter capability, 65535 for PostgreSQL/MySQL). Explicit
+	// requests (AutoChunk, InBatches) are unaffected. A session inherits this and
+	// may override it with WithSessionAutoChunk.
 	autoChunk bool
 	// preloadChunkSize caps the parent keys per follow-up IN query of a Preload, so
 	// an eager-load over many parents runs several smaller, plan-cache-friendly
@@ -170,12 +170,12 @@ func WithBatchWriteSnapshot(enabled bool) DatabaseOption {
 	return func(d *Database) { d.batchWriteSnapshot = enabled }
 }
 
-// WithAutoChunk enables or disables automatic statement splitting. It is on by
-// default, so bulk INSERTs, large IN lists, RETURNING writes, and uow flushes are
-// split to stay within the dialect's bind-parameter limit (the BindParamLimiter
-// capability, 65535 for PostgreSQL/MySQL). Pass false to turn every automatic
-// split off; explicit chunking via AutoChunk and InBatches still works. Sessions
-// inherit the setting and can override it with WithSessionAutoChunk.
+// WithAutoChunk enables or disables automatic statement splitting. It is off by
+// default; pass true so bulk INSERTs, large IN lists, RETURNING writes, and uow
+// flushes are split to stay within the dialect's bind-parameter limit (the
+// BindParamLimiter capability, 65535 for PostgreSQL/MySQL). With it off, explicit
+// chunking via AutoChunk and InBatches still works. Sessions inherit the setting
+// and can override it with WithSessionAutoChunk.
 func WithAutoChunk(enabled bool) DatabaseOption {
 	return func(d *Database) { d.autoChunk = enabled }
 }
@@ -228,7 +228,7 @@ func WrapExecutor(exec Executor, opts ...DatabaseOption) *Database {
 // newDatabase builds a Database with the shared defaults, then applies opts. A
 // WrapDB/Open database passes db (exec nil); WrapExecutor passes exec (db nil).
 func newDatabase(db *stdsql.DB, exec Executor, opts []DatabaseOption) *Database {
-	d := &Database{db: db, exec: exec, dialect: sql.PostgreSQLDialect{}, batchReadSnapshot: true, autoChunk: true, preloadChunk: defaultPreloadChunkSize}
+	d := &Database{db: db, exec: exec, dialect: sql.PostgreSQLDialect{}, batchReadSnapshot: true, autoChunk: false, preloadChunk: defaultPreloadChunkSize}
 	for _, opt := range opts {
 		opt(d)
 	}

@@ -50,6 +50,7 @@ func TestPreloadSplitEndToEnd(t *testing.T) {
 		counter := &stmtCounter{}
 		sdb := sqlkit.WrapDB(db.SQL(),
 			sqlkit.WithDialect(db.Dialect()),
+			sqlkit.WithAutoChunk(true),
 			sqlkit.WithPreloadBatchSize(8),
 			sqlkit.WithInterceptor(counter))
 
