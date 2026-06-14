@@ -157,6 +157,49 @@ func ILike(left, pattern any) ILikeExpression {
 	return ILikeExpression{Left: Expr(left), Pattern: Expr(pattern)}
 }
 
+// RegexpExpression is a regular-expression match. Regex syntax and operators
+// are genuinely non-portable, so it renders per dialect through a RegexpMatcher
+// (PostgreSQL ~ / ~* / !~ / !~*, MySQL and SQLite REGEXP / NOT REGEXP, the SQL
+// standard LIKE_REGEX [FLAG 'i']); a dialect without that capability rejects it
+// at compile time. CaseInsensitive selects a case-insensitive match where the
+// dialect can express one inline (it errors on dialects that cannot).
+type RegexpExpression struct {
+	Left            Expression
+	Pattern         Expression
+	Negate          bool
+	CaseInsensitive bool
+}
+
+func (RegexpExpression) SQLExpression() {}
+
+// Regexp creates a "left ~ pattern" regular-expression match. Non-expression
+// operands become bind values.
+func Regexp(left, pattern any) RegexpExpression {
+	return RegexpExpression{Left: Expr(left), Pattern: Expr(pattern)}
+}
+
+// NotRegexp creates a negated regular-expression match.
+func NotRegexp(left, pattern any) RegexpExpression {
+	e := Regexp(left, pattern)
+	e.Negate = true
+	return e
+}
+
+// IRegexp creates a case-insensitive regular-expression match.
+func IRegexp(left, pattern any) RegexpExpression {
+	e := Regexp(left, pattern)
+	e.CaseInsensitive = true
+	return e
+}
+
+// NotIRegexp creates a negated case-insensitive regular-expression match.
+func NotIRegexp(left, pattern any) RegexpExpression {
+	e := Regexp(left, pattern)
+	e.Negate = true
+	e.CaseInsensitive = true
+	return e
+}
+
 // BetweenExpression tests whether an operand falls within an inclusive range.
 type BetweenExpression struct {
 	Operand Expression
