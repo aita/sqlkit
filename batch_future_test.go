@@ -417,28 +417,3 @@ func TestAutoChunkOffForcesSingleUpdate(t *testing.T) {
 		t.Fatalf("args = %d, want 6 (SET value + full IN list)", len(execs[0].Args))
 	}
 }
-
-// TestRecordsStreamsSplitChunks streams a split SELECT via Records: it must run
-// each chunk (not the empty statement of a batched Rows) and yield every row.
-func TestRecordsStreamsSplitChunks(t *testing.T) {
-	fake := idFromArgsFake()
-	db := sqlkit.WrapDB(fake.DB())
-
-	var ids []int64
-	for u, err := range sqlkit.Records[User](
-		db.Select().From(Users).Where(Users.ID.In(1, 2, 3, 4, 5)).AutoChunk(sqlkit.ChunkSize(2)).All(context.Background()),
-	) {
-		if err != nil {
-			t.Fatalf("Records error = %v", err)
-		}
-		ids = append(ids, u.ID)
-	}
-	// 5 ids at chunk size 2 => 3 chunks; idFromArgsFake returns one row per query
-	// whose id is the chunk's arg count, so the stream yields 2, 2, 1.
-	if len(fake.Queries()) != 3 {
-		t.Fatalf("queries = %d, want 3 (chunked)", len(fake.Queries()))
-	}
-	if len(ids) != 3 || ids[0] != 2 || ids[1] != 2 || ids[2] != 1 {
-		t.Fatalf("streamed ids = %v, want [2 2 1]", ids)
-	}
-}

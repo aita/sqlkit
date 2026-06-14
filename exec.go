@@ -5,7 +5,6 @@ import (
 	stdsql "database/sql"
 	"errors"
 	"fmt"
-	"iter"
 	"reflect"
 
 	"github.com/aita/sqlkit/sql"
@@ -96,6 +95,9 @@ type executorBinding interface {
 	// executor returns the terminal that runs compiled statements: the
 	// connection-backed default, or a WrapExecutor database's custom one.
 	executor() Executor
+	// resultObservers returns the observers run over each scanned result,
+	// registered with WithResultObserver.
+	resultObservers() []ResultObserver
 }
 
 // ErrNoRows is returned when a single-row Scan finds no row.
@@ -117,9 +119,8 @@ var errNoTx = errors.New(
 	"sqlkit: savepoints require a transaction; this session's executor does not implement TxExecutor")
 
 // Rows is a pending query result. It is produced by All, First, One, and
-// RawSQL, and materialized with Scan, or streamed row by row with the
-// package-level Records function. Execution is deferred until either
-// terminal, so build and query errors surface there.
+// RawSQL, and materialized with Scan. Execution is deferred until Scan, so
+// build and query errors surface there.
 type Rows struct {
 	ctx     context.Context
 	ex      executorBinding
@@ -213,6 +214,9 @@ func (r Rows) Scan(dest any) error {
 	}(); err != nil {
 		return err
 	}
+	if obs := r.ex.resultObservers(); len(obs) > 0 {
+		observeResult(r.ctx, obs, r.statement(), dest)
+	}
 	// Eager-load any registered relations onto the just-scanned destination.
 	if len(r.preloads) > 0 {
 		return applyPreloads(r.ctx, r.ex, dest, r.preloads)
@@ -251,6 +255,10 @@ func (r Rows) scanBatched(dest any) (err error) {
 		acc = reflect.AppendSlice(acc, tmp.Elem())
 	}
 	dv.Elem().Set(acc)
+	// A split query's result is the union of its chunks; observe it once, whole.
+	if obs := ex.resultObservers(); len(obs) > 0 {
+		observeResult(r.ctx, obs, Statement{Op: OpQuery, Dialect: dialect}, dest)
+	}
 	if len(r.preloads) > 0 {
 		return applyPreloads(r.ctx, ex, dest, r.preloads)
 	}
@@ -349,97 +357,6 @@ func scanInto(rows *stdsql.Rows, dest any) error {
 		return ErrNoRows
 	}
 	return nil
-}
-
-// Records runs the query and streams each row as an already-scanned T:
-//
-//	for user, err := range sqlkit.Records[User](db.RawSQL(ctx, query)) {
-//		if err != nil { return err }
-//		...
-//	}
-//
-// T may be a struct, a pointer to struct, or a scalar, with columns matched
-// to fields by the same rules as Rows.Scan. Rows are fetched on demand and
-// scanned one at a time — the result set is never materialized as a whole —
-// and breaking out of the loop releases it. It is a generic function rather
-// than a method on Rows because Go methods cannot have type parameters.
-// Like Scan, each range over the iterator executes the query anew.
-func Records[T any](r Rows) iter.Seq2[T, error] {
-	return func(yield func(T, error) bool) {
-		var zero T
-		if r.err != nil {
-			yield(zero, r.err)
-			return
-		}
-
-		elemType := reflect.TypeFor[T]()
-		pointerElems := elemType.Kind() == reflect.Pointer
-		baseType := elemType
-		if pointerElems {
-			baseType = elemType.Elem()
-		}
-
-		// A split Rows (a large IN list, or a bulk RETURNING write) streams chunk by
-		// chunk under the same executor/transaction Scan would use; an unsplit Rows
-		// streams its single statement.
-		ex := r.ex
-		finish := func(error) error { return nil }
-		var statements []Statement
-		if len(r.batches) > 0 {
-			ex, finish = r.batchExecutor()
-			dialect := ex.sqlDialect()
-			statements = make([]Statement, len(r.batches))
-			for i, b := range r.batches {
-				statements[i] = Statement{Op: OpQuery, SQL: b.sql, Args: b.args, Dialect: dialect}
-			}
-		} else {
-			statements = []Statement{r.statement()}
-		}
-		var streamErr error
-		defer func() { _ = finish(streamErr) }()
-
-		for _, stmt := range statements {
-			rows, err := runQuery(r.ctx, ex, stmt)
-			if err != nil {
-				streamErr = err
-				yield(zero, err)
-				return
-			}
-			scan, err := rowScanner(rows, baseType)
-			if err != nil {
-				rows.Close()
-				streamErr = err
-				yield(zero, err)
-				return
-			}
-			for rows.Next() {
-				item := reflect.New(baseType)
-				if err := scan(item.Elem()); err != nil {
-					rows.Close()
-					streamErr = err
-					yield(zero, err)
-					return
-				}
-				var value T
-				if pointerElems {
-					value = item.Interface().(T)
-				} else {
-					value = item.Elem().Interface().(T)
-				}
-				if !yield(value, nil) {
-					rows.Close()
-					return
-				}
-			}
-			if err := rows.Err(); err != nil {
-				rows.Close()
-				streamErr = err
-				yield(zero, err)
-				return
-			}
-			rows.Close()
-		}
-	}
 }
 
 // runExec compiles and runs a statement, returning the database/sql result.
