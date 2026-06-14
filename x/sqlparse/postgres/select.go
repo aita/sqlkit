@@ -13,7 +13,9 @@ type setOperand interface {
 	Union(sql.Query) sql.CompoundQuery
 	UnionAll(sql.Query) sql.CompoundQuery
 	Intersect(sql.Query) sql.CompoundQuery
+	IntersectAll(sql.Query) sql.CompoundQuery
 	Except(sql.Query) sql.CompoundQuery
+	ExceptAll(sql.Query) sql.CompoundQuery
 }
 
 // cteMaker is satisfied by the query types that can become a CTE body.
@@ -31,7 +33,7 @@ func convertSelect(s *pg.SelectStmt) (sql.Query, error) {
 		return convertCompound(s)
 	}
 	if len(s.GetValuesLists()) > 0 {
-		return nil, sqlparse.Unsupported("VALUES list")
+		return convertValuesList(s.GetValuesLists())
 	}
 
 	columns, err := convertTargetList(s.GetTargetList())
@@ -42,13 +44,20 @@ func convertSelect(s *pg.SelectStmt) (sql.Query, error) {
 
 	if distinct := s.GetDistinctClause(); len(distinct) > 0 {
 		// Plain DISTINCT is a single empty list element; DISTINCT ON (...) carries
-		// the distinct expressions, which sqlkit cannot represent.
-		for _, d := range distinct {
-			if d.GetNode() != nil {
-				return nil, sqlparse.Unsupported("DISTINCT ON")
+		// the distinct expressions.
+		if distinct[0].GetNode() == nil {
+			q = q.Distinct()
+		} else {
+			exprs := make([]sql.Expression, 0, len(distinct))
+			for _, d := range distinct {
+				expr, err := convertExpr(d)
+				if err != nil {
+					return nil, err
+				}
+				exprs = append(exprs, expr)
 			}
+			q = q.DistinctOn(exprs...)
 		}
-		q = q.Distinct()
 	}
 
 	if from := s.GetFromClause(); len(from) > 0 {
@@ -92,6 +101,22 @@ func convertSelect(s *pg.SelectStmt) (sql.Query, error) {
 		q = q.Having(expr)
 	}
 
+	if windows := s.GetWindowClause(); len(windows) > 0 {
+		defs := make([]sql.NamedWindow, 0, len(windows))
+		for _, node := range windows {
+			wd := node.GetWindowDef()
+			if wd == nil {
+				return nil, sqlparse.Unsupportedf("WINDOW item %T", node.GetNode())
+			}
+			def, err := convertNamedWindow(wd)
+			if err != nil {
+				return nil, err
+			}
+			defs = append(defs, def)
+		}
+		q = q.Window(defs...)
+	}
+
 	if order := s.GetSortClause(); len(order) > 0 {
 		terms, err := convertSortClause(order)
 		if err != nil {
@@ -119,10 +144,73 @@ func convertSelect(s *pg.SelectStmt) (sql.Query, error) {
 		q = q.WithCTE(ctes...)
 	}
 
+	if locks := s.GetLockingClause(); len(locks) > 0 {
+		q, err = applyLocking(q, locks)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return q, nil
 }
 
+// applyLocking maps SELECT row-locking clauses (FOR UPDATE / FOR SHARE / FOR NO
+// KEY UPDATE / FOR KEY SHARE, with OF / SKIP LOCKED / NOWAIT).
+func applyLocking(q sql.SelectQuery, locks []*pg.Node) (sql.SelectQuery, error) {
+	for _, node := range locks {
+		lc := node.GetLockingClause()
+		if lc == nil {
+			return q, sqlparse.Unsupportedf("locking clause %T", node.GetNode())
+		}
+		var opts []sql.LockOption
+		if of := lockedRelNames(lc.GetLockedRels()); len(of) > 0 {
+			opts = append(opts, sql.LockOf(of...))
+		}
+		switch lc.GetWaitPolicy() {
+		case pg.LockWaitPolicy_LockWaitSkip:
+			opts = append(opts, sql.SkipLocked())
+		case pg.LockWaitPolicy_LockWaitError:
+			opts = append(opts, sql.NoWait())
+		}
+		switch lc.GetStrength() {
+		case pg.LockClauseStrength_LCS_FORUPDATE:
+			q = q.ForUpdate(opts...)
+		case pg.LockClauseStrength_LCS_FORSHARE:
+			q = q.ForShare(opts...)
+		case pg.LockClauseStrength_LCS_FORNOKEYUPDATE:
+			q = q.ForNoKeyUpdate(opts...)
+		case pg.LockClauseStrength_LCS_FORKEYSHARE:
+			q = q.ForKeyShare(opts...)
+		default:
+			return q, sqlparse.Unsupportedf("lock strength %s", lc.GetStrength())
+		}
+	}
+	return q, nil
+}
+
+func lockedRelNames(rels []*pg.Node) []string {
+	names := make([]string, 0, len(rels))
+	for _, r := range rels {
+		if rv := r.GetRangeVar(); rv != nil {
+			names = append(names, rv.GetRelname())
+		}
+	}
+	return names
+}
+
 func applyJoin(q sql.SelectQuery, j joinSpec) sql.SelectQuery {
+	if j.natural {
+		if j.kind == "LEFT JOIN" {
+			return q.NaturalLeftJoin(j.source)
+		}
+		return q.NaturalJoin(j.source)
+	}
+	if j.using != nil {
+		if j.kind == "LEFT JOIN" {
+			return q.LeftJoinUsing(j.source, j.using...)
+		}
+		return q.JoinUsing(j.source, j.using...)
+	}
 	switch j.kind {
 	case "LEFT JOIN":
 		return q.LeftJoin(j.source, j.on)
@@ -161,14 +249,16 @@ func convertCompound(s *pg.SelectStmt) (sql.Query, error) {
 		}
 	case pg.SetOperation_SETOP_INTERSECT:
 		if s.GetAll() {
-			return nil, sqlparse.Unsupported("INTERSECT ALL")
+			compound = operand.IntersectAll(right)
+		} else {
+			compound = operand.Intersect(right)
 		}
-		compound = operand.Intersect(right)
 	case pg.SetOperation_SETOP_EXCEPT:
 		if s.GetAll() {
-			return nil, sqlparse.Unsupported("EXCEPT ALL")
+			compound = operand.ExceptAll(right)
+		} else {
+			compound = operand.Except(right)
 		}
-		compound = operand.Except(right)
 	default:
 		return nil, sqlparse.Unsupportedf("set operation %s", s.GetOp())
 	}
@@ -259,6 +349,27 @@ func limitValue(node *pg.Node) (int, bool, error) {
 		return 0, false, sqlparse.Unsupported("non-integer LIMIT/OFFSET")
 	}
 	return int(c.GetIval().GetIval()), true, nil
+}
+
+// convertValuesList converts a standalone VALUES statement into a ValuesQuery.
+func convertValuesList(rows []*pg.Node) (sql.Query, error) {
+	q := sql.Values()
+	for _, rowNode := range rows {
+		row := rowNode.GetList()
+		if row == nil {
+			return nil, sqlparse.Unsupportedf("VALUES row %T", rowNode.GetNode())
+		}
+		cells := make([]any, 0, len(row.GetItems()))
+		for _, item := range row.GetItems() {
+			expr, err := convertExpr(item)
+			if err != nil {
+				return nil, err
+			}
+			cells = append(cells, expr)
+		}
+		q = q.Row(cells...)
+	}
+	return q, nil
 }
 
 func convertWith(wc *pg.WithClause) ([]sql.CTE, error) {

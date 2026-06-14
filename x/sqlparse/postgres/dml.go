@@ -75,40 +75,45 @@ func convertInsert(s *pg.InsertStmt) (sql.Query, error) {
 }
 
 func applyOnConflict(q sql.InsertQuery, oc *pg.OnConflictClause) (sql.InsertQuery, error) {
-	var target []string
+	var opts []sql.ConflictOption
 	if infer := oc.GetInfer(); infer != nil {
-		if infer.GetConname() != "" {
-			return q, sqlparse.Unsupported("ON CONFLICT ON CONSTRAINT")
-		}
-		for _, elem := range infer.GetIndexElems() {
-			ie := elem.GetIndexElem()
-			if ie == nil || ie.GetName() == "" {
-				return q, sqlparse.Unsupported("ON CONFLICT expression target")
+		if name := infer.GetConname(); name != "" {
+			opts = append(opts, sql.OnConstraint(name))
+		} else {
+			var target []string
+			for _, elem := range infer.GetIndexElems() {
+				ie := elem.GetIndexElem()
+				if ie == nil || ie.GetName() == "" {
+					return q, sqlparse.Unsupported("ON CONFLICT expression target")
+				}
+				target = append(target, ie.GetName())
 			}
-			target = append(target, ie.GetName())
+			if len(target) > 0 {
+				opts = append(opts, sql.OnColumns(target...))
+			}
 		}
 	}
 
 	switch oc.GetAction() {
 	case pg.OnConflictAction_ONCONFLICT_NOTHING:
-		return q.OnConflictDoNothing(target...), nil
+		opts = append(opts, sql.DoNothing())
 	case pg.OnConflictAction_ONCONFLICT_UPDATE:
 		assignments, err := convertAssignments(oc.GetTargetList(), true)
 		if err != nil {
 			return q, err
 		}
-		q = q.OnConflictDoUpdate(target, assignments...)
+		opts = append(opts, sql.DoUpdate(assignments...))
 		if where := oc.GetWhereClause(); where != nil {
 			expr, err := convertExpr(where)
 			if err != nil {
 				return q, err
 			}
-			q = q.OnConflictWhere(expr)
+			opts = append(opts, sql.ConflictWhere(expr))
 		}
-		return q, nil
 	default:
 		return q, sqlparse.Unsupportedf("ON CONFLICT action %s", oc.GetAction())
 	}
+	return q.OnConflict(opts...), nil
 }
 
 func convertUpdate(s *pg.UpdateStmt) (sql.Query, error) {

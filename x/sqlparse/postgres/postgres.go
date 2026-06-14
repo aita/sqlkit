@@ -70,6 +70,8 @@ func convertStmt(node *pg.Node) (sql.Query, error) {
 		return convertAlterTable(node.GetAlterTableStmt())
 	case node.GetDropStmt() != nil:
 		return convertDrop(node.GetDropStmt())
+	case node.GetTruncateStmt() != nil:
+		return convertTruncate(node.GetTruncateStmt())
 	default:
 		return nil, sqlparse.Unsupportedf("statement node %T", node.GetNode())
 	}

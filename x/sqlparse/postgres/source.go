@@ -7,11 +7,13 @@ import (
 )
 
 // joinSpec is one flattened JOIN: its kind keyword, the right-hand source, and
-// the ON predicate (nil for CROSS JOIN).
+// the join condition (an ON predicate, a USING column list, or NATURAL).
 type joinSpec struct {
-	kind   string
-	source sql.Source
-	on     sql.Expression
+	kind    string
+	source  sql.Source
+	on      sql.Expression
+	using   []string
+	natural bool
 }
 
 // convertFrom turns a FROM list into a base source plus the joins applied to it.
@@ -59,12 +61,32 @@ func flattenFrom(node *pg.Node) (sql.Source, []joinSpec, error) {
 }
 
 func joinSpecFor(join *pg.JoinExpr, right sql.Source) (joinSpec, error) {
+	kind, err := joinKind(join.GetJointype())
+	if err != nil {
+		return joinSpec{}, err
+	}
+
+	// NATURAL and USING joins are sqlkit SELECT builders limited to INNER/LEFT.
 	if join.GetIsNatural() {
-		return joinSpec{}, sqlparse.Unsupported("NATURAL JOIN")
+		if kind != "JOIN" && kind != "LEFT JOIN" {
+			return joinSpec{}, sqlparse.Unsupportedf("NATURAL %s", kind)
+		}
+		return joinSpec{kind: kind, source: right, natural: true}, nil
 	}
-	if len(join.GetUsingClause()) > 0 {
-		return joinSpec{}, sqlparse.Unsupported("JOIN ... USING")
+	if cols := join.GetUsingClause(); len(cols) > 0 {
+		if kind != "JOIN" && kind != "LEFT JOIN" {
+			return joinSpec{}, sqlparse.Unsupportedf("%s ... USING", kind)
+		}
+		names := make([]string, 0, len(cols))
+		for _, col := range cols {
+			if col.GetString_() == nil {
+				return joinSpec{}, sqlparse.Unsupportedf("USING column %T", col.GetNode())
+			}
+			names = append(names, col.GetString_().GetSval())
+		}
+		return joinSpec{kind: kind, source: right, using: names}, nil
 	}
+
 	var on sql.Expression
 	if quals := join.GetQuals(); quals != nil {
 		expr, err := convertExpr(quals)
@@ -73,20 +95,24 @@ func joinSpecFor(join *pg.JoinExpr, right sql.Source) (joinSpec, error) {
 		}
 		on = expr
 	}
-	switch join.GetJointype() {
+	if kind == "JOIN" && on == nil {
+		return joinSpec{kind: "CROSS JOIN", source: right}, nil
+	}
+	return joinSpec{kind: kind, source: right, on: on}, nil
+}
+
+func joinKind(t pg.JoinType) (string, error) {
+	switch t {
 	case pg.JoinType_JOIN_INNER:
-		if on == nil {
-			return joinSpec{kind: "CROSS JOIN", source: right}, nil
-		}
-		return joinSpec{kind: "JOIN", source: right, on: on}, nil
+		return "JOIN", nil
 	case pg.JoinType_JOIN_LEFT:
-		return joinSpec{kind: "LEFT JOIN", source: right, on: on}, nil
+		return "LEFT JOIN", nil
 	case pg.JoinType_JOIN_RIGHT:
-		return joinSpec{kind: "RIGHT JOIN", source: right, on: on}, nil
+		return "RIGHT JOIN", nil
 	case pg.JoinType_JOIN_FULL:
-		return joinSpec{kind: "FULL JOIN", source: right, on: on}, nil
+		return "FULL JOIN", nil
 	default:
-		return joinSpec{}, sqlparse.Unsupportedf("join type %s", join.GetJointype())
+		return "", sqlparse.Unsupportedf("join type %s", t)
 	}
 }
 

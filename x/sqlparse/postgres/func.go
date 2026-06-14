@@ -30,10 +30,6 @@ func convertFuncCall(fc *pg.FuncCall) (sql.Expression, error) {
 	if err != nil {
 		return nil, err
 	}
-	if fc.GetAggDistinct() {
-		return nil, sqlparse.Unsupportedf("DISTINCT aggregate %s", name)
-	}
-
 	var base sql.Expression
 	switch {
 	case strings.EqualFold(name, "count"):
@@ -62,6 +58,9 @@ func convertCount(fc *pg.FuncCall) (sql.Expression, error) {
 	if err != nil {
 		return nil, err
 	}
+	if fc.GetAggDistinct() {
+		return sql.CountDistinct(target), nil
+	}
 	return sql.Count(target), nil
 }
 
@@ -76,6 +75,9 @@ func convertGenericFunc(name string, fc *pg.FuncCall) (sql.Expression, error) {
 			return nil, err
 		}
 		args = append(args, expr)
+	}
+	if fc.GetAggDistinct() {
+		return sql.DistinctFunc(name, args...), nil
 	}
 	return sql.Func(name, args...), nil
 }
@@ -117,11 +119,22 @@ func convertSelectionExpr(node *pg.Node) (sql.Selection, error) {
 	return selection, nil
 }
 
+// frameOptionNonDefault is PostgreSQL's FRAMEOPTION_NONDEFAULT bit, set when the
+// window carries an explicit frame clause (ROWS/RANGE/GROUPS BETWEEN ...).
+const frameOptionNonDefault = 0x00001
+
 func convertWindow(fn sql.Expression, w *pg.WindowDef) (sql.Expression, error) {
-	if w.GetRefname() != "" {
-		return nil, sqlparse.Unsupported("named window reference")
+	if w.GetFrameOptions()&frameOptionNonDefault != 0 {
+		return nil, sqlparse.Unsupported("window frame clause")
 	}
 	win := sql.Over(fn)
+	// OVER w references a window named by the WINDOW clause; OVER (w ...) names a
+	// base window in refname.
+	if name := w.GetName(); name != "" {
+		win = win.Named(name)
+	} else if ref := w.GetRefname(); ref != "" {
+		win = win.Named(ref)
+	}
 	if parts := w.GetPartitionClause(); len(parts) > 0 {
 		exprs := make([]sql.Expression, 0, len(parts))
 		for _, p := range parts {
@@ -141,6 +154,33 @@ func convertWindow(fn sql.Expression, w *pg.WindowDef) (sql.Expression, error) {
 		win = win.OrderBy(terms...)
 	}
 	return win, nil
+}
+
+// convertNamedWindow converts a SELECT-level WINDOW clause definition.
+func convertNamedWindow(w *pg.WindowDef) (sql.NamedWindow, error) {
+	if w.GetFrameOptions()&frameOptionNonDefault != 0 {
+		return sql.NamedWindow{}, sqlparse.Unsupported("window frame clause")
+	}
+	def := sql.WindowDef(w.GetName())
+	if parts := w.GetPartitionClause(); len(parts) > 0 {
+		exprs := make([]sql.Expression, 0, len(parts))
+		for _, p := range parts {
+			expr, err := convertExpr(p)
+			if err != nil {
+				return sql.NamedWindow{}, err
+			}
+			exprs = append(exprs, expr)
+		}
+		def = def.PartitionBy(exprs...)
+	}
+	if order := w.GetOrderClause(); len(order) > 0 {
+		terms, err := convertSortClause(order)
+		if err != nil {
+			return sql.NamedWindow{}, err
+		}
+		def = def.OrderBy(terms...)
+	}
+	return def, nil
 }
 
 // canonicalTypes maps PostgreSQL's internal type names back to their canonical

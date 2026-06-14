@@ -48,8 +48,43 @@ func TestAlterTableColumnType(t *testing.T) {
 		`ALTER TABLE "users" ALTER COLUMN "age" TYPE bigint;`)
 }
 
+func TestCreateTableInlineConstraints(t *testing.T) {
+	assertRoundTrip(t,
+		"CREATE TABLE t (id int UNIQUE, uid int REFERENCES users(id) ON DELETE CASCADE)",
+		`CREATE TABLE "t" (
+    "id" integer UNIQUE,
+    "uid" integer REFERENCES "users" ("id") ON DELETE CASCADE
+);`)
+}
+
+func TestCreateTableTableUnique(t *testing.T) {
+	assertRoundTrip(t,
+		"CREATE TABLE t (a int, b int, CONSTRAINT uq UNIQUE (a, b))",
+		`CREATE TABLE "t" (
+    "a" integer,
+    "b" integer,
+    CONSTRAINT "uq" UNIQUE ("a", "b")
+);`)
+}
+
+func TestAlterTableAddConstraints(t *testing.T) {
+	assertRoundTrip(t,
+		"ALTER TABLE t ADD CONSTRAINT uq UNIQUE (a, b), ADD CONSTRAINT fk FOREIGN KEY (uid) REFERENCES users(id)",
+		`ALTER TABLE "t" ADD CONSTRAINT "uq" UNIQUE ("a", "b"), ADD CONSTRAINT "fk" FOREIGN KEY ("uid") REFERENCES "users" ("id");`)
+}
+
 func TestDropTable(t *testing.T) {
 	assertRoundTrip(t, "DROP TABLE users", `DROP TABLE "users";`)
+}
+
+func TestDropMultipleTables(t *testing.T) {
+	assertRoundTrip(t, "DROP TABLE a, b, c", `DROP TABLE "a", "b", "c";`)
+}
+
+func TestTruncate(t *testing.T) {
+	assertRoundTrip(t,
+		"TRUNCATE TABLE a, b RESTART IDENTITY CASCADE",
+		`TRUNCATE TABLE "a", "b" RESTART IDENTITY CASCADE;`)
 }
 
 func TestDropTableIfExists(t *testing.T) {

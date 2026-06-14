@@ -122,6 +122,42 @@ func TestExprNegativeNumber(t *testing.T) {
 		-5)
 }
 
-func TestExprSimpleCaseUnsupported(t *testing.T) {
-	assertUnsupported(t, "SELECT CASE a WHEN 1 THEN 'x' END FROM t")
+func TestExprSimpleCase(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT CASE status WHEN 'a' THEN 1 ELSE 0 END FROM t",
+		`SELECT CASE "status" WHEN $1 THEN $2 ELSE $3 END FROM "t"`,
+		"a", 1, 0)
+}
+
+func TestExprDistinctAggregates(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT COUNT(DISTINCT uid), SUM(DISTINCT amount) FROM orders",
+		`SELECT COUNT(DISTINCT "uid"), sum(DISTINCT "amount") FROM "orders"`)
+}
+
+func TestExprIsDistinctFrom(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT id FROM t WHERE a IS DISTINCT FROM b AND c IS NOT DISTINCT FROM d",
+		`SELECT "id" FROM "t" WHERE (("a" IS DISTINCT FROM "b") AND ("c" IS NOT DISTINCT FROM "d"))`)
+}
+
+func TestExprRowIn(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT id FROM t WHERE (a, b) IN ((1, 2), (3, 4))",
+		`SELECT "id" FROM "t" WHERE (("a", "b") IN (($1, $2), ($3, $4)))`,
+		1, 2, 3, 4)
+}
+
+func TestExprArrayAny(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT id FROM t WHERE x = ANY(ARRAY[1, 2, 3])",
+		`SELECT "id" FROM "t" WHERE ("x" = ANY(ARRAY[$1, $2, $3]))`,
+		1, 2, 3)
+}
+
+func TestExprSimilarTo(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT id FROM t WHERE name SIMILAR TO 'a%' AND x NOT SIMILAR TO 'b%'",
+		`SELECT "id" FROM "t" WHERE (("name" SIMILAR TO $1) AND ("x" NOT SIMILAR TO $2))`,
+		"a%", "b%")
 }

@@ -115,6 +115,52 @@ func TestSelectLiteralProjection(t *testing.T) {
 		`SELECT 1 WHERE EXISTS (SELECT 1 FROM "users")`)
 }
 
-func TestSelectDistinctOnUnsupported(t *testing.T) {
-	assertUnsupported(t, "SELECT DISTINCT ON (a) a, b FROM t")
+func TestSelectDistinctOn(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT DISTINCT ON (a) a, b FROM t",
+		`SELECT DISTINCT ON ("a") "a", "b" FROM "t"`)
+}
+
+func TestSelectJoinUsing(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT id FROM users u JOIN orders o USING (uid)",
+		`SELECT "id" FROM "users" AS "u" JOIN "orders" AS "o" USING ("uid")`)
+}
+
+func TestSelectNaturalJoin(t *testing.T) {
+	assertRoundTrip(t, "SELECT id FROM a NATURAL JOIN b", `SELECT "id" FROM "a" NATURAL JOIN "b"`)
+}
+
+func TestSelectNaturalLeftJoin(t *testing.T) {
+	assertRoundTrip(t, "SELECT id FROM a NATURAL LEFT JOIN b", `SELECT "id" FROM "a" NATURAL LEFT JOIN "b"`)
+}
+
+func TestSelectIntersectAll(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT a FROM t1 INTERSECT ALL SELECT a FROM t2",
+		`(SELECT "a" FROM "t1") INTERSECT ALL (SELECT "a" FROM "t2")`)
+}
+
+func TestSelectExceptAll(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT a FROM t1 EXCEPT ALL SELECT a FROM t2",
+		`(SELECT "a" FROM "t1") EXCEPT ALL (SELECT "a" FROM "t2")`)
+}
+
+func TestSelectNamedWindow(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT ROW_NUMBER() OVER w FROM t WINDOW w AS (PARTITION BY a ORDER BY b)",
+		`SELECT row_number() OVER "w" FROM "t" WINDOW "w" AS (PARTITION BY "a" ORDER BY "b")`)
+}
+
+func TestSelectStandaloneValues(t *testing.T) {
+	assertRoundTrip(t,
+		"VALUES (1, 'a'), (2, 'b')",
+		`VALUES ($1, $2), ($3, $4)`,
+		1, "a", 2, "b")
+}
+
+func TestSelectWindowFrameUnsupported(t *testing.T) {
+	assertUnsupported(t,
+		"SELECT SUM(x) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM t")
 }

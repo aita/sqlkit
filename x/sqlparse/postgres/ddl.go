@@ -43,6 +43,18 @@ func convertCreateTable(s *pg.CreateStmt) (sql.Query, error) {
 					return nil, err
 				}
 				ct = ct.Check(con.GetConname(), expr)
+			case pg.ConstrType_CONSTR_UNIQUE:
+				keys, err := constraintKeys(con)
+				if err != nil {
+					return nil, err
+				}
+				ct = ct.Unique(con.GetConname(), keys...)
+			case pg.ConstrType_CONSTR_FOREIGN:
+				fk, err := convertForeignKey(con)
+				if err != nil {
+					return nil, err
+				}
+				ct = ct.ForeignKey(fk)
 			default:
 				return nil, sqlparse.Unsupportedf("table constraint %s", con.GetContype())
 			}
@@ -78,12 +90,20 @@ func convertColumnDef(cd *pg.ColumnDef) (sql.ColumnDef, bool, error) {
 			// Explicit NULL is the default; nothing to record.
 		case pg.ConstrType_CONSTR_PRIMARY:
 			isPK = true
+		case pg.ConstrType_CONSTR_UNIQUE:
+			def.Unique = true
 		case pg.ConstrType_CONSTR_DEFAULT:
 			expr, err := staticExpr(con.GetRawExpr())
 			if err != nil {
 				return sql.ColumnDef{}, false, err
 			}
 			def.Default = expr
+		case pg.ConstrType_CONSTR_FOREIGN:
+			ref, err := convertColumnReference(con)
+			if err != nil {
+				return sql.ColumnDef{}, false, err
+			}
+			def.References = ref
 		default:
 			return sql.ColumnDef{}, false, sqlparse.Unsupportedf("column constraint %s", con.GetContype())
 		}
@@ -140,6 +160,13 @@ func convertAlterTable(s *pg.AlterTableStmt) (sql.Query, error) {
 				return nil, err
 			}
 			at = at.AlterColumnType(cmd.GetName(), sql.RawType(typeName))
+		case pg.AlterTableType_AT_AddConstraint:
+			var err error
+			if at, err = applyAddConstraint(at, cmd.GetDef().GetConstraint()); err != nil {
+				return nil, err
+			}
+		case pg.AlterTableType_AT_DropConstraint:
+			at = at.DropConstraint(cmd.GetName())
 		default:
 			return nil, sqlparse.Unsupportedf("ALTER TABLE action %s", cmd.GetSubtype())
 		}
@@ -150,14 +177,15 @@ func convertAlterTable(s *pg.AlterTableStmt) (sql.Query, error) {
 func convertDrop(s *pg.DropStmt) (sql.Query, error) {
 	switch s.GetRemoveType() {
 	case pg.ObjectType_OBJECT_TABLE:
-		if len(s.GetObjects()) != 1 {
-			return nil, sqlparse.Unsupported("DROP TABLE of multiple tables")
+		tables := make([]sql.Table, 0, len(s.GetObjects()))
+		for _, obj := range s.GetObjects() {
+			table, err := tableFromNameList(obj)
+			if err != nil {
+				return nil, err
+			}
+			tables = append(tables, table)
 		}
-		table, err := tableFromNameList(s.GetObjects()[0])
-		if err != nil {
-			return nil, err
-		}
-		stmt := sql.DropTable(table)
+		stmt := sql.DropTable(tables...)
 		if s.GetMissingOk() {
 			stmt = stmt.IfExists()
 		}
@@ -189,6 +217,133 @@ func convertCreateSchema(s *pg.CreateSchemaStmt) (sql.Query, error) {
 		stmt = stmt.IfNotExists()
 	}
 	return stmt, nil
+}
+
+func convertTruncate(s *pg.TruncateStmt) (sql.Query, error) {
+	tables := make([]sql.Table, 0, len(s.GetRelations()))
+	for _, rel := range s.GetRelations() {
+		rv := rel.GetRangeVar()
+		if rv == nil {
+			return nil, sqlparse.Unsupportedf("TRUNCATE relation %T", rel.GetNode())
+		}
+		tables = append(tables, sql.Table{Schema: rv.GetSchemaname(), Name: rv.GetRelname()})
+	}
+	stmt := sql.Truncate(tables...)
+	if s.GetRestartSeqs() {
+		stmt = stmt.RestartIdentity()
+	}
+	if s.GetBehavior() == pg.DropBehavior_DROP_CASCADE {
+		stmt = stmt.Cascade()
+	}
+	return stmt, nil
+}
+
+// applyAddConstraint maps an ALTER TABLE ADD CONSTRAINT for UNIQUE and FOREIGN
+// KEY constraints.
+func applyAddConstraint(at sql.AlterTableStmt, con *pg.Constraint) (sql.AlterTableStmt, error) {
+	if con == nil {
+		return at, sqlparse.Unsupported("empty ADD CONSTRAINT")
+	}
+	switch con.GetContype() {
+	case pg.ConstrType_CONSTR_UNIQUE:
+		keys, err := constraintKeys(con)
+		if err != nil {
+			return at, err
+		}
+		return at.AddUnique(con.GetConname(), keys...), nil
+	case pg.ConstrType_CONSTR_FOREIGN:
+		fk, err := convertForeignKey(con)
+		if err != nil {
+			return at, err
+		}
+		return at.AddForeignKey(fk), nil
+	case pg.ConstrType_CONSTR_CHECK:
+		expr, err := staticExpr(con.GetRawExpr())
+		if err != nil {
+			return at, err
+		}
+		return at.AddCheck(con.GetConname(), expr), nil
+	default:
+		return at, sqlparse.Unsupportedf("ADD CONSTRAINT %s", con.GetContype())
+	}
+}
+
+// convertColumnReference builds a column-level REFERENCES from an inline foreign
+// key constraint.
+func convertColumnReference(con *pg.Constraint) (*sql.ColumnReference, error) {
+	pk := con.GetPktable()
+	if pk == nil {
+		return nil, sqlparse.Unsupported("foreign key without referenced table")
+	}
+	ref := &sql.ColumnReference{
+		Schema:   pk.GetSchemaname(),
+		Table:    pk.GetRelname(),
+		OnDelete: fkAction(con.GetFkDelAction()),
+		OnUpdate: fkAction(con.GetFkUpdAction()),
+	}
+	cols, err := stringList(con.GetPkAttrs())
+	if err != nil {
+		return nil, err
+	}
+	if len(cols) == 1 {
+		ref.Column = cols[0]
+	} else if len(cols) > 1 {
+		return nil, sqlparse.Unsupported("multi-column column-level foreign key")
+	}
+	return ref, nil
+}
+
+// convertForeignKey builds a table-level FOREIGN KEY constraint.
+func convertForeignKey(con *pg.Constraint) (sql.ForeignKeyConstraint, error) {
+	pk := con.GetPktable()
+	if pk == nil {
+		return sql.ForeignKeyConstraint{}, sqlparse.Unsupported("foreign key without referenced table")
+	}
+	columns, err := stringList(con.GetFkAttrs())
+	if err != nil {
+		return sql.ForeignKeyConstraint{}, err
+	}
+	refColumns, err := stringList(con.GetPkAttrs())
+	if err != nil {
+		return sql.ForeignKeyConstraint{}, err
+	}
+	return sql.ForeignKeyConstraint{
+		Name:       con.GetConname(),
+		Columns:    columns,
+		RefSchema:  pk.GetSchemaname(),
+		RefTable:   pk.GetRelname(),
+		RefColumns: refColumns,
+		OnDelete:   fkAction(con.GetFkDelAction()),
+		OnUpdate:   fkAction(con.GetFkUpdAction()),
+	}, nil
+}
+
+// fkAction maps PostgreSQL's single-character referential action codes to their
+// SQL clause text. "a" (NO ACTION, the default) renders nothing.
+func fkAction(code string) string {
+	switch code {
+	case "r":
+		return "RESTRICT"
+	case "c":
+		return "CASCADE"
+	case "n":
+		return "SET NULL"
+	case "d":
+		return "SET DEFAULT"
+	default:
+		return ""
+	}
+}
+
+func stringList(nodes []*pg.Node) ([]string, error) {
+	out := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		if n.GetString_() == nil {
+			return nil, sqlparse.Unsupportedf("name node %T", n.GetNode())
+		}
+		out = append(out, n.GetString_().GetSval())
+	}
+	return out, nil
 }
 
 // tableFromNameList builds a Table from a DROP object, a List of name parts

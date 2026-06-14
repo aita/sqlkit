@@ -29,6 +29,13 @@ func TestInsertOnConflictDoUpdate(t *testing.T) {
 		1, "a")
 }
 
+func TestInsertOnConflictOnConstraint(t *testing.T) {
+	assertRoundTrip(t,
+		"INSERT INTO t (id) VALUES (1) ON CONFLICT ON CONSTRAINT t_pkey DO NOTHING",
+		`INSERT INTO "t" ("id") VALUES ($1) ON CONFLICT ON CONSTRAINT "t_pkey" DO NOTHING`,
+		1)
+}
+
 func TestUpdateSetWhere(t *testing.T) {
 	assertRoundTrip(t,
 		"UPDATE users SET name = 'x', n = n + 1 WHERE id = 5",

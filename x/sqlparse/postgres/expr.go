@@ -46,6 +46,14 @@ func convertExpr(node *pg.Node) (sql.Expression, error) {
 		return sql.Func("coalesce", args...), nil
 	case node.GetMinMaxExpr() != nil:
 		return convertMinMax(node.GetMinMaxExpr())
+	case node.GetRowExpr() != nil:
+		args, err := convertExprArgs(node.GetRowExpr().GetArgs())
+		if err != nil {
+			return nil, err
+		}
+		return sql.Row(args...), nil
+	case node.GetAArrayExpr() != nil:
+		return convertArray(node.GetAArrayExpr())
 	default:
 		return nil, sqlparse.Unsupportedf("expression node %T", node.GetNode())
 	}
@@ -131,12 +139,29 @@ func convertAExpr(e *pg.A_Expr) (sql.Expression, error) {
 			return nil, err
 		}
 		return sql.BinaryExpression{Left: left, Operator: op, Right: right}, nil
+	case pg.A_Expr_Kind_AEXPR_OP_ANY, pg.A_Expr_Kind_AEXPR_OP_ALL:
+		return convertArrayQuantified(e, op)
 	case pg.A_Expr_Kind_AEXPR_LIKE, pg.A_Expr_Kind_AEXPR_ILIKE:
 		return convertLike(e, op)
+	case pg.A_Expr_Kind_AEXPR_SIMILAR:
+		return convertSimilar(e, op)
 	case pg.A_Expr_Kind_AEXPR_IN:
 		return convertInList(e, op)
 	case pg.A_Expr_Kind_AEXPR_BETWEEN, pg.A_Expr_Kind_AEXPR_NOT_BETWEEN:
 		return convertBetween(e)
+	case pg.A_Expr_Kind_AEXPR_DISTINCT, pg.A_Expr_Kind_AEXPR_NOT_DISTINCT:
+		left, err := convertExpr(e.GetLexpr())
+		if err != nil {
+			return nil, err
+		}
+		right, err := convertExpr(e.GetRexpr())
+		if err != nil {
+			return nil, err
+		}
+		if e.GetKind() == pg.A_Expr_Kind_AEXPR_NOT_DISTINCT {
+			return sql.IsNotDistinctFrom(left, right), nil
+		}
+		return sql.IsDistinctFrom(left, right), nil
 	case pg.A_Expr_Kind_AEXPR_NULLIF:
 		left, err := convertExpr(e.GetLexpr())
 		if err != nil {
@@ -314,10 +339,14 @@ func convertSubLink(e *pg.SubLink) (sql.Expression, error) {
 }
 
 func convertCaseExpr(e *pg.CaseExpr) (sql.Expression, error) {
-	if e.GetArg() != nil {
-		return nil, sqlparse.Unsupported("simple CASE (CASE expr WHEN ...)")
-	}
 	c := sql.Case()
+	if arg := e.GetArg(); arg != nil {
+		operand, err := convertExpr(arg)
+		if err != nil {
+			return nil, err
+		}
+		c = sql.CaseOf(operand)
+	}
 	for _, arg := range e.GetArgs() {
 		when := arg.GetCaseWhen()
 		if when == nil {
@@ -354,6 +383,62 @@ func convertExprArgs(nodes []*pg.Node) ([]any, error) {
 		args = append(args, expr)
 	}
 	return args, nil
+}
+
+func convertArray(e *pg.A_ArrayExpr) (sql.Expression, error) {
+	elements, err := convertExprArgs(e.GetElements())
+	if err != nil {
+		return nil, err
+	}
+	return sql.Array(elements...), nil
+}
+
+// convertArrayQuantified handles "left op ANY/ALL (array)" where the right side
+// is an array value (ARRAY[...] or an array literal), not a subquery.
+func convertArrayQuantified(e *pg.A_Expr, op string) (sql.Expression, error) {
+	left, err := convertExpr(e.GetLexpr())
+	if err != nil {
+		return nil, err
+	}
+	array, err := convertExpr(e.GetRexpr())
+	if err != nil {
+		return nil, err
+	}
+	if e.GetKind() == pg.A_Expr_Kind_AEXPR_OP_ALL {
+		return sql.AllArray(left, op, array), nil
+	}
+	return sql.AnyArray(left, op, array), nil
+}
+
+// convertSimilar handles "left SIMILAR TO pattern". PostgreSQL rewrites the
+// pattern through pg_catalog.similar_to_escape(pattern), so the pattern is that
+// call's first argument; the operator name is "~" (SIMILAR TO) or "!~" (NOT).
+func convertSimilar(e *pg.A_Expr, op string) (sql.Expression, error) {
+	left, err := convertExpr(e.GetLexpr())
+	if err != nil {
+		return nil, err
+	}
+	pattern, err := similarPattern(e.GetRexpr())
+	if err != nil {
+		return nil, err
+	}
+	if op == "!~" {
+		return sql.NotSimilarTo(left, pattern), nil
+	}
+	return sql.SimilarTo(left, pattern), nil
+}
+
+func similarPattern(node *pg.Node) (sql.Expression, error) {
+	if fc := node.GetFuncCall(); fc != nil && len(fc.GetArgs()) >= 1 {
+		name, err := funcName(fc.GetFuncname())
+		if err != nil {
+			return nil, err
+		}
+		if name == "similar_to_escape" {
+			return convertExpr(fc.GetArgs()[0])
+		}
+	}
+	return convertExpr(node)
 }
 
 func convertMinMax(e *pg.MinMaxExpr) (sql.Expression, error) {
