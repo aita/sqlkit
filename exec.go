@@ -37,6 +37,7 @@ type Executor interface {
 	RawSQL(ctx context.Context, query any, args ...any) Rows
 
 	sqlDialect() sql.Dialect
+	interceptors() []Interceptor
 	queryContext(ctx context.Context, query string, args ...any) (*stdsql.Rows, error)
 	execContext(ctx context.Context, query string, args ...any) (stdsql.Result, error)
 }
@@ -59,6 +60,7 @@ var errNoExecutor = errors.New(
 type Rows struct {
 	ctx     context.Context
 	ex      Executor
+	query   sql.Query
 	sqlText string
 	args    []any
 	err     error
@@ -75,7 +77,18 @@ func newRows(ctx context.Context, ex Executor, query sql.Query) Rows {
 		return Rows{err: errNoExecutor}
 	}
 	sqlText, args, err := query.ToSQL(ex.sqlDialect())
-	return Rows{ctx: ctx, ex: ex, sqlText: sqlText, args: args, err: err}
+	return Rows{ctx: ctx, ex: ex, query: query, sqlText: sqlText, args: args, err: err}
+}
+
+// statement builds the read Statement an interceptor sees for this Rows.
+func (r Rows) statement() Statement {
+	return Statement{
+		Op:      OpQuery,
+		Query:   r.query,
+		SQL:     r.sqlText,
+		Args:    r.args,
+		Dialect: r.ex.sqlDialect(),
+	}
 }
 
 // ErrRows returns a Rows that fails with err when scanned. It lets the builders
@@ -85,7 +98,9 @@ func ErrRows(err error) Rows { return Rows{err: err} }
 
 func newRawRows(ctx context.Context, ex Executor, query any, args []any) Rows {
 	sqlText, sqlArgs, err := resolveQuery(ex.sqlDialect(), query, args)
-	return Rows{ctx: ctx, ex: ex, sqlText: sqlText, args: sqlArgs, err: err}
+	// Carry the AST for interceptors when one was supplied; a raw string has none.
+	ast, _ := query.(sql.Query)
+	return Rows{ctx: ctx, ex: ex, query: ast, sqlText: sqlText, args: sqlArgs, err: err}
 }
 
 // Scan runs the query and copies the result into dest. Columns are matched
@@ -99,7 +114,7 @@ func (r Rows) Scan(dest any) error {
 	if r.err != nil {
 		return r.err
 	}
-	rows, err := r.ex.queryContext(r.ctx, r.sqlText, r.args...)
+	rows, err := runQuery(r.ctx, r.ex, r.statement())
 	if err != nil {
 		return err
 	}
@@ -201,7 +216,7 @@ func Records[T any](r Rows) iter.Seq2[T, error] {
 			yield(zero, r.err)
 			return
 		}
-		rows, err := r.ex.queryContext(r.ctx, r.sqlText, r.args...)
+		rows, err := runQuery(r.ctx, r.ex, r.statement())
 		if err != nil {
 			yield(zero, err)
 			return
@@ -250,5 +265,11 @@ func runExec(ctx context.Context, ex Executor, query sql.Query) (stdsql.Result, 
 	if err != nil {
 		return nil, err
 	}
-	return ex.execContext(ctx, sqlText, args...)
+	return runExecStmt(ctx, ex, Statement{
+		Op:      OpExec,
+		Query:   query,
+		SQL:     sqlText,
+		Args:    args,
+		Dialect: ex.sqlDialect(),
+	})
 }
