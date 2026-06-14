@@ -1,0 +1,165 @@
+package dbtest_test
+
+import (
+	"database/sql/driver"
+	"strings"
+	"testing"
+
+	"github.com/aita/sqlkit"
+	"github.com/aita/sqlkit/dbtest"
+	"github.com/aita/sqlkit/internal/sqltest"
+)
+
+// userRow / postRow are caller-defined DTOs, mirroring how tests bring their own
+// row types against the generated table bindings.
+type userRow struct {
+	ID    int64
+	Email string
+	Name  *string
+}
+
+type postRow struct {
+	ID     int64
+	UserID int64
+	Title  string
+}
+
+// Minimal hand-written bindings, the same shape sqlkit generates, so the tests
+// do not depend on the example packages.
+type usersTable struct {
+	info  sqlkit.TableInfo
+	ID    sqlkit.Column[int64]
+	Email sqlkit.Column[string]
+	Name  sqlkit.Column[*string]
+}
+
+func newUsers() usersTable {
+	info := sqlkit.TableInfo{Schema: "public", Name: "users"}
+	return usersTable{
+		info:  info,
+		ID:    sqlkit.NewColumn[int64](info, "id"),
+		Email: sqlkit.NewColumn[string](info, "email"),
+		Name:  sqlkit.NewColumn[*string](info, "name"),
+	}
+}
+
+func (t usersTable) Info() sqlkit.TableInfo             { return t.info }
+func (t usersTable) SQLSource() sqlkit.SourceExpression { return t.info.SQLSource() }
+func (t usersTable) Columns() []sqlkit.AnyColumn        { return []sqlkit.AnyColumn{t.ID, t.Email, t.Name} }
+func (t usersTable) PrimaryKey() []sqlkit.AnyColumn     { return []sqlkit.AnyColumn{t.ID} }
+func (t usersTable) Defaulted() []sqlkit.AnyColumn      { return []sqlkit.AnyColumn{t.ID} }
+
+type postsTable struct {
+	info   sqlkit.TableInfo
+	ID     sqlkit.Column[int64]
+	UserID sqlkit.Column[int64]
+	Title  sqlkit.Column[string]
+}
+
+func newPosts() postsTable {
+	info := sqlkit.TableInfo{Schema: "public", Name: "posts"}
+	return postsTable{
+		info:   info,
+		ID:     sqlkit.NewColumn[int64](info, "id"),
+		UserID: sqlkit.NewColumn[int64](info, "user_id"),
+		Title:  sqlkit.NewColumn[string](info, "title"),
+	}
+}
+
+func (t postsTable) Info() sqlkit.TableInfo             { return t.info }
+func (t postsTable) SQLSource() sqlkit.SourceExpression { return t.info.SQLSource() }
+func (t postsTable) Columns() []sqlkit.AnyColumn {
+	return []sqlkit.AnyColumn{t.ID, t.UserID, t.Title}
+}
+func (t postsTable) PrimaryKey() []sqlkit.AnyColumn { return []sqlkit.AnyColumn{t.ID} }
+func (t postsTable) Defaulted() []sqlkit.AnyColumn  { return []sqlkit.AnyColumn{t.ID} }
+
+func wrap(fake *sqltest.Fake, dialect sqlkit.Dialect) *sqlkit.Database {
+	return sqlkit.WrapDB(fake.DB(), sqlkit.WithDialect(dialect))
+}
+
+func TestInsertIDReturning(t *testing.T) {
+	fake := &sqltest.Fake{
+		QueryFunc: func(string, []any) (sqltest.Result, error) {
+			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(42)}}}, nil
+		},
+	}
+	db := wrap(fake, sqlkit.PostgreSQLDialect{})
+
+	id := dbtest.InsertID(t, db, newUsers(), userRow{Email: "alice@example.com"})
+	if id != 42 {
+		t.Fatalf("InsertID = %d, want 42", id)
+	}
+	// PostgreSQL reads the key back via a RETURNING query, not an exec.
+	queries := fake.Queries()
+	if len(queries) != 1 {
+		t.Fatalf("queries = %d, want 1", len(queries))
+	}
+	if !strings.Contains(queries[0].SQL, "RETURNING") || !strings.Contains(queries[0].SQL, `"id"`) {
+		t.Fatalf("query = %q, want RETURNING \"id\"", queries[0].SQL)
+	}
+	if len(fake.Execs()) != 0 {
+		t.Fatalf("execs = %d, want 0 (RETURNING path)", len(fake.Execs()))
+	}
+}
+
+func TestInsertIDLastInsertID(t *testing.T) {
+	fake := &sqltest.Fake{LastInsertID: 7}
+	db := wrap(fake, sqlkit.MySQLDialect{})
+
+	id := dbtest.InsertID(t, db, newUsers(), userRow{Email: "bob@example.com"})
+	if id != 7 {
+		t.Fatalf("InsertID = %d, want 7 (LastInsertId)", id)
+	}
+	// MySQL has no RETURNING: a plain exec, then LastInsertId.
+	execs := fake.Execs()
+	if len(execs) != 1 {
+		t.Fatalf("execs = %d, want 1", len(execs))
+	}
+	if strings.Contains(execs[0].SQL, "RETURNING") {
+		t.Fatalf("exec = %q, must not contain RETURNING on MySQL", execs[0].SQL)
+	}
+	if len(fake.Queries()) != 0 {
+		t.Fatalf("queries = %d, want 0 (LastInsertId path)", len(fake.Queries()))
+	}
+}
+
+func TestInsertBulk(t *testing.T) {
+	fake := &sqltest.Fake{}
+	db := wrap(fake, sqlkit.PostgreSQLDialect{})
+
+	dbtest.Insert(t, db, newUsers(),
+		userRow{Email: "alice@example.com"},
+		userRow{Email: "bob@example.com"},
+	)
+	execs := fake.Execs()
+	if len(execs) != 1 {
+		t.Fatalf("execs = %d, want 1", len(execs))
+	}
+	// Two rows, two columns each (email, name) → four bind args.
+	if len(execs[0].Args) != 4 {
+		t.Fatalf("args = %d, want 4", len(execs[0].Args))
+	}
+}
+
+func TestFixtureLoadOrder(t *testing.T) {
+	fake := &sqltest.Fake{}
+	db := wrap(fake, sqlkit.PostgreSQLDialect{})
+
+	users, posts := newUsers(), newPosts()
+	dbtest.NewFixture("blog").
+		Add(users, userRow{Email: "alice@example.com"}).
+		Add(posts, postRow{UserID: 1, Title: "Hello"}, postRow{UserID: 1, Title: "World"}).
+		Load(t, db)
+
+	stmts := fake.Statements()
+	if len(stmts) != 2 {
+		t.Fatalf("statements = %d, want 2", len(stmts))
+	}
+	if !strings.Contains(stmts[0], `"users"`) {
+		t.Fatalf("first statement = %q, want users insert", stmts[0])
+	}
+	if !strings.Contains(stmts[1], `"posts"`) {
+		t.Fatalf("second statement = %q, want posts insert", stmts[1])
+	}
+}

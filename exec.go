@@ -36,6 +36,11 @@ type Executor interface {
 	// sql.Query; materialize it with Scan.
 	RawSQL(ctx context.Context, query any, args ...any) Rows
 
+	// Dialect returns the SQL dialect the executor compiles against. Both
+	// *Database and *Session expose it, so helpers bound to an Executor can
+	// branch on dialect capabilities (see Dialect.SupportsReturning).
+	Dialect() sql.Dialect
+
 	sqlDialect() sql.Dialect
 	interceptors() []Interceptor
 	// maxBindParams reports the configured bind-parameter limit driving automatic

@@ -41,6 +41,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/aita/sqlkit"
+	"github.com/aita/sqlkit/dbtest"
 	"github.com/aita/sqlkit/meta"
 )
 
@@ -212,37 +213,19 @@ func image(envVar, fallback string) string {
 	return fallback
 }
 
-// applySchema recreates the shared schema (testCatalog) for the engine. It
-// drops the tables in reverse declaration order (children before parents, so
-// foreign keys never block the drop and an empty database is a no-op), then
-// executes the CREATE SQL the meta model renders from the shared catalog.
-// Running it per subtest gives each test a clean database.
-//
-// The drops are issued directly rather than via Metadata.DropSQL because that
-// drops foreign-key constraints with ALTER TABLE first, which fails on the
-// not-yet-created tables of a fresh database.
+// applySchema recreates the shared schema (testCatalog) for the engine,
+// delegating to dbtest.ApplySchema: it drops the tables in reverse declaration
+// order (children before parents, so foreign keys never block the drop) and
+// executes the CREATE SQL the meta model renders for the database's dialect.
+// Running it per subtest gives each test a clean database. eng is unused now
+// that dbtest reads the dialect from the database handle.
 func applySchema(t *testing.T, db *sqlkit.Database, eng engine) {
 	t.Helper()
-	ctx := context.Background()
-	model, err := testCatalog.Build()
+	md, err := testCatalog.Build()
 	if err != nil {
 		t.Fatalf("build catalog: %v", err)
 	}
-	for i := len(model.Tables) - 1; i >= 0; i-- {
-		ident := eng.dialect.QuoteIdent(qualifiedName(model.Tables[i]))
-		if _, err := db.SQL().ExecContext(ctx, "DROP TABLE IF EXISTS "+ident); err != nil {
-			t.Fatalf("drop %s: %v", model.Tables[i].Name, err)
-		}
-	}
-	createText, err := model.CreateSQL(eng.dialect)
-	if err != nil {
-		t.Fatalf("generate %s schema: %v", eng.name, err)
-	}
-	for _, stmt := range splitStatements(createText) {
-		if _, err := db.SQL().ExecContext(ctx, stmt); err != nil {
-			t.Fatalf("apply schema statement %q: %v", stmt, err)
-		}
-	}
+	dbtest.ApplySchema(t, db, md)
 }
 
 func qualifiedName(t meta.Table) string {
