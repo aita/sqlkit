@@ -534,6 +534,13 @@ var pairs []struct {
 err = db.Select(appdb.Users.ID, appdb.Users.Email).From(appdb.Users).
     All(ctx).Scan(&pairs)
 
+// One table whole plus a column from another: sqlkit.Star(table) is the
+// "table.*" select-list item, qualified by the table's name (or alias).
+// -> SELECT "public"."users".*, "public"."profiles"."bio" FROM ...
+err = db.Select(sqlkit.Star(appdb.Users), appdb.Profiles.Bio).From(appdb.Users).
+    JoinRel(appdb.Users.Rels.Profile).
+    All(ctx).Scan(&users)
+
 // Scan into a single struct (first row) or a scalar slice.
 var one MyUserDTO
 err = db.Select().From(appdb.Users).Where(appdb.Users.ID.Eq(1)).

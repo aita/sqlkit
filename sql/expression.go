@@ -37,6 +37,24 @@ func (e ColumnExpression) Reference() string { return e.Name }
 // Col creates a column reference expression.
 func Col(name string) ColumnExpression { return ColumnExpression{Name: name} }
 
+// StarSelection is a "*" select-list item, optionally qualified by a table name
+// or alias to project every column of one source ("users.*"). Unlike a column
+// reference the qualifier is quoted but the "*" is emitted raw, so it never
+// becomes "users"."*". It is only a Selection, not an Expression: a "*" stands
+// alone in the select list and is not a value operand.
+type StarSelection struct{ Qualifier string }
+
+func (StarSelection) SQLSelection() {}
+
+// Star creates an unqualified "*" select-list item, projecting every column of
+// the query's sources.
+func Star() StarSelection { return StarSelection{} }
+
+// StarOf creates a qualified "qualifier.*" select-list item, projecting every
+// column of the table or alias named by qualifier — for selecting one source
+// whole alongside individual columns of others (SELECT users.*, profiles.bio).
+func StarOf(qualifier string) StarSelection { return StarSelection{Qualifier: qualifier} }
+
 // ValueExpression binds a value as a SQL argument.
 type ValueExpression struct{ Value any }
 

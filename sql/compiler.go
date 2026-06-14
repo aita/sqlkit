@@ -401,6 +401,11 @@ func (c *Compiler) CompileSelection(selection Selection) (string, []any, error) 
 		return string(s), nil, nil
 	case ColumnExpression:
 		return c.Dialect.QuoteIdent(s.Reference()), nil, nil
+	case StarSelection:
+		if s.Qualifier == "" {
+			return "*", nil, nil
+		}
+		return c.Dialect.QuoteIdent(s.Qualifier) + ".*", nil, nil
 	case AliasedSelection:
 		inner, args, err := c.CompileSelection(s.Selection)
 		if err != nil {

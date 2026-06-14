@@ -389,6 +389,22 @@ func (q SelectQuery) Except(other SelectQuery) UnionQuery {
 	return UnionQuery{ex: q.ex, query: q.query.Except(other.query)}
 }
 
+// Star is the "table.*" select-list item — every column of table, qualified by
+// its name (or alias when the binding is aliased), like Column.Reference. Use it
+// to project one table whole alongside individual columns of others, which a
+// plain Select cannot express on its own:
+//
+//	db.Select(sqlkit.Star(Users), Profiles.Bio).
+//		From(Users).JoinRel(Users.Rels.Profile).
+//		All(ctx).Scan(&dst)
+//
+// compiles to SELECT "users".*, "profiles"."bio" FROM ... . For an unqualified
+// "*" use sql.Star; selecting from a single table with no columns already emits
+// every column without it (db.Select().From(Users)).
+func Star(table Table) sql.Selection {
+	return sql.StarOf(table.Info().refName())
+}
+
 func allColumnsOf(source sql.Source) []sql.Selection {
 	if cs, ok := source.(columnSource); ok {
 		return selectionsOf(cs.Columns())

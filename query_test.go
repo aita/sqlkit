@@ -62,6 +62,20 @@ func TestSelectExplicitColumns(t *testing.T) {
 		nil)
 }
 
+func TestSelectStarOfTable(t *testing.T) {
+	query := sqlkit.Select(sqlkit.Star(Users), Posts.Title).From(Users).
+		Join(Posts, Posts.UserID.EqExpr(Users.ID))
+	assertToSQL(t, query,
+		`SELECT "public"."users".*, "public"."posts"."title" FROM "public"."users" JOIN "public"."posts" ON ("public"."posts"."user_id" = "public"."users"."id")`,
+		nil)
+}
+
+func TestSelectStarOfAliasedTable(t *testing.T) {
+	u := Users.As("u")
+	query := sqlkit.Select(sqlkit.Star(u)).From(u)
+	assertToSQL(t, query, `SELECT "u".* FROM "public"."users" AS "u"`, nil)
+}
+
 func TestSelectJoinFilters(t *testing.T) {
 	query := sqlkit.Select().From(Posts).
 		Join(Users, Posts.UserID.EqExpr(Users.ID)).
