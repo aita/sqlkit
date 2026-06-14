@@ -141,13 +141,39 @@ files, err := codegen.Generate(catalog, codegen.Options{
     Dialect:      "postgres",
     FilePerTable: true,
     EmitDTO:      true,
-    // Map numeric to a decimal type instead of string.
-    TypeMapper: codegen.DefaultTypeMapper{Overrides: map[string]codegen.GoType{
-        "numeric": {ImportPath: "github.com/shopspring/decimal", Name: "decimal.Decimal"},
-    }},
+    TypeMapper: codegen.NewDefaultTypeMapper(codegen.TypeMapperConfig{
+        // Map every numeric column to a decimal type instead of string.
+        Overrides: map[string]codegen.GoType{
+            "numeric": {ImportPath: "github.com/shopspring/decimal", Name: "decimal.Decimal"},
+        },
+        // Map specific columns by name, regardless of their SQL type.
+        ColumnOverrides: map[string]codegen.GoType{
+            "users.id": {ImportPath: "github.com/google/uuid", Name: "uuid.UUID"},
+            "metadata": {ImportPath: "encoding/json", Name: "json.RawMessage"},
+        },
+        // Or decide dynamically; return ok=false to fall through to the rest.
+        OverrideFunc: func(table meta.Table, column meta.Column, dialect string) (codegen.GoType, bool, error) {
+            if strings.HasSuffix(column.Name, "_cents") {
+                return codegen.GoType{ImportPath: "myapp/money", Name: "money.Cents"}, true, nil
+            }
+            return codegen.GoType{}, false, nil
+        },
+    }),
 })
 // files[i].Name / files[i].Content
 ```
+
+`NewDefaultTypeMapper` builds the mapper from a `TypeMapperConfig`; it resolves
+each column's Go type in precedence order: `OverrideFunc` (if it returns ok),
+then `ColumnOverrides` (by name — `schema.table.column`, then `table.column`, then
+bare `column`, most specific wins), then `Overrides` (by lowercase SQL type
+name), then a Go type pinned on the column's `meta.Type` at the schema source
+(see `DataType.Go` below), then the built-in PostgreSQL/MySQL/SQLite tables.
+Nullable columns become pointers at every level, so overrides pin the bare type.
+For full control, implement the one-method `codegen.TypeMapper` interface (or
+`codegen.TypeMapperFunc`) yourself; it receives the `meta.Table`, the
+`meta.Column`, and the dialect, so you can decide on the table and column names
+as well as the SQL type.
 
 Schema metadata — the column's `meta.Type`, comments, and the
 primary-key/nullable/default constraints — lives on `meta.Column`, the model
@@ -216,11 +242,42 @@ generator compiles it for the target dialect, while a bare `Default()` on an
 integer primary key renders as serial/auto-increment. `Check` likewise takes a
 `sql.Expression` (`Check(sql.Raw("price > 0"))`); both reject bind values, so
 wrap literals in `sql.Raw`. `PrimaryKey()` on several columns declares a composite
-key. Types are portable: `BigInt`, `Timestamp`, ... are `meta.Type` values
-that carry both engines' names (`int8`/`bigint`, `timestamptz`/`datetime`), so
-one catalog targets PostgreSQL and MySQL and the generators resolve the engine
-name only when you pick a dialect. `Type("citext")` passes an engine type name
-through verbatim.
+key. Types are portable: `BigInt`, `Timestamp`, ... name a canonical type kind
+that a registry resolves to each engine's name (`int8`/`bigint`/`integer`,
+`timestamptz`/`datetime`/`datetime`), so one catalog targets PostgreSQL, MySQL,
+and SQLite and the generators resolve the engine name only when you pick a
+dialect.
+
+The per-dialect engine names live in a registry, so adding a type or a dialect
+is a `RegisterType` call rather than a DSL change — that is how SQLite is added
+alongside PostgreSQL and MySQL, and how you teach the schema a custom type:
+
+```go
+// Add a dialect to a built-in kind, or register a brand-new type kind.
+sqldef.RegisterType("uuid", map[string]string{"sqlite": "text"})
+sqldef.RegisterType("geometry", map[string]string{
+    "postgres": "geometry", "mysql": "geometry", "sqlite": "blob",
+})
+sqldef.Column("shape", sqldef.Type("geometry")),
+```
+
+To fix the DB type inline, `Type("citext")` passes one engine type name through
+verbatim on every dialect (any unregistered kind), and
+`TypeFor(map[string]string{...})` fixes a distinct name per dialect (a dialect
+absent from the map makes the type unavailable there). A type whose engine name
+the code generator's tables don't recognize would otherwise fail generation, so
+pin its Go type at the schema source with `.Go` (every dialect) or `.GoFor` (per
+dialect) — the DB type stays fixed for DDL while the pinned Go type flows through
+`codegen` without needing a separate `TypeMapper` override. Build the
+`meta.GoType` with `sqldef.GoTypeOf[T]()` or `sqldef.GoType(reflect.Type)`:
+
+```go
+sqldef.Column("tags", sqldef.Type("citext").Go(sqldef.GoTypeOf[string]())),
+sqldef.Column("id",   sqldef.Type("uuid").Go(sqldef.GoTypeOf[uuid.UUID]())),
+sqldef.Column("doc",  sqldef.Type("json").
+    GoFor("postgres", sqldef.GoType(reflect.TypeOf(json.RawMessage(nil)))).
+    GoFor("mysql", sqldef.GoTypeOf[string]())),
+```
 
 Foreign keys reference the `meta.Table` values, so the compiler catches typos:
 `References(Users, "id")` for the single-column case,

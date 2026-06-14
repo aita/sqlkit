@@ -77,6 +77,20 @@ type Type interface {
 	Engine(dialect string) (Engine, bool)
 }
 
+// GoTyped is an optional interface a meta.Type may implement to pin the Go type
+// it maps to, letting the schema fix the SQL→Go mapping at the source instead of
+// relying on the code generator's built-in type tables. codegen's
+// DefaultTypeMapper honors it (after its explicit Overrides, so a codegen-side
+// override still wins). The sqldef DSL's DataType implements it via DataType.Go;
+// the inspector's single-dialect types do not, so introspected schemas keep
+// using the generator's tables.
+type GoTyped interface {
+	// GoType returns the Go type pinned for the dialect ("postgres" or "mysql");
+	// ok is false when no type is pinned (for that dialect), so the mapper falls
+	// back to its tables.
+	GoType(dialect string) (GoType, bool)
+}
+
 // Of returns a Type known only on the given dialect — what the inspector
 // produces from one introspected engine type, and a convenient way to build a
 // meta.Column by hand for a single target dialect.

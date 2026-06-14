@@ -11,35 +11,88 @@ import (
 // import codegen can spell type overrides as codegen.GoType.
 type GoType = meta.GoType
 
-// TypeMapper resolves the Go type a column's field uses. Implement it (or use
-// DefaultTypeMapper with Overrides) to customize the SQL→Go mapping when using
-// codegen as a library.
+// TypeMapper resolves the Go type a column's field uses, for a given dialect.
+// The table is supplied so a mapper can key its decision on the table and column
+// names, not just the SQL type. Implement it (or build a DefaultTypeMapper with
+// NewDefaultTypeMapper) to customize the SQL→Go mapping when using codegen as a
+// library.
 type TypeMapper interface {
-	GoTypeFor(column meta.Column, dialect string) (meta.GoType, error)
+	GoTypeFor(table meta.Table, column meta.Column, dialect string) (meta.GoType, error)
 }
 
 // TypeMapperFunc adapts a plain function to the TypeMapper interface.
-type TypeMapperFunc func(column meta.Column, dialect string) (meta.GoType, error)
+type TypeMapperFunc func(table meta.Table, column meta.Column, dialect string) (meta.GoType, error)
 
 // GoTypeFor calls f.
-func (f TypeMapperFunc) GoTypeFor(column meta.Column, dialect string) (meta.GoType, error) {
-	return f(column, dialect)
+func (f TypeMapperFunc) GoTypeFor(table meta.Table, column meta.Column, dialect string) (meta.GoType, error) {
+	return f(table, column, dialect)
 }
 
-// DefaultTypeMapper maps standard PostgreSQL and MySQL types to Go types and
-// turns nullable columns into pointer types (slices, already nullable, are left
-// as-is). Overrides, keyed by the lowercase SQL type name, take precedence over
-// the built-in tables — e.g. to map "numeric" to a decimal type:
-//
-//	codegen.DefaultTypeMapper{Overrides: map[string]codegen.GoType{
-//		"numeric": {ImportPath: "github.com/shopspring/decimal", Name: "decimal.Decimal"},
-//	}}
-type DefaultTypeMapper struct {
+// TypeMapperConfig initializes a DefaultTypeMapper; pass it to
+// NewDefaultTypeMapper. All fields are optional — the zero config maps standard
+// types to Go types out of the box.
+type TypeMapperConfig struct {
+	// Overrides maps a lowercase SQL/engine type name to a Go type, e.g. to map
+	// every "numeric" column to a decimal type:
+	//
+	//	Overrides: map[string]codegen.GoType{
+	//		"numeric": {ImportPath: "github.com/shopspring/decimal", Name: "decimal.Decimal"},
+	//	}
 	Overrides map[string]meta.GoType
+	// ColumnOverrides maps a specific column to a Go type, keyed by
+	// "schema.table.column", "table.column", or bare "column" (most specific
+	// match wins), regardless of the column's SQL type:
+	//
+	//	ColumnOverrides: map[string]codegen.GoType{
+	//		"users.id": {ImportPath: "github.com/google/uuid", Name: "uuid.UUID"},
+	//		"metadata": {ImportPath: "encoding/json", Name: "json.RawMessage"},
+	//	}
+	ColumnOverrides map[string]meta.GoType
+	// OverrideFunc, when set, is consulted first for each column. Return ok=true
+	// with the resolved Go type to use it, ok=false to fall through to the maps,
+	// pinned types, and built-in tables, or a non-nil error to fail generation.
+	// It receives the table so it can decide on the table and column names.
+	OverrideFunc func(table meta.Table, column meta.Column, dialect string) (gt meta.GoType, ok bool, err error)
+}
+
+// DefaultTypeMapper maps standard PostgreSQL, MySQL, and SQLite types to Go
+// types and turns nullable columns into pointer types (slices, already nullable,
+// are left as-is). Construct it with NewDefaultTypeMapper; the zero value is the
+// default mapper with no customization. It resolves a column's Go type in
+// precedence order:
+//
+//  1. Config.OverrideFunc, if set and it returns ok.
+//  2. Config.ColumnOverrides, by column name (most specific key wins).
+//  3. Config.Overrides, by lowercase SQL type name.
+//  4. A Go type pinned on the column's meta.Type at the schema source (the
+//     sqldef DSL's DataType.Go), so a custom DB type carries its Go type along.
+//  5. The built-in PostgreSQL/MySQL/SQLite type tables.
+//
+// Nullability is applied to the resolved type at every level (a nullable column
+// becomes a pointer), so overrides pin the bare type.
+type DefaultTypeMapper struct {
+	cfg TypeMapperConfig
+}
+
+// NewDefaultTypeMapper builds a DefaultTypeMapper from the config.
+func NewDefaultTypeMapper(cfg TypeMapperConfig) DefaultTypeMapper {
+	return DefaultTypeMapper{cfg: cfg}
 }
 
 // GoTypeFor implements TypeMapper.
-func (m DefaultTypeMapper) GoTypeFor(column meta.Column, dialect string) (meta.GoType, error) {
+func (m DefaultTypeMapper) GoTypeFor(table meta.Table, column meta.Column, dialect string) (meta.GoType, error) {
+	if m.cfg.OverrideFunc != nil {
+		gt, ok, err := m.cfg.OverrideFunc(table, column, dialect)
+		if err != nil {
+			return meta.GoType{}, err
+		}
+		if ok {
+			return applyNullable(gt, column), nil
+		}
+	}
+	if gt, ok := m.columnOverride(table, column); ok {
+		return applyNullable(gt, column), nil
+	}
 	if column.Type == nil {
 		return meta.GoType{}, fmt.Errorf("codegen: column %q has no type", column.Name)
 	}
@@ -48,20 +101,40 @@ func (m DefaultTypeMapper) GoTypeFor(column meta.Column, dialect string) (meta.G
 		return meta.GoType{}, fmt.Errorf("codegen: column %q has no type on dialect %s", column.Name, dialect)
 	}
 	dataType := strings.ToLower(strings.TrimSpace(engine.Name))
-	if gt, ok := m.Overrides[dataType]; ok {
+	if gt, ok := m.cfg.Overrides[dataType]; ok {
 		return applyNullable(gt, column), nil
 	}
-	table := pgTypes
-	label := "PostgreSQL"
-	if dialect == "mysql" {
-		table = mysqlTypes
-		label = "MySQL"
+	if typed, ok := column.Type.(meta.GoTyped); ok {
+		if gt, ok := typed.GoType(dialect); ok {
+			return applyNullable(gt, column), nil
+		}
 	}
-	gt, ok := table[dataType]
+	stdTable, label := tableForDialect(dialect)
+	gt, ok := stdTable[dataType]
 	if !ok {
-		return meta.GoType{}, fmt.Errorf("codegen: unsupported %s type %q (column %q); add a type override via Options.TypeMapper", label, engine.Name, column.Name)
+		return meta.GoType{}, fmt.Errorf("codegen: unsupported %s type %q (column %q); add a type override via NewDefaultTypeMapper or pin one with sqldef's DataType.Go", label, engine.Name, column.Name)
 	}
 	return applyNullable(gt, column), nil
+}
+
+// columnOverride looks up a name-based override for the column, trying the
+// fully qualified name first and falling back to less specific keys.
+func (m DefaultTypeMapper) columnOverride(table meta.Table, column meta.Column) (meta.GoType, bool) {
+	if len(m.cfg.ColumnOverrides) == 0 {
+		return meta.GoType{}, false
+	}
+	if table.Schema.Name != "" {
+		if gt, ok := m.cfg.ColumnOverrides[table.Schema.Name+"."+table.Name+"."+column.Name]; ok {
+			return gt, true
+		}
+	}
+	if table.Name != "" {
+		if gt, ok := m.cfg.ColumnOverrides[table.Name+"."+column.Name]; ok {
+			return gt, true
+		}
+	}
+	gt, ok := m.cfg.ColumnOverrides[column.Name]
+	return gt, ok
 }
 
 func applyNullable(gt meta.GoType, column meta.Column) meta.GoType {
@@ -69,6 +142,19 @@ func applyNullable(gt meta.GoType, column meta.Column) meta.GoType {
 		gt.Pointer = true
 	}
 	return gt
+}
+
+// tableForDialect returns the built-in SQL→Go type table for the dialect and a
+// human label for error messages, defaulting to PostgreSQL.
+func tableForDialect(dialect string) (map[string]meta.GoType, string) {
+	switch dialect {
+	case "mysql":
+		return mysqlTypes, "MySQL"
+	case "sqlite":
+		return sqliteTypes, "SQLite"
+	default:
+		return pgTypes, "PostgreSQL"
+	}
 }
 
 // pgTypes maps PostgreSQL udt_name values to Go types.
@@ -138,4 +224,28 @@ var mysqlTypes = map[string]meta.GoType{
 	"datetime":   {ImportPath: "time", Name: "time.Time"},
 	"timestamp":  {ImportPath: "time", Name: "time.Time"},
 	"time":       {ImportPath: "time", Name: "time.Time"},
+}
+
+// sqliteTypes maps the engine type names the sqldef registry emits for SQLite
+// (plus the common storage-class spellings) to Go types. SQLite's type affinity
+// is loose, so the mapping keys on the declared type name.
+var sqliteTypes = map[string]meta.GoType{
+	"integer":  {Name: "int64"},
+	"int":      {Name: "int64"},
+	"bigint":   {Name: "int64"},
+	"real":     {Name: "float64"},
+	"float":    {Name: "float64"},
+	"double":   {Name: "float64"},
+	"numeric":  {Name: "string"},
+	"decimal":  {Name: "string"},
+	"boolean":  {Name: "bool"},
+	"text":     {Name: "string"},
+	"varchar":  {Name: "string"},
+	"char":     {Name: "string"},
+	"clob":     {Name: "string"},
+	"json":     {Name: "[]byte"},
+	"blob":     {Name: "[]byte"},
+	"date":     {ImportPath: "time", Name: "time.Time"},
+	"datetime": {ImportPath: "time", Name: "time.Time"},
+	"time":     {ImportPath: "time", Name: "time.Time"},
 }
