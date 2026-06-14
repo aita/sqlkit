@@ -33,7 +33,7 @@ func TestPreloadInChunksByBindParamLimit(t *testing.T) {
 			}}, nil
 		},
 	}
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithPreloadBatchSize(2))
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true), sqlkit.WithPreloadBatchSize(2))
 
 	var users []preUser
 	if err := db.Select(Users.ID).From(Users).Preload(Posts).All(context.Background()).Scan(&users); err != nil {
@@ -149,7 +149,7 @@ func TestInsertReturningWithinLimitIsSingleQuery(t *testing.T) {
 func TestUpdateReturningSplitsByInList(t *testing.T) {
 	// SET name = $1 consumes one param; ChunkSize 2 leaves two ids per statement.
 	fake := returningFake(func(args []any) int { return len(args) - 1 })
-	db := sqlkit.WrapDB(fake.DB())
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true))
 
 	ids := []int64{1, 2, 3, 4, 5}
 	name := "x"
@@ -169,7 +169,7 @@ func TestUpdateReturningSplitsByInList(t *testing.T) {
 
 func TestDeleteReturningSplitsByInList(t *testing.T) {
 	fake := returningFake(func(args []any) int { return len(args) })
-	db := sqlkit.WrapDB(fake.DB())
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true))
 
 	ids := []int64{1, 2, 3, 4, 5}
 	var out []User
@@ -233,7 +233,7 @@ func TestWithAutoChunkFalseExplicitBatchSizeStillSplits(t *testing.T) {
 
 func TestWithSessionAutoChunkDisablesPerSession(t *testing.T) {
 	fake := &sqltest.Fake{}
-	db := sqlkit.WrapDB(fake.DB()) // database: auto-chunk on
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true)) // database: auto-chunk on
 	s := db.NewSession(sqlkit.WithSessionAutoChunk(false))
 	defer s.Close()
 
@@ -292,7 +292,7 @@ func TestPreloadBatchSizeChunksBelowLimit(t *testing.T) {
 			}}, nil
 		},
 	}
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithPreloadBatchSize(2))
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true), sqlkit.WithPreloadBatchSize(2))
 
 	var users []preUser
 	if err := db.Select(Users.ID).From(Users).Preload(Posts).All(context.Background()).Scan(&users); err != nil {
@@ -341,7 +341,7 @@ func TestPreloadBatchSizeZeroUsesHardLimitOnly(t *testing.T) {
 // user-issued Column.In query.
 func TestPreloadBatchSizeDoesNotCapUserSelect(t *testing.T) {
 	fake := idFromArgsFake()
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithPreloadBatchSize(2))
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true), sqlkit.WithPreloadBatchSize(2))
 
 	var users []User
 	if err := db.Select().From(Users).Where(Users.ID.In(1, 2, 3, 4, 5)).All(context.Background()).Scan(&users); err != nil {
@@ -357,7 +357,7 @@ func TestPreloadBatchSizeDoesNotCapUserSelect(t *testing.T) {
 func TestAutoChunkChunkSizeSplitsSelect(t *testing.T) {
 	fake := idFromArgsFake()
 	// The dialect limit is generous, so only the per-query ChunkSize drives the split.
-	db := sqlkit.WrapDB(fake.DB())
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true))
 
 	var users []User
 	if err := db.Select().From(Users).Where(Users.ID.In(1, 2, 3, 4, 5)).
@@ -389,7 +389,7 @@ func TestAutoChunkOffForcesSingleSelect(t *testing.T) {
 
 func TestAutoChunkChunkSizeSplitsDelete(t *testing.T) {
 	fake := &sqltest.Fake{}
-	db := sqlkit.WrapDB(fake.DB())
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true))
 
 	if _, err := db.Delete(Users).Where(Users.ID.In(1, 2, 3, 4, 5)).
 		AutoChunk(sqlkit.ChunkSize(2)).Exec(context.Background()); err != nil {

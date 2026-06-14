@@ -475,7 +475,7 @@ func (s *Scope) insertWithWriteback(ctx context.Context, ts *tableState, row any
 
 func (s *Scope) flushManaged(ctx context.Context, ts *tableState) error {
 	auto, limit := s.splitConfig()
-	bulk := auto && len(ts.table.PrimaryKey()) == 1
+	bulk := (auto || s.batchSize > 0) && len(ts.table.PrimaryKey()) == 1
 	var pending []pendingUpdate
 	for _, tr := range ts.managed {
 		pk, err := sqlkit.PrimaryKeyValues(ts.table, tr.ptr)
@@ -506,7 +506,7 @@ func (s *Scope) flushManaged(ctx context.Context, ts *tableState) error {
 
 func (s *Scope) flushUpdates(ctx context.Context, ts *tableState) error {
 	auto, limit := s.splitConfig()
-	bulk := auto && len(ts.table.PrimaryKey()) == 1
+	bulk := (auto || s.batchSize > 0) && len(ts.table.PrimaryKey()) == 1
 	var pending []pendingUpdate
 	for _, row := range ts.updates {
 		pk, err := sqlkit.PrimaryKeyValues(ts.table, row)

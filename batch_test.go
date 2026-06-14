@@ -99,7 +99,7 @@ func idFromArgsFake() *sqltest.Fake {
 
 func TestSelectInChunksByBindParamLimit(t *testing.T) {
 	fake := idFromArgsFake()
-	db := sqlkit.WrapDB(fake.DB())
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true))
 
 	ids := []int64{1, 2, 3, 4, 5, 6, 7}
 	var users []User
@@ -126,7 +126,7 @@ func TestSelectInChunksByBindParamLimit(t *testing.T) {
 
 func TestSelectInChunksRunUnderRepeatableReadSnapshot(t *testing.T) {
 	fake := idFromArgsFake()
-	db := sqlkit.WrapDB(fake.DB())
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true))
 
 	ids := []int64{1, 2, 3, 4, 5, 6, 7}
 	var users []User
@@ -144,7 +144,7 @@ func TestSelectInChunksRunUnderRepeatableReadSnapshot(t *testing.T) {
 
 func TestSelectInChunksWithoutSnapshotRunIndependently(t *testing.T) {
 	fake := idFromArgsFake()
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithBatchReadSnapshot(false))
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true), sqlkit.WithBatchReadSnapshot(false))
 
 	ids := []int64{1, 2, 3, 4, 5, 6, 7}
 	var users []User
@@ -265,7 +265,7 @@ func TestSelectInCombinedWithFilterToSQLUnchanged(t *testing.T) {
 
 func TestUpdateInChunksByBindParamLimit(t *testing.T) {
 	fake := &sqltest.Fake{}
-	db := sqlkit.WrapDB(fake.DB())
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true))
 
 	ids := []int64{1, 2, 3, 4, 5, 6, 7}
 	name := "x"
@@ -293,7 +293,7 @@ func TestUpdateInChunksByBindParamLimit(t *testing.T) {
 
 func TestDeleteInChunksByBindParamLimit(t *testing.T) {
 	fake := &sqltest.Fake{}
-	db := sqlkit.WrapDB(fake.DB())
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true))
 
 	ids := []int64{1, 2, 3, 4, 5, 6, 7}
 	if _, err := db.Delete(Users).Where(Users.ID.In(ids...)).AutoChunk(sqlkit.ChunkSize(3)).Exec(context.Background()); err != nil {
@@ -314,7 +314,7 @@ func TestDeleteInChunksByBindParamLimit(t *testing.T) {
 // opening a new one.
 func TestUpdateInChunksJoinsSessionTransaction(t *testing.T) {
 	fake := &sqltest.Fake{}
-	db := sqlkit.WrapDB(fake.DB())
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true))
 	session := db.NewSession()
 	t.Cleanup(func() { _ = session.Close() })
 
@@ -337,7 +337,7 @@ func TestUpdateInChunksJoinsSessionTransaction(t *testing.T) {
 // the same way, each chunk re-running the full statement for its id subset.
 func TestReferenceUpdateInChunks(t *testing.T) {
 	fake := &sqltest.Fake{}
-	db := sqlkit.WrapDB(fake.DB())
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true))
 
 	ids := []int64{1, 2, 3, 4, 5, 6, 7}
 	_, err := db.Update(Posts).
@@ -370,6 +370,7 @@ func TestReferenceUpdateInChunks(t *testing.T) {
 func TestBatchWriteSnapshotUsesRepeatableRead(t *testing.T) {
 	fake := &sqltest.Fake{}
 	db := sqlkit.WrapDB(fake.DB(),
+		sqlkit.WithAutoChunk(true),
 		sqlkit.WithBatchWriteSnapshot(true))
 
 	ids := []int64{1, 2, 3, 4, 5}
@@ -390,7 +391,7 @@ func TestBatchWriteSnapshotUsesRepeatableRead(t *testing.T) {
 
 func TestBatchReadSnapshotIsReadOnlyRepeatableRead(t *testing.T) {
 	fake := idFromArgsFake()
-	db := sqlkit.WrapDB(fake.DB())
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true))
 
 	ids := []int64{1, 2, 3, 4, 5}
 	var users []User
@@ -420,7 +421,7 @@ func TestSplitStatementsPassThroughInterceptors(t *testing.T) {
 		}
 		return stmt, nil
 	})
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithInterceptor(count))
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true), sqlkit.WithInterceptor(count))
 
 	ids := []int64{1, 2, 3, 4, 5, 6, 7}
 	var users []User

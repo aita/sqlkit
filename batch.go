@@ -155,7 +155,9 @@ func resolveBindParamLimit(dialect sql.Dialect) int {
 //
 // maxChunk, when positive, additionally caps the values per chunk (the per-query
 // AutoChunk size or the preload default) — it can only make chunks smaller than
-// the bind-parameter limit allows, never larger.
+// the bind-parameter limit allows, never larger. With automatic splitting off
+// the limit is 0 and the IN list runs as a single statement, so a per-query
+// AutoChunk(ChunkSize) only takes effect while splitting is enabled.
 func splitInStatements(ex executorBinding, batch *batchIn, maxChunk int, compile func(in sql.Expression) (string, []any, error)) (stmts []compiledStmt, ok bool, err error) {
 	if batch == nil || ex == nil {
 		return nil, false, nil

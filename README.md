@@ -648,12 +648,13 @@ Bulk inserts and large `IN` lists split themselves so a single statement never
 exceeds the database's bind-parameter limit (the driver's `BindParamLimiter`
 capability — 65535 for PostgreSQL and MySQL).
 
-Automatic splitting is **on by default**: a bulk insert sizes itself to that
-limit with no extra configuration. `WithAutoChunk(false)` turns it off, and you
-can still split a single insert by hand with `BatchSize(n)`.
+Automatic splitting is **off by default**: pass `WithAutoChunk(true)` to enable
+it, after which a bulk insert sizes itself to that limit with no extra
+configuration. With it off you can still split a single insert by hand with
+`BatchSize(n)`.
 
 ```go
-db, err := sqlkit.Open("pgx", dsn)
+db, err := sqlkit.Open("pgx", dsn, sqlkit.WithAutoChunk(true))
 // 100k rows × 5 columns is split into statements of ≤ 65535 parameters.
 _, err = db.Insert(appdb.Users).Values(users).Exec(ctx)
 ```

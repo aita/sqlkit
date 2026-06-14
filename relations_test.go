@@ -752,7 +752,7 @@ func TestPreloadThroughSessionUsesItsChunkSize(t *testing.T) {
 			}}, nil
 		},
 	}
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithPreloadBatchSize(2))
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true), sqlkit.WithPreloadBatchSize(2))
 	session := db.NewSession()
 	defer session.Close()
 

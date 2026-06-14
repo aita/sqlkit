@@ -567,7 +567,9 @@ func TestRemoveBatchSizeChunksDeletes(t *testing.T) {
 
 func TestExplicitUpdateBatchesViaValuesJoin(t *testing.T) {
 	fake := &sqltest.Fake{}
-	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()))
+	// Auto-split is off by default; enable it so multiple row updates combine
+	// into one VALUES-join statement.
+	scope := uow.NewScope(sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true)))
 	if err := scope.Update(newUsers(),
 		userRow{ID: 1, Email: "a@x", Name: "A"},
 		userRow{ID: 2, Email: "b@x", Name: "B"},
@@ -621,8 +623,8 @@ func TestExplicitUpdateBulkChunksByBatchSize(t *testing.T) {
 
 func TestScopeAutoChunkFalseFlushesPerRow(t *testing.T) {
 	fake := &sqltest.Fake{}
-	// The executor enables auto-chunk by default; the scope overrides it off.
-	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()), uow.WithAutoChunk(false))
+	// The executor has auto-chunk enabled; the scope overrides it off.
+	scope := uow.NewScope(sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true)), uow.WithAutoChunk(false))
 	for _, id := range []int64{1, 2, 3} {
 		if err := scope.Remove(newUsers(), userRow{ID: id}); err != nil {
 			t.Fatal(err)
