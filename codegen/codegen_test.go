@@ -293,6 +293,57 @@ func TestDTONameCollisionForSingularTable(t *testing.T) {
 	}
 }
 
+func TestCustomBindingName(t *testing.T) {
+	// BindingName overrides the binding's base identifier; every binding type
+	// and var name is formed off it.
+	body := string(generateSingle(t, fixtureTables(), Options{
+		PackageName: "blogdb",
+		BindingName: func(table meta.Table) string { return goName(singular(table.Name)) + "Tbl" },
+	}))
+	for _, want := range []string{
+		"type UserTblTable struct",
+		"var UserTbl = func() UserTblTable",
+		"func (t UserTblTable) As(alias string) UserTblTable",
+		"var _ sqlkit.Table = UserTbl",
+		"type PostTblTable struct",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("expected renamed binding %q:\n%s", want, body)
+		}
+	}
+	// The default-derived names must no longer appear.
+	for _, banned := range []string{"type UsersTable struct", "var Users ="} {
+		if strings.Contains(body, banned) {
+			t.Errorf("default binding name %q should be replaced:\n%s", banned, body)
+		}
+	}
+}
+
+func TestCustomBindingNameWithRelations(t *testing.T) {
+	// In the relation-aware layout, BindingName must flow through the columns
+	// type, constructor, relation types, and relation target references so the
+	// generated code stays consistent and compiles.
+	body := string(generateSingle(t, relationFixtureTables(), Options{
+		PackageName:   "blogdb",
+		EmitRelations: true,
+		BindingName:   func(table meta.Table) string { return "Tbl" + goName(table.Name) },
+	}))
+	for _, want := range []string{
+		"type TblUsersColumns struct",
+		"func newTblUsersColumns() TblUsersColumns",
+		"type TblUsersTable struct",
+		"type TblUsersRels struct",
+		"type TblUsersFilter struct",
+		// Reverse relation on users targets posts: target columns and ctor use
+		// the renamed posts binding.
+		"TblPostsColumns: newTblPostsColumns()",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("expected renamed relation binding %q:\n%s", want, body)
+		}
+	}
+}
+
 func TestCustomTypeMapper(t *testing.T) {
 	mapper := NewDefaultTypeMapper(TypeMapperConfig{Overrides: map[string]GoType{
 		"timestamptz": {ImportPath: "time", Name: "time.Time"},

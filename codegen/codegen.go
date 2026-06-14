@@ -79,6 +79,16 @@ type Options struct {
 	// collision-avoiding name (e.g. table "users" -> "User"). When the derived
 	// name collides with a binding identifier, "Row" is appended.
 	DTOName func(table meta.Table) string
+
+	// BindingName derives the table binding's base Go identifier from a table.
+	// Defaults to the exported camel-case of the table name (e.g. table "users"
+	// -> "Users"). The returned name backs every binding identifier: the package
+	// var ("Users"), its table type ("UsersTable"), and—in the relation-aware
+	// layout—the columns type ("UsersColumns"), its constructor
+	// ("newUsersColumns"), the relations type ("UsersRels"), and the filter
+	// bundle ("UsersFilter"). It is the caller's responsibility to keep the
+	// returned names valid and distinct across tables.
+	BindingName func(table meta.Table) string
 }
 
 const sqlkitImport = "github.com/aita/sqlkit"
@@ -207,6 +217,10 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 	if dtoName == nil {
 		dtoName = defaultDTOName
 	}
+	bindingName := opts.BindingName
+	if bindingName == nil {
+		bindingName = defaultBindingName
+	}
 
 	tables := filterTables(md.Tables, opts.Tables)
 	if len(tables) == 0 {
@@ -216,7 +230,7 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 	// Reserve binding identifiers so generated DTO names never collide.
 	reserved := map[string]bool{}
 	for _, table := range tables {
-		varName := goName(table.Name)
+		varName := bindingName(table)
 		reserved[varName] = true
 		reserved[varName+"Table"] = true
 	}
@@ -224,7 +238,7 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 	generator := GeneratorID()
 	models := make([]*tableModel, 0, len(tables))
 	for _, table := range tables {
-		tm, err := buildTable(table, dialect, mapper)
+		tm, err := buildTable(table, dialect, mapper, bindingName)
 		if err != nil {
 			return nil, err
 		}
@@ -241,7 +255,7 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 	}
 
 	if opts.EmitRelations {
-		relations := buildRelations(tables)
+		relations := buildRelations(tables, bindingName)
 		for i, tm := range models {
 			tm.Relational = true
 			tm.Relations = relations[qualified(tables[i].Schema.Name, tables[i].Name)]
@@ -251,9 +265,11 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 	return assemble(models, opts)
 }
 
-// buildTable builds the binding model for a single table.
-func buildTable(table meta.Table, dialect string, mapper TypeMapper) (*tableModel, error) {
-	varName := goName(table.Name)
+// buildTable builds the binding model for a single table. bindingName derives
+// the binding's base identifier, off which every binding type and var name is
+// formed.
+func buildTable(table meta.Table, dialect string, mapper TypeMapper, bindingName func(meta.Table) string) (*tableModel, error) {
+	varName := bindingName(table)
 	tm := &tableModel{
 		TypeName:    varName + "Table",
 		VarName:     varName,
@@ -300,6 +316,10 @@ func docLines(comment string) []string {
 
 func defaultDTOName(table meta.Table) string {
 	return goName(singular(table.Name))
+}
+
+func defaultBindingName(table meta.Table) string {
+	return goName(table.Name)
 }
 
 func filterTables(tables []meta.Table, only []string) []meta.Table {
