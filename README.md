@@ -96,6 +96,32 @@ err := db.Select().From(appdb.Jobs).Where(appdb.Jobs.Status.Eq("ready")).
     Limit(10).ForUpdate(sqlkit.SkipLocked()).All(ctx).Scan(&jobs)
 ```
 
+For keyset (cursor) pagination — a page that costs the same at any depth and
+does not shift when rows are inserted or deleted — configure a `Paginator` with
+the sort keys and a page size, then walk it with cursors. The first page uses
+`sqlkit.Start()`; each returned `Page` hands out the cursor for its neighbours,
+which you pass straight back:
+
+```go
+pager := sqlkit.NewPaginator(
+    sqlkit.KeyDesc(appdb.Users.CreatedAt),
+    sqlkit.KeyAsc(appdb.Users.ID), // a unique tie-breaker, so the order is total
+).Limit(20)
+
+var users []MyUserDTO
+page, err := pager.Paginate(ctx, db.Select().From(appdb.Users), &users, sqlkit.Start())
+if page.HasNext {
+    page, err = pager.Paginate(ctx, db.Select().From(appdb.Users), &users, page.Next())
+}
+```
+
+The cursor is opaque and carries its own direction, so it cannot be applied the
+wrong way. To cross an HTTP request, render it with `page.Next().String()` and
+rebuild it with `sqlkit.ParseCursor(token)` (an empty token is the first page) —
+treat the string as a token, not a value to parse. The Paginator owns cursor
+encoding; supply `WithCodec` to sign or encrypt the envelope. End the keys with a
+unique column (typically the primary key) so the order is total.
+
 ### Predicates and filters
 
 Typed columns carry the predicate vocabulary directly: `Eq`/`Ne`/`Lt`/`Le`/
