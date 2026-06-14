@@ -344,6 +344,25 @@ func TestCustomBindingNameWithRelations(t *testing.T) {
 	}
 }
 
+func TestBindingNameEmptyFallsBackToDefault(t *testing.T) {
+	// Returning "" for a table defers to the default derivation; a non-empty
+	// return renames just that table.
+	body := string(generateSingle(t, fixtureTables(), Options{
+		PackageName: "blogdb",
+		BindingName: func(table meta.Table) string {
+			if table.Name == "users" {
+				return "Account"
+			}
+			return "" // posts falls back to the default
+		},
+	}))
+	for _, want := range []string{"type AccountTable struct", "var Account = func() AccountTable", "type PostsTable struct"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("expected %q in output:\n%s", want, body)
+		}
+	}
+}
+
 func TestCustomTypeMapper(t *testing.T) {
 	mapper := NewDefaultTypeMapper(TypeMapperConfig{Overrides: map[string]GoType{
 		"timestamptz": {ImportPath: "time", Name: "time.Time"},

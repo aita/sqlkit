@@ -81,13 +81,17 @@ type Options struct {
 	DTOName func(table meta.Table) string
 
 	// BindingName derives the table binding's base Go identifier from a table.
-	// Defaults to the exported camel-case of the table name (e.g. table "users"
-	// -> "Users"). The returned name backs every binding identifier: the package
-	// var ("Users"), its table type ("UsersTable"), and—in the relation-aware
+	// The returned name backs every binding identifier: the package var
+	// ("Users"), its table type ("UsersTable"), and—in the relation-aware
 	// layout—the columns type ("UsersColumns"), its constructor
 	// ("newUsersColumns"), the relations type ("UsersRels"), and the filter
 	// bundle ("UsersFilter"). It is the caller's responsibility to keep the
 	// returned names valid and distinct across tables.
+	//
+	// Returning the empty string for a table (or leaving BindingName nil) falls
+	// back to the default: the exported camel-case of the table name (e.g. table
+	// "users" -> "Users"). A decl catalog exposes its declared overrides as a
+	// ready-made hook via Catalog.BindingNames.
 	BindingName func(table meta.Table) string
 }
 
@@ -217,9 +221,16 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 	if dtoName == nil {
 		dtoName = defaultDTOName
 	}
-	bindingName := opts.BindingName
-	if bindingName == nil {
-		bindingName = defaultBindingName
+	// bindingName resolves each table's binding identifier: the Options.BindingName
+	// hook when it returns a non-empty name, otherwise the default derived from
+	// the table name. A nil hook (or an empty return) always falls back.
+	bindingName := func(table meta.Table) string {
+		if opts.BindingName != nil {
+			if name := opts.BindingName(table); name != "" {
+				return name
+			}
+		}
+		return goName(table.Name)
 	}
 
 	tables := filterTables(md.Tables, opts.Tables)
@@ -316,10 +327,6 @@ func docLines(comment string) []string {
 
 func defaultDTOName(table meta.Table) string {
 	return goName(singular(table.Name))
-}
-
-func defaultBindingName(table meta.Table) string {
-	return goName(table.Name)
 }
 
 func filterTables(tables []meta.Table, only []string) []meta.Table {

@@ -90,6 +90,7 @@ func main() {
 		EmitDTO:         {{.EmitDTO}},
 		DTOSeparateFile: {{.DTOSeparateFile}},
 		Tables:          {{.Tables}},
+		BindingName:     schema.{{.Var}}.BindingNames(),
 	})
 	if err != nil {
 		log.Fatal(err)

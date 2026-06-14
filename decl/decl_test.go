@@ -371,6 +371,69 @@ func TestGenerate(t *testing.T) {
 	}
 }
 
+func TestBindingName(t *testing.T) {
+	catalog := decl.NewCatalog()
+	catalog.Table("tbl_person",
+		decl.BindingName("Person"),
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("name", decl.Text),
+	)
+	catalog.Table("widgets",
+		decl.Column("id", decl.BigInt, decl.PrimaryKey()),
+	)
+	md := buildCatalog(t, catalog)
+
+	// The override lives on the catalog (a codegen hint), not on the schema model.
+	bindingName := catalog.BindingNames()
+	if bindingName == nil {
+		t.Fatal("BindingNames() should be non-nil when an override is declared")
+	}
+	if got := bindingName(md.Tables[0]); got != "Person" {
+		t.Errorf("BindingNames() for tbl_person = %q, want Person", got)
+	}
+	if got := bindingName(md.Tables[1]); got != "" {
+		t.Errorf("BindingNames() for widgets = %q, want empty (default)", got)
+	}
+
+	files, err := codegen.Generate(md, codegen.Options{PackageName: "appdb", BindingName: bindingName})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	body := string(files[0].Content)
+	for _, want := range []string{
+		"type PersonTable struct",
+		"var Person = func() PersonTable",
+		"type WidgetsTable struct", // no override -> default name
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("generated binding should contain %q:\n%s", want, body)
+		}
+	}
+	// The SQL table name is unaffected — only the Go identifier changes.
+	if !strings.Contains(body, `Name: "tbl_person"`) {
+		t.Errorf("SQL table name should stay tbl_person:\n%s", body)
+	}
+}
+
+func TestBindingNamesNilWithoutOverrides(t *testing.T) {
+	catalog := decl.NewCatalog()
+	catalog.Table("users", decl.Column("id", decl.BigInt, decl.PrimaryKey()))
+	if catalog.BindingNames() != nil {
+		t.Error("BindingNames() should be nil when no table declares an override")
+	}
+}
+
+func TestBindingNameRequiresName(t *testing.T) {
+	catalog := decl.NewCatalog()
+	catalog.Table("items",
+		decl.BindingName(""),
+		decl.Column("id", decl.BigInt, decl.PrimaryKey()),
+	)
+	if _, err := catalog.Build(); err == nil {
+		t.Fatal("empty BindingName should be a declaration error")
+	}
+}
+
 func TestDDL(t *testing.T) {
 	sql, err := buildCatalog(t, blogCatalog()).CreateSQL(querysql.PostgreSQLDialect{})
 	if err != nil {
