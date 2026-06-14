@@ -66,8 +66,9 @@ import (
 // meta.Tables declared on it, plus any declaration errors, and Builds them
 // into a meta.Metadata. Create one with NewCatalog.
 type Catalog struct {
-	defaultSchema string   // schema Catalog.Table declares into ("" = unnamed)
-	schemaNames   []string // distinct schema names in first-seen order
+	defaultSchema string          // schema Catalog.Table declares into ("" = unnamed)
+	schemaNames   []string        // distinct schema names in first-seen order
+	createSchemas map[string]bool // schema name -> managed by migrations (CREATE/DROP SCHEMA)
 	tables        []meta.Table
 	registered    map[string]bool // schema\x00name -> declared, for FK target checks
 	errs          []error
@@ -87,7 +88,7 @@ func DefaultSchema(name string) CatalogOption {
 // point of the DSL: var Catalog = sqldef.NewCatalog(). Options configure
 // catalog-wide defaults such as DefaultSchema.
 func NewCatalog(opts ...CatalogOption) *Catalog {
-	c := &Catalog{registered: map[string]bool{}}
+	c := &Catalog{registered: map[string]bool{}, createSchemas: map[string]bool{}}
 	for _, opt := range opts {
 		opt(c)
 	}
@@ -102,8 +103,37 @@ func (d *Catalog) fail(format string, args ...any) {
 
 // Schema returns a handle for the named schema (PostgreSQL schema / MySQL
 // database). Declaring tables through it qualifies them with the schema name.
-func (d *Catalog) Schema(name string) *Schema {
+//
+// By default the schema is assumed to already exist and is not managed by
+// sqlkit. Pass Create to put it under migration management: the generated
+// CreateSQL emits a CREATE SCHEMA IF NOT EXISTS for it and DropSQL a DROP
+// SCHEMA. sqlkit never creates the default schema (Catalog.Table's schema),
+// which is assumed to exist; mark additional schemas explicitly.
+func (d *Catalog) Schema(name string, opts ...SchemaOption) *Schema {
+	cfg := schemaConfig{}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	if cfg.create && name != "" {
+		d.createSchemas[name] = true
+	}
 	return &Schema{catalog: d, name: name}
+}
+
+// SchemaOption configures a schema declared with Catalog.Schema.
+type SchemaOption func(*schemaConfig)
+
+type schemaConfig struct {
+	create bool
+}
+
+// Create marks the schema for migration management, so CreateSQL emits a CREATE
+// SCHEMA IF NOT EXISTS for it (and DropSQL a DROP SCHEMA). Without it a schema
+// is assumed to already exist and is left alone:
+//
+//	Catalog.Schema("audit", sqldef.Create()).Table("log", ...)
+func Create() SchemaOption {
+	return func(c *schemaConfig) { c.create = true }
 }
 
 // Table declares a table in the catalog's default schema (unnamed unless set
@@ -203,7 +233,11 @@ func (b *tableBuilder) fail(format string, args ...any) {
 // constraint names. Type resolution is deferred to the generators.
 func (b *tableBuilder) build() meta.Table {
 	d := b.catalog
-	mt := meta.Table{Schema: meta.Schema{Name: b.schema}, Name: b.name, Comment: b.comment}
+	mt := meta.Table{
+		Schema:  meta.Schema{Name: b.schema, Create: d.createSchemas[b.schema]},
+		Name:    b.name,
+		Comment: b.comment,
+	}
 	if b.name != "" && len(b.columns) == 0 {
 		d.fail("table %q declares no columns", b.name)
 	}

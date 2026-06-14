@@ -22,15 +22,22 @@ type Metadata struct {
 	Tables []Table
 }
 
-// Schemas returns the distinct schemas of the tables, in first-seen order.
+// Schemas returns the distinct schemas of the tables, in first-seen order. When
+// the same schema name appears with differing Create flags (e.g. one table
+// marks it for creation and another does not), the result reports Create=true:
+// the schema is managed if any of its tables ask for it.
 func (m Metadata) Schemas() []Schema {
 	var out []Schema
-	seen := map[string]bool{}
+	index := map[string]int{}
 	for _, t := range m.Tables {
-		if !seen[t.Schema.Name] {
-			seen[t.Schema.Name] = true
-			out = append(out, t.Schema)
+		if i, ok := index[t.Schema.Name]; ok {
+			if t.Schema.Create {
+				out[i].Create = true
+			}
+			continue
 		}
+		index[t.Schema.Name] = len(out)
+		out = append(out, t.Schema)
 	}
 	return out
 }
@@ -39,8 +46,15 @@ func (m Metadata) Schemas() []Schema {
 // belongs to. It is a small value, not a container: construct
 // meta.Schema{Name: "public"} wherever one is needed. The zero value is the
 // unnamed default schema, which generates unqualified names.
+//
+// Create marks the schema for migration management: when set (and the schema is
+// named), Metadata.CreateSQL emits a CREATE SCHEMA for it and DropSQL a DROP
+// SCHEMA. It defaults to false, so sqlkit never creates a schema it was not
+// told to — in particular the default schema, which is assumed to already
+// exist.
 type Schema struct {
-	Name string
+	Name   string
+	Create bool
 }
 
 // Table is a database table. Schema is the schema it belongs to.

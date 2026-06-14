@@ -74,9 +74,7 @@ func TestDDLPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSQL() error = %v", err)
 	}
-	want := `CREATE SCHEMA IF NOT EXISTS "public";
-
-CREATE TABLE "public"."users" (
+	want := `CREATE TABLE "public"."users" (
     "id" bigserial,
     "email" varchar(255) NOT NULL,
     "name" text,
@@ -157,13 +155,13 @@ func TestDDLUnqualified(t *testing.T) {
 	}
 }
 
-// TestDDLSchemaDependency verifies CreateSQL declares each distinct named schema
-// (once, in first-seen order) before the tables that depend on it, and DropSQL
-// drops the schemas last, after the tables they hold.
+// TestDDLSchemaDependency verifies CreateSQL declares each distinct schema
+// marked for creation (once, in first-seen order) before the tables that depend
+// on it, and DropSQL drops the schemas last, after the tables they hold.
 func TestDDLSchemaDependency(t *testing.T) {
 	intType := meta.Of("postgres", "int8", 0, 0, 0)
-	auth := meta.Schema{Name: "auth"}
-	billing := meta.Schema{Name: "billing"}
+	auth := meta.Schema{Name: "auth", Create: true}
+	billing := meta.Schema{Name: "billing", Create: true}
 	md := meta.Metadata{
 		Tables: []meta.Table{
 			{Schema: auth, Name: "users", Columns: []meta.Column{{Name: "id", Type: intType, PrimaryKey: true}}},
@@ -198,6 +196,45 @@ func TestDDLSchemaDependency(t *testing.T) {
 	drop := md.DropSQL(pg)
 	if last := strings.LastIndex(drop, "DROP TABLE"); last > strings.Index(drop, "DROP SCHEMA") {
 		t.Errorf("DROP SCHEMA must follow all DROP TABLE statements:\n%s", drop)
+	}
+}
+
+// TestDDLSchemaCreateGating verifies a named schema is created only when marked
+// Create — a schema assumed to already exist (Create=false) is left alone — and
+// that Schemas merges the flag when a name appears both ways.
+func TestDDLSchemaCreateGating(t *testing.T) {
+	intType := meta.Of("postgres", "int8", 0, 0, 0)
+	pg := mustDialect(t, "postgres")
+
+	// A named but unmanaged schema gets no CREATE/DROP SCHEMA.
+	unmanaged := meta.Metadata{Tables: []meta.Table{
+		{Schema: meta.Schema{Name: "public"}, Name: "t", Columns: []meta.Column{{Name: "id", Type: intType, PrimaryKey: true}}},
+	}}
+	got, err := unmanaged.CreateSQL(pg)
+	if err != nil {
+		t.Fatalf("CreateSQL() error = %v", err)
+	}
+	if strings.Contains(got, "CREATE SCHEMA") {
+		t.Errorf("unmanaged schema should not emit CREATE SCHEMA:\n%s", got)
+	}
+	if strings.Contains(unmanaged.DropSQL(pg), "DROP SCHEMA") {
+		t.Errorf("unmanaged schema should not emit DROP SCHEMA")
+	}
+
+	// Mixed Create flags on the same schema name: managed if any table asks.
+	mixed := meta.Metadata{Tables: []meta.Table{
+		{Schema: meta.Schema{Name: "audit"}, Name: "a", Columns: []meta.Column{{Name: "id", Type: intType, PrimaryKey: true}}},
+		{Schema: meta.Schema{Name: "audit", Create: true}, Name: "b", Columns: []meta.Column{{Name: "id", Type: intType, PrimaryKey: true}}},
+	}}
+	if schemas := mixed.Schemas(); len(schemas) != 1 || !schemas[0].Create {
+		t.Errorf("Schemas() = %+v, want one schema with Create=true", schemas)
+	}
+	got, err = mixed.CreateSQL(pg)
+	if err != nil {
+		t.Fatalf("CreateSQL() error = %v", err)
+	}
+	if c := strings.Count(got, "CREATE SCHEMA"); c != 1 {
+		t.Errorf("CREATE SCHEMA count = %d, want 1:\n%s", c, got)
 	}
 }
 
@@ -287,8 +324,6 @@ func TestDropDDLPostgres(t *testing.T) {
 DROP TABLE IF EXISTS "public"."users";
 
 DROP TABLE IF EXISTS "public"."posts";
-
-DROP SCHEMA IF EXISTS "public";
 `
 	if got != want {
 		t.Errorf("DropSQL() =\n%s\nwant\n%s", got, want)
@@ -300,8 +335,7 @@ func TestDropDDLMySQL(t *testing.T) {
 	got := md.DropSQL(mustDialect(t, "mysql"))
 	want := "ALTER TABLE `public`.`posts` DROP FOREIGN KEY `fk_posts_user_id`;\n\n" +
 		"DROP TABLE IF EXISTS `public`.`users`;\n\n" +
-		"DROP TABLE IF EXISTS `public`.`posts`;\n\n" +
-		"DROP SCHEMA IF EXISTS `public`;\n"
+		"DROP TABLE IF EXISTS `public`.`posts`;\n"
 	if got != want {
 		t.Errorf("DropSQL() =\n%s\nwant\n%s", got, want)
 	}
