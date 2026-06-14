@@ -164,6 +164,22 @@ func TestSourcelessSelect(t *testing.T) {
 	assertSQL(t, Select(Raw("1"), Raw("2")), `SELECT 1, 2`, nil)
 }
 
+func TestSelectQualifiedStar(t *testing.T) {
+	query := Select(StarOf("users"), Col("orgs.name")).
+		From(users).
+		Join(orgs, Eq(Col("users.org_id"), Col("orgs.id")))
+
+	assertSQL(t, query,
+		`SELECT "users".*, "orgs"."name" FROM "public"."users" JOIN "orgs" ON ("users"."org_id" = "orgs"."id")`,
+		nil)
+}
+
+func TestSelectUnqualifiedStar(t *testing.T) {
+	query := Select(Star()).From(users)
+
+	assertSQL(t, query, `SELECT * FROM "public"."users"`, nil)
+}
+
 func TestSelectStarWithoutSourceFails(t *testing.T) {
 	if _, _, err := Select().ToSQL(PostgreSQLDialect{}); err == nil {
 		t.Fatal("SELECT * without FROM compiled, want error")
