@@ -8,11 +8,15 @@ import (
 )
 
 // CreateSQL returns the SQL that creates the whole schema for dialect d (it
-// does not touch a database): CREATE TABLE statements with primary keys and
-// CHECK constraints, then CREATE INDEX statements, then ALTER TABLE statements
-// for foreign keys (emitted after all tables so declaration order never
-// matters), then comments. Catalogs built with the sqldef package and schemas
-// read by the inspector both feed it through the same model.
+// does not touch a database): a CREATE SCHEMA IF NOT EXISTS for each distinct
+// schema marked for creation (Schema.Create) first — so the tables that live in
+// them never reference a missing schema — then CREATE TABLE statements with
+// primary keys and CHECK constraints, then CREATE INDEX statements, then ALTER
+// TABLE statements for foreign keys (emitted after all tables so declaration
+// order never matters), then comments. Schemas not marked Create (including the
+// default schema) are assumed to already exist and are left alone. Catalogs
+// built with the sqldef package and schemas read by the inspector both feed it
+// through the same model.
 //
 // The statements are built as sql-package DDL nodes (the DDL side of the SQL
 // DSL) and compiled through the dialect, so meta, the migrate diff engine, and
@@ -25,6 +29,16 @@ import (
 // has no type on the dialect or a default/check expression cannot be compiled.
 func (md Metadata) CreateSQL(d sql.Dialect) (string, error) {
 	var stmts []string
+	for _, s := range md.Schemas() {
+		if !s.Create || s.Name == "" {
+			continue
+		}
+		out, _, err := s.CreateStatement().ToSQL(d)
+		if err != nil {
+			return "", err
+		}
+		stmts = append(stmts, out)
+	}
 	for _, table := range md.Tables {
 		stmt, err := table.CreateSQL(d)
 		if err != nil {
@@ -53,8 +67,12 @@ func (md Metadata) CreateSQL(d sql.Dialect) (string, error) {
 // DropSQL returns the SQL that tears down everything CreateSQL creates,
 // for dialect d (it does not touch a database): it drops the foreign keys first
 // (so table drop order never matters), then drops the tables, which also drops
-// their indexes. It is the inverse of CreateSQL — run it before regenerating
-// the schema.
+// their indexes, and finally a DROP SCHEMA IF EXISTS for each distinct schema
+// marked for creation (Schema.Create), after its tables so the schema is empty
+// by then. Schemas that CreateSQL leaves alone (the default schema and any not
+// marked Create) are not dropped. It is the inverse of CreateSQL — run it before
+// regenerating the schema. On MySQL, where a schema is a database, dropping it
+// drops the database.
 func (md Metadata) DropSQL(d sql.Dialect) string {
 	var stmts []string
 	for _, table := range md.Tables {
@@ -65,7 +83,26 @@ func (md Metadata) DropSQL(d sql.Dialect) string {
 	for _, table := range md.Tables {
 		stmts = append(stmts, table.DropSQL(d))
 	}
+	for _, s := range md.Schemas() {
+		if !s.Create || s.Name == "" {
+			continue
+		}
+		out, _, _ := s.DropStatement().ToSQL(d)
+		stmts = append(stmts, out)
+	}
 	return strings.Join(stmts, "\n\n") + "\n"
+}
+
+// CreateStatement builds the CREATE SCHEMA IF NOT EXISTS DDL node for the
+// schema. The unnamed default schema (empty Name) has no statement to build —
+// CreateSQL skips it, leaving its tables unqualified.
+func (s Schema) CreateStatement() sql.CreateSchemaStmt {
+	return sql.CreateSchema(s.Name).IfNotExists()
+}
+
+// DropStatement builds the DROP SCHEMA IF EXISTS DDL node for the schema.
+func (s Schema) DropStatement() sql.DropSchemaStmt {
+	return sql.DropSchema(s.Name).IfExists()
 }
 
 // SQLTable returns the sql-package table reference for the table.

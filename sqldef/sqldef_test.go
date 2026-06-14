@@ -79,6 +79,44 @@ func TestBuild(t *testing.T) {
 	}
 }
 
+func TestSchemaCreateOption(t *testing.T) {
+	catalog := sqldef.NewCatalog()
+	// A plain schema is assumed to exist; a Create schema is managed.
+	catalog.Schema("public").Table("users",
+		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey()),
+	)
+	catalog.Schema("audit", sqldef.Create()).Table("log",
+		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey()),
+	)
+	md := buildCatalog(t, catalog)
+
+	byName := map[string]meta.Schema{}
+	for _, s := range md.Schemas() {
+		byName[s.Name] = s
+	}
+	if byName["public"].Create {
+		t.Errorf("public schema should not be marked Create")
+	}
+	if !byName["audit"].Create {
+		t.Errorf("audit schema should be marked Create")
+	}
+
+	pg, err := querysql.DialectByName("postgres")
+	if err != nil {
+		t.Fatalf("DialectByName() error = %v", err)
+	}
+	got, err := md.CreateSQL(pg)
+	if err != nil {
+		t.Fatalf("CreateSQL() error = %v", err)
+	}
+	if !strings.Contains(got, `CREATE SCHEMA IF NOT EXISTS "audit";`) {
+		t.Errorf("expected CREATE SCHEMA for audit:\n%s", got)
+	}
+	if strings.Contains(got, `CREATE SCHEMA IF NOT EXISTS "public";`) {
+		t.Errorf("did not expect CREATE SCHEMA for public:\n%s", got)
+	}
+}
+
 func TestBuildPortableTypes(t *testing.T) {
 	catalog := sqldef.NewCatalog()
 	catalog.Table("items",

@@ -146,6 +146,96 @@ func TestDDLUnqualified(t *testing.T) {
 	if !strings.Contains(got, `CREATE TABLE "items" (`) {
 		t.Errorf("unqualified table name expected:\n%s", got)
 	}
+	// The unnamed default schema has no CREATE SCHEMA to emit.
+	if strings.Contains(got, "CREATE SCHEMA") {
+		t.Errorf("default schema should not emit CREATE SCHEMA:\n%s", got)
+	}
+	if strings.Contains(md.DropSQL(mustDialect(t, "postgres")), "DROP SCHEMA") {
+		t.Errorf("default schema should not emit DROP SCHEMA")
+	}
+}
+
+// TestDDLSchemaDependency verifies CreateSQL declares each distinct schema
+// marked for creation (once, in first-seen order) before the tables that depend
+// on it, and DropSQL drops the schemas last, after the tables they hold.
+func TestDDLSchemaDependency(t *testing.T) {
+	intType := meta.Of("postgres", "int8", 0, 0, 0)
+	auth := meta.Schema{Name: "auth", Create: true}
+	billing := meta.Schema{Name: "billing", Create: true}
+	md := meta.Metadata{
+		Tables: []meta.Table{
+			{Schema: auth, Name: "users", Columns: []meta.Column{{Name: "id", Type: intType, PrimaryKey: true}}},
+			{Schema: billing, Name: "invoices", Columns: []meta.Column{{Name: "id", Type: intType, PrimaryKey: true}}},
+			{Schema: auth, Name: "sessions", Columns: []meta.Column{{Name: "id", Type: intType, PrimaryKey: true}}},
+		},
+	}
+	pg := mustDialect(t, "postgres")
+
+	got, err := md.CreateSQL(pg)
+	if err != nil {
+		t.Fatalf("CreateSQL() error = %v", err)
+	}
+	// Each schema declared once, before any table.
+	if c := strings.Count(got, "CREATE SCHEMA"); c != 2 {
+		t.Errorf("CREATE SCHEMA count = %d, want 2:\n%s", c, got)
+	}
+	for _, s := range []string{`CREATE SCHEMA IF NOT EXISTS "auth";`, `CREATE SCHEMA IF NOT EXISTS "billing";`} {
+		idx := strings.Index(got, s)
+		if idx < 0 {
+			t.Fatalf("missing %q:\n%s", s, got)
+		}
+		if idx > strings.Index(got, "CREATE TABLE") {
+			t.Errorf("%q must precede the first CREATE TABLE:\n%s", s, got)
+		}
+	}
+	// First-seen order: auth before billing.
+	if strings.Index(got, `"auth"`) > strings.Index(got, `"billing"`) {
+		t.Errorf("schemas not in first-seen order:\n%s", got)
+	}
+
+	drop := md.DropSQL(pg)
+	if last := strings.LastIndex(drop, "DROP TABLE"); last > strings.Index(drop, "DROP SCHEMA") {
+		t.Errorf("DROP SCHEMA must follow all DROP TABLE statements:\n%s", drop)
+	}
+}
+
+// TestDDLSchemaCreateGating verifies a named schema is created only when marked
+// Create — a schema assumed to already exist (Create=false) is left alone — and
+// that Schemas merges the flag when a name appears both ways.
+func TestDDLSchemaCreateGating(t *testing.T) {
+	intType := meta.Of("postgres", "int8", 0, 0, 0)
+	pg := mustDialect(t, "postgres")
+
+	// A named but unmanaged schema gets no CREATE/DROP SCHEMA.
+	unmanaged := meta.Metadata{Tables: []meta.Table{
+		{Schema: meta.Schema{Name: "public"}, Name: "t", Columns: []meta.Column{{Name: "id", Type: intType, PrimaryKey: true}}},
+	}}
+	got, err := unmanaged.CreateSQL(pg)
+	if err != nil {
+		t.Fatalf("CreateSQL() error = %v", err)
+	}
+	if strings.Contains(got, "CREATE SCHEMA") {
+		t.Errorf("unmanaged schema should not emit CREATE SCHEMA:\n%s", got)
+	}
+	if strings.Contains(unmanaged.DropSQL(pg), "DROP SCHEMA") {
+		t.Errorf("unmanaged schema should not emit DROP SCHEMA")
+	}
+
+	// Mixed Create flags on the same schema name: managed if any table asks.
+	mixed := meta.Metadata{Tables: []meta.Table{
+		{Schema: meta.Schema{Name: "audit"}, Name: "a", Columns: []meta.Column{{Name: "id", Type: intType, PrimaryKey: true}}},
+		{Schema: meta.Schema{Name: "audit", Create: true}, Name: "b", Columns: []meta.Column{{Name: "id", Type: intType, PrimaryKey: true}}},
+	}}
+	if schemas := mixed.Schemas(); len(schemas) != 1 || !schemas[0].Create {
+		t.Errorf("Schemas() = %+v, want one schema with Create=true", schemas)
+	}
+	got, err = mixed.CreateSQL(pg)
+	if err != nil {
+		t.Fatalf("CreateSQL() error = %v", err)
+	}
+	if c := strings.Count(got, "CREATE SCHEMA"); c != 1 {
+		t.Errorf("CREATE SCHEMA count = %d, want 1:\n%s", c, got)
+	}
 }
 
 func TestDDLUnsupportedDialect(t *testing.T) {

@@ -129,6 +129,70 @@ type ForeignKeyConstraint struct {
 	OnUpdate   string
 }
 
+// CreateSchemaStmt builds a CREATE SCHEMA statement. On MySQL, where a schema
+// is a database, CREATE SCHEMA is the engine's own synonym for CREATE DATABASE,
+// so the same node renders for both dialects.
+type CreateSchemaStmt struct {
+	name        string
+	ifNotExists bool
+}
+
+// CreateSchema starts a CREATE SCHEMA builder for a schema name.
+func CreateSchema(name string) CreateSchemaStmt { return CreateSchemaStmt{name: name} }
+
+// IfNotExists adds IF NOT EXISTS, making the statement idempotent (it leaves an
+// already-existing schema, and whatever it contains, untouched).
+func (s CreateSchemaStmt) IfNotExists() CreateSchemaStmt {
+	s.ifNotExists = true
+	return s
+}
+
+// ToSQL compiles the CREATE SCHEMA statement.
+func (s CreateSchemaStmt) ToSQL(d Dialect) (string, []any, error) {
+	out, err := s.compileDDL(NewCompiler(d))
+	return out, nil, err
+}
+func (s CreateSchemaStmt) compileDDL(c *Compiler) (string, error) {
+	return c.CompileCreateSchema(s)
+}
+func (CreateSchemaStmt) ddlStatement() {}
+
+// DropSchemaStmt builds a DROP SCHEMA statement. On MySQL, where a schema is a
+// database, this drops the database and everything left in it; on PostgreSQL a
+// non-empty schema needs the tables dropped first (or Cascade).
+type DropSchemaStmt struct {
+	name     string
+	ifExists bool
+	cascade  bool
+}
+
+// DropSchema starts a DROP SCHEMA builder for a schema name.
+func DropSchema(name string) DropSchemaStmt { return DropSchemaStmt{name: name} }
+
+// IfExists adds IF EXISTS.
+func (s DropSchemaStmt) IfExists() DropSchemaStmt {
+	s.ifExists = true
+	return s
+}
+
+// Cascade adds CASCADE, dropping objects the schema still contains. It renders
+// only on PostgreSQL; MySQL has no CASCADE clause (DROP SCHEMA there always
+// drops the database's contents), so the flag is ignored.
+func (s DropSchemaStmt) Cascade() DropSchemaStmt {
+	s.cascade = true
+	return s
+}
+
+// ToSQL compiles the DROP SCHEMA statement.
+func (s DropSchemaStmt) ToSQL(d Dialect) (string, []any, error) {
+	out, err := s.compileDDL(NewCompiler(d))
+	return out, nil, err
+}
+func (s DropSchemaStmt) compileDDL(c *Compiler) (string, error) {
+	return c.CompileDropSchema(s)
+}
+func (DropSchemaStmt) ddlStatement() {}
+
 // CreateTableStmt builds a CREATE TABLE statement.
 type CreateTableStmt struct {
 	table       Table
@@ -486,6 +550,8 @@ func (dropPrimaryKeyAlt) alteration()  {}
 // Compile-time checks that every DDL node is a Statement (and therefore a
 // Query, so it runs through Database.Exec / Session.Exec).
 var (
+	_ Statement = CreateSchemaStmt{}
+	_ Statement = DropSchemaStmt{}
 	_ Statement = CreateTableStmt{}
 	_ Statement = DropTableStmt{}
 	_ Statement = CreateIndexStmt{}
