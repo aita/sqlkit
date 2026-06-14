@@ -428,3 +428,53 @@ func TestWithIdentitiesUnknownTable(t *testing.T) {
 		t.Fatal("expected an error staging a table absent from the identity map")
 	}
 }
+
+// A database bound with sqlkit.WithMetadata hands its identity map to every
+// scope opened over it, so validation happens without an explicit
+// WithIdentities.
+func TestWithMetadataAutoAdoptsIdentities(t *testing.T) {
+	fake := &sqltest.Fake{}
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithMetadata(meta.Metadata{Tables: []meta.Table{usersMeta()}}))
+	scope := uow.NewScope(db)
+	binding := newUsersFull(usersMeta().Key().Checksum, "")
+	if err := scope.Add(binding, userRow{Email: "a@x"}); err != nil {
+		t.Fatalf("Add with matching catalog binding: %v", err)
+	}
+	if err := scope.Flush(ctx()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+}
+
+func TestWithMetadataRejectsDriftedBinding(t *testing.T) {
+	db := sqlkit.WrapDB((&sqltest.Fake{}).DB(), sqlkit.WithMetadata(meta.Metadata{Tables: []meta.Table{usersMeta()}}))
+	scope := uow.NewScope(db)
+	// A binding whose checksum differs from the catalog table.
+	err := scope.Add(newUsersFull("drifted", ""), userRow{Email: "a@x"})
+	if !errors.Is(err, meta.ErrTableConflict) {
+		t.Fatalf("err = %v, want ErrTableConflict", err)
+	}
+}
+
+// An explicit WithIdentities takes precedence over the database's bound
+// metadata.
+func TestWithIdentitiesOverridesMetadata(t *testing.T) {
+	// The database's catalog omits users, which would reject the binding...
+	db := sqlkit.WrapDB((&sqltest.Fake{}).DB(), sqlkit.WithMetadata(meta.Metadata{Tables: []meta.Table{{
+		Schema:  meta.Schema{Name: "public"},
+		Name:    "orgs",
+		Columns: []meta.Column{{Name: "id", Type: meta.Of("postgres", "bigint", 0, 0, 0), PrimaryKey: true}},
+	}}}))
+	// ...but an explicit identity map that includes users overrides it.
+	im, err := meta.Metadata{Tables: []meta.Table{usersMeta()}}.Identities()
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := uow.NewScope(db, uow.WithIdentities(im))
+	binding := newUsersFull(usersMeta().Key().Checksum, "")
+	if err := scope.Add(binding, userRow{Email: "a@x"}); err != nil {
+		t.Fatalf("Add with overriding identity map: %v", err)
+	}
+	if err := scope.Flush(ctx()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+}

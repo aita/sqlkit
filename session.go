@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/aita/sqlkit/meta"
 	"github.com/aita/sqlkit/sql"
 )
 
@@ -21,6 +22,10 @@ type Session struct {
 	db      *stdsql.DB
 	txOpts  *stdsql.TxOptions
 	dialect sql.Dialect
+
+	// identities is inherited from the Database (see WithMetadata): a uow.Scope
+	// opened over this session validates its bindings against it automatically.
+	identities *meta.IdentityMap
 
 	mu     sync.Mutex
 	tx     *stdsql.Tx
@@ -175,6 +180,11 @@ func (s *Session) Exec(ctx context.Context, query sql.Query) (stdsql.Result, err
 // lets layers above sqlkit (such as the uow package) branch on dialect
 // capabilities like RETURNING support without reaching into the executor.
 func (s *Session) Dialect() sql.Dialect { return s.dialect }
+
+// Identities returns the catalog identity map inherited from the database that
+// opened this session (see WithMetadata), or nil if none was bound. A uow.Scope
+// opened over this session reads it to validate table bindings automatically.
+func (s *Session) Identities() *meta.IdentityMap { return s.identities }
 
 // Savepoint opens a savepoint in the session's transaction and returns its
 // generated name. The transaction begins on first use, so a savepoint may be

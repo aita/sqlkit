@@ -68,6 +68,14 @@ type savepointer interface {
 // implement it.
 type dialecter interface{ Dialect() sql.Dialect }
 
+// identityProvider is implemented by executors that carry a catalog identity
+// map — a *sqlkit.Database or *sqlkit.Session bound with sqlkit.WithMetadata.
+// NewScope reads it so a scope validates its bindings automatically, without an
+// explicit WithIdentities.
+type identityProvider interface {
+	Identities() *meta.IdentityMap
+}
+
 // Scope is a Unit of Work over table bindings. Construct one with NewScope (or a
 // child with Scope.NewScope). A Scope is not safe for concurrent use.
 type Scope struct {
@@ -111,8 +119,15 @@ func WithBatchSize(n int) Option {
 // *sqlkit.Session so load and flush share one transaction (and so nested scopes
 // can use savepoints); a *sqlkit.Database works too, but each flush statement
 // then auto-commits independently.
+//
+// When ex carries a catalog identity map (a database or session bound with
+// sqlkit.WithMetadata), the scope adopts it automatically and validates its
+// bindings against it; an explicit WithIdentities still overrides that.
 func NewScope(ex sqlkit.Executor, opts ...Option) *Scope {
 	s := &Scope{ex: ex, tables: map[string]*tableState{}}
+	if ip, ok := ex.(identityProvider); ok {
+		s.identities = ip.Identities()
+	}
 	for _, opt := range opts {
 		opt(s)
 	}
