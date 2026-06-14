@@ -564,6 +564,44 @@ statements start from the db handle with the table as an argument
 relation metadata and `--emit-dto` to also generate a row struct per table. For
 full control over the SQL→Go type mapping, call the `codegen` library directly.
 
+### Customizing generation (codegen as a library)
+
+The CLI calls `codegen.Generate(md, codegen.Options{...})` for you with a fixed
+set of options. Call it yourself when you need the parts the flags can't
+express — chiefly the SQL→Go **type mapping** and the **DTO naming** scheme.
+Build the schema model with the catalog's `Build` (or the inspector), then
+generate:
+
+```go
+md, _ := schema.Catalog.Build()
+
+files, _ := codegen.Generate(md, codegen.Options{
+    PackageName:   "appdb",
+    EmitRelations: true,
+    EmitDTO:       true,
+    // Map SQL types to your own Go types. Overrides apply by SQL type name,
+    // ColumnOverrides by (schema.)table.column, OverrideFunc programmatically.
+    TypeMapper: codegen.NewDefaultTypeMapper(codegen.TypeMapperConfig{
+        Overrides: map[string]codegen.GoType{
+            "numeric": {ImportPath: "github.com/shopspring/decimal", Name: "decimal.Decimal"},
+        },
+        ColumnOverrides: map[string]codegen.GoType{
+            "users.id": {ImportPath: "github.com/google/uuid", Name: "uuid.UUID"},
+        },
+    }),
+    // Name the row structs your way ("users" -> "UserRecord").
+    DTOName: func(t meta.Table) string { return myName(t.Name) + "Record" },
+})
+
+_ = codegen.Write("appdb", files) // or inspect files[i].Content yourself
+```
+
+The mapper's hooks are consulted most-specific first (`OverrideFunc`, then
+`ColumnOverrides`, then `Overrides`), falling through to the built-in type
+tables; nullability is applied on top, so overrides pin the bare type. A
+runnable end-to-end version — custom type mapper, programmatic enum types, and a
+custom DTO namer — lives in [`examples/codegen`](examples/codegen).
+
 ### Bootstrapping from an existing database
 
 `sqlkit inspect` reads a live **PostgreSQL or MySQL** schema and emits the
