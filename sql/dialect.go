@@ -235,6 +235,25 @@ type ValuesCaster interface {
 	ValuesCastType(value any) (sqlType string, ok bool)
 }
 
+// DistinctOnDialect is an optional capability a Dialect implements to report
+// support for SELECT DISTINCT ON (exprs) (SelectQuery.DistinctOn), a PostgreSQL
+// extension with no portable equivalent. The compiler detects it with a type
+// assertion, so it is not a breaking change to Dialect; a dialect that does not
+// implement it (or returns false) rejects DISTINCT ON at compile time.
+type DistinctOnDialect interface {
+	SupportsDistinctOn() bool
+}
+
+// SimilarToMatcher is an optional capability a Dialect implements to render a
+// SQL-standard SIMILAR TO match (SimilarToExpression). PostgreSQL and the SQL
+// standard support it; MySQL and SQLite do not, and reject it at compile time
+// (the compiler detects the capability with a type assertion, so adding it is
+// not a breaking change to Dialect). left and pattern are already-compiled SQL
+// fragments; negate selects NOT SIMILAR TO.
+type SimilarToMatcher interface {
+	SimilarTo(left, pattern string, negate bool) string
+}
+
 // NullSafeEqualityDialect is an optional capability for dialects that spell the
 // null-safe comparison (DistinctPredicate, IS [NOT] DISTINCT FROM) differently
 // from the SQL standard. MySQL has no IS DISTINCT FROM and uses the null-safe
@@ -280,6 +299,16 @@ func typeWithArgs(name string, length, precision, scale int, lengthTypes, decima
 // literal renders a single-quoted SQL string literal.
 func literal(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+// renderSimilarTo renders the SQL-standard SIMILAR TO / NOT SIMILAR TO match,
+// shared by PostgreSQL and the standard target (which spell it identically).
+func renderSimilarTo(left, pattern string, negate bool) string {
+	operator := "SIMILAR TO"
+	if negate {
+		operator = "NOT SIMILAR TO"
+	}
+	return "(" + left + " " + operator + " " + pattern + ")"
 }
 
 // jsonPathStep renders one JSON path step into the dialect-neutral parts a
@@ -498,6 +527,14 @@ func (PostgreSQLDialect) Regexp(left, pattern string, negate, caseInsensitive bo
 	}
 	return "(" + left + " " + operator + " " + pattern + ")", nil
 }
+
+// SimilarTo renders PostgreSQL's SIMILAR TO / NOT SIMILAR TO operator.
+func (PostgreSQLDialect) SimilarTo(left, pattern string, negate bool) string {
+	return renderSimilarTo(left, pattern, negate)
+}
+
+// SupportsDistinctOn reports PostgreSQL's support for SELECT DISTINCT ON.
+func (PostgreSQLDialect) SupportsDistinctOn() bool { return true }
 
 // JSONAccess chains the -> / ->> operators, one per path step (the last uses
 // ->> when asText), e.g. (("data" -> 'a') -> 0) ->> 'b'.
@@ -916,6 +953,11 @@ func (StandardSQLDialect) Regexp(left, pattern string, negate, caseInsensitive b
 		return "(NOT (" + expr + "))", nil
 	}
 	return "(" + expr + ")", nil
+}
+
+// SimilarTo renders the SQL-standard SIMILAR TO / NOT SIMILAR TO predicate.
+func (StandardSQLDialect) SimilarTo(left, pattern string, negate bool) string {
+	return renderSimilarTo(left, pattern, negate)
 }
 
 // RenderFunc remaps canonical function names to their SQL-standard spelling.

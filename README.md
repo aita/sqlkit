@@ -90,9 +90,11 @@ alongside `All`. `Page(ctx, limit, offset)` fetches a window in one call.
 ### Predicates and filters
 
 Typed columns carry the predicate vocabulary directly: `Eq`/`Ne`/`Lt`/`Le`/
-`Gt`/`Ge`, `In`/`NotIn`, `Between`/`NotBetween`, `IsNull`/`IsNotNull`, and
+`Gt`/`Ge`, `In`/`NotIn`, `Between`/`NotBetween`, `IsNull`/`IsNotNull`,
+`IsDistinctFrom`/`IsNotDistinctFrom` (null-safe, `<=>` on MySQL), and
 `InQuery`/`NotInQuery` for `IN (subquery)`. String columns add the free helpers
-`sqlkit.Like` / `NotLike` / `ILike` (case-insensitive on both engines).
+`sqlkit.Like` / `NotLike` / `ILike` (case-insensitive on both engines) and
+`sqlkit.SimilarTo` / `NotSimilarTo` (PostgreSQL/standard only).
 `sqlkit.Exists` / `NotExists` wrap a subquery, and `sqlkit.And` / `Or` / `Not`
 combine predicates.
 
@@ -123,8 +125,10 @@ err := db.Select().From(appdb.Users).
 ### Joins
 
 `Join` / `LeftJoin` / `RightJoin` / `FullJoin` take a source and an ON
-predicate; `CrossJoin` takes only a source. Wrap a source with `sql.Lateral`
-for a `LATERAL` join.
+predicate; `CrossJoin` takes only a source. `JoinUsing` / `LeftJoinUsing` join
+on equally named columns (`USING (...)`), and `NaturalJoin` / `NaturalLeftJoin`
+match every shared column implicitly. Wrap a source with `sql.Lateral` for a
+`LATERAL` join.
 
 ```go
 var posts []PostDTO

@@ -270,6 +270,33 @@ func NotIRegexp(left, pattern any) RegexpExpression {
 	return e
 }
 
+// SimilarToExpression matches a string against a SQL regular expression with the
+// SQL-standard SIMILAR TO operator, whose pattern language is LIKE's (% and _)
+// extended with the regex metacharacters | * + ? () [] {}. It is genuinely
+// non-portable — PostgreSQL and the SQL standard have it, MySQL and SQLite do
+// not — so it renders through a SimilarToMatcher and a dialect without that
+// capability rejects it at compile time.
+type SimilarToExpression struct {
+	Left    Expression
+	Pattern Expression
+	Negate  bool
+}
+
+func (SimilarToExpression) SQLExpression() {}
+
+// SimilarTo creates a "left SIMILAR TO pattern" match. Non-expression operands
+// become bind values.
+func SimilarTo(left, pattern any) SimilarToExpression {
+	return SimilarToExpression{Left: Expr(left), Pattern: Expr(pattern)}
+}
+
+// NotSimilarTo creates a negated "left NOT SIMILAR TO pattern" match.
+func NotSimilarTo(left, pattern any) SimilarToExpression {
+	e := SimilarTo(left, pattern)
+	e.Negate = true
+	return e
+}
+
 // BetweenExpression tests whether an operand falls within an inclusive range.
 type BetweenExpression struct {
 	Operand Expression

@@ -141,6 +141,31 @@ func (q SelectQuery) CrossJoin(source sql.Source) SelectQuery {
 	return q
 }
 
+// JoinUsing adds an INNER JOIN ... USING (columns) on the equally named columns.
+func (q SelectQuery) JoinUsing(source sql.Source, columns ...string) SelectQuery {
+	q.query = q.query.JoinUsing(source, columns...)
+	return q
+}
+
+// LeftJoinUsing adds a LEFT JOIN ... USING (columns).
+func (q SelectQuery) LeftJoinUsing(source sql.Source, columns ...string) SelectQuery {
+	q.query = q.query.LeftJoinUsing(source, columns...)
+	return q
+}
+
+// NaturalJoin adds a NATURAL JOIN, an inner join on every column the sources
+// share by name. It takes no condition.
+func (q SelectQuery) NaturalJoin(source sql.Source) SelectQuery {
+	q.query = q.query.NaturalJoin(source)
+	return q
+}
+
+// NaturalLeftJoin adds a NATURAL LEFT JOIN.
+func (q SelectQuery) NaturalLeftJoin(source sql.Source) SelectQuery {
+	q.query = q.query.NaturalLeftJoin(source)
+	return q
+}
+
 // RightJoinRel adds a RIGHT JOIN to a relation's target on its foreign-key
 // condition.
 func (q SelectQuery) RightJoinRel(rel Relation) SelectQuery {
@@ -284,6 +309,16 @@ func (q SelectQuery) Offset(n int) SelectQuery {
 // Distinct marks the query as SELECT DISTINCT.
 func (q SelectQuery) Distinct() SelectQuery {
 	q.query = q.query.Distinct()
+	q.batchUnsafe = true
+	return q
+}
+
+// DistinctOn marks the query as SELECT DISTINCT ON (exprs...), keeping the first
+// row of each group equal on the given expressions (PostgreSQL only). Pair it
+// with an ORDER BY beginning with the same expressions to make "first"
+// deterministic.
+func (q SelectQuery) DistinctOn(exprs ...sql.Expression) SelectQuery {
+	q.query = q.query.DistinctOn(exprs...)
 	q.batchUnsafe = true
 	return q
 }

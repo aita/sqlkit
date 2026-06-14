@@ -317,6 +317,21 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 			return "", nil, err
 		}
 		return out, args, nil
+	case SimilarToExpression:
+		leftSQL, args, err := c.CompileExpression(e.Left)
+		if err != nil {
+			return "", nil, err
+		}
+		patternSQL, patternArgs, err := c.CompileExpression(e.Pattern)
+		if err != nil {
+			return "", nil, err
+		}
+		args = append(args, patternArgs...)
+		matcher, ok := c.Dialect.(SimilarToMatcher)
+		if !ok {
+			return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support SIMILAR TO", c.Dialect.Name())
+		}
+		return matcher.SimilarTo(leftSQL, patternSQL, e.Negate), args, nil
 	case NullPredicate:
 		operandSQL, args, err := c.CompileExpression(e.Operand)
 		if err != nil {
@@ -682,14 +697,32 @@ func (c *Compiler) compileSubquery(query Query) (string, []any, error) {
 	return query.ToSQL(c.Dialect)
 }
 
-// CompileJoin compiles a JOIN clause.
+// CompileJoin compiles a JOIN clause. A join's condition is mutually exclusive:
+// NATURAL (no ON/USING), USING (a column list), or ON (a predicate).
 func (c *Compiler) CompileJoin(join JoinClause) (string, []any, error) {
+	if join.Natural && (join.On != nil || len(join.Using) > 0) {
+		return "", nil, fmt.Errorf("sqlkit/sql: a NATURAL join cannot also carry ON or USING")
+	}
+	if join.On != nil && len(join.Using) > 0 {
+		return "", nil, fmt.Errorf("sqlkit/sql: a join cannot carry both ON and USING")
+	}
 	sourceSQL, args, err := c.CompileSource(join.Source)
 	if err != nil {
 		return "", nil, err
 	}
-	compiled := join.Kind + " " + sourceSQL
-	if join.On != nil {
+	kind := join.Kind
+	if join.Natural {
+		kind = "NATURAL " + kind
+	}
+	compiled := kind + " " + sourceSQL
+	switch {
+	case len(join.Using) > 0:
+		columns := make([]string, len(join.Using))
+		for i, column := range join.Using {
+			columns[i] = c.Dialect.QuoteName(column)
+		}
+		compiled += " USING (" + strings.Join(columns, ", ") + ")"
+	case join.On != nil:
 		onSQL, onArgs, err := c.CompileExpression(join.On)
 		if err != nil {
 			return "", nil, err
@@ -766,7 +799,25 @@ func (c *Compiler) CompileSelect(q SelectQuery) (string, []any, error) {
 	sb.WriteString(withSQL)
 	args = append(args, withArgs...)
 	sb.WriteString("SELECT ")
-	if q.distinct {
+	if len(q.distinctOn) > 0 {
+		d, ok := c.Dialect.(DistinctOnDialect)
+		if !ok || !d.SupportsDistinctOn() {
+			return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support DISTINCT ON", c.Dialect.Name())
+		}
+		sb.WriteString("DISTINCT ON (")
+		for i, expr := range q.distinctOn {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			exprSQL, exprArgs, err := c.CompileExpression(expr)
+			if err != nil {
+				return "", nil, err
+			}
+			sb.WriteString(exprSQL)
+			args = append(args, exprArgs...)
+		}
+		sb.WriteString(") ")
+	} else if q.distinct {
 		sb.WriteString("DISTINCT ")
 	}
 	if len(q.columns) == 0 {
