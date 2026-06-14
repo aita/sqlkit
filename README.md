@@ -750,6 +750,23 @@ err = db.Delete(appdb.Posts).Where(appdb.Posts.Published.Eq(false)).
 Columns with a database-side default are omitted from INSERT when their value
 is the Go zero value in every row, so serial keys and defaults are filled in.
 
+**Partial updates from a struct.** `Update(...).SetStruct(row, cols...)` is the
+UPDATE counterpart of `Insert().Values`: it maps the struct's fields to columns
+by name (the same `sqlkit` tag / exact name / snake_case rules `Scan` uses) and
+emits one `SET` assignment per column. Name the columns to update just those —
+a partial update that leaves the rest untouched — or omit them to assign every
+mapped column except the primary key. Zero-valued fields are written (so a
+column can be cleared), and the assignments compose with `Set`. Pair it with
+`Where` to choose the rows:
+
+```go
+// Update only name and email; leave every other column as it is.
+_, err = db.Update(appdb.Users).
+    SetStruct(u, appdb.Users.Name, appdb.Users.Email).
+    Where(appdb.Users.ID.Eq(u.ID)).
+    Exec(ctx)
+```
+
 **Bulk inserts.** `BatchSize(n)` splits a `Values` insert into separate `Exec`
 statements of at most `n` rows each, keeping large inserts within the
 database's bind-parameter and statement-size limits. The returned result sums

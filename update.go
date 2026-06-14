@@ -3,7 +3,11 @@ package sqlkit
 import (
 	"context"
 	stdsql "database/sql"
+	"fmt"
+	"reflect"
+	"strings"
 
+	"github.com/aita/sqlkit/internal/reflectmap"
 	"github.com/aita/sqlkit/sql"
 )
 
@@ -15,6 +19,7 @@ type UpdateQuery struct {
 	query        sql.UpdateQuery
 	returning    []sql.Selection
 	hasReturning bool
+	err          error
 }
 
 // Update creates an unbound UPDATE builder, for ToSQL or tests. Assignments
@@ -29,6 +34,88 @@ func Update(table Table) UpdateQuery {
 func (q UpdateQuery) Set(assignments ...sql.Assignment) UpdateQuery {
 	q.query = q.query.Set(assignments...)
 	return q
+}
+
+// SetStruct appends SET assignments taken from a struct's fields, mapping
+// fields to columns by name the same way Insert().Values and Scan do (sqlkit
+// tag, exact name, or snake_case). It is the UPDATE counterpart of
+// Insert().Values for a single row, and composes with Set: assignments accumulate.
+//
+// With no columns, every column the struct maps to is assigned except the
+// primary key, which identifies the row and belongs in Where rather than SET.
+// Pass columns to restrict the update to just those — a partial update that
+// leaves every other column untouched; a primary key column is included when
+// named explicitly. Unlike a non-zero "patch", zero-valued fields are written,
+// so a column can be cleared to its zero value.
+//
+// SetStruct only builds SET assignments; pair it with Where to choose the rows:
+//
+//	db.Update(Users).SetStruct(u, Users.Name, Users.Email).Where(Users.ID.Eq(u.ID)).Exec(ctx)
+//
+// row may be a struct or a pointer to one. A field-mapping failure (not a
+// struct, a nil pointer, or an explicitly named column with no matching field)
+// is deferred and returned by ToSQL and Exec.
+func (q UpdateQuery) SetStruct(row any, columns ...AnyColumn) UpdateQuery {
+	assignments, err := q.structAssignments(row, columns)
+	if err != nil {
+		if q.err == nil {
+			q.err = err
+		}
+		return q
+	}
+	q.query = q.query.Set(assignments...)
+	return q
+}
+
+// structAssignments resolves a struct's fields against the target columns and
+// builds SET assignments in target-column order.
+func (q UpdateQuery) structAssignments(row any, columns []AnyColumn) ([]sql.Assignment, error) {
+	rv := reflect.ValueOf(row)
+	for rv.Kind() == reflect.Pointer {
+		if rv.IsNil() {
+			return nil, fmt.Errorf("sqlkit: SetStruct row is a nil pointer")
+		}
+		rv = rv.Elem()
+	}
+	if rv.Kind() != reflect.Struct {
+		return nil, fmt.Errorf("sqlkit: SetStruct requires a struct, got %T", row)
+	}
+	fields := reflectmap.FieldsByColumn(rv.Type())
+
+	explicit := len(columns) > 0
+	var targets []string
+	if explicit {
+		targets = columnNames(columns)
+	} else {
+		pk := make(map[string]bool, len(q.def.PrimaryKey))
+		for _, name := range q.def.PrimaryKey {
+			pk[name] = true
+		}
+		for _, name := range q.def.Columns {
+			if !pk[name] {
+				targets = append(targets, name)
+			}
+		}
+	}
+
+	assignments := make([]sql.Assignment, 0, len(targets))
+	for _, name := range targets {
+		path, ok := fields[strings.ToLower(name)]
+		if !ok {
+			if explicit {
+				return nil, fmt.Errorf("sqlkit: SetStruct: no field of %s maps to column %q of %s",
+					rv.Type(), name, q.def.Table.QualifiedName())
+			}
+			continue
+		}
+		value := rv.FieldByIndex(path).Interface()
+		assignments = append(assignments, sql.Set(name, sql.Val(value)))
+	}
+	if len(assignments) == 0 {
+		return nil, fmt.Errorf("sqlkit: SetStruct: no fields of %s map to columns of %s",
+			rv.Type(), q.def.Table.QualifiedName())
+	}
+	return assignments, nil
 }
 
 // WithCTE prepends common table expressions to the UPDATE, emitting a leading
@@ -84,6 +171,9 @@ func (q UpdateQuery) Returning(selections ...sql.Selection) ReturningQuery {
 
 // ToSQL compiles the UPDATE statement.
 func (q UpdateQuery) ToSQL(dialect sql.Dialect) (string, []any, error) {
+	if q.err != nil {
+		return "", nil, q.err
+	}
 	query := q.query
 	if q.hasReturning {
 		if len(q.returning) > 0 {
