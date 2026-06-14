@@ -22,6 +22,8 @@ type Database struct {
 	// surface.
 	identities *meta.IdentityMap
 	metaErr    error
+
+	ics []Interceptor
 }
 
 // DatabaseOption configures a Database.
@@ -48,6 +50,14 @@ func WithMetadata(m meta.Metadata) DatabaseOption {
 		}
 		d.identities = im
 	}
+}
+
+// WithInterceptor registers interceptors that wrap every statement run through
+// the database (and through sessions it opens). They run in registration order,
+// the first wrapping the rest, around both reads and writes — see Interceptor.
+// Multiple calls accumulate.
+func WithInterceptor(interceptors ...Interceptor) DatabaseOption {
+	return func(d *Database) { d.ics = append(d.ics, interceptors...) }
 }
 
 // Open opens a database/sql handle from a driver name and DSN string. The
@@ -161,7 +171,7 @@ func (d *Database) NewSession(opts ...SessionOption) *Session {
 	for _, opt := range opts {
 		opt(&options)
 	}
-	return &Session{db: d.db, txOpts: options.tx, dialect: d.dialect, identities: d.identities}
+	return &Session{db: d.db, txOpts: options.tx, dialect: d.dialect, identities: d.identities, ics: d.ics}
 }
 
 // WithSession runs fn inside a session and commits when fn returns nil; on
@@ -217,10 +227,18 @@ func (d *Database) Exec(ctx context.Context, query sql.Query) (stdsql.Result, er
 	if sqlText == "" {
 		return nil, nil
 	}
-	return d.db.ExecContext(ctx, sqlText, args...)
+	return runExecStmt(ctx, d, Statement{
+		Op:      OpExec,
+		Query:   query,
+		SQL:     sqlText,
+		Args:    args,
+		Dialect: d.dialect,
+	})
 }
 
 func (d *Database) sqlDialect() sql.Dialect { return d.dialect }
+
+func (d *Database) interceptors() []Interceptor { return d.ics }
 
 func (d *Database) queryContext(ctx context.Context, query string, args ...any) (*stdsql.Rows, error) {
 	return d.db.QueryContext(ctx, query, args...)

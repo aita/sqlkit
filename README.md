@@ -1040,6 +1040,53 @@ if _, err := session.Insert(appdb.Users).Values(u).Exec(ctx); err != nil { ... }
 err = session.Commit()
 ```
 
+## Interceptors
+
+Interceptors wrap statement execution, gRPC-style: each one receives the
+`Statement` about to run and the `next` handler in the chain, and decides
+whether — and with what — to call it. That covers observing and timing
+execution, rewriting the SQL, short-circuiting (return without calling `next`),
+and retrying (call `next` more than once). Register them with `WithInterceptor`;
+they apply to every read and write run through the database and any session it
+opens, in registration order (the first wrapping the rest).
+
+The common case — rewriting SQL or args just before execution — needs no `next`
+plumbing. `Rewrite` adapts a statement transform that runs on both reads and
+writes:
+
+```go
+db, _ := sqlkit.Open("pgx", dsn, sqlkit.WithInterceptor(
+    sqlkit.Rewrite(func(ctx context.Context, stmt sqlkit.Statement) (sqlkit.Statement, error) {
+        stmt.SQL = "/* tenant=" + tenantOf(ctx) + " */ " + stmt.SQL
+        return stmt, nil
+    }),
+))
+```
+
+A `Statement` carries the `Op` (`OpQuery` for reads, `OpExec` for writes), the
+compiled `SQL` and `Args` (the source of truth for execution), and `Query` — the
+SQL DSL (`sql.Query` AST) the statement was compiled from, for branching on its
+structure. `Query` is nil for a raw string passed to `RawSQL`. To rewrite at the
+AST level, assign a new builder result to `Query` and call `Statement.Recompile`.
+
+For the full middleware shape — observing results, timing, retries — implement
+`Interceptor` directly. Embed `NoopInterceptor` to implement only the side you
+need; reads and writes keep their native `*sql.Rows` and `sql.Result` return
+types:
+
+```go
+type queryLogger struct{ sqlkit.NoopInterceptor }
+
+func (queryLogger) InterceptExec(ctx context.Context, stmt sqlkit.Statement, next sqlkit.ExecHandler) (sql.Result, error) {
+    start := time.Now()
+    res, err := next(ctx, stmt)
+    log.Printf("%s %s (%s) err=%v", stmt.Op, stmt.SQL, time.Since(start), err)
+    return res, err
+}
+```
+
+A session's transaction-control statements (savepoints) bypass interceptors.
+
 ## Raw SQL
 
 When a query is easier to write by hand, `RawSQL` runs a raw string (or a

@@ -22,6 +22,7 @@ type Session struct {
 	db      *stdsql.DB
 	txOpts  *stdsql.TxOptions
 	dialect sql.Dialect
+	ics     []Interceptor
 
 	// identities is inherited from the Database (see WithMetadata): a uow.Scope
 	// opened over this session validates its bindings against it automatically.
@@ -173,7 +174,13 @@ func (s *Session) Exec(ctx context.Context, query sql.Query) (stdsql.Result, err
 	if sqlText == "" {
 		return nil, nil
 	}
-	return s.execContext(ctx, sqlText, args...)
+	return runExecStmt(ctx, s, Statement{
+		Op:      OpExec,
+		Query:   query,
+		SQL:     sqlText,
+		Args:    args,
+		Dialect: s.dialect,
+	})
 }
 
 // Dialect returns the session's SQL dialect. It mirrors Database.Dialect and
@@ -217,6 +224,8 @@ func (s *Session) Release(ctx context.Context, name string) error {
 }
 
 func (s *Session) sqlDialect() sql.Dialect { return s.dialect }
+
+func (s *Session) interceptors() []Interceptor { return s.ics }
 
 func (s *Session) queryContext(ctx context.Context, query string, args ...any) (*stdsql.Rows, error) {
 	tx, err := s.ensureTx(ctx)
