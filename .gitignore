@@ -1,6 +1,7 @@
 # build artifacts
 /basic
 /sqlkit
+/cmd/sqlkit/sqlkit
 *.test
 /blog
 

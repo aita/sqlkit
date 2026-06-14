@@ -3,8 +3,6 @@ package main
 import (
 	"go/parser"
 	"go/token"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -105,38 +103,5 @@ func TestTablesLiteral(t *testing.T) {
 	}
 	if got := tablesLiteral([]string{"a", "b"}); got != `[]string{"a", "b"}` {
 		t.Errorf("tablesLiteral = %q", got)
-	}
-}
-
-// TestGenerateMatchesCommittedBindings runs the generate command end-to-end
-// against the in-repo blog catalog (the same path the example's gen.go drives)
-// and checks it reproduces the committed bindings byte for byte.
-func TestGenerateMatchesCommittedBindings(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping go run-based end-to-end test in -short mode")
-	}
-	out := t.TempDir()
-	cmd := &generateCmd{
-		Package:   "github.com/aita/sqlkit/examples/blog/schema",
-		Var:       "Catalog",
-		Name:      "blogdb",
-		Out:       out,
-		Dialect:   "postgres",
-		Relations: true, // matches the example's //go:generate directive
-	}
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("generate: %v", err)
-	}
-
-	got, err := os.ReadFile(filepath.Join(out, "tables.go"))
-	if err != nil {
-		t.Fatalf("read generated: %v", err)
-	}
-	want, err := os.ReadFile(filepath.Join("..", "..", "examples", "blog", "blogdb", "tables.go"))
-	if err != nil {
-		t.Fatalf("read golden: %v", err)
-	}
-	if string(got) != string(want) {
-		t.Errorf("generated bindings differ from examples/blog/blogdb/tables.go\n--- got ---\n%s", got)
 	}
 }

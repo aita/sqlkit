@@ -45,6 +45,23 @@ jobs:
       - name: Test
         run: go test -race ./...
 
+      # The sqlkit command and the examples are separate modules so their
+      # database drivers stay out of the root module that consumers import;
+      # build, vet and test them here since `./...` above does not reach them.
+      - name: Build, vet & test cmd/sqlkit module
+        working-directory: cmd/sqlkit
+        run: |
+          go build ./...
+          go vet ./...
+          go test -race ./...
+
+      - name: Build, vet & test examples module
+        working-directory: examples
+        run: |
+          go build ./...
+          go vet ./...
+          go test -race ./...
+
       - name: Build & vet integration module
         working-directory: internal/integration
         run: |
