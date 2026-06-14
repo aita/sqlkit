@@ -11,13 +11,16 @@ type InsertQuery struct {
 	returning []Selection
 }
 
-// conflictClause holds an upsert action: the conflict-target columns, whether
-// it is DO UPDATE (vs DO NOTHING), the SET assignments, and an optional WHERE.
+// conflictClause holds an upsert action: the conflict target — either a column
+// list (target) or a named constraint (targetConstraint, PostgreSQL ON
+// CONSTRAINT) — whether it is DO UPDATE (vs DO NOTHING), the SET assignments,
+// and an optional WHERE.
 type conflictClause struct {
-	target   []string
-	doUpdate bool
-	sets     []Assignment
-	where    Expression
+	target           []string
+	targetConstraint string
+	doUpdate         bool
+	sets             []Assignment
+	where            Expression
 }
 
 // InsertInto creates an INSERT query builder for a table.
@@ -64,6 +67,23 @@ func (q InsertQuery) OnConflictDoNothing(target ...string) InsertQuery {
 // with Excluded.
 func (q InsertQuery) OnConflictDoUpdate(target []string, assignments ...Assignment) InsertQuery {
 	q.conflict = &conflictClause{target: target, doUpdate: true, sets: assignments}
+	return q
+}
+
+// OnConflictOnConstraintDoNothing adds an upsert that skips rows conflicting on
+// a named constraint: PostgreSQL ON CONFLICT ON CONSTRAINT name DO NOTHING. It is
+// PostgreSQL/SQLite-only (MySQL infers the key and cannot name a constraint).
+func (q InsertQuery) OnConflictOnConstraintDoNothing(constraint string) InsertQuery {
+	q.conflict = &conflictClause{targetConstraint: constraint}
+	return q
+}
+
+// OnConflictOnConstraintDoUpdate adds an upsert that updates rows conflicting on
+// a named constraint: PostgreSQL ON CONFLICT ON CONSTRAINT name DO UPDATE SET
+// assignments. Reference the proposed row's values with Excluded. It is
+// PostgreSQL/SQLite-only.
+func (q InsertQuery) OnConflictOnConstraintDoUpdate(constraint string, assignments ...Assignment) InsertQuery {
+	q.conflict = &conflictClause{targetConstraint: constraint, doUpdate: true, sets: assignments}
 	return q
 }
 

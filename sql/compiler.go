@@ -1036,9 +1036,16 @@ func (c *Compiler) writeUpsert(sb *strings.Builder, args *[]any, conflict *confl
 	if conflict.doUpdate && len(conflict.sets) == 0 {
 		return fmt.Errorf("sqlkit/sql: ON CONFLICT DO UPDATE requires at least one assignment")
 	}
+	if len(conflict.target) > 0 && conflict.targetConstraint != "" {
+		return fmt.Errorf("sqlkit/sql: ON CONFLICT cannot target both columns and a named constraint")
+	}
 	target := make([]string, len(conflict.target))
 	for i, col := range conflict.target {
 		target[i] = c.Dialect.QuoteName(col)
+	}
+	targetConstraint := ""
+	if conflict.targetConstraint != "" {
+		targetConstraint = c.Dialect.QuoteName(conflict.targetConstraint)
 	}
 	assignments := make([]string, 0, len(conflict.sets))
 	for _, assignment := range conflict.sets {
@@ -1061,10 +1068,11 @@ func (c *Compiler) writeUpsert(sb *strings.Builder, args *[]any, conflict *confl
 		*args = append(*args, whereArgs...)
 	}
 	clause, err := renderer.Upsert(UpsertClause{
-		Target:      target,
-		DoUpdate:    conflict.doUpdate,
-		Assignments: assignments,
-		WhereSQL:    whereSQL,
+		Target:           target,
+		TargetConstraint: targetConstraint,
+		DoUpdate:         conflict.doUpdate,
+		Assignments:      assignments,
+		WhereSQL:         whereSQL,
 	})
 	if err != nil {
 		return err

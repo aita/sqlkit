@@ -548,6 +548,16 @@ func TestTypedOnConflictDoNothing(t *testing.T) {
 		[]any{int64(1), "a@example.com", &name})
 }
 
+func TestTypedOnConflictOnConstraint(t *testing.T) {
+	name := "Alice"
+	query := sqlkit.Insert(Users).
+		Values(User{ID: 1, Email: "a@example.com", Name: &name}).
+		OnConflictOnConstraintDoUpdate("users_email_key", Users.Email.SetExpr(Users.Email.Excluded()))
+	assertToSQL(t, query,
+		`INSERT INTO "public"."users" ("id", "email", "name") VALUES ($1, $2, $3) ON CONFLICT ON CONSTRAINT "users_email_key" DO UPDATE SET "email" = excluded."email"`,
+		[]any{int64(1), "a@example.com", &name})
+}
+
 func TestTypedUpdateFromAndDeleteUsing(t *testing.T) {
 	assertToSQL(t,
 		sqlkit.Update(Posts).

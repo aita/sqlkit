@@ -30,10 +30,11 @@ type InsertQuery struct {
 
 // insertConflict holds a typed upsert action mirroring sql.conflictClause.
 type insertConflict struct {
-	doUpdate bool
-	target   []AnyColumn
-	sets     []sql.Assignment
-	where    sql.Expression
+	doUpdate         bool
+	target           []AnyColumn
+	targetConstraint string
+	sets             []sql.Assignment
+	where            sql.Expression
 }
 
 // Insert creates an unbound INSERT builder, for ToSQL or tests. Executing it
@@ -123,6 +124,23 @@ func (q InsertQuery) OnConflictDoUpdate(target []AnyColumn, assignments ...sql.A
 	return q
 }
 
+// OnConflictOnConstraintDoNothing makes this an upsert that skips rows
+// conflicting on a named constraint (PostgreSQL ON CONFLICT ON CONSTRAINT name
+// DO NOTHING). It is PostgreSQL/SQLite-only.
+func (q InsertQuery) OnConflictOnConstraintDoNothing(constraint string) InsertQuery {
+	q.conflict = &insertConflict{targetConstraint: constraint}
+	return q
+}
+
+// OnConflictOnConstraintDoUpdate makes this an upsert that updates rows
+// conflicting on a named constraint (PostgreSQL ON CONFLICT ON CONSTRAINT name
+// DO UPDATE SET ...). Build assignments with Column.Set / SetExpr. It is
+// PostgreSQL/SQLite-only.
+func (q InsertQuery) OnConflictOnConstraintDoUpdate(constraint string, assignments ...sql.Assignment) InsertQuery {
+	q.conflict = &insertConflict{doUpdate: true, targetConstraint: constraint, sets: assignments}
+	return q
+}
+
 // OnConflictWhere adds a predicate to a preceding OnConflictDoUpdate
 // (PostgreSQL ON CONFLICT ... DO UPDATE SET ... WHERE ...). It is unsupported
 // on MySQL and has no effect without a DO UPDATE action.
@@ -164,11 +182,19 @@ func (q InsertQuery) ToSQL(dialect sql.Dialect) (string, []any, error) {
 
 // applyConflict copies this query's upsert configuration onto the sql builder.
 func (q InsertQuery) applyConflict(insert sql.InsertQuery) sql.InsertQuery {
-	target := columnNames(q.conflict.target)
-	if q.conflict.doUpdate {
-		insert = insert.OnConflictDoUpdate(target, q.conflict.sets...)
+	if c := q.conflict.targetConstraint; c != "" {
+		if q.conflict.doUpdate {
+			insert = insert.OnConflictOnConstraintDoUpdate(c, q.conflict.sets...)
+		} else {
+			insert = insert.OnConflictOnConstraintDoNothing(c)
+		}
 	} else {
-		insert = insert.OnConflictDoNothing(target...)
+		target := columnNames(q.conflict.target)
+		if q.conflict.doUpdate {
+			insert = insert.OnConflictDoUpdate(target, q.conflict.sets...)
+		} else {
+			insert = insert.OnConflictDoNothing(target...)
+		}
 	}
 	if q.conflict.where != nil {
 		insert = insert.OnConflictWhere(q.conflict.where)

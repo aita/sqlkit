@@ -125,14 +125,16 @@ type JSONObjectRenderer interface {
 
 // UpsertClause carries the already-compiled pieces of an upsert for a dialect to
 // assemble into its native syntax. Target holds the already-quoted conflict
-// columns; DoUpdate distinguishes DO UPDATE from DO NOTHING; Assignments are the
-// already-compiled "col = expr" fragments; WhereSQL is an optional already-
-// compiled predicate ("" when none).
+// columns, or TargetConstraint the already-quoted name of a conflict constraint
+// (PostgreSQL ON CONSTRAINT) — at most one is set; DoUpdate distinguishes DO
+// UPDATE from DO NOTHING; Assignments are the already-compiled "col = expr"
+// fragments; WhereSQL is an optional already-compiled predicate ("" when none).
 type UpsertClause struct {
-	Target      []string
-	DoUpdate    bool
-	Assignments []string
-	WhereSQL    string
+	Target           []string
+	TargetConstraint string
+	DoUpdate         bool
+	Assignments      []string
+	WhereSQL         string
 }
 
 // UpsertRenderer is an optional capability a Dialect implements to render an
@@ -503,12 +505,15 @@ func (PostgreSQLDialect) Upsert(cl UpsertClause) (string, error) {
 func renderOnConflict(cl UpsertClause, engine string) (string, error) {
 	// ON CONFLICT DO NOTHING needs no target, but DO UPDATE requires a conflict
 	// target (column list or constraint) to arbitrate.
-	if cl.DoUpdate && len(cl.Target) == 0 {
+	if cl.DoUpdate && len(cl.Target) == 0 && cl.TargetConstraint == "" {
 		return "", fmt.Errorf("sql: %s ON CONFLICT DO UPDATE requires a conflict target", engine)
 	}
 	var sb strings.Builder
 	sb.WriteString(" ON CONFLICT")
-	if len(cl.Target) > 0 {
+	if cl.TargetConstraint != "" {
+		sb.WriteString(" ON CONSTRAINT ")
+		sb.WriteString(cl.TargetConstraint)
+	} else if len(cl.Target) > 0 {
 		sb.WriteString(" (")
 		sb.WriteString(strings.Join(cl.Target, ", "))
 		sb.WriteString(")")
@@ -724,6 +729,9 @@ func (MySQLDialect) Regexp(left, pattern string, negate, caseInsensitive bool) (
 // conflicting key, so the target is ignored; it has no DO NOTHING form and no
 // per-action WHERE, both of which are reported as errors.
 func (MySQLDialect) Upsert(cl UpsertClause) (string, error) {
+	if cl.TargetConstraint != "" {
+		return "", fmt.Errorf("sql: MySQL ON DUPLICATE KEY UPDATE cannot target a named constraint; it infers the conflicting key")
+	}
 	if !cl.DoUpdate {
 		return "", fmt.Errorf("sql: MySQL has no ON CONFLICT DO NOTHING; use INSERT IGNORE or an OnConflictDoUpdate")
 	}

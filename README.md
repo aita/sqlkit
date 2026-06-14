@@ -234,6 +234,10 @@ err = db.Union(
 `WithCTE` (works on SELECT/UPDATE/DELETE). Pass `sql.Recursive()` for a
 `WITH RECURSIVE`.
 
+`sql.Values().Row(...)` builds a standalone `VALUES (...), (...)` query — usable
+on its own, as an aliased derived-table source, or as an `INSERT … SELECT`
+source.
+
 ```go
 active := db.Select(appdb.Users.ID).From(appdb.Users).
     Where(appdb.Users.Active.Eq(true)).CTE("active")
@@ -273,7 +277,9 @@ More write forms:
   struct's fields to columns and emits one `SET` per column.
 - **Upsert** — `OnConflictDoNothing` / `OnConflictDoUpdate` render PostgreSQL's
   `ON CONFLICT` and MySQL's `ON DUPLICATE KEY UPDATE`; `Column.Excluded()` refers
-  to the proposed row.
+  to the proposed row. `OnConflictOnConstraintDoNothing` /
+  `OnConflictOnConstraintDoUpdate` target a named constraint (PostgreSQL
+  `ON CONFLICT ON CONSTRAINT`).
 - **Cross-table writes** — `Update(t).From(src...)` and `Delete(t).Using(src...)`
   add `UPDATE … FROM` / `DELETE … USING` source lists.
 
