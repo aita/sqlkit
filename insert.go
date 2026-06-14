@@ -74,12 +74,16 @@ func (q InsertQuery) Columns(columns ...AnyColumn) InsertQuery {
 
 // BatchSize splits a Values-based INSERT into separate statements of at most n
 // rows each when executed, keeping large bulk inserts within the database's
-// bind-parameter and statement-size limits. n <= 0 (the default) inserts every
-// row in a single statement.
+// bind-parameter and statement-size limits. n <= 0 (the default) leaves the
+// per-statement row count to the executor's configured bind-parameter limit (see
+// WithMaxBindParams): when one is set, the rows are still split so the statement
+// never exceeds it, sizing each batch to floor(limit / columns). An explicit n
+// is additionally capped by that limit, so it can only make batches smaller.
 //
 // It applies to Exec only: ToSQL always compiles the full statement, and it has
-// no effect on FromSelect. Wrap the Exec in a transaction (a Session) if the
-// batches must succeed or fail together.
+// no effect on FromSelect. When the rows split into several statements run
+// through a Database, they run in one transaction so they succeed or fail
+// together; through a Session they join its transaction.
 func (q InsertQuery) BatchSize(n int) InsertQuery {
 	q.batchSize = n
 	return q
@@ -271,25 +275,21 @@ func intersect(names, allowed []string) []string {
 	return out
 }
 
-// Exec runs the INSERT statement and returns the database/sql result. When
-// BatchSize is set and the rows exceed it, the rows are inserted in several
-// statements and the returned result aggregates them: RowsAffected sums every
-// batch and LastInsertId reports the final batch.
+// Exec runs the INSERT statement and returns the database/sql result. The rows
+// are split into several statements when BatchSize is set or the executor's
+// configured bind-parameter limit (WithMaxBindParams) would otherwise be
+// exceeded; the returned result then aggregates the batches: RowsAffected sums
+// every batch and LastInsertId reports the final batch. Split statements run
+// atomically — in one transaction through a Database, joining the session's
+// transaction through a Session.
 func (q InsertQuery) Exec(ctx context.Context) (stdsql.Result, error) {
-	if q.batchSize > 0 && len(q.rows) > q.batchSize {
-		return q.execBatched(ctx)
-	}
-	return runExec(ctx, q.ex, q)
-}
-
-// execBatched inserts q.rows in chunks of q.batchSize, one statement per chunk.
-// The statement is built once so the mapped columns and the defaulted-and-zero
-// omission mask are derived from all rows (preserving non-batched Values
-// semantics), then the row list is split into per-chunk statements that share
-// that fixed column set.
-func (q InsertQuery) execBatched(ctx context.Context) (stdsql.Result, error) {
 	if q.ex == nil {
 		return nil, errNoExecutor
+	}
+	// FromSelect carries no per-row bind values to split, and an empty/erroring
+	// build is left to the single-statement path to surface.
+	if q.selectSrc != nil || len(q.rows) == 0 {
+		return runExec(ctx, q.ex, q)
 	}
 	insert, err := q.build()
 	if err != nil {
@@ -298,44 +298,47 @@ func (q InsertQuery) execBatched(ctx context.Context) (stdsql.Result, error) {
 	if q.conflict != nil {
 		insert = q.applyConflict(insert)
 	}
+	batch := q.effectiveBatchSize(insert.ColumnCount())
+	if batch <= 0 || len(q.rows) <= batch {
+		return runExec(ctx, q.ex, q)
+	}
+	return q.execBatched(ctx, insert, batch)
+}
+
+// effectiveBatchSize combines the explicit BatchSize with the executor's
+// bind-parameter limit: the limit caps each statement at floor(limit / columns)
+// rows so the parameters never exceed it, and an explicit BatchSize can only
+// lower that. It returns 0 when neither bounds the row count (a single
+// statement).
+func (q InsertQuery) effectiveBatchSize(columns int) int {
+	batch := q.batchSize
+	if limit := q.ex.maxBindParams(); limit > 0 && columns > 0 {
+		perStmt := limit / columns
+		if perStmt < 1 {
+			perStmt = 1
+		}
+		if batch <= 0 || perStmt < batch {
+			batch = perStmt
+		}
+	}
+	return batch
+}
+
+// execBatched inserts q.rows in chunks of batch rows, one statement per chunk.
+// The statement is built once so the mapped columns and the defaulted-and-zero
+// omission mask are derived from all rows (preserving non-batched Values
+// semantics), then the row list is split into per-chunk statements that share
+// that fixed column set and run atomically through execStatements.
+func (q InsertQuery) execBatched(ctx context.Context, insert sql.InsertQuery, batch int) (stdsql.Result, error) {
 	dialect := q.ex.sqlDialect()
-	result := &batchResult{}
-	for _, batch := range insert.SplitRows(q.batchSize) {
-		sqlText, args, err := batch.ToSQL(dialect)
+	parts := insert.SplitRows(batch)
+	stmts := make([]compiledStmt, 0, len(parts))
+	for _, part := range parts {
+		sqlText, args, err := part.ToSQL(dialect)
 		if err != nil {
 			return nil, err
 		}
-		res, err := q.ex.execContext(ctx, sqlText, args...)
-		if err != nil {
-			return nil, err
-		}
-		result.add(res)
+		stmts = append(stmts, compiledStmt{sql: sqlText, args: args})
 	}
-	return result, nil
-}
-
-// batchResult aggregates the per-batch results of a BatchSize INSERT: it sums
-// RowsAffected across batches and reports LastInsertId from the final batch.
-type batchResult struct {
-	last         stdsql.Result
-	rowsAffected int64
-	rowsErr      error
-}
-
-func (r *batchResult) add(res stdsql.Result) {
-	r.last = res
-	if n, err := res.RowsAffected(); err != nil {
-		r.rowsErr = err
-	} else {
-		r.rowsAffected += n
-	}
-}
-
-func (r *batchResult) LastInsertId() (int64, error) { return r.last.LastInsertId() }
-
-func (r *batchResult) RowsAffected() (int64, error) {
-	if r.rowsErr != nil {
-		return 0, r.rowsErr
-	}
-	return r.rowsAffected, nil
+	return execStatements(ctx, q.ex, stmts)
 }

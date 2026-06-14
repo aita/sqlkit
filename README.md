@@ -827,11 +827,67 @@ _, err = db.Update(appdb.Users).
 **Bulk inserts.** `BatchSize(n)` splits a `Values` insert into separate `Exec`
 statements of at most `n` rows each, keeping large inserts within the
 database's bind-parameter and statement-size limits. The returned result sums
-`RowsAffected` across batches. Run it inside a `Session` if the batches must
-share a transaction.
+`RowsAffected` across batches. When the split runs through a `Database` the
+batches run in one transaction (so they succeed or fail together); through a
+`Session` they join its transaction.
 
 ```go
 _, err = db.Insert(appdb.Users).Values(users).BatchSize(1000).Exec(ctx)
+```
+
+**Automatic splitting at the parameter limit.** Configure a bind-parameter limit
+on the `Database` and bulk inserts split themselves so a statement never exceeds
+it — no `BatchSize` needed. `WithMaxBindParams(n)` sets the limit explicitly;
+`WithAutoMaxBindParams()` detects a safe one from the database at `Open`
+(PostgreSQL and MySQL both cap a statement at 65535 parameters), as does
+`db.DetectMaxBindParams(ctx)` for a handle made with `WrapDB`. Each insert is
+sized to `floor(limit / columns)` rows; an explicit `BatchSize` is additionally
+capped by it, so it can only make batches smaller.
+
+```go
+db, err := sqlkit.Open("pgx", dsn, sqlkit.WithAutoMaxBindParams())
+// 100k rows × 5 columns is split into statements of ≤ 65535 parameters.
+_, err = db.Insert(appdb.Users).Values(users).Exec(ctx)
+```
+
+The same limit chunks a large `IN` list. When a column `In` is the sole
+predicate of a `Where` and its values would overflow the limit, `Select.All`
+runs one statement per chunk and concatenates the rows, while `Update`/`Delete`
+`Exec` run the chunks atomically and sum `RowsAffected`. Chunking is skipped (the
+list runs as one statement) when a `Select` also carries `ORDER BY`, `GROUP BY`,
+`DISTINCT`, `HAVING`, or `LIMIT`/`OFFSET`, whose semantics splitting cannot
+preserve; reach for `sqlkit.InBatches` to split those by hand. `ToSQL` is
+unaffected — it always compiles the full value list into a single statement.
+
+A split `Select` runs its chunk queries inside one `REPEATABLE READ` transaction
+by default, so they observe a single consistent snapshot just as the unsplit
+query would; `WithBatchReadSnapshot(false)` turns that off to run the chunks as
+independent reads (not holding a connection across them). Chunks started from a
+`Session` already share its transaction. Split writes are always wrapped in their
+own atomic transaction regardless of this setting.
+
+A split write (an `Update`/`Delete` chunked on its `IN` list) stays correct even
+as a *reference* update — `SET` from a subquery or a correlated `From` source —
+because the chunks target disjoint keys. When the data those chunks read must not
+drift between them, `WithBatchWriteSnapshot(true)` raises that wrapping
+transaction to `REPEATABLE READ` so every chunk reads the same snapshot. It is
+off by default because `REPEATABLE READ` can surface serialization failures
+(PostgreSQL `40001`) the caller must retry; the split is atomic eitherway.
+
+```go
+db, _ := sqlkit.Open("pgx", dsn,
+    sqlkit.WithAutoMaxBindParams(), sqlkit.WithBatchWriteSnapshot(true))
+// Each chunk reads `rates` under the same snapshot.
+_, err = db.Update(appdb.Accounts).
+    Set(appdb.Accounts.Rate.SetExpr(rateSubquery)).
+    Where(appdb.Accounts.ID.In(ids...)).Exec(ctx)
+```
+
+```go
+// ids may hold far more than 65535 values; the query splits as needed.
+var users []appdb.User
+err = db.Select().From(appdb.Users).Where(appdb.Users.ID.In(ids...)).
+    All(ctx).Scan(&users)
 ```
 
 **Upsert.** `OnConflictDoNothing` / `OnConflictDoUpdate` render PostgreSQL's

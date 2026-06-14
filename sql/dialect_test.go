@@ -41,4 +41,9 @@ func TestDialectNamesAndCapabilities(t *testing.T) {
 	if (MySQLDialect{}).Name() != "mysql" || (MySQLDialect{}).SupportsReturning() {
 		t.Fatal("mysql dialect metadata wrong")
 	}
+	for _, d := range []BindParamLimiter{PostgreSQLDialect{}, MySQLDialect{}} {
+		if got := d.MaxBindParams(); got != 65535 {
+			t.Fatalf("MaxBindParams() = %d, want 65535", got)
+		}
+	}
 }

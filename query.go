@@ -77,7 +77,7 @@ type Execable interface {
 func unwrapQuery(query Query) sql.Query {
 	switch q := query.(type) {
 	case SelectQuery:
-		return q.query
+		return q.finalQuery()
 	case UnionQuery:
 		return q.query
 	default:

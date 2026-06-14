@@ -29,6 +29,14 @@ type SelectQuery struct {
 	preloads   []Relation // relations eager-loaded at Scan after the base rows
 	query      sql.SelectQuery
 	err        error // deferred build error (e.g. from Filter), surfaced at the terminal
+	// batch holds a lone column IN back from q.query so All can split its
+	// value list across statements when the bind-parameter limit would be
+	// exceeded. finalQuery folds it back in for every other use.
+	batch *batchIn
+	// batchUnsafe records clauses (ORDER BY, GROUP BY, DISTINCT, LIMIT/OFFSET,
+	// HAVING) whose semantics concatenating split results cannot preserve, so the
+	// IN runs as a single statement instead.
+	batchUnsafe bool
 }
 
 // Select starts an unbound SELECT builder for use as a subquery (FromSelect,
@@ -64,12 +72,28 @@ func (q SelectQuery) fail(err error) SelectQuery {
 	return q
 }
 
-// Where adds predicates, combined with AND.
+// Where adds predicates, combined with AND. A lone column IN whose value
+// list is large enough to exceed the executor's bind-parameter limit is held
+// back and split across statements by All; see WithMaxBindParams.
 func (q SelectQuery) Where(predicates ...Predicate) SelectQuery {
-	if expr := combineWhere(predicates); expr != nil {
-		q.query = q.query.Where(expr)
+	flush, fold, deferred := resolveWhere(predicates, q.batch)
+	if flush != nil {
+		q.query = q.query.Where(flush)
 	}
+	if fold != nil {
+		q.query = q.query.Where(fold)
+	}
+	q.batch = deferred
 	return q
+}
+
+// finalQuery folds any deferred IN back into the query, for every use other than
+// All's splitting path (ToSQL, subqueries, single-row and counting reads).
+func (q SelectQuery) finalQuery() sql.SelectQuery {
+	if q.batch == nil {
+		return q.query
+	}
+	return q.query.Where(q.batch.exprFor(q.batch.values))
 }
 
 // Join adds an INNER JOIN.
@@ -211,36 +235,42 @@ func (q SelectQuery) Filter(filter any) SelectQuery {
 // GroupBy adds GROUP BY expressions (columns or sql expressions).
 func (q SelectQuery) GroupBy(exprs ...sql.Expression) SelectQuery {
 	q.query = q.query.GroupBy(exprs...)
+	q.batchUnsafe = true
 	return q
 }
 
 // Having adds a HAVING predicate.
 func (q SelectQuery) Having(predicate Predicate) SelectQuery {
 	q.query = q.query.Having(predicate.Expression())
+	q.batchUnsafe = true
 	return q
 }
 
 // OrderBy adds ORDER BY terms.
 func (q SelectQuery) OrderBy(terms ...sql.OrderTerm) SelectQuery {
 	q.query = q.query.OrderBy(terms...)
+	q.batchUnsafe = true
 	return q
 }
 
 // Limit sets the LIMIT clause.
 func (q SelectQuery) Limit(n int) SelectQuery {
 	q.query = q.query.Limit(n)
+	q.batchUnsafe = true
 	return q
 }
 
 // Offset sets the OFFSET clause.
 func (q SelectQuery) Offset(n int) SelectQuery {
 	q.query = q.query.Offset(n)
+	q.batchUnsafe = true
 	return q
 }
 
 // Distinct marks the query as SELECT DISTINCT.
 func (q SelectQuery) Distinct() SelectQuery {
 	q.query = q.query.Distinct()
+	q.batchUnsafe = true
 	return q
 }
 
@@ -248,7 +278,7 @@ func (q SelectQuery) Distinct() SelectQuery {
 // FROM source and column handle, and attached to a statement with WithCTE. Pass
 // sql.Recursive() / sql.Columns(...) options to configure it.
 func (q SelectQuery) CTE(name string, opts ...sql.CTEOption) sql.CTE {
-	return q.query.CTE(name, opts...)
+	return q.finalQuery().CTE(name, opts...)
 }
 
 // WithCTE prepends common table expressions to the SELECT, emitting a leading
@@ -265,28 +295,65 @@ func (q SelectQuery) WithCTE(ctes ...sql.CTE) SelectQuery {
 //	sub := sqlkit.Select(Users.ID).From(Users).Where(Users.Active.Eq(true)).As("sub")
 //	db.Select(sub.Col("id")).From(sub).All(ctx).Scan(&ids)
 func (q SelectQuery) As(alias string) sql.DerivedTable {
-	return q.query.As(alias)
+	return q.finalQuery().As(alias)
 }
 
 // SQLSource marks the query as a subquery source.
-func (q SelectQuery) SQLSource() SourceExpression { return q.query.SQLSource() }
+func (q SelectQuery) SQLSource() SourceExpression { return q.finalQuery().SQLSource() }
 
-// ToSQL compiles the query.
+// ToSQL compiles the query. A deferred IN is folded into a single statement, so
+// the compiled SQL always carries the full value list regardless of any
+// configured bind-parameter limit (which only affects All's execution).
 func (q SelectQuery) ToSQL(dialect sql.Dialect) (string, []any, error) {
 	if q.err != nil {
 		return "", nil, q.err
 	}
-	return q.query.ToSQL(dialect)
+	return q.finalQuery().ToSQL(dialect)
 }
 
 // All prepares the query for execution against the executor the chain was
 // built from. The query runs when Scan is called; build and execution errors
 // surface there.
+//
+// When a lone column IN carries more values than the executor's
+// bind-parameter limit (WithMaxBindParams) allows in one statement, the value
+// list is split across several statements and Scan concatenates their rows. The
+// split is skipped, running a single statement, when the query also carries
+// ORDER BY, GROUP BY, DISTINCT, HAVING, or LIMIT/OFFSET, whose semantics
+// concatenation cannot preserve.
 func (q SelectQuery) All(ctx context.Context) Rows {
 	if q.err != nil {
 		return ErrRows(q.err)
 	}
-	return q.withPreloads(newRows(ctx, q.ex, q.query))
+	if rows, ok := q.batchedRows(ctx); ok {
+		return q.withPreloads(rows)
+	}
+	return q.withPreloads(newRows(ctx, q.ex, q.finalQuery()))
+}
+
+// batchedRows splits a deferred IN across statements when its value list would
+// exceed the executor's bind-parameter limit, returning the multi-statement Rows
+// and true. It returns false when no split applies (no deferred IN, unsafe
+// clauses present, no limit configured, or the values already fit).
+func (q SelectQuery) batchedRows(ctx context.Context) (Rows, bool) {
+	if q.batchUnsafe || q.ex == nil {
+		return Rows{}, false
+	}
+	dialect := q.ex.sqlDialect()
+	stmts, ok, err := splitInStatements(q.ex, q.batch, func(in sql.Expression) (string, []any, error) {
+		query := q.query
+		if in != nil {
+			query = query.Where(in)
+		}
+		return query.ToSQL(dialect)
+	})
+	if err != nil {
+		return ErrRows(err), true
+	}
+	if !ok {
+		return Rows{}, false
+	}
+	return Rows{ctx: ctx, ex: q.ex, batches: stmts}, true
 }
 
 // withPreloads attaches the registered preloads to a Rows so Scan eager-loads
@@ -303,7 +370,7 @@ func (q SelectQuery) First(ctx context.Context) Rows {
 	if q.err != nil {
 		return ErrRows(q.err)
 	}
-	return q.withPreloads(newRows(ctx, q.ex, q.query.Limit(1)))
+	return q.withPreloads(newRows(ctx, q.ex, q.finalQuery().Limit(1)))
 }
 
 // One is All restricted to exactly one row: Scan yields the row when the
@@ -314,7 +381,7 @@ func (q SelectQuery) One(ctx context.Context) Rows {
 	if q.err != nil {
 		return ErrRows(q.err)
 	}
-	rows := newRows(ctx, q.ex, q.query.Limit(2))
+	rows := newRows(ctx, q.ex, q.finalQuery().Limit(2))
 	rows.exactlyOne = true
 	return q.withPreloads(rows)
 }
@@ -328,7 +395,7 @@ func (q SelectQuery) Page(ctx context.Context, limit, offset int) Rows {
 	if q.err != nil {
 		return ErrRows(q.err)
 	}
-	return q.withPreloads(newRows(ctx, q.ex, q.query.Limit(limit).Offset(offset)))
+	return q.withPreloads(newRows(ctx, q.ex, q.finalQuery().Limit(limit).Offset(offset)))
 }
 
 // Count runs SELECT COUNT(*) over this query (as a subquery, so joins,
@@ -337,7 +404,7 @@ func (q SelectQuery) Count(ctx context.Context) (int64, error) {
 	if q.err != nil {
 		return 0, q.err
 	}
-	count := sql.Select(sql.CountAll()).From(sql.Alias(q.query, "q"))
+	count := sql.Select(sql.CountAll()).From(sql.Alias(q.finalQuery(), "q"))
 	var n int64
 	err := newRows(ctx, q.ex, count).Scan(&n)
 	return n, err
@@ -371,22 +438,22 @@ func (q SelectQuery) Get(ctx context.Context, pk ...any) Rows {
 // Union combines this query with another using UNION. The result stays bound
 // to this chain's executor.
 func (q SelectQuery) Union(other SelectQuery) UnionQuery {
-	return UnionQuery{ex: q.ex, query: q.query.Union(other.query)}
+	return UnionQuery{ex: q.ex, query: q.finalQuery().Union(other.finalQuery())}
 }
 
 // UnionAll combines this query with another using UNION ALL.
 func (q SelectQuery) UnionAll(other SelectQuery) UnionQuery {
-	return UnionQuery{ex: q.ex, query: q.query.UnionAll(other.query)}
+	return UnionQuery{ex: q.ex, query: q.finalQuery().UnionAll(other.finalQuery())}
 }
 
 // Intersect combines this query with another using INTERSECT.
 func (q SelectQuery) Intersect(other SelectQuery) UnionQuery {
-	return UnionQuery{ex: q.ex, query: q.query.Intersect(other.query)}
+	return UnionQuery{ex: q.ex, query: q.finalQuery().Intersect(other.finalQuery())}
 }
 
 // Except combines this query with another using EXCEPT.
 func (q SelectQuery) Except(other SelectQuery) UnionQuery {
-	return UnionQuery{ex: q.ex, query: q.query.Except(other.query)}
+	return UnionQuery{ex: q.ex, query: q.finalQuery().Except(other.finalQuery())}
 }
 
 // Star is the "table.*" select-list item — every column of table, qualified by

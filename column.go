@@ -189,16 +189,25 @@ func (c Column[T]) GtExpr(other TypedExpr[T]) Predicate { return newPredicate(sq
 // GeExpr creates a "column >= expression" predicate.
 func (c Column[T]) GeExpr(other TypedExpr[T]) Predicate { return newPredicate(sql.Ge(c, other)) }
 
-// In creates a "column IN (values...)" predicate.
+// In creates a "column IN (values...)" predicate. When it is the only predicate
+// of a Where call and the executor has a bind-parameter limit configured
+// (WithMaxBindParams), a value list large enough to exceed the limit is split
+// across several statements automatically; see SelectQuery.All. The chunks are
+// disjoint, so the combined rows are exactly those of the full list.
 func (c Column[T]) In(values ...T) Predicate {
 	items := make([]any, len(values))
 	for i, value := range values {
 		items[i] = sql.Val(value)
 	}
-	return newPredicate(sql.In(c, items...))
+	b := &batchIn{col: c, values: items}
+	return Predicate{expr: b.exprFor(items), batch: b}
 }
 
-// NotIn creates a "column NOT IN (values...)" predicate.
+// NotIn creates a "column NOT IN (values...)" predicate. Unlike In it is not
+// split automatically: NOT IN cannot be partitioned across statements (a row is
+// excluded only when it appears in no chunk), so a very large NOT IN list must
+// fit within the bind-parameter limit. Express the complement as an anti-join or
+// a NOT EXISTS subquery when it would not.
 func (c Column[T]) NotIn(values ...T) Predicate {
 	items := make([]any, len(values))
 	for i, value := range values {
