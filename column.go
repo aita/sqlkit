@@ -336,7 +336,7 @@ func (c Column[T]) Asc() sql.OrderTerm { return sql.Asc(c) }
 // Desc creates a descending ORDER BY term.
 func (c Column[T]) Desc() sql.OrderTerm { return sql.Desc(c) }
 
-// Excluded refers to this column's proposed value inside an OnConflictDoUpdate
+// Excluded refers to this column's proposed value inside an OnConflict DoUpdate
 // assignment (PostgreSQL excluded.col, MySQL VALUES(col)), e.g.
 // Users.Name.SetExpr(Users.Name.Excluded()) to overwrite with the new row.
 func (c Column[T]) Excluded() TypedExpr[T] { return typedNode[T]{sql.Excluded(c.name)} }

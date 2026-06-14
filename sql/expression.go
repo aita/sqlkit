@@ -502,7 +502,7 @@ type ExcludedExpression struct{ Column string }
 
 func (ExcludedExpression) SQLExpression() {}
 
-// Excluded references the proposed value for column in an OnConflictDoUpdate
+// Excluded references the proposed value for column in an OnConflict DoUpdate
 // assignment, e.g. Set("name", Excluded("name")) to overwrite with the new row.
 func Excluded(column string) ExcludedExpression { return ExcludedExpression{Column: column} }
 

@@ -83,7 +83,7 @@ func TestInsertRequiresRowsOrSelect(t *testing.T) {
 
 func TestInsertOnConflictDoNothing(t *testing.T) {
 	query := InsertInto(users).Columns("email").Values("a@example.com").
-		OnConflictDoNothing("email")
+		OnConflict(OnColumns("email"), DoNothing())
 	assertSQL(t, query,
 		`INSERT INTO "public"."users" ("email") VALUES ($1) ON CONFLICT ("email") DO NOTHING`,
 		[]any{"a@example.com"})
@@ -91,7 +91,7 @@ func TestInsertOnConflictDoNothing(t *testing.T) {
 
 func TestInsertOnConflictDoUpdate(t *testing.T) {
 	query := InsertInto(users).Columns("email", "name").Values("a@example.com", "Alice").
-		OnConflictDoUpdate([]string{"email"}, Set("name", Excluded("name"))).
+		OnConflict(OnColumns("email"), DoUpdate(Set("name", Excluded("name")))).
 		Returning(Col("id"))
 	assertSQL(t, query,
 		`INSERT INTO "public"."users" ("email", "name") VALUES ($1, $2) ON CONFLICT ("email") DO UPDATE SET "name" = excluded."name" RETURNING "id"`,
@@ -100,13 +100,13 @@ func TestInsertOnConflictDoUpdate(t *testing.T) {
 
 func TestInsertOnConflictOnConstraint(t *testing.T) {
 	doNothing := InsertInto(users).Columns("email").Values("a@x.com").
-		OnConflictOnConstraintDoNothing("users_email_key")
+		OnConflict(OnConstraint("users_email_key"), DoNothing())
 	assertSQL(t, doNothing,
 		`INSERT INTO "public"."users" ("email") VALUES ($1) ON CONFLICT ON CONSTRAINT "users_email_key" DO NOTHING`,
 		[]any{"a@x.com"})
 
 	doUpdate := InsertInto(users).Columns("email", "name").Values("a@x.com", "Alice").
-		OnConflictOnConstraintDoUpdate("users_email_key", Set("name", Excluded("name")))
+		OnConflict(OnConstraint("users_email_key"), DoUpdate(Set("name", Excluded("name"))))
 	assertSQL(t, doUpdate,
 		`INSERT INTO "public"."users" ("email", "name") VALUES ($1, $2) ON CONFLICT ON CONSTRAINT "users_email_key" DO UPDATE SET "name" = excluded."name"`,
 		[]any{"a@x.com", "Alice"})
@@ -114,7 +114,7 @@ func TestInsertOnConflictOnConstraint(t *testing.T) {
 
 func TestInsertOnConflictOnConstraintRejectedOnMySQL(t *testing.T) {
 	q := InsertInto(users).Columns("email", "name").Values("a@x.com", "Alice").
-		OnConflictOnConstraintDoUpdate("users_email_key", Set("name", Excluded("name")))
+		OnConflict(OnConstraint("users_email_key"), DoUpdate(Set("name", Excluded("name"))))
 	if _, _, err := q.ToSQL(MySQLDialect{}); err == nil || !strings.Contains(err.Error(), "constraint") {
 		t.Fatalf("ToSQL(mysql) error = %v, want constraint rejection", err)
 	}
@@ -122,8 +122,11 @@ func TestInsertOnConflictOnConstraintRejectedOnMySQL(t *testing.T) {
 
 func TestInsertOnConflictDoUpdateWherePlaceholderOrder(t *testing.T) {
 	query := InsertInto(users).Columns("email", "name").Values("a@example.com", "Alice").
-		OnConflictDoUpdate([]string{"email"}, Set("name", Excluded("name"))).
-		OnConflictWhere(Ne(Col("users.name"), Val("locked")))
+		OnConflict(
+			OnColumns("email"),
+			DoUpdate(Set("name", Excluded("name"))),
+			ConflictWhere(Ne(Col("users.name"), Val("locked"))),
+		)
 	assertSQL(t, query,
 		`INSERT INTO "public"."users" ("email", "name") VALUES ($1, $2) ON CONFLICT ("email") DO UPDATE SET "name" = excluded."name" WHERE ("users"."name" <> $3)`,
 		[]any{"a@example.com", "Alice", "locked"})
@@ -131,7 +134,7 @@ func TestInsertOnConflictDoUpdateWherePlaceholderOrder(t *testing.T) {
 
 func TestInsertOnConflictDoUpdateRequiresAssignment(t *testing.T) {
 	query := InsertInto(users).Columns("email").Values("a@example.com").
-		OnConflictDoUpdate([]string{"email"})
+		OnConflict(OnColumns("email"))
 	if _, _, err := query.ToSQL(PostgreSQLDialect{}); err == nil {
 		t.Fatal("DO UPDATE without assignments compiled, want error")
 	}
@@ -139,18 +142,17 @@ func TestInsertOnConflictDoUpdateRequiresAssignment(t *testing.T) {
 
 func TestInsertOnConflictDoUpdateRequiresTargetOnPostgres(t *testing.T) {
 	query := InsertInto(users).Columns("email", "name").Values("a@example.com", "Alice").
-		OnConflictDoUpdate(nil, Set("name", Excluded("name")))
+		OnConflict(DoUpdate(Set("name", Excluded("name"))))
 	if _, _, err := query.ToSQL(PostgreSQLDialect{}); err == nil {
 		t.Fatal("DO UPDATE without a conflict target compiled on PostgreSQL, want error")
 	}
 }
 
 func TestInsertOnConflictWhereIgnoredOnDoNothing(t *testing.T) {
-	// A WHERE chained onto DO NOTHING is dropped, and must not leave a dangling
+	// A WHERE alongside DO NOTHING is dropped, and must not leave a dangling
 	// bind value behind (which would desync the placeholder count).
 	query := InsertInto(users).Columns("email").Values("a@example.com").
-		OnConflictDoNothing("email").
-		OnConflictWhere(Ne(Col("users.name"), Val("locked")))
+		OnConflict(OnColumns("email"), DoNothing(), ConflictWhere(Ne(Col("users.name"), Val("locked"))))
 	assertSQL(t, query,
 		`INSERT INTO "public"."users" ("email") VALUES ($1) ON CONFLICT ("email") DO NOTHING`,
 		[]any{"a@example.com"})

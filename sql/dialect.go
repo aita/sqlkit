@@ -764,7 +764,7 @@ func (MySQLDialect) Upsert(cl UpsertClause) (string, error) {
 		return "", fmt.Errorf("sql: MySQL ON DUPLICATE KEY UPDATE cannot target a named constraint; it infers the conflicting key")
 	}
 	if !cl.DoUpdate {
-		return "", fmt.Errorf("sql: MySQL has no ON CONFLICT DO NOTHING; use INSERT IGNORE or an OnConflictDoUpdate")
+		return "", fmt.Errorf("sql: MySQL has no ON CONFLICT DO NOTHING; use INSERT IGNORE or OnConflict(DoUpdate(...))")
 	}
 	if cl.WhereSQL != "" {
 		return "", fmt.Errorf("sql: MySQL ON DUPLICATE KEY UPDATE does not support a WHERE clause")
