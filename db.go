@@ -25,6 +25,12 @@ type Database struct {
 
 	ics []Interceptor
 
+	// exec is the terminal Executor a WrapExecutor database runs every statement
+	// through, inherited by its sessions. It is nil for a WrapDB/Open database,
+	// which runs against its database/sql handle instead (dbExecutor here,
+	// sessionExecutor — the session's own transaction — in a Session).
+	exec Executor
+
 	// batchReadSnapshot runs a split SELECT's chunk queries inside one REPEATABLE
 	// READ transaction so they observe a single consistent snapshot, as an
 	// unsplit statement would. It defaults to true (active only when splitting is
@@ -85,6 +91,44 @@ func WithMetadata(m meta.Metadata) DatabaseOption {
 func WithInterceptor(interceptors ...Interceptor) DatabaseOption {
 	return func(d *Database) { d.ics = append(d.ics, interceptors...) }
 }
+
+// dbExecutor is the default terminal Executor: it runs compiled statements
+// against the wrapped database/sql handle in auto-commit mode, and begins
+// transactions on it for sessions.
+type dbExecutor struct{ db *stdsql.DB }
+
+func (e dbExecutor) Query(ctx context.Context, stmt Statement) (*stdsql.Rows, error) {
+	return e.db.QueryContext(ctx, stmt.SQL, stmt.Args...)
+}
+
+func (e dbExecutor) Exec(ctx context.Context, stmt Statement) (stdsql.Result, error) {
+	return e.db.ExecContext(ctx, stmt.SQL, stmt.Args...)
+}
+
+// Begin starts a database/sql transaction, satisfying TxExecutor so sessions of
+// a WrapDB/Open database run inside a real transaction.
+func (e dbExecutor) Begin(ctx context.Context, opts *stdsql.TxOptions) (Tx, error) {
+	tx, err := e.db.BeginTx(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	return txExecutor{tx}, nil
+}
+
+// txExecutor is the default Tx: it runs compiled statements on a database/sql
+// transaction and ends it with Commit or Rollback.
+type txExecutor struct{ tx *stdsql.Tx }
+
+func (e txExecutor) Query(ctx context.Context, stmt Statement) (*stdsql.Rows, error) {
+	return e.tx.QueryContext(ctx, stmt.SQL, stmt.Args...)
+}
+
+func (e txExecutor) Exec(ctx context.Context, stmt Statement) (stdsql.Result, error) {
+	return e.tx.ExecContext(ctx, stmt.SQL, stmt.Args...)
+}
+
+func (e txExecutor) Commit() error   { return e.tx.Commit() }
+func (e txExecutor) Rollback() error { return e.tx.Rollback() }
 
 // WithBatchReadSnapshot controls whether a split SELECT (a large IN list chunked
 // to stay within the bind-parameter limit) runs its chunk queries inside one
@@ -149,7 +193,28 @@ func Open(driverName, dsn string, opts ...DatabaseOption) (*Database, error) {
 
 // WrapDB creates a sqlkit database handle from an existing database/sql handle.
 func WrapDB(db *stdsql.DB, opts ...DatabaseOption) *Database {
-	d := &Database{db: db, dialect: sql.PostgreSQLDialect{}, batchReadSnapshot: true, autoChunk: true, preloadChunk: defaultPreloadChunkSize}
+	return newDatabase(db, nil, opts)
+}
+
+// WrapExecutor creates a database that runs every statement through exec instead
+// of a database/sql handle — the counterpart to WrapDB for a custom terminal
+// (statement router, in-memory or remote backend, test double). exec is the
+// innermost handler of the interceptor chain, and sessions opened from the
+// database inherit it.
+//
+// Sessions opened from the database are transactional when exec also implements
+// TxExecutor: their statements run in a transaction it begins, and Commit,
+// Rollback, and savepoints take effect. When exec implements only Executor, a
+// session has no managed transaction — its statements run directly through exec
+// and Commit/Rollback are no-ops, so exec owns any transactional semantics.
+func WrapExecutor(exec Executor, opts ...DatabaseOption) *Database {
+	return newDatabase(nil, exec, opts)
+}
+
+// newDatabase builds a Database with the shared defaults, then applies opts. A
+// WrapDB/Open database passes db (exec nil); WrapExecutor passes exec (db nil).
+func newDatabase(db *stdsql.DB, exec Executor, opts []DatabaseOption) *Database {
+	d := &Database{db: db, exec: exec, dialect: sql.PostgreSQLDialect{}, batchReadSnapshot: true, autoChunk: true, preloadChunk: defaultPreloadChunkSize}
 	for _, opt := range opts {
 		opt(d)
 	}
@@ -267,7 +332,7 @@ func (d *Database) NewSession(opts ...SessionOption) *Session {
 	if options.autoChunk != nil {
 		autoChunk = *options.autoChunk
 	}
-	return &Session{db: d.db, txOpts: options.tx, dialect: d.dialect, identities: d.identities, ics: d.ics, autoChunk: autoChunk, preloadChunk: d.preloadChunk}
+	return &Session{base: d.executor(), txOpts: options.tx, dialect: d.dialect, identities: d.identities, ics: d.ics, autoChunk: autoChunk, preloadChunk: d.preloadChunk}
 }
 
 // WithSession runs fn inside a session and commits when fn returns nil; on
@@ -361,10 +426,9 @@ func (d *Database) AutoChunkEnabled() bool { return d.autoChunk }
 
 func (d *Database) preloadChunkSize() int { return d.preloadChunk }
 
-func (d *Database) queryContext(ctx context.Context, query string, args ...any) (*stdsql.Rows, error) {
-	return d.db.QueryContext(ctx, query, args...)
-}
-
-func (d *Database) execContext(ctx context.Context, query string, args ...any) (stdsql.Result, error) {
-	return d.db.ExecContext(ctx, query, args...)
+func (d *Database) executor() Executor {
+	if d.exec != nil {
+		return d.exec
+	}
+	return dbExecutor{d.db}
 }

@@ -4,7 +4,7 @@
 //
 // Every helper takes *testing.T and fails the test with t.Fatalf on error, so
 // callers write linear setup code with no error handling. The insert helpers
-// accept a sqlkit.Executor — the interface both *sqlkit.Database (auto-commit)
+// accept a sqlkit.Querier — the interface both *sqlkit.Database (auto-commit)
 // and *sqlkit.Session (a transaction) implement — so the same helper seeds data
 // directly or inside a transaction.
 //

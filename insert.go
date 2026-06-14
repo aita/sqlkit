@@ -16,7 +16,7 @@ import (
 // mapped to columns by field name the same way Scan maps results) or by
 // FromSelect (INSERT ... SELECT).
 type InsertQuery struct {
-	ex           Executor
+	ex           executorBinding
 	def          sql.TableDef
 	rows         []any
 	selectSrc    sql.Query
@@ -324,7 +324,7 @@ func (q InsertQuery) effectiveBatchSize(columns int) int {
 // mask derive from all rows (preserving non-batched Values semantics). It reports
 // ok=false — running the statement unchanged — for ChunkOff, FromSelect, no rows, or
 // when the rows already fit one statement. Inserts are always writes.
-func (q InsertQuery) splitStatements(ex Executor) ([]compiledStmt, bool, bool, error) {
+func (q InsertQuery) splitStatements(ex executorBinding) ([]compiledStmt, bool, bool, error) {
 	if q.chunkOff || q.selectSrc != nil || len(q.rows) == 0 {
 		return nil, false, true, nil
 	}

@@ -22,7 +22,7 @@ type generateCmd struct {
 	Dialect         string   `help:"Type-mapping dialect (postgres or mysql)." default:"postgres"`
 	FileName        string   `help:"Single-file output name (default tables.go); ignored with --file-per-table."`
 	FilePerTable    bool     `help:"Write one file per table instead of a single combined file."`
-	Relations       bool     `help:"Generate the relation-aware ORM surface (Rels metadata + Queryer/Q)."`
+	Relations       bool     `help:"Generate the relation-aware ORM surface (Rels metadata + Query/Q)."`
 	EmitDTO         bool     `help:"Also generate a row struct (DTO) per table."`
 	DTOSeparateFile bool     `help:"Write the DTOs into their own file(s)."`
 }

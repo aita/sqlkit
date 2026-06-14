@@ -9,7 +9,7 @@ import (
 // UnionQuery is a set operation over SELECT queries, materialized the same way
 // with All(ctx).Scan(&dst).
 type UnionQuery struct {
-	ex    Executor
+	ex    executorBinding
 	query sql.CompoundQuery
 }
 

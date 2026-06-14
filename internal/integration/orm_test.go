@@ -10,7 +10,7 @@ import (
 )
 
 // These tests exercise the generated relation-aware surface (the SelectQuery
-// reached through blogdb.Users.Q(db) / .Queryer(db), plus JoinRel/Filter) end to
+// reached through blogdb.Users.Q(db) / .Query(db), plus JoinRel/Filter) end to
 // end against the real engines. The rest of the suite drives the same bindings
 // through the typed builder; here the entry point is the generated Q sugar and
 // its relation metadata, which nothing else in the suite executes.

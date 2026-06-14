@@ -46,8 +46,8 @@ var (
 )
 
 // Q mirrors the generated entry point: a SELECT over the table bound to ex.
-func (t UsersTable) Q(ex sqlkit.Executor) sqlkit.SelectQuery { return ex.Select().From(t) }
-func (t PostsTable) Q(ex sqlkit.Executor) sqlkit.SelectQuery { return ex.Select().From(t) }
+func (t UsersTable) Q(ex sqlkit.Querier) sqlkit.SelectQuery { return ex.Select().From(t) }
+func (t PostsTable) Q(ex sqlkit.Querier) sqlkit.SelectQuery { return ex.Select().From(t) }
 
 // Relations lets Preload(target) resolve a relation by the target's table.
 func (t UsersTable) Relations() []sqlkit.Relation { return []sqlkit.Relation{UsersPosts} }

@@ -38,7 +38,7 @@ var Users = func() UsersTable {
 	}
 }()
 
-func (t UsersTable) Get(ctx context.Context, ex sqlkit.Executor, id int64, dest any) (bool, error) {
+func (t UsersTable) Get(ctx context.Context, ex sqlkit.Querier, id int64, dest any) (bool, error) {
 	err := ex.Select().From(t).Where(t.ID.Eq(id)).Limit(1).All(ctx).Scan(dest)
 	if err != nil {
 		if errors.Is(err, sqlkit.ErrNoRows) {

@@ -9,7 +9,7 @@ import (
 
 // DeleteQuery is a DELETE statement.
 type DeleteQuery struct {
-	ex           Executor
+	ex           executorBinding
 	def          sql.TableDef
 	query        sql.DeleteQuery
 	returning    []sql.Selection
@@ -147,7 +147,7 @@ func (q DeleteQuery) Exec(ctx context.Context) (stdsql.Result, error) {
 // value list exceeds the executor's bind-parameter limit into one statement per
 // chunk, each carrying the RETURNING clause when set. It honors AutoChunk
 // (ChunkSize caps the chunk; ChunkOff returns ok=false). Deletes are always writes.
-func (q DeleteQuery) splitStatements(ex Executor) ([]compiledStmt, bool, bool, error) {
+func (q DeleteQuery) splitStatements(ex executorBinding) ([]compiledStmt, bool, bool, error) {
 	if q.chunkOff {
 		return nil, false, true, nil
 	}

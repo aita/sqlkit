@@ -18,7 +18,7 @@ type UsersColumns struct {
 }
 
 func newUsersColumns() UsersColumns {
-	info := sqlkit.TableInfo{Schema: "public", Name: "users", Checksum: "60ad56982385a6951028fb535d6dcd889f83e46784378ea3b23a07f0170b474d", Generator: "fmt1+tple72f770b2047+sqlkit(devel)"}
+	info := sqlkit.TableInfo{Schema: "public", Name: "users", Checksum: "60ad56982385a6951028fb535d6dcd889f83e46784378ea3b23a07f0170b474d", Generator: "fmt1+tpl250a2b88da32+sqlkit(devel)"}
 	return UsersColumns{
 		info:      info,
 		ID:        sqlkit.NewColumn[int64](info, "id"),
@@ -118,12 +118,12 @@ type UsersTable struct {
 	Rels UsersRels
 }
 
-// Queryer starts a SELECT over public.users bound to ex, with all columns
+// Query starts a SELECT over public.users bound to ex, with all columns
 // selected; chain JoinRel, Filter, Where, and the terminals from there.
-func (t UsersTable) Queryer(ex sqlkit.Executor) sqlkit.SelectQuery { return ex.Select().From(t) }
+func (t UsersTable) Query(ex sqlkit.Querier) sqlkit.SelectQuery { return ex.Select().From(t) }
 
-// Q is shorthand for Queryer.
-func (t UsersTable) Q(ex sqlkit.Executor) sqlkit.SelectQuery { return ex.Select().From(t) }
+// Q is shorthand for Query.
+func (t UsersTable) Q(ex sqlkit.Querier) sqlkit.SelectQuery { return ex.Select().From(t) }
 
 // Relations lists the table's foreign-key relations, so Preload(target) can
 // resolve which relation reaches a related table.
@@ -153,7 +153,7 @@ type PostsColumns struct {
 }
 
 func newPostsColumns() PostsColumns {
-	info := sqlkit.TableInfo{Schema: "public", Name: "posts", Checksum: "ae6c44bc694636209a416d68dd5fe54fd6129f8c000a4475153d31aab3daaa67", Generator: "fmt1+tple72f770b2047+sqlkit(devel)"}
+	info := sqlkit.TableInfo{Schema: "public", Name: "posts", Checksum: "ae6c44bc694636209a416d68dd5fe54fd6129f8c000a4475153d31aab3daaa67", Generator: "fmt1+tpl250a2b88da32+sqlkit(devel)"}
 	return PostsColumns{
 		info:      info,
 		ID:        sqlkit.NewColumn[int64](info, "id"),
@@ -232,12 +232,12 @@ type PostsTable struct {
 	Rels PostsRels
 }
 
-// Queryer starts a SELECT over public.posts bound to ex, with all columns
+// Query starts a SELECT over public.posts bound to ex, with all columns
 // selected; chain JoinRel, Filter, Where, and the terminals from there.
-func (t PostsTable) Queryer(ex sqlkit.Executor) sqlkit.SelectQuery { return ex.Select().From(t) }
+func (t PostsTable) Query(ex sqlkit.Querier) sqlkit.SelectQuery { return ex.Select().From(t) }
 
-// Q is shorthand for Queryer.
-func (t PostsTable) Q(ex sqlkit.Executor) sqlkit.SelectQuery { return ex.Select().From(t) }
+// Q is shorthand for Query.
+func (t PostsTable) Q(ex sqlkit.Querier) sqlkit.SelectQuery { return ex.Select().From(t) }
 
 // Relations lists the table's foreign-key relations, so Preload(target) can
 // resolve which relation reaches a related table.
@@ -265,7 +265,7 @@ type ProfilesColumns struct {
 }
 
 func newProfilesColumns() ProfilesColumns {
-	info := sqlkit.TableInfo{Schema: "public", Name: "profiles", Checksum: "cb91d6b4d79dd2d1458268d691553800ed952abbbc666708c98237313a8b5791", Generator: "fmt1+tple72f770b2047+sqlkit(devel)"}
+	info := sqlkit.TableInfo{Schema: "public", Name: "profiles", Checksum: "cb91d6b4d79dd2d1458268d691553800ed952abbbc666708c98237313a8b5791", Generator: "fmt1+tpl250a2b88da32+sqlkit(devel)"}
 	return ProfilesColumns{
 		info:   info,
 		ID:     sqlkit.NewColumn[int64](info, "id"),
@@ -342,12 +342,12 @@ type ProfilesTable struct {
 	Rels ProfilesRels
 }
 
-// Queryer starts a SELECT over public.profiles bound to ex, with all columns
+// Query starts a SELECT over public.profiles bound to ex, with all columns
 // selected; chain JoinRel, Filter, Where, and the terminals from there.
-func (t ProfilesTable) Queryer(ex sqlkit.Executor) sqlkit.SelectQuery { return ex.Select().From(t) }
+func (t ProfilesTable) Query(ex sqlkit.Querier) sqlkit.SelectQuery { return ex.Select().From(t) }
 
-// Q is shorthand for Queryer.
-func (t ProfilesTable) Q(ex sqlkit.Executor) sqlkit.SelectQuery { return ex.Select().From(t) }
+// Q is shorthand for Query.
+func (t ProfilesTable) Q(ex sqlkit.Querier) sqlkit.SelectQuery { return ex.Select().From(t) }
 
 // Relations lists the table's foreign-key relations, so Preload(target) can
 // resolve which relation reaches a related table.

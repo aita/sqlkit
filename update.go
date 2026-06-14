@@ -14,7 +14,7 @@ import (
 // UpdateQuery is an UPDATE statement. Assignments come from typed columns, so
 // it does not need to be generic over the row type.
 type UpdateQuery struct {
-	ex           Executor
+	ex           executorBinding
 	def          sql.TableDef
 	query        sql.UpdateQuery
 	returning    []sql.Selection
@@ -248,7 +248,7 @@ func (q UpdateQuery) Exec(ctx context.Context) (stdsql.Result, error) {
 // value list exceeds the executor's bind-parameter limit into one statement per
 // chunk, each carrying the RETURNING clause when set. It honors AutoChunk
 // (ChunkSize caps the chunk; ChunkOff returns ok=false). Updates are always writes.
-func (q UpdateQuery) splitStatements(ex Executor) ([]compiledStmt, bool, bool, error) {
+func (q UpdateQuery) splitStatements(ex executorBinding) ([]compiledStmt, bool, bool, error) {
 	if q.err != nil {
 		return nil, false, true, q.err
 	}

@@ -22,7 +22,7 @@ type columnSource interface {
 //
 //	db.Select().From(Users).Where(Users.ID.Gt(10)).All(ctx).Scan(&dst)
 type SelectQuery struct {
-	ex         Executor
+	ex         executorBinding
 	selections []sql.Selection
 	hasCols    bool
 	base       Table      // the From table, when the source is one; powers Filter/Get
@@ -350,7 +350,7 @@ func (q SelectQuery) All(ctx context.Context) Rows {
 // applies (unsafe clauses present, ChunkOff, no deferred IN/limit, or the values
 // fit). AutoChunk's ChunkSize additionally caps the values per statement. Reads are
 // never writes.
-func (q SelectQuery) splitStatements(ex Executor) ([]compiledStmt, bool, bool, error) {
+func (q SelectQuery) splitStatements(ex executorBinding) ([]compiledStmt, bool, bool, error) {
 	if q.batchUnsafe || q.chunkOff {
 		return nil, false, false, nil
 	}

@@ -61,7 +61,7 @@ var reservedFieldNames = map[string]bool{
 	"Info": true, "Columns": true, "PrimaryKey": true, "Defaulted": true,
 	"SQLSource": true, "Get": true,
 	// Relation-aware bindings add these methods/fields to the table struct.
-	"Queryer": true, "Q": true, "Rels": true,
+	"Query": true, "Q": true, "Rels": true,
 }
 
 func fieldName(column string) string {

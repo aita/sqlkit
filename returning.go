@@ -11,7 +11,7 @@ import (
 // yield rows, ended with All(ctx).Scan(&dst). Statements without Returning end
 // with Exec.
 type ReturningQuery struct {
-	ex    Executor
+	ex    executorBinding
 	query sql.Query
 }
 
