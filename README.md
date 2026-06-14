@@ -122,6 +122,37 @@ treat the string as a token, not a value to parse. The Paginator owns cursor
 encoding; supply `WithCodec` to sign or encrypt the envelope. End the keys with a
 unique column (typically the primary key) so the order is total.
 
+### Struct field tags
+
+The `sqlkit` tag names the column (`sqlkit:"created_at"`) and `sqlkit:"-"` drops
+a field from mapping. Comma-separated options after the name follow
+`encoding/json`'s shape and change how a field is *written* or *encoded* — they
+apply to `Insert().Values`, `Update().SetStruct`, and `Scan` alike, on generated
+DTOs and hand-written structs both:
+
+```go
+type Account struct {
+    ID        int64          `sqlkit:"id"`
+    Settings  map[string]any `sqlkit:"settings,json"`     // ↔ JSON/JSONB column
+    Version   int64          `sqlkit:"version,version"`   // optimistic lock
+    CreatedAt time.Time      `sqlkit:"created_at,readonly"` // DB-generated; never written
+}
+```
+
+- **`readonly`** — the field is scanned on read but never written by INSERT or
+  UPDATE. Use it for database-generated columns (identity keys, computed
+  columns, trigger-maintained timestamps), so one DTO serves both reads and
+  writes without the generated columns leaking into your INSERT/UPDATE. Naming
+  the column explicitly in `SetStruct(row, T.Col)` overrides the exclusion.
+- **`json`** (or **`jsonb`**) — a struct, map, or slice field round-trips a
+  JSON/JSONB column: it marshals to JSON on write and unmarshals on read,
+  without a hand-written `driver.Valuer`/`sql.Scanner`. A nil pointer, map, or
+  slice writes SQL NULL.
+- **`version`** — turns `SetStruct` into an optimistic-locked update: the column
+  is bumped (`version = version + 1`) and the row is guarded on the field's
+  current value, so `Exec` returns `ErrVersionConflict` when another writer
+  advanced it first — the tag-driven equivalent of `CheckVersion`.
+
 ### Predicates and filters
 
 Typed columns carry the predicate vocabulary directly: `Eq`/`Ne`/`Lt`/`Le`/

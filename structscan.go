@@ -63,7 +63,8 @@ func PrimaryKeyValues(table Table, row any) ([]any, error) {
 }
 
 // ColumnValues maps a table's columns to the values found in row, in Columns
-// declaration order, skipping any column the struct provides no field for. It
+// declaration order, skipping any column the struct provides no field for and
+// any field tagged read-only (`sqlkit:",readonly"`), which is never written. It
 // uses the same column-to-field mapping as Scan and Insert. row may be a struct
 // or a pointer to one. It backs the uow package's UPDATE assignment building.
 func ColumnValues(table Table, row any) (names []string, values []any, err error) {
@@ -71,15 +72,15 @@ func ColumnValues(table Table, row any) (names []string, values []any, err error
 	if err != nil {
 		return nil, nil, err
 	}
-	fields := reflectmap.FieldsByColumn(rv.Type())
+	fields := reflectmap.Fields(rv.Type())
 	for _, col := range table.Columns() {
 		name := col.ColumnName()
-		path, ok := fields[strings.ToLower(name)]
-		if !ok {
+		f, ok := fields[strings.ToLower(name)]
+		if !ok || f.ReadOnly {
 			continue
 		}
 		names = append(names, name)
-		values = append(values, rv.FieldByIndex(path).Interface())
+		values = append(values, rv.FieldByIndex(f.Path).Interface())
 	}
 	return names, values, nil
 }
@@ -216,19 +217,24 @@ func rowScanner(rows *stdsql.Rows, t reflect.Type) (func(reflect.Value) error, e
 	if err != nil {
 		return nil, err
 	}
-	fields := reflectmap.FieldsByColumn(t)
-	paths := make([][]int, len(columns))
+	fields := reflectmap.Fields(t)
+	targets := make([]reflectmap.Field, len(columns))
 	for i, column := range columns {
-		path, ok := fields[strings.ToLower(column)]
+		f, ok := fields[strings.ToLower(column)]
 		if !ok {
 			return nil, fmt.Errorf("sqlkit: no field in %s for column %q", t, column)
 		}
-		paths[i] = path
+		targets[i] = f
 	}
 	return func(v reflect.Value) error {
-		dests := make([]any, len(paths))
-		for i, path := range paths {
-			dests[i] = v.FieldByIndex(path).Addr().Interface()
+		dests := make([]any, len(targets))
+		for i, t := range targets {
+			addr := v.FieldByIndex(t.Path).Addr().Interface()
+			if t.JSON {
+				dests[i] = jsonScanner{dst: addr}
+			} else {
+				dests[i] = addr
+			}
 		}
 		return rows.Scan(dests...)
 	}, nil

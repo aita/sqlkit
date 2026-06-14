@@ -64,13 +64,21 @@ func (q UpdateQuery) Set(assignments ...sql.Assignment) UpdateQuery {
 // Insert().Values for a single row, and composes with Set: assignments accumulate.
 //
 // With no columns, every column the struct maps to is assigned except the
-// primary key, which identifies the row and belongs in Where rather than SET.
-// Pass columns to restrict the update to just those — a partial update that
-// leaves every other column untouched; a primary key column is included when
-// named explicitly. Unlike a non-zero "patch", zero-valued fields are written,
-// so a column can be cleared to its zero value.
+// primary key, which identifies the row and belongs in Where rather than SET,
+// and except read-only fields (`sqlkit:",readonly"`, for database-generated
+// columns). Pass columns to restrict the update to just those — a partial update
+// that leaves every other column untouched; a primary key or read-only column is
+// included when named explicitly. Unlike a non-zero "patch", zero-valued fields
+// are written, so a column can be cleared to its zero value.
 //
-// SetStruct only builds SET assignments; pair it with Where to choose the rows:
+// A field tagged `sqlkit:",version"` enables optimistic locking on an implicit
+// update: its column is bumped (col = col + 1) and the row is guarded on the
+// field's current value, so Exec returns ErrVersionConflict when another writer
+// advanced it first — the tag-driven equivalent of CheckVersion. A field tagged
+// `sqlkit:",json"` is written as its JSON encoding.
+//
+// SetStruct only builds SET assignments (plus the version guard above); pair it
+// with Where to choose the rows:
 //
 //	db.Update(Users).SetStruct(u, Users.Name, Users.Email).Where(Users.ID.Eq(u.ID)).Exec(ctx)
 //
@@ -78,7 +86,7 @@ func (q UpdateQuery) Set(assignments ...sql.Assignment) UpdateQuery {
 // struct, a nil pointer, or an explicitly named column with no matching field)
 // is deferred and returned by ToSQL and Exec.
 func (q UpdateQuery) SetStruct(row any, columns ...AnyColumn) UpdateQuery {
-	assignments, err := q.structAssignments(row, columns)
+	assignments, vcol, vcur, err := q.structAssignments(row, columns)
 	if err != nil {
 		if q.err == nil {
 			q.err = err
@@ -86,23 +94,33 @@ func (q UpdateQuery) SetStruct(row any, columns ...AnyColumn) UpdateQuery {
 		return q
 	}
 	q.query = q.query.Set(assignments...)
+	// A version-tagged field turns the implicit update into an optimistic-locked
+	// one: the SET already bumps the column, and this guards the row on its
+	// current value so a concurrently advanced row matches nothing and Exec
+	// reports ErrVersionConflict.
+	if vcol != "" {
+		q.versionGuard = true
+		q = q.Where(Cond(sql.Eq(sql.Col(vcol), sql.Val(vcur))))
+	}
 	return q
 }
 
 // structAssignments resolves a struct's fields against the target columns and
-// builds SET assignments in target-column order.
-func (q UpdateQuery) structAssignments(row any, columns []AnyColumn) ([]sql.Assignment, error) {
+// builds SET assignments in target-column order. When a version-tagged field is
+// part of an implicit update it is returned separately (versionCol/versionCur)
+// so SetStruct can add the optimistic-lock guard rather than a plain assignment.
+func (q UpdateQuery) structAssignments(row any, columns []AnyColumn) (assignments []sql.Assignment, versionCol string, versionCur any, err error) {
 	rv := reflect.ValueOf(row)
 	for rv.Kind() == reflect.Pointer {
 		if rv.IsNil() {
-			return nil, fmt.Errorf("sqlkit: SetStruct row is a nil pointer")
+			return nil, "", nil, fmt.Errorf("sqlkit: SetStruct row is a nil pointer")
 		}
 		rv = rv.Elem()
 	}
 	if rv.Kind() != reflect.Struct {
-		return nil, fmt.Errorf("sqlkit: SetStruct requires a struct, got %T", row)
+		return nil, "", nil, fmt.Errorf("sqlkit: SetStruct requires a struct, got %T", row)
 	}
-	fields := reflectmap.FieldsByColumn(rv.Type())
+	fields := reflectmap.Fields(rv.Type())
 
 	explicit := len(columns) > 0
 	var targets []string
@@ -120,24 +138,39 @@ func (q UpdateQuery) structAssignments(row any, columns []AnyColumn) ([]sql.Assi
 		}
 	}
 
-	assignments := make([]sql.Assignment, 0, len(targets))
+	assignments = make([]sql.Assignment, 0, len(targets))
 	for _, name := range targets {
-		path, ok := fields[strings.ToLower(name)]
+		f, ok := fields[strings.ToLower(name)]
 		if !ok {
 			if explicit {
-				return nil, fmt.Errorf("sqlkit: SetStruct: no field of %s maps to column %q of %s",
+				return nil, "", nil, fmt.Errorf("sqlkit: SetStruct: no field of %s maps to column %q of %s",
 					rv.Type(), name, q.def.Table.QualifiedName())
 			}
 			continue
 		}
-		value := rv.FieldByIndex(path).Interface()
+		// Read-only columns (database-generated) are never assigned in an
+		// implicit update; name them explicitly to override.
+		if f.ReadOnly && !explicit {
+			continue
+		}
+		value := rv.FieldByIndex(f.Path).Interface()
+		// A version field in an implicit update is bumped, not copied, and its
+		// current value becomes the optimistic-lock guard.
+		if f.Version && !explicit {
+			assignments = append(assignments, sql.Set(name, sql.Add(sql.Col(name), sql.Val(1))))
+			versionCol, versionCur = name, value
+			continue
+		}
+		if f.JSON {
+			value = jsonValue{v: value}
+		}
 		assignments = append(assignments, sql.Set(name, sql.Val(value)))
 	}
 	if len(assignments) == 0 {
-		return nil, fmt.Errorf("sqlkit: SetStruct: no fields of %s map to columns of %s",
+		return nil, "", nil, fmt.Errorf("sqlkit: SetStruct: no fields of %s map to columns of %s",
 			rv.Type(), q.def.Table.QualifiedName())
 	}
-	return assignments, nil
+	return assignments, versionCol, versionCur, nil
 }
 
 // CheckVersion enables optimistic locking on the UPDATE using col as the

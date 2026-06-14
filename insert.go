@@ -51,7 +51,8 @@ func Insert(table Table) InsertQuery {
 // tag, exact name, or snake_case — the same rules Scan uses —
 // so both generated row structs and caller-defined DTOs work. Columns with no
 // matching field are omitted, as are defaulted columns that are zero-valued
-// in every row.
+// in every row and fields tagged read-only (`sqlkit:",readonly"`). A field
+// tagged `sqlkit:",json"` is written as its JSON encoding.
 func (q InsertQuery) Values(rows ...any) InsertQuery {
 	for _, row := range rows {
 		rv := reflect.ValueOf(row)
@@ -254,6 +255,7 @@ func (q InsertQuery) mapRows() ([]string, [][]any, error) {
 	type plan struct {
 		names []string
 		paths [][]int
+		jsons []bool
 	}
 	plans := map[reflect.Type]plan{}
 	var names []string
@@ -272,11 +274,14 @@ func (q InsertQuery) mapRows() ([]string, [][]any, error) {
 		}
 		p, ok := plans[rv.Type()]
 		if !ok {
-			fields := reflectmap.FieldsByColumn(rv.Type())
+			fields := reflectmap.Fields(rv.Type())
 			for _, name := range q.def.Columns {
-				if path, found := fields[strings.ToLower(name)]; found {
+				// Read-only columns (identity keys, computed columns) are scanned
+				// but never inserted; their database side supplies the value.
+				if f, found := fields[strings.ToLower(name)]; found && !f.ReadOnly {
 					p.names = append(p.names, name)
-					p.paths = append(p.paths, path)
+					p.paths = append(p.paths, f.Path)
+					p.jsons = append(p.jsons, f.JSON)
 				}
 			}
 			if len(p.names) == 0 {
@@ -293,7 +298,11 @@ func (q InsertQuery) mapRows() ([]string, [][]any, error) {
 		}
 		values := make([]any, len(p.paths))
 		for i, path := range p.paths {
-			values[i] = rv.FieldByIndex(path).Interface()
+			value := rv.FieldByIndex(path).Interface()
+			if p.jsons[i] {
+				value = jsonValue{v: value}
+			}
+			values[i] = value
 		}
 		rows = append(rows, values)
 	}
