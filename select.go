@@ -25,8 +25,8 @@ type SelectQuery struct {
 	ex         executorBinding
 	selections []sql.Selection
 	hasCols    bool
-	base       Table      // the From table, when the source is one; powers Filter/Get
-	preloads   []Relation // relations eager-loaded at Scan after the base rows
+	base       Table         // the From table, when the source is one; powers Filter/Get
+	preloads   []preloadSpec // relations eager-loaded at Scan after the base rows
 	query      sql.SelectQuery
 	err        error // deferred build error (e.g. from Filter), surfaced at the terminal
 	// batch holds a lone column IN back from q.query so All can split its
@@ -167,68 +167,109 @@ func (q SelectQuery) LeftJoinRel(rel Relation) SelectQuery {
 	return q.LeftJoin(rel.Target(), rel.JoinOn())
 }
 
-// Preload registers related tables to eager-load. Each target is resolved to
-// the From table's relation reaching it, so callers pass the target binding
-// rather than the relation: Preload(Posts), not Preload(Users.Rels.Posts). The
-// load is not a join; when a terminal's Scan runs, each relation is fetched in
-// one batched follow-up query and assigned onto the scanned destination by
-// reflection (matched to a field by the relation name or a `preload:"…"` tag),
-// avoiding the N+1:
+// Preload registers a related table to eager-load, optionally narrowed by
+// conditions. The target is resolved to the From table's relation reaching it, so
+// callers pass the target binding rather than the relation: Preload(Posts), not
+// Preload(Users.Rels.Posts). The load is not a join; when a terminal's Scan runs,
+// the relation is fetched in one batched follow-up query and assigned onto the
+// scanned destination by reflection (matched to a field by the relation name or a
+// `preload:"…"` tag), avoiding the N+1:
 //
 //	db.Select().From(Users).Preload(Posts).All(ctx).Scan(&users)
 //
-// Resolution errors (no From table, the base exposes no relations, or no/ambiguous
-// relation to a target) are deferred to the terminal. When more than one relation
-// reaches the same table (e.g. a self-reference's Manager and Reports), pick one
-// explicitly with PreloadRel.
-func (q SelectQuery) Preload(targets ...Table) SelectQuery {
-	preloads := append([]Relation(nil), q.preloads...)
-	for _, target := range targets {
-		rel, err := q.resolveRelation(target)
-		if err != nil {
-			return q.fail(err)
-		}
-		preloads = append(preloads, rel)
-	}
-	q.preloads = preloads
-	return q
-}
-
-// PreloadRel registers relations to eager-load by value, for when Preload's
-// target-table lookup is ambiguous (several relations reach the same table) or a
-// hand-built relation is used. It behaves like Preload otherwise.
-func (q SelectQuery) PreloadRel(rels ...Relation) SelectQuery {
-	q.preloads = append(append([]Relation(nil), q.preloads...), rels...)
-	return q
-}
-
-// resolveRelation finds the base table's relation whose target is t.
-func (q SelectQuery) resolveRelation(t Table) (Relation, error) {
+// Conditions are ANDed into the follow-up SELECT, so only matching children load:
+//
+//	db.Select().From(Users).Preload(Posts, Posts.Published.Eq(true))
+//
+// For a nested eager-load, pass a RelPath as the target — Preload then builds
+// each hop, creating any intermediate level not already registered, and the
+// conditions apply to the final hop (Users→Posts→Comments):
+//
+//	db.Select().From(Users).
+//	    Preload(sqlkit.RelPath(Posts, Comments), Comments.Approved.Eq(true)).
+//	    All(ctx).Scan(&users)
+//
+// Resolution errors (no From table, a table on the path exposes no relations, or
+// no/ambiguous relation between two hops) are deferred to the terminal. When more
+// than one relation reaches the same table (e.g. a self-reference's Manager and
+// Reports), pick one explicitly with PreloadRel.
+func (q SelectQuery) Preload(target Table, conditions ...Predicate) SelectQuery {
 	if q.base == nil {
-		return nil, fmt.Errorf("sqlkit: Preload requires From to be a table")
+		return q.fail(fmt.Errorf("sqlkit: Preload requires From to be a table"))
 	}
-	src, ok := q.base.(RelationSource)
+	path := []Table{target}
+	if rp, ok := target.(relPath); ok {
+		if len(rp.path) == 0 {
+			return q.fail(fmt.Errorf("sqlkit: Preload: RelPath requires at least one table"))
+		}
+		path = rp.path
+	}
+	specs, err := applyPreloadPath(q.base, path, conditions, q.preloads)
+	if err != nil {
+		return q.fail(err)
+	}
+	q.preloads = specs
+	return q
+}
+
+// PreloadRel registers a relation to eager-load by value, for when Preload's
+// target-table lookup is ambiguous (several relations reach the same table) or a
+// hand-built relation is used. It takes the same conditions, but its target is not
+// resolved to a RelationSource, so it cannot be a hop on a RelPath.
+func (q SelectQuery) PreloadRel(rel Relation, conditions ...Predicate) SelectQuery {
+	q.preloads = append(append([]preloadSpec(nil), q.preloads...), preloadSpec{rel: rel, wheres: conditions})
+	return q
+}
+
+// applyPreloadPath registers a preload for each hop of path under specs, resolving
+// each table against the previous one's relations (path[0] against src). A hop
+// that already has a spec is reused so a table is loaded once; conditions apply to
+// the final hop. It returns a copy of specs with the path merged in.
+func applyPreloadPath(src Table, path []Table, conditions []Predicate, specs []preloadSpec) ([]preloadSpec, error) {
+	rs, ok := src.(RelationSource)
 	if !ok {
-		return nil, fmt.Errorf("sqlkit: Preload: %s exposes no relations", q.base.Info().QualifiedName())
+		return nil, fmt.Errorf("sqlkit: Preload: %s exposes no relations", src.Info().QualifiedName())
 	}
-	want := t.Info()
-	var found Relation
-	matches := 0
-	for _, rel := range src.Relations() {
-		if got := rel.Target().Info(); got.Schema == want.Schema && got.Name == want.Name {
-			found, matches = rel, matches+1
+	target := path[0]
+	rel, n := relationReaching(rs, target)
+	switch {
+	case n == 0:
+		return nil, fmt.Errorf("sqlkit: Preload: %s has no relation to %s",
+			src.Info().QualifiedName(), target.Info().QualifiedName())
+	case n > 1:
+		return nil, ambiguousRelation(src, target)
+	}
+
+	out := append([]preloadSpec(nil), specs...)
+	idx := -1
+	for i := range out {
+		if out[i].target != nil && sameTable(out[i].target, target) {
+			idx = i
+			break
 		}
 	}
-	switch matches {
-	case 0:
-		return nil, fmt.Errorf("sqlkit: Preload: %s has no relation to %s",
-			q.base.Info().QualifiedName(), want.QualifiedName())
-	case 1:
-		return found, nil
-	default:
-		return nil, fmt.Errorf("sqlkit: Preload: %s has %d relations to %s; pick one with PreloadRel",
-			q.base.Info().QualifiedName(), matches, want.QualifiedName())
+	if idx < 0 {
+		out = append(out, preloadSpec{rel: rel, target: target})
+		idx = len(out) - 1
 	}
+	s := out[idx]
+	if len(path) == 1 {
+		s.wheres = append(append([]Predicate(nil), s.wheres...), conditions...)
+	} else {
+		nested, err := applyPreloadPath(target, path[1:], conditions, s.nested)
+		if err != nil {
+			return nil, err
+		}
+		s.nested = nested
+	}
+	out[idx] = s
+	return out, nil
+}
+
+// sameTable reports whether a and b name the same table (ignoring any alias).
+func sameTable(a, b Table) bool {
+	ai, bi := a.Info(), b.Info()
+	return ai.Schema == bi.Schema && ai.Name == bi.Name
 }
 
 // Filter applies a reusable filter bundle against the From table's columns:

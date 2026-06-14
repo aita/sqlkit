@@ -292,6 +292,107 @@ func TestPreloadRelExplicit(t *testing.T) {
 	}
 }
 
+// --- nested & conditional Preload ---
+
+type nestUser struct {
+	ID    int64 `sqlkit:"id"`
+	Name  string
+	Posts []nestPost
+}
+
+type nestPost struct {
+	ID     int64 `sqlkit:"id"`
+	UserID int64 `sqlkit:"user_id"`
+	Title  string
+	User   *nestAuthor // nested to-one, loaded from each post's user_id
+}
+
+type nestAuthor struct {
+	ID   int64 `sqlkit:"id"`
+	Name string
+}
+
+// TestPreloadNested loads Users -> Posts -> (each post's) User in three batched
+// queries and threads the grandchildren onto the value-type child slice.
+func TestPreloadNested(t *testing.T) {
+	fake := &sqltest.Fake{
+		QueryFunc: func(s string, _ []any) (sqltest.Result, error) {
+			if contains(s, `"public"."posts"`) {
+				return sqltest.Result{Columns: []string{"id", "user_id", "title"}, Rows: [][]driver.Value{
+					{int64(10), int64(1), "a"}, {int64(11), int64(2), "b"},
+				}}, nil
+			}
+			// Both the base users query and the nested users follow-up land here.
+			return sqltest.Result{Columns: []string{"id", "name"}, Rows: [][]driver.Value{
+				{int64(1), "Alice"}, {int64(2), "Bob"},
+			}}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var users []nestUser
+	err := db.Select().From(Users).
+		Preload(sqlkit.RelPath(Posts, Users)).
+		All(context.Background()).Scan(&users)
+	if err != nil {
+		t.Fatalf("nested Preload error = %v", err)
+	}
+	if len(users) != 2 || len(users[0].Posts) != 1 {
+		t.Fatalf("scanned users = %+v", users)
+	}
+	post := users[0].Posts[0]
+	if post.User == nil || post.User.Name != "Alice" {
+		t.Fatalf("nested user not loaded onto child copy: %+v", post.User)
+	}
+	if users[1].Posts[0].User == nil || users[1].Posts[0].User.Name != "Bob" {
+		t.Fatalf("nested user for second branch = %+v", users[1].Posts[0].User)
+	}
+}
+
+// TestPreloadConditionalAppliesWhere checks a Preload condition narrows the
+// follow-up SELECT while leaving the parent-key IN as the (still splittable)
+// deferred filter.
+func TestPreloadConditionalAppliesWhere(t *testing.T) {
+	var postsSQL string
+	fake := &sqltest.Fake{QueryFunc: func(s string, _ []any) (sqltest.Result, error) {
+		if contains(s, `"public"."posts"`) {
+			postsSQL = s
+			return sqltest.Result{Columns: []string{"id", "user_id", "title"}, Rows: [][]driver.Value{
+				{int64(10), int64(1), "a"},
+			}}, nil
+		}
+		return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}}}, nil
+	}}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var users []preUser
+	err := db.Select(Users.ID).From(Users).
+		Preload(Posts, Posts.Title.Eq("a")).
+		All(context.Background()).Scan(&users)
+	if err != nil {
+		t.Fatalf("conditional Preload error = %v", err)
+	}
+	if !contains(postsSQL, `"public"."posts"."title"`) || !contains(postsSQL, "IN") {
+		t.Fatalf("conditional preload SQL missing condition or IN: %q", postsSQL)
+	}
+	if len(users) != 1 || len(users[0].Posts) != 1 || users[0].Posts[0].Title != "a" {
+		t.Fatalf("scanned users = %+v", users)
+	}
+}
+
+// A RelPath whose hops are not related defers an error.
+func TestPreloadRelPathUnrelatedHopErrors(t *testing.T) {
+	db := newDB()
+	// Users relates to Posts, but Posts has no relation to Posts, so the second
+	// hop cannot resolve.
+	err := db.Select().From(Users).
+		Preload(sqlkit.RelPath(Posts, Posts)).
+		All(context.Background()).Scan(&[]nestUser{})
+	if err == nil {
+		t.Fatal("RelPath with an unrelated hop should defer an error")
+	}
+}
+
 // --- relation-driven UPDATE/DELETE ---
 
 func TestUpdateJoinRel(t *testing.T) {

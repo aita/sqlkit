@@ -132,7 +132,7 @@ type Rows struct {
 	exactlyOne bool
 	// preloads are relations eager-loaded after a successful Scan, set by
 	// SelectQuery terminals when Preload was registered.
-	preloads []Relation
+	preloads []preloadSpec
 	// batches, when non-empty, holds several compiled statements whose rows Scan
 	// concatenates into the destination slice. It is set by All when a large IN
 	// list is split to stay within the bind-parameter limit; sqlText/args are
