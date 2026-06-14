@@ -57,6 +57,11 @@ var ErrNestingRequiresTx = errors.New("uow: nested scope requires a transaction-
 // mutated after it was loaded; identity is fixed at load time.
 var ErrPrimaryKeyChanged = errors.New("uow: primary key of a managed row changed")
 
+// ErrAttachRequiresPointer reports a non-pointer row passed to Attach. The
+// snapshot diff re-reads the row at flush time, so a value copy could never
+// reflect later mutations.
+var ErrAttachRequiresPointer = errors.New("uow: Attach requires a pointer to a struct")
+
 // savepointer is the subset of *sqlkit.Session a nested scope needs.
 type savepointer interface {
 	Savepoint(context.Context) (string, error)
@@ -267,6 +272,34 @@ func (s *Scope) Update(table sqlkit.Table, rows ...any) error {
 		return err
 	}
 	ts.updates = append(ts.updates, rows...)
+	return nil
+}
+
+// Attach registers detached rows as managed entities, snapshotting their
+// current column values. Mutate a row after attaching and Flush emits an UPDATE
+// that sets only the changed non-primary-key columns — the same snapshot-diff
+// path used for rows loaded with Get/Find, and emitting nothing when nothing
+// changed. Use it for rows that originate outside the scope (for example a
+// cache) when you want a minimal UPDATE instead of Update's full-column
+// overwrite.
+//
+// Each row must be a pointer to its struct: the diff is computed at flush time
+// by re-reading that pointer against the snapshot, so a value copy could never
+// reflect later mutations. Re-attaching the same primary key replaces the
+// previous snapshot.
+func (s *Scope) Attach(table sqlkit.Table, rows ...any) error {
+	ts, err := s.stateFor(table)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if !isPointer(row) {
+			return fmt.Errorf("%w: %T", ErrAttachRequiresPointer, row)
+		}
+		if err := s.track(ts, row); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
