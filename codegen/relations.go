@@ -13,6 +13,7 @@ import (
 // the generated columns/table structs.
 var relationMethodNames = []string{
 	"Info", "SQLSource", "Columns", "PrimaryKey", "Defaulted", "Query", "Q", "Rels",
+	"Insert", "Update", "Delete",
 }
 
 // buildRelations derives the relation models for every generated table from the

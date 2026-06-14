@@ -15,6 +15,7 @@ import (
 // it does not need to be generic over the row type.
 type UpdateQuery struct {
 	ex           executorBinding
+	base         Table // the target table, kept so Filter can resolve its columns
 	def          sql.TableDef
 	query        sql.UpdateQuery
 	returning    []sql.Selection
@@ -36,7 +37,7 @@ type UpdateQuery struct {
 // Executing it returns an error; start from a Database or Session to run it.
 func Update(table Table) UpdateQuery {
 	def := tableDef(table)
-	return UpdateQuery{def: def, query: sql.Update(def.Table)}
+	return UpdateQuery{base: table, def: def, query: sql.Update(def.Table)}
 }
 
 // AutoChunk configures how a lone WHERE column IN whose value list exceeds the
@@ -168,6 +169,23 @@ func (q UpdateQuery) LeftJoin(source sql.Source, on Predicate) UpdateQuery {
 // spell out the ON clause.
 func (q UpdateQuery) JoinRel(rel Relation) UpdateQuery {
 	return q.Join(rel.Target(), rel.JoinOn())
+}
+
+// Filter narrows the UPDATE with a reusable filter bundle applied against the
+// target table's columns: either a Predicate, or a struct whose set fields map
+// to columns by name and hold FilterTerm values (sqlkit.Le(20), …) or
+// predicates. It is the UPDATE counterpart of SelectQuery.Filter, so one filter
+// bundle narrows a read or a write alike. A mapping error is deferred to the
+// terminal.
+func (q UpdateQuery) Filter(filter any) UpdateQuery {
+	predicates, err := buildFilter(q.base, filter)
+	if err != nil {
+		if q.err == nil {
+			q.err = err
+		}
+		return q
+	}
+	return q.Where(predicates...)
 }
 
 // Where adds predicates, combined with AND. A lone column IN whose value

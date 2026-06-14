@@ -113,6 +113,16 @@ func TestGenerateRelationsGolden(t *testing.T) {
 	for _, want := range []string{
 		"func (t UsersTable) Query(ex sqlkit.Querier) sqlkit.SelectQuery",
 		"func (t UsersTable) Q(ex sqlkit.Querier) sqlkit.SelectQuery",
+		"func (t UsersTable) Insert(ex sqlkit.Querier) sqlkit.InsertQuery",
+		"func (t UsersTable) Update(ex sqlkit.Querier) sqlkit.UpdateQuery",
+		"func (t UsersTable) Delete(ex sqlkit.Querier) sqlkit.DeleteQuery",
+		"type UsersFilter struct",
+		`sqlkit:"email"`, // column field carries its column tag
+		"*PostsFilter",   // relation field is a nested filter pointer
+		"type PostsFilter struct",
+		// Target returns the target's package var (a RelationSource), so nested
+		// relation filters can recurse through the target's own relations.
+		"func (r UsersPostsRel) Target() sqlkit.Table { return Posts }",
 		"type UsersColumns struct",
 		"func newUsersColumns() UsersColumns",
 		"Profile UsersProfileRel", // has-one (unique FK)
@@ -156,6 +166,9 @@ func TestGenerateSelfReferentialRelations(t *testing.T) {
 		"func (r EmployeesManagerRel) Cardinality() sqlkit.Cardinality { return sqlkit.ToOne }",
 		// JoinOn equates the aliased target id to the base manager_id.
 		"sqlkit.Cond(sql.Eq(r.ID, newEmployeesColumns().ManagerID))",
+		// A self-referential relation keeps the aliased columns value as Target (not
+		// the package var) so the self-join stays unambiguous.
+		"func (r EmployeesManagerRel) Target() sqlkit.Table { return r.EmployeesColumns }",
 		// Reverse has-many; alias suffixed to avoid colliding with the table name.
 		"func (r EmployeesEmployeesRel) Cardinality() sqlkit.Cardinality { return sqlkit.ToMany }",
 		`As("employees_ref")`,

@@ -279,6 +279,42 @@ err = db.Select().From(appdb.Users).Preload(appdb.Posts).All(ctx).Scan(&users)
 Relations also drive multi-table writes (`Update(t).JoinRel(rel)`,
 `Delete(t).UsingRel(rel)`) and primary-key lookups (`Get(ctx, pk...)`).
 
+Each binding also exposes write entry points alongside `Query`/`Q`, so a
+statement can start from the table the way a `SelectQuery` does — `Insert(ex)`,
+`Update(ex)`, and `Delete(ex)` return the bound `Insert`/`Update`/`Delete`
+builders, mirroring `ex.Insert(t)`/`ex.Update(t)`/`ex.Delete(t)`. And `Filter` —
+the reusable filter bundle that narrows a `SelectQuery` — now applies to
+`Update` and `Delete` too, so one bundle narrows a read or a write:
+
+```go
+// One filter bundle, reused across a read and a write.
+active := appdb.Users.Age.Le(20)
+
+err := appdb.Users.Q(db).Filter(active).All(ctx).Scan(&authors)
+
+_, err = appdb.Users.Update(db).Filter(active).
+    Set(appdb.Users.Name.Set(&name)).Exec(ctx)
+
+_, err = appdb.Users.Delete(db).Filter(active).Exec(ctx)
+```
+
+Generating with `--relations` also emits a typed filter bundle per table — a
+`XxxFilter` struct whose fields map to columns (holding a `FilterTerm` like
+`sqlkit.Eq(…)`/`sqlkit.Le(…)` or a `Predicate`) and whose **relation fields** carry
+a nested filter on the related table. A relation filter compiles to a correlated
+`EXISTS`, so it narrows a `SELECT`, `UPDATE`, or `DELETE` without a join (and never
+duplicates rows for a to-many relation):
+
+```go
+// Users who have a published post — EXISTS over the Posts relation.
+err := appdb.Users.Q(db).Filter(appdb.UsersFilter{
+    Age:   sqlkit.Le(20),
+    Posts: &appdb.PostsFilter{Published: sqlkit.Eq(true)},
+}).All(ctx).Scan(&authors)
+// SELECT … FROM users WHERE "users"."age" <= $1
+//   AND EXISTS (SELECT 1 FROM posts WHERE posts.user_id = users.id AND posts.published = $2)
+```
+
 ### Raw SQL
 
 When a query is easier by hand, `RawSQL` runs a raw string (or a built

@@ -564,6 +564,34 @@ func TestTypedUpdateFromAndDeleteUsing(t *testing.T) {
 		[]any{"x@example.com"})
 }
 
+func TestUpdateAndDeleteFilter(t *testing.T) {
+	// The same filter bundle that narrows a SELECT (TestSelectFilter) narrows an
+	// UPDATE and a DELETE: Filter resolves against the target table's columns, so
+	// one reusable bundle serves a read or a write.
+	assertToSQL(t,
+		sqlkit.Update(Users).
+			Filter(userFilter{Email: sqlkit.Eq("a@x")}).
+			Set(Users.Email.Set("new@x")),
+		`UPDATE "public"."users" SET "email" = $1 WHERE ("public"."users"."email" = $2)`,
+		[]any{"new@x", "a@x"})
+
+	assertToSQL(t,
+		sqlkit.Delete(Users).Filter(userFilter{Email: sqlkit.Eq("a@x")}),
+		`DELETE FROM "public"."users" WHERE ("public"."users"."email" = $1)`,
+		[]any{"a@x"})
+}
+
+func TestUpdateAndDeleteFilterDefersError(t *testing.T) {
+	// A bad filter (not a struct or Predicate) defers its build error to the
+	// terminal, matching SelectQuery.Filter.
+	if _, _, err := sqlkit.Update(Users).Filter(123).ToSQL(pg); err == nil {
+		t.Fatal("UpdateQuery.Filter with a bad filter should defer an error")
+	}
+	if _, _, err := sqlkit.Delete(Users).Filter(123).ToSQL(pg); err == nil {
+		t.Fatal("DeleteQuery.Filter with a bad filter should defer an error")
+	}
+}
+
 func TestUpdateSetStruct(t *testing.T) {
 	name := "Alice"
 	u := User{ID: 7, Email: "a@example.com", Name: &name}

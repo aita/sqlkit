@@ -108,6 +108,44 @@ func TestSelectFilter(t *testing.T) {
 		[]any{"a@x"})
 }
 
+// usersByPosts filters users by their related posts; Posts names the UsersPosts
+// relation and carries a nested filter on the posts table.
+type usersByPosts struct {
+	Email sqlkit.FilterTerm
+	Posts *postsByTitle
+}
+
+type postsByTitle struct {
+	Title sqlkit.FilterTerm
+}
+
+func TestFilterRelationExists(t *testing.T) {
+	db := newDB()
+	// A nested filter on a relation narrows the base table with a correlated
+	// EXISTS over the related table, joined on the foreign key.
+	assertSelectSQL(t, Users.Q(db).Filter(usersByPosts{Posts: &postsByTitle{Title: sqlkit.Eq("Hello")}}),
+		`SELECT "public"."users"."id", "public"."users"."email", "public"."users"."name" FROM "public"."users" WHERE EXISTS (SELECT 1 FROM "public"."posts" WHERE (("public"."posts"."user_id" = "public"."users"."id") AND ("public"."posts"."title" = $1)))`,
+		[]any{"Hello"})
+
+	// An empty nested filter means "has any related row": just the join.
+	assertSelectSQL(t, Users.Q(db).Filter(usersByPosts{Posts: &postsByTitle{}}),
+		`SELECT "public"."users"."id", "public"."users"."email", "public"."users"."name" FROM "public"."users" WHERE EXISTS (SELECT 1 FROM "public"."posts" WHERE ("public"."posts"."user_id" = "public"."users"."id"))`,
+		nil)
+
+	// The same relation filter narrows an UPDATE and a DELETE through the same
+	// correlated EXISTS, no join needed.
+	assertToSQL(t,
+		db.Update(Users).Filter(usersByPosts{Posts: &postsByTitle{Title: sqlkit.Eq("Hello")}}).
+			Set(Users.Email.Set("x@x")),
+		`UPDATE "public"."users" SET "email" = $1 WHERE EXISTS (SELECT 1 FROM "public"."posts" WHERE (("public"."posts"."user_id" = "public"."users"."id") AND ("public"."posts"."title" = $2)))`,
+		[]any{"x@x", "Hello"})
+
+	assertToSQL(t,
+		db.Delete(Users).Filter(usersByPosts{Posts: &postsByTitle{Title: sqlkit.Eq("Hello")}}),
+		`DELETE FROM "public"."users" WHERE EXISTS (SELECT 1 FROM "public"."posts" WHERE (("public"."posts"."user_id" = "public"."users"."id") AND ("public"."posts"."title" = $1)))`,
+		[]any{"Hello"})
+}
+
 func TestSelectFilterRequiresFromTable(t *testing.T) {
 	db := newDB()
 	// A subquery source is not a table, so Filter defers an error to the terminal.
