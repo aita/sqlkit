@@ -550,6 +550,54 @@ func TestTypedUpdateFromAndDeleteUsing(t *testing.T) {
 		[]any{"x@example.com"})
 }
 
+func TestUpdateSetStruct(t *testing.T) {
+	name := "Alice"
+	u := User{ID: 7, Email: "a@example.com", Name: &name}
+
+	// Explicit columns: a partial update of just those columns.
+	assertToSQL(t,
+		sqlkit.Update(Users).SetStruct(u, Users.Email).Where(Users.ID.Eq(u.ID)),
+		`UPDATE "public"."users" SET "email" = $1 WHERE ("public"."users"."id" = $2)`,
+		[]any{"a@example.com", int64(7)})
+
+	// Several explicit columns keep the given order.
+	assertToSQL(t,
+		sqlkit.Update(Users).SetStruct(u, Users.Name, Users.Email).Where(Users.ID.Eq(u.ID)),
+		`UPDATE "public"."users" SET "name" = $1, "email" = $2 WHERE ("public"."users"."id" = $3)`,
+		[]any{&name, "a@example.com", int64(7)})
+
+	// No columns: every mapped column except the primary key, in table order.
+	assertToSQL(t,
+		sqlkit.Update(Users).SetStruct(u).Where(Users.ID.Eq(u.ID)),
+		`UPDATE "public"."users" SET "email" = $1, "name" = $2 WHERE ("public"."users"."id" = $3)`,
+		[]any{"a@example.com", &name, int64(7)})
+
+	// Composes with Set: the struct assignments come first, then manual ones.
+	assertToSQL(t,
+		sqlkit.Update(Users).SetStruct(u, Users.Email).
+			Set(Users.ID.SetExpr(Users.ID.Add(1))).Where(Users.ID.Eq(u.ID)),
+		`UPDATE "public"."users" SET "email" = $1, "id" = ("public"."users"."id" + $2) WHERE ("public"."users"."id" = $3)`,
+		[]any{"a@example.com", int64(1), int64(7)})
+}
+
+func TestUpdateSetStructErrors(t *testing.T) {
+	cases := map[string]sqlkit.UpdateQuery{
+		"not a struct": sqlkit.Update(Users).SetStruct(42),
+		"nil pointer":  sqlkit.Update(Users).SetStruct((*User)(nil)),
+		"explicit column with no field": sqlkit.Update(Users).
+			SetStruct(struct{ Email string }{}, Users.Name),
+		"no fields map": sqlkit.Update(Users).
+			SetStruct(struct{ Foo string }{}),
+	}
+	for name, query := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := query.ToSQL(pg); err == nil {
+				t.Fatalf("ToSQL() error = nil, want non-nil")
+			}
+		})
+	}
+}
+
 func TestTypedOrderByNulls(t *testing.T) {
 	assertToSQL(t,
 		sqlkit.Select(Users.ID).From(Users).OrderBy(Users.Name.Asc().NullsLast(), Users.ID.Desc()),
