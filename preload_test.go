@@ -8,185 +8,7 @@ import (
 
 	"github.com/aita/sqlkit"
 	"github.com/aita/sqlkit/internal/sqltest"
-	"github.com/aita/sqlkit/sql"
 )
-
-// Relation fixtures over the Users/Posts bindings from session_test.go, mirroring
-// what codegen emits: a value implementing sqlkit.Relation per foreign key.
-
-// UsersPosts is the has-many from users to posts (posts.user_id = users.id).
-type usersPostsRel struct{ PostsTable }
-
-func (r usersPostsRel) Target() sqlkit.Table { return r.PostsTable }
-func (r usersPostsRel) JoinOn() sqlkit.Predicate {
-	return sqlkit.Cond(sql.Eq(r.PostsTable.UserID, Users.ID))
-}
-func (r usersPostsRel) Cardinality() sqlkit.Cardinality { return sqlkit.ToMany }
-func (r usersPostsRel) Name() string                    { return "Posts" }
-func (r usersPostsRel) Keys() (target, base []string)   { return []string{"user_id"}, []string{"id"} }
-
-var UsersPosts = usersPostsRel{Posts}
-
-// PostsUser is the belongs-to from posts to users (users.id = posts.user_id).
-type postsUserRel struct{ UsersTable }
-
-func (r postsUserRel) Target() sqlkit.Table { return r.UsersTable }
-func (r postsUserRel) JoinOn() sqlkit.Predicate {
-	return sqlkit.Cond(sql.Eq(r.UsersTable.ID, Posts.UserID))
-}
-func (r postsUserRel) Cardinality() sqlkit.Cardinality { return sqlkit.ToOne }
-func (r postsUserRel) Name() string                    { return "User" }
-func (r postsUserRel) Keys() (target, base []string)   { return []string{"id"}, []string{"user_id"} }
-
-var PostsUser = postsUserRel{Users}
-
-var (
-	_ sqlkit.Relation = UsersPosts
-	_ sqlkit.Relation = PostsUser
-)
-
-// Q mirrors the generated entry point: a SELECT over the table bound to ex.
-func (t UsersTable) Q(ex sqlkit.Querier) sqlkit.SelectQuery { return ex.Select().From(t) }
-func (t PostsTable) Q(ex sqlkit.Querier) sqlkit.SelectQuery { return ex.Select().From(t) }
-
-// Relations lets Preload(target) resolve a relation by the target's table.
-func (t UsersTable) Relations() []sqlkit.Relation { return []sqlkit.Relation{UsersPosts} }
-func (t PostsTable) Relations() []sqlkit.Relation { return []sqlkit.Relation{PostsUser} }
-
-func contains(s, sub string) bool { return strings.Contains(s, sub) }
-
-func newDB() *sqlkit.Database { return sqlkit.WrapDB((&sqltest.Fake{}).DB()) }
-
-func assertSelectSQL(t *testing.T, q sqlkit.SelectQuery, wantSQL string, wantArgs []any) {
-	t.Helper()
-	sqlText, args, err := q.ToSQL(sql.PostgreSQLDialect{})
-	if err != nil {
-		t.Fatalf("ToSQL() error = %v", err)
-	}
-	if sqlText != wantSQL {
-		t.Fatalf("ToSQL() SQL = %q,\nwant %q", sqlText, wantSQL)
-	}
-	if len(wantArgs) > 0 && len(args) != len(wantArgs) {
-		t.Fatalf("ToSQL() args = %#v, want %#v", args, wantArgs)
-	}
-}
-
-func TestSelectJoinRel(t *testing.T) {
-	db := newDB()
-	assertSelectSQL(t, Posts.Q(db).JoinRel(PostsUser).Where(Users.Email.Eq("a@x")),
-		`SELECT "public"."posts"."id", "public"."posts"."user_id", "public"."posts"."title" FROM "public"."posts" JOIN "public"."users" ON ("public"."users"."id" = "public"."posts"."user_id") WHERE ("public"."users"."email" = $1)`,
-		[]any{"a@x"})
-}
-
-func TestSelectLeftJoinRel(t *testing.T) {
-	db := newDB()
-	assertSelectSQL(t, Users.Q(db).LeftJoinRel(UsersPosts),
-		`SELECT "public"."users"."id", "public"."users"."email", "public"."users"."name" FROM "public"."users" LEFT JOIN "public"."posts" ON ("public"."posts"."user_id" = "public"."users"."id")`,
-		nil)
-}
-
-func TestSelectRightAndFullJoinRel(t *testing.T) {
-	db := newDB()
-	assertSelectSQL(t, Users.Q(db).RightJoinRel(UsersPosts),
-		`SELECT "public"."users"."id", "public"."users"."email", "public"."users"."name" FROM "public"."users" RIGHT JOIN "public"."posts" ON ("public"."posts"."user_id" = "public"."users"."id")`,
-		nil)
-	assertSelectSQL(t, Users.Q(db).FullJoinRel(UsersPosts),
-		`SELECT "public"."users"."id", "public"."users"."email", "public"."users"."name" FROM "public"."users" FULL JOIN "public"."posts" ON ("public"."posts"."user_id" = "public"."users"."id")`,
-		nil)
-}
-
-// userFilter is a reusable filter bundle; unset (nil) terms are skipped.
-type userFilter struct {
-	Email sqlkit.FilterTerm
-	ID    sqlkit.FilterTerm
-}
-
-func TestSelectFilter(t *testing.T) {
-	db := newDB()
-	assertSelectSQL(t, Users.Q(db).Filter(userFilter{Email: sqlkit.Eq("a@x")}),
-		`SELECT "public"."users"."id", "public"."users"."email", "public"."users"."name" FROM "public"."users" WHERE ("public"."users"."email" = $1)`,
-		[]any{"a@x"})
-}
-
-// usersByPosts filters users by their related posts; Posts names the UsersPosts
-// relation and carries a nested filter on the posts table.
-type usersByPosts struct {
-	Email sqlkit.FilterTerm
-	Posts *postsByTitle
-}
-
-type postsByTitle struct {
-	Title sqlkit.FilterTerm
-}
-
-func TestFilterRelationExists(t *testing.T) {
-	db := newDB()
-	// A nested filter on a relation narrows the base table with a correlated
-	// EXISTS over the related table, joined on the foreign key.
-	assertSelectSQL(t, Users.Q(db).Filter(usersByPosts{Posts: &postsByTitle{Title: sqlkit.Eq("Hello")}}),
-		`SELECT "public"."users"."id", "public"."users"."email", "public"."users"."name" FROM "public"."users" WHERE EXISTS (SELECT 1 FROM "public"."posts" WHERE (("public"."posts"."user_id" = "public"."users"."id") AND ("public"."posts"."title" = $1)))`,
-		[]any{"Hello"})
-
-	// An empty nested filter means "has any related row": just the join.
-	assertSelectSQL(t, Users.Q(db).Filter(usersByPosts{Posts: &postsByTitle{}}),
-		`SELECT "public"."users"."id", "public"."users"."email", "public"."users"."name" FROM "public"."users" WHERE EXISTS (SELECT 1 FROM "public"."posts" WHERE ("public"."posts"."user_id" = "public"."users"."id"))`,
-		nil)
-
-	// The same relation filter narrows an UPDATE and a DELETE through the same
-	// correlated EXISTS, no join needed.
-	assertToSQL(t,
-		db.Update(Users).Filter(usersByPosts{Posts: &postsByTitle{Title: sqlkit.Eq("Hello")}}).
-			Set(Users.Email.Set("x@x")),
-		`UPDATE "public"."users" SET "email" = $1 WHERE EXISTS (SELECT 1 FROM "public"."posts" WHERE (("public"."posts"."user_id" = "public"."users"."id") AND ("public"."posts"."title" = $2)))`,
-		[]any{"x@x", "Hello"})
-
-	assertToSQL(t,
-		db.Delete(Users).Filter(usersByPosts{Posts: &postsByTitle{Title: sqlkit.Eq("Hello")}}),
-		`DELETE FROM "public"."users" WHERE EXISTS (SELECT 1 FROM "public"."posts" WHERE (("public"."posts"."user_id" = "public"."users"."id") AND ("public"."posts"."title" = $1)))`,
-		[]any{"Hello"})
-}
-
-func TestSelectFilterRequiresFromTable(t *testing.T) {
-	db := newDB()
-	// A subquery source is not a table, so Filter defers an error to the terminal.
-	q := sqlkit.Select().From(sqlkit.Select().From(Users).SQLSource()).Filter(userFilter{ID: sqlkit.Eq(1)})
-	if _, _, err := q.ToSQL(sql.PostgreSQLDialect{}); err == nil {
-		t.Fatal("Filter without a From table should defer an error")
-	}
-	_ = db
-}
-
-func TestSelectGet(t *testing.T) {
-	db := newDB()
-	assertSelectSQL(t, Users.Q(db).Where(Users.Email.Eq("x")),
-		`SELECT "public"."users"."id", "public"."users"."email", "public"."users"."name" FROM "public"."users" WHERE ("public"."users"."email" = $1)`,
-		[]any{"x"})
-	// Get adds the PK predicate and LIMIT 1.
-	rows := Users.Q(db).Get(context.Background(), 7)
-	if err := rows.Scan(&User{}); err != nil && err != sqlkit.ErrNoRows {
-		t.Fatalf("Get() scan error = %v", err)
-	}
-}
-
-func TestSelectGetWrongArity(t *testing.T) {
-	db := newDB()
-	if err := Users.Q(db).Get(context.Background(), 1, 2).Scan(&User{}); err == nil {
-		t.Fatal("Get with too many primary-key values should error")
-	}
-}
-
-// --- Preload ---
-
-type preUser struct {
-	ID    int64 `sqlkit:"id"`
-	Posts []prePost
-}
-
-type prePost struct {
-	ID     int64 `sqlkit:"id"`
-	UserID int64 `sqlkit:"user_id"`
-	Title  string
-}
 
 func TestPreloadToManyPopulatesSliceField(t *testing.T) {
 	// The base query returns the three users; the preload follow-up returns the
@@ -222,34 +44,6 @@ func TestPreloadToManyPopulatesSliceField(t *testing.T) {
 	}
 	if len(users[2].Posts) != 0 {
 		t.Fatalf("user 3 should have no posts, got %+v", users[2].Posts)
-	}
-}
-
-type prePost2 struct {
-	ID     int64 `sqlkit:"id"`
-	UserID int64 `sqlkit:"user_id"`
-	Title  string
-	User   *preUser2
-}
-
-type preUser2 struct {
-	ID   int64 `sqlkit:"id"`
-	Name string
-}
-
-// postsAndUsersFake serves the posts base query and the users preload follow-up.
-func postsAndUsersFake() *sqltest.Fake {
-	return &sqltest.Fake{
-		QueryFunc: func(s string, _ []any) (sqltest.Result, error) {
-			if contains(s, `"public"."users"`) {
-				return sqltest.Result{Columns: []string{"id", "name"}, Rows: [][]driver.Value{
-					{int64(1), "Alice"}, {int64(2), "Bob"},
-				}}, nil
-			}
-			return sqltest.Result{Columns: []string{"id", "user_id", "title"}, Rows: [][]driver.Value{
-				{int64(10), int64(1), "a"}, {int64(11), int64(2), "b"}, {int64(12), int64(1), "c"},
-			}}, nil
-		},
 	}
 }
 
@@ -328,26 +122,6 @@ func TestPreloadRelExplicit(t *testing.T) {
 	if len(posts) == 0 || posts[0].User == nil || posts[0].User.Name != "Alice" {
 		t.Fatalf("PreloadRel did not populate: %+v", posts)
 	}
-}
-
-// --- nested & conditional Preload ---
-
-type nestUser struct {
-	ID    int64 `sqlkit:"id"`
-	Name  string
-	Posts []nestPost
-}
-
-type nestPost struct {
-	ID     int64 `sqlkit:"id"`
-	UserID int64 `sqlkit:"user_id"`
-	Title  string
-	User   *nestAuthor // nested to-one, loaded from each post's user_id
-}
-
-type nestAuthor struct {
-	ID   int64 `sqlkit:"id"`
-	Name string
 }
 
 // TestPreloadNested loads Users -> Posts -> (each post's) User in three batched
@@ -429,17 +203,6 @@ func TestPreloadRelPathUnrelatedHopErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("RelPath with an unrelated hop should defer an error")
 	}
-}
-
-// countQueries reports how many recorded queries mention table.
-func countQueries(fake *sqltest.Fake, table string) int {
-	n := 0
-	for _, q := range fake.Queries() {
-		if contains(q.SQL, table) {
-			n++
-		}
-	}
-	return n
 }
 
 // TestPreloadRelPathReusesRegisteredLevel checks that a table named by both a
@@ -578,76 +341,6 @@ func TestPreloadRequiresFromTable(t *testing.T) {
 	}
 }
 
-// --- relation-driven UPDATE/DELETE ---
-
-func TestUpdateJoinRel(t *testing.T) {
-	db := newDB()
-	sqlText, _, err := db.Update(Posts).Set(Posts.Title.Set("x")).JoinRel(PostsUser).
-		Where(Users.Email.Eq("a@x")).ToSQL(sql.PostgreSQLDialect{})
-	if err != nil {
-		t.Fatalf("ToSQL() error = %v", err)
-	}
-	if !contains(sqlText, "UPDATE") || !contains(sqlText, "FROM") {
-		t.Fatalf("UpdateJoinRel SQL = %q", sqlText)
-	}
-}
-
-func TestDeleteUsingRel(t *testing.T) {
-	db := newDB()
-	sqlText, _, err := db.Delete(Posts).UsingRel(PostsUser).
-		Where(Users.Email.Eq("a@x")).ToSQL(sql.PostgreSQLDialect{})
-	if err != nil {
-		t.Fatalf("ToSQL() error = %v", err)
-	}
-	if !contains(sqlText, "DELETE") || !contains(sqlText, "USING") {
-		t.Fatalf("DeleteUsingRel SQL = %q", sqlText)
-	}
-}
-
-// filterTerms is a reusable filter bundle covering both an integer column (ID)
-// and a string column (Email); unset (nil) terms are skipped by Filter.
-type filterTerms struct {
-	ID    sqlkit.FilterTerm
-	Email sqlkit.FilterTerm
-}
-
-// filtered builds "SELECT * FROM users WHERE (<term>)" from a filter bundle and
-// asserts the resulting SQL/args. It exercises the FilterTerm constructors,
-// which resolve to a predicate against the field's column inside Filter.
-func filtered(t *testing.T, f filterTerms, wantWhere string, wantArgs []any) {
-	t.Helper()
-	const prefix = `SELECT "public"."users"."id", "public"."users"."email", "public"."users"."name" FROM "public"."users" WHERE `
-	assertSelectSQL(t, Users.Q(newDB()).Filter(f), prefix+wantWhere, wantArgs)
-}
-
-// TestFilterComparisonTerms covers the comparison FilterTerm constructors that
-// the existing Eq test does not: Ne/Lt/Le/Gt/Ge.
-func TestFilterComparisonTerms(t *testing.T) {
-	id := `"public"."users"."id"`
-	filtered(t, filterTerms{ID: sqlkit.Ne(1)}, `(`+id+` <> $1)`, []any{int64(1)})
-	filtered(t, filterTerms{ID: sqlkit.Lt(2)}, `(`+id+` < $1)`, []any{int64(2)})
-	filtered(t, filterTerms{ID: sqlkit.Le(3)}, `(`+id+` <= $1)`, []any{int64(3)})
-	filtered(t, filterTerms{ID: sqlkit.Gt(4)}, `(`+id+` > $1)`, []any{int64(4)})
-	filtered(t, filterTerms{ID: sqlkit.Ge(5)}, `(`+id+` >= $1)`, []any{int64(5)})
-}
-
-// TestFilterSetAndPatternTerms covers In, FilterLike, and FilterIsNull.
-func TestFilterSetAndPatternTerms(t *testing.T) {
-	filtered(t, filterTerms{ID: sqlkit.In(1, 2, 3)},
-		`("public"."users"."id" IN ($1, $2, $3))`, []any{int64(1), int64(2), int64(3)})
-	filtered(t, filterTerms{Email: sqlkit.FilterLike("a%")},
-		`("public"."users"."email" LIKE $1)`, []any{"a%"})
-	filtered(t, filterTerms{Email: sqlkit.FilterIsNull()},
-		`("public"."users"."email" IS NULL)`, nil)
-}
-
-// taggedUser resolves its preload destination by a `preload:"Posts"` tag rather
-// than by a field named after the relation, so the field can be named anything.
-type taggedUser struct {
-	ID       int64     `sqlkit:"id"`
-	Authored []prePost `preload:"Posts"`
-}
-
 // TestPreloadResolvesFieldByTag covers relationField's tag branch: the relation
 // rows land in the tagged field even though it is not named after the relation.
 func TestPreloadResolvesFieldByTag(t *testing.T) {
@@ -672,13 +365,6 @@ func TestPreloadResolvesFieldByTag(t *testing.T) {
 	}
 }
 
-// toManyScalarUser declares a to-many relation field that is not a slice, which
-// the preload must reject.
-type toManyScalarUser struct {
-	ID    int64   `sqlkit:"id"`
-	Posts prePost // not a slice, though Users->Posts is to-many
-}
-
 // TestPreloadToManyNonSliceFieldErrors covers the guard that a to-many relation
 // requires a slice destination field.
 func TestPreloadToManyNonSliceFieldErrors(t *testing.T) {
@@ -692,13 +378,6 @@ func TestPreloadToManyNonSliceFieldErrors(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "must be a slice") {
 		t.Fatalf("Preload error = %v, want a 'must be a slice' rejection", err)
 	}
-}
-
-// nullableKeyUser has a nullable (pointer) primary-key field, exercising
-// scalarValue's pointer-deref and nil-skip paths during preload.
-type nullableKeyUser struct {
-	ID    *int64 `sqlkit:"id"`
-	Posts []prePost
 }
 
 // TestPreloadSkipsNullParentKey covers scalarValue: a parent whose key is nil is

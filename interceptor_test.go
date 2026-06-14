@@ -105,6 +105,7 @@ func TestInterceptorWrapsExecution(t *testing.T) {
 type stubResult struct{}
 
 func (stubResult) LastInsertId() (int64, error) { return 0, nil }
+
 func (stubResult) RowsAffected() (int64, error) { return 1, nil }
 
 // shortCircuit returns a canned result without calling next.

@@ -2,6 +2,7 @@ package sqlkit_test
 
 import (
 	"context"
+	stdsql "database/sql"
 	"database/sql/driver"
 	"strings"
 	"testing"
@@ -10,8 +11,6 @@ import (
 	"github.com/aita/sqlkit/internal/sqltest"
 	"github.com/aita/sqlkit/sql"
 )
-
-// Field-to-column mapping edge cases for Insert(...).Values.
 
 func TestInsertValuesMapsSnakeCaseFields(t *testing.T) {
 	// Post.UserID maps to user_id without a tag.
@@ -273,19 +272,6 @@ func TestInsertBatchSizeIgnoredByToSQL(t *testing.T) {
 		[]any{"a@example.com", (*string)(nil), "b@example.com", (*string)(nil)})
 }
 
-func TestDeleteExecThroughDatabase(t *testing.T) {
-	fake := &sqltest.Fake{}
-	db := sqlkit.WrapDB(fake.DB())
-
-	if _, err := db.Delete(Users).Where(Users.ID.Eq(1)).Exec(context.Background()); err != nil {
-		t.Fatalf("Exec() error = %v", err)
-	}
-	execs := fake.Execs()
-	if len(execs) != 1 || !strings.HasPrefix(execs[0].SQL, "DELETE FROM") {
-		t.Fatalf("execs = %#v, want one DELETE", execs)
-	}
-}
-
 func TestBuildErrorsSurfaceAtScanWithoutQuerying(t *testing.T) {
 	fake := &sqltest.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
@@ -312,36 +298,129 @@ func TestBuildErrorsSurfaceAtExecWithoutQuerying(t *testing.T) {
 	}
 }
 
-func TestQueryRejectsUnsupportedQueryType(t *testing.T) {
-	fake := &sqltest.Fake{}
-	db := sqlkit.WrapDB(fake.DB())
+func TestTypedOnConflictDoUpdate(t *testing.T) {
+	name := "Alice"
+	query := sqlkit.Insert(Users).
+		Values(User{ID: 1, Email: "a@example.com", Name: &name}).
+		OnConflict(sqlkit.OnColumns(Users.ID), sqlkit.DoUpdate(Users.Email.SetExpr(Users.Email.Excluded()))).
+		Returning(Users.ID)
+	assertToSQL(t, query,
+		`INSERT INTO "public"."users" ("id", "email", "name") VALUES ($1, $2, $3) ON CONFLICT ("id") DO UPDATE SET "email" = excluded."email" RETURNING "public"."users"."id"`,
+		[]any{int64(1), "a@example.com", &name})
+}
 
-	var out []User
-	err := db.RawSQL(context.Background(), 42).Scan(&out)
-	if err == nil || !strings.Contains(err.Error(), "must be a SQL string or sql.Query") {
-		t.Fatalf("Scan() error = %v, want unsupported-query-type error", err)
+func TestTypedOnConflictDoNothing(t *testing.T) {
+	name := "Alice"
+	query := sqlkit.Insert(Users).
+		Values(User{ID: 1, Email: "a@example.com", Name: &name}).
+		OnConflict(sqlkit.OnColumns(Users.ID), sqlkit.DoNothing())
+	assertToSQL(t, query,
+		`INSERT INTO "public"."users" ("id", "email", "name") VALUES ($1, $2, $3) ON CONFLICT ("id") DO NOTHING`,
+		[]any{int64(1), "a@example.com", &name})
+}
+
+func TestTypedOnConflictOnConstraint(t *testing.T) {
+	name := "Alice"
+	query := sqlkit.Insert(Users).
+		Values(User{ID: 1, Email: "a@example.com", Name: &name}).
+		OnConflict(sqlkit.OnConstraint("users_email_key"), sqlkit.DoUpdate(Users.Email.SetExpr(Users.Email.Excluded())))
+	assertToSQL(t, query,
+		`INSERT INTO "public"."users" ("id", "email", "name") VALUES ($1, $2, $3) ON CONFLICT ON CONSTRAINT "users_email_key" DO UPDATE SET "email" = excluded."email"`,
+		[]any{int64(1), "a@example.com", &name})
+}
+
+func TestInsertValuesSlice(t *testing.T) {
+	name := "Alice"
+	insert := sqlkit.Insert(Users).Values([]User{
+		{Email: "a@example.com", Name: &name},
+		{Email: "b@example.com"},
+	})
+	assertToSQL(t, insert,
+		`INSERT INTO "public"."users" ("email", "name") VALUES ($1, $2), ($3, $4)`,
+		[]any{"a@example.com", &name, "b@example.com", (*string)(nil)})
+}
+
+func TestInsertValuesVariadicAndPointer(t *testing.T) {
+	insert := sqlkit.Insert(Users).Values(
+		User{Email: "a@example.com"},
+		&User{Email: "b@example.com"},
+	)
+	assertToSQL(t, insert,
+		`INSERT INTO "public"."users" ("email", "name") VALUES ($1, $2), ($3, $4)`,
+		[]any{"a@example.com", (*string)(nil), "b@example.com", (*string)(nil)})
+}
+
+func TestInsertKeepsExplicitDefaultedColumn(t *testing.T) {
+	insert := sqlkit.Insert(Users).Values(User{ID: 42, Email: "a@example.com"})
+	assertToSQL(t, insert,
+		`INSERT INTO "public"."users" ("id", "email", "name") VALUES ($1, $2, $3)`,
+		[]any{int64(42), "a@example.com", (*string)(nil)})
+}
+
+func TestInsertValuesFromCustomDTO(t *testing.T) {
+	insert := sqlkit.Insert(Users).Values(insertDTO{Mail: "dto@example.com"})
+	assertToSQL(t, insert,
+		`INSERT INTO "public"."users" ("email") VALUES ($1)`,
+		[]any{"dto@example.com"})
+}
+
+func TestInsertFromSelect(t *testing.T) {
+	insert := sqlkit.Insert(Users).
+		Columns(Users.Email, Users.Name).
+		FromSelect(sqlkit.Select(Users.Email, Users.Name).From(Users).Where(Users.ID.Lt(100)))
+	assertToSQL(t, insert,
+		`INSERT INTO "public"."users" ("email", "name") SELECT "public"."users"."email", "public"."users"."name" FROM "public"."users" WHERE ("public"."users"."id" < $1)`,
+		[]any{int64(100)})
+}
+
+func TestInsertFromSelectWithoutColumns(t *testing.T) {
+	insert := sqlkit.Insert(Users).FromSelect(sqlkit.Select().From(Users))
+	assertToSQL(t, insert,
+		`INSERT INTO "public"."users" SELECT "public"."users"."id", "public"."users"."email", "public"."users"."name" FROM "public"."users"`,
+		nil)
+}
+
+func TestInsertRejectsValuesAndFromSelect(t *testing.T) {
+	insert := sqlkit.Insert(Users).Values(User{Email: "x"}).FromSelect(sqlkit.Select().From(Users))
+	if _, _, err := insert.ToSQL(pg); err == nil {
+		t.Fatal("Values+FromSelect compiled, want error")
+	}
+	if _, _, err := sqlkit.Insert(Users).ToSQL(pg); err == nil {
+		t.Fatal("empty INSERT compiled, want error")
 	}
 }
 
-func TestUnboundChainFailsAtExecution(t *testing.T) {
-	// Package-level constructors build subqueries / ToSQL-only chains; they
-	// are not bound to an executor, so executing them errors.
-	var out []User
-	err := sqlkit.Select().From(Users).All(context.Background()).Scan(&out)
-	if err == nil || !strings.Contains(err.Error(), "not bound to an executor") {
-		t.Fatalf("unbound Select Scan() = %v, want no-executor error", err)
-	}
+func TestInsertValuesPassesValuerFields(t *testing.T) {
+	insert := sqlkit.Insert(Users).Values(struct {
+		Email upperString
+		Name  stdsql.NullString
+	}{
+		Email: upperString{value: "X@EXAMPLE.COM"},
+		Name:  stdsql.NullString{}, // invalid -> NULL via Valuer
+	})
 
-	if _, err := sqlkit.Insert(Users).Values(User{Email: "x"}).Exec(context.Background()); err == nil {
-		t.Fatal("unbound Insert Exec() succeeded, want error")
+	sqlText, args, err := insert.ToSQL(pg)
+	if err != nil {
+		t.Fatalf("ToSQL() error = %v", err)
 	}
-	if _, err := sqlkit.Update(Users).Set(Users.Email.Set("x")).Exec(context.Background()); err == nil {
-		t.Fatal("unbound Update Exec() succeeded, want error")
+	want := `INSERT INTO "public"."users" ("email", "name") VALUES ($1, $2)`
+	if sqlText != want {
+		t.Fatalf("SQL = %q, want %q", sqlText, want)
 	}
-	if _, err := sqlkit.Delete(Users).Exec(context.Background()); err == nil {
-		t.Fatal("unbound Delete Exec() succeeded, want error")
+	// database/sql converts the args via driver.Valuer at execution time;
+	// verify what the driver actually receives.
+	fake := &sqltest.Fake{}
+	db := sqlkit.WrapDB(fake.DB())
+	q := db.Insert(Users).Values(struct {
+		Email upperString
+		Name  stdsql.NullString
+	}{Email: upperString{value: "X@EXAMPLE.COM"}})
+	if _, err := q.Exec(context.Background()); err != nil {
+		t.Fatalf("Exec() error = %v", err)
 	}
-	if _, err := sqlkit.Select().From(Users).Count(context.Background()); err == nil {
-		t.Fatal("unbound Count() succeeded, want error")
+	got := fake.Execs()[0].Args
+	if got[0] != "x@example.com" || got[1] != nil {
+		t.Fatalf("driver args = %#v, want lowered email and NULL name", got)
 	}
+	_ = args
 }

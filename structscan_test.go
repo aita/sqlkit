@@ -2,8 +2,11 @@ package sqlkit_test
 
 import (
 	"context"
+	stdsql "database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +14,130 @@ import (
 	"github.com/aita/sqlkit/internal/sqltest"
 	"github.com/aita/sqlkit/sql"
 )
+
+func TestQueryRejectsUnsupportedQueryType(t *testing.T) {
+	fake := &sqltest.Fake{}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var out []User
+	err := db.RawSQL(context.Background(), 42).Scan(&out)
+	if err == nil || !strings.Contains(err.Error(), "must be a SQL string or sql.Query") {
+		t.Fatalf("Scan() error = %v, want unsupported-query-type error", err)
+	}
+}
+
+// upperString is a custom database/sql Scanner / driver.Valuer pair.
+type upperString struct {
+	value string
+}
+
+func (u *upperString) Scan(src any) error {
+	switch v := src.(type) {
+	case nil:
+		u.value = ""
+		return nil
+	case string:
+		u.value = strings.ToUpper(v)
+		return nil
+	case []byte:
+		u.value = strings.ToUpper(string(v))
+		return nil
+	default:
+		return fmt.Errorf("upperString: cannot scan %T", src)
+	}
+}
+
+func (u upperString) Value() (driver.Value, error) { return strings.ToLower(u.value), nil }
+
+func TestScanIntoSQLNullAndCustomScannerFields(t *testing.T) {
+	fake := &sqltest.Fake{
+		QueryFunc: func(string, []any) (sqltest.Result, error) {
+			return sqltest.Result{
+				Columns: []string{"id", "email", "name"},
+				Rows: [][]driver.Value{
+					{int64(1), "a@example.com", "Alice"},
+					{int64(2), "b@example.com", nil},
+				},
+			}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var rows []struct {
+		ID    int64
+		Email upperString       // custom Scanner
+		Name  stdsql.NullString // stdlib Scanner; NULL-aware
+	}
+	err := db.Select().From(Users).All(context.Background()).Scan(&rows)
+	if err != nil {
+		t.Fatalf("Scan() error = %v", err)
+	}
+	if rows[0].Email.value != "A@EXAMPLE.COM" {
+		t.Fatalf("custom scanner value = %q", rows[0].Email.value)
+	}
+	if !rows[0].Name.Valid || rows[0].Name.String != "Alice" {
+		t.Fatalf("row 0 name = %#v", rows[0].Name)
+	}
+	if rows[1].Name.Valid {
+		t.Fatalf("row 1 name = %#v, want invalid for NULL", rows[1].Name)
+	}
+}
+
+func TestScannerStructFieldIsNotFlattened(t *testing.T) {
+	// sql.NullString is a struct, but it implements Scanner, so it maps as a
+	// single column rather than being flattened into String/Valid fields.
+	fake := &sqltest.Fake{
+		QueryFunc: func(string, []any) (sqltest.Result, error) {
+			return sqltest.Result{Columns: []string{"name"}, Rows: [][]driver.Value{{"Alice"}}}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var row struct {
+		Name stdsql.NullString
+	}
+	if err := db.RawSQL(context.Background(), "SELECT name FROM users").Scan(&row); err != nil {
+		t.Fatalf("Scan() error = %v", err)
+	}
+	if !row.Name.Valid || row.Name.String != "Alice" {
+		t.Fatalf("name = %#v", row.Name)
+	}
+}
+
+func TestSqlkitTagIsTheOnlyTag(t *testing.T) {
+	fake := &sqltest.Fake{
+		QueryFunc: func(string, []any) (sqltest.Result, error) {
+			return sqltest.Result{
+				Columns: []string{"id", "email"},
+				Rows:    [][]driver.Value{{int64(1), "a@example.com"}},
+			}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	// db/json tags are no longer consulted: this maps only by field name, so
+	// the "email" column has no destination and Scan fails.
+	var rows []struct {
+		ID   int64
+		Addr string `db:"email" json:"email"`
+	}
+	err := db.Select(Users.ID, Users.Email).From(Users).All(context.Background()).Scan(&rows)
+	if err == nil || !strings.Contains(err.Error(), `no field`) {
+		t.Fatalf("Scan() error = %v, want unmapped-column error", err)
+	}
+
+	// The sqlkit tag works.
+	var ok []struct {
+		ID   int64
+		Addr string `sqlkit:"email"`
+	}
+	if err := db.Select(Users.ID, Users.Email).From(Users).All(context.Background()).Scan(&ok); err != nil {
+		t.Fatalf("Scan() with sqlkit tag error = %v", err)
+	}
+	if ok[0].Addr != "a@example.com" {
+		t.Fatalf("ok[0] = %#v", ok[0])
+	}
+}
 
 type timestamps struct {
 	CreatedAt time.Time

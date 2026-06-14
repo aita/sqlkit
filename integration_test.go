@@ -55,14 +55,3 @@ func TestMySQLReturningFailsAtScanWithoutQuerying(t *testing.T) {
 		t.Fatalf("rejected statement still reached the database: %d statements", n)
 	}
 }
-
-func TestDialectForDriver(t *testing.T) {
-	if sqlkit.DialectForDriver("mysql").Name() != "mysql" {
-		t.Fatal("mysql driver should select the MySQL dialect")
-	}
-	for _, name := range []string{"pgx", "postgres", "anything-else"} {
-		if sqlkit.DialectForDriver(name).Name() != "postgres" {
-			t.Fatalf("driver %q should default to postgres", name)
-		}
-	}
-}
