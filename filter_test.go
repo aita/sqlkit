@@ -69,6 +69,17 @@ func TestFilterRelationExists(t *testing.T) {
 		[]any{"Hello"})
 }
 
+func TestFilterRelationExistsMultiHop(t *testing.T) {
+	db := newDB()
+	// A relation filter nested inside another relation filter (users → posts →
+	// users) nests the correlated EXISTS: the inner EXISTS over users is
+	// correlated to the posts row of the outer EXISTS.
+	assertSelectSQL(t,
+		Users.Q(db).Filter(usersByPostAuthor{Posts: &postsByAuthor{User: &userFilter{Email: sqlkit.Eq("a@example.com")}}}),
+		`SELECT "public"."users"."id", "public"."users"."email", "public"."users"."name" FROM "public"."users" WHERE EXISTS (SELECT 1 FROM "public"."posts" WHERE (("public"."posts"."user_id" = "public"."users"."id") AND EXISTS (SELECT 1 FROM "public"."users" WHERE (("public"."users"."id" = "public"."posts"."user_id") AND ("public"."users"."email" = $1)))))`,
+		[]any{"a@example.com"})
+}
+
 func TestSelectFilterRequiresFromTable(t *testing.T) {
 	db := newDB()
 	// A subquery source is not a table, so Filter defers an error to the terminal.

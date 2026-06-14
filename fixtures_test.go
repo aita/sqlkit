@@ -137,6 +137,19 @@ type postsByTitle struct {
 	Title sqlkit.FilterTerm
 }
 
+// usersByPostAuthor and postsByAuthor nest a relation filter inside another
+// relation filter (users → posts → users): the authors of a post written by a
+// given user. Each hop must emit its own correlated EXISTS, which only works
+// when a relation's Target() exposes the target's own relations — i.e. returns
+// the table binding, not the bare columns value.
+type usersByPostAuthor struct {
+	Posts *postsByAuthor
+}
+
+type postsByAuthor struct {
+	User *userFilter
+}
+
 type preUser struct {
 	ID    int64 `sqlkit:"id"`
 	Posts []prePost
