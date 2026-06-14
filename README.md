@@ -88,12 +88,12 @@ whole table plus a column from another. For a single row, chains offer `First`
 alongside `All`. `Page(ctx, limit, offset)` fetches a window in one call.
 
 Row locking (PostgreSQL/MySQL 8.0+) is `ForUpdate` / `ForShare` (plus
-PostgreSQL's `ForNoKeyUpdate` / `ForKeyShare`), refined with `SkipLocked` /
-`NoWait` and `LockOf(tables...)` — the building block of a queue worker:
+PostgreSQL's `ForNoKeyUpdate` / `ForKeyShare`), refined with the `SkipLocked` /
+`NoWait` / `LockOf(tables...)` options — the building block of a queue worker:
 
 ```go
 err := db.Select().From(appdb.Jobs).Where(appdb.Jobs.Status.Eq("ready")).
-    Limit(10).ForUpdate().SkipLocked().All(ctx).Scan(&jobs)
+    Limit(10).ForUpdate(sqlkit.SkipLocked()).All(ctx).Scan(&jobs)
 ```
 
 ### Predicates and filters

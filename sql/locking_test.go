@@ -19,19 +19,16 @@ func TestForUpdateAndShare(t *testing.T) {
 func TestLockWaitModifiers(t *testing.T) {
 	base := Select(Col("id")).From(Table{Name: "jobs"})
 
-	assertSQL(t, base.ForUpdate().SkipLocked(),
+	assertSQL(t, base.ForUpdate(SkipLocked()),
 		`SELECT "id" FROM "jobs" FOR UPDATE SKIP LOCKED`, nil)
-	assertSQL(t, base.ForUpdate().NoWait(),
+	assertSQL(t, base.ForUpdate(NoWait()),
 		`SELECT "id" FROM "jobs" FOR UPDATE NOWAIT`, nil)
-
-	// SkipLocked / NoWait default the lock to FOR UPDATE when no strength is set.
-	assertSQL(t, base.SkipLocked(), `SELECT "id" FROM "jobs" FOR UPDATE SKIP LOCKED`, nil)
 }
 
 func TestLockOf(t *testing.T) {
 	q := Select(Col("jobs.id")).From(Table{Name: "jobs"}).
 		Join(Table{Name: "queues"}, Eq(Col("jobs.queue_id"), Col("queues.id"))).
-		ForUpdate().LockOf("jobs").SkipLocked()
+		ForUpdate(LockOf("jobs"), SkipLocked())
 	assertSQL(t, q,
 		`SELECT "jobs"."id" FROM "jobs" JOIN "queues" ON ("jobs"."queue_id" = "queues"."id") FOR UPDATE OF "jobs" SKIP LOCKED`,
 		nil)
@@ -39,13 +36,13 @@ func TestLockOf(t *testing.T) {
 
 func TestLockComesAfterLimitOffset(t *testing.T) {
 	q := Select(Col("id")).From(Table{Name: "jobs"}).
-		OrderBy(Asc(Col("id"))).Limit(10).Offset(5).ForUpdate().SkipLocked()
+		OrderBy(Asc(Col("id"))).Limit(10).Offset(5).ForUpdate(SkipLocked())
 	assertSQL(t, q,
 		`SELECT "id" FROM "jobs" ORDER BY "id" LIMIT 10 OFFSET 5 FOR UPDATE SKIP LOCKED`, nil)
 }
 
 func TestLockMySQL(t *testing.T) {
-	assertMySQL(t, Select(Col("id")).From(Table{Name: "jobs"}).ForUpdate().SkipLocked(),
+	assertMySQL(t, Select(Col("id")).From(Table{Name: "jobs"}).ForUpdate(SkipLocked()),
 		"SELECT `id` FROM `jobs` FOR UPDATE SKIP LOCKED", nil)
 	assertMySQL(t, Select(Col("id")).From(Table{Name: "jobs"}).ForShare(),
 		"SELECT `id` FROM `jobs` FOR SHARE", nil)

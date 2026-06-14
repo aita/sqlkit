@@ -187,66 +187,51 @@ func (q SelectQuery) Offset(n int) SelectQuery {
 	return q
 }
 
-// cloneLock returns a copy of the lock clause (a fresh default FOR UPDATE when
-// none is set yet), so each builder call mutates its own copy rather than a
-// pointer shared across query values.
-func (q SelectQuery) cloneLock() *lockClause {
-	if q.lock == nil {
-		return &lockClause{strength: "UPDATE"}
-	}
-	clone := *q.lock
-	clone.of = append([]string(nil), q.lock.of...)
-	return &clone
+// LockOption refines a SELECT row-locking clause (ForUpdate / ForShare / …):
+// SkipLocked, NoWait, and LockOf.
+type LockOption func(*lockClause)
+
+// SkipLocked adds SKIP LOCKED, skipping rows another transaction has already
+// locked rather than waiting (the queue-worker pattern).
+func SkipLocked() LockOption { return func(l *lockClause) { l.wait = "SKIP LOCKED" } }
+
+// NoWait adds NOWAIT, erroring immediately instead of waiting when a selected
+// row is already locked.
+func NoWait() LockOption { return func(l *lockClause) { l.wait = "NOWAIT" } }
+
+// LockOf restricts the lock to rows from the named tables/aliases
+// (FOR UPDATE OF t), for a join that should lock only some of its inputs.
+func LockOf(tables ...string) LockOption {
+	return func(l *lockClause) { l.of = append(l.of, tables...) }
 }
 
 // ForUpdate adds a FOR UPDATE row-locking clause, locking the selected rows
-// against concurrent updates and deletes until the transaction ends. Chain
-// SkipLocked / NoWait / LockOf to refine it. Row locking is PostgreSQL/MySQL
+// against concurrent updates and deletes until the transaction ends. Refine it
+// with the SkipLocked / NoWait / LockOf options. Row locking is PostgreSQL/MySQL
 // (8.0+) only; other dialects reject it at compile time.
-func (q SelectQuery) ForUpdate() SelectQuery { return q.withLockStrength("UPDATE") }
+func (q SelectQuery) ForUpdate(opts ...LockOption) SelectQuery { return q.lockWith("UPDATE", opts) }
 
 // ForShare adds a FOR SHARE row-locking clause, a shared lock that blocks
 // concurrent writes but not other shared locks.
-func (q SelectQuery) ForShare() SelectQuery { return q.withLockStrength("SHARE") }
+func (q SelectQuery) ForShare(opts ...LockOption) SelectQuery { return q.lockWith("SHARE", opts) }
 
 // ForNoKeyUpdate adds a FOR NO KEY UPDATE clause, a weaker FOR UPDATE that does
 // not block concurrent inserts of referencing rows (PostgreSQL only).
-func (q SelectQuery) ForNoKeyUpdate() SelectQuery { return q.withLockStrength("NO KEY UPDATE") }
+func (q SelectQuery) ForNoKeyUpdate(opts ...LockOption) SelectQuery {
+	return q.lockWith("NO KEY UPDATE", opts)
+}
 
 // ForKeyShare adds a FOR KEY SHARE clause, the weakest lock, blocking only
 // changes to the key columns (PostgreSQL only).
-func (q SelectQuery) ForKeyShare() SelectQuery { return q.withLockStrength("KEY SHARE") }
-
-func (q SelectQuery) withLockStrength(strength string) SelectQuery {
-	lock := q.cloneLock()
-	lock.strength = strength
-	q.lock = lock
-	return q
+func (q SelectQuery) ForKeyShare(opts ...LockOption) SelectQuery {
+	return q.lockWith("KEY SHARE", opts)
 }
 
-// SkipLocked adds SKIP LOCKED to the row-locking clause, skipping rows already
-// locked by another transaction rather than waiting (a queue-worker pattern). It
-// defaults the lock to FOR UPDATE when no strength was set.
-func (q SelectQuery) SkipLocked() SelectQuery { return q.withLockWait("SKIP LOCKED") }
-
-// NoWait adds NOWAIT to the row-locking clause, erroring immediately instead of
-// waiting when a selected row is already locked. It defaults the lock to FOR
-// UPDATE when no strength was set.
-func (q SelectQuery) NoWait() SelectQuery { return q.withLockWait("NOWAIT") }
-
-func (q SelectQuery) withLockWait(wait string) SelectQuery {
-	lock := q.cloneLock()
-	lock.wait = wait
-	q.lock = lock
-	return q
-}
-
-// LockOf restricts the row-locking clause to rows from the named tables/aliases
-// (FOR UPDATE OF t), for a join that should lock only some of its inputs. It
-// defaults the lock to FOR UPDATE when no strength was set.
-func (q SelectQuery) LockOf(tables ...string) SelectQuery {
-	lock := q.cloneLock()
-	lock.of = append(lock.of, tables...)
+func (q SelectQuery) lockWith(strength string, opts []LockOption) SelectQuery {
+	lock := &lockClause{strength: strength}
+	for _, opt := range opts {
+		opt(lock)
+	}
 	q.lock = lock
 	return q
 }

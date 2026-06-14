@@ -1043,12 +1043,12 @@ func TestSelectDistinctOn(t *testing.T) {
 
 func TestSelectForUpdateSkipLocked(t *testing.T) {
 	assertToSQL(t,
-		sqlkit.Select(Users.ID).From(Users).Where(Users.ID.Gt(0)).ForUpdate().SkipLocked(),
+		sqlkit.Select(Users.ID).From(Users).Where(Users.ID.Gt(0)).ForUpdate(sqlkit.SkipLocked()),
 		`SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" > $1) FOR UPDATE SKIP LOCKED`,
 		[]any{int64(0)})
 
 	assertToSQL(t,
-		sqlkit.Select(Users.ID).From(Users).ForShare().NoWait(),
+		sqlkit.Select(Users.ID).From(Users).ForShare(sqlkit.NoWait()),
 		`SELECT "public"."users"."id" FROM "public"."users" FOR SHARE NOWAIT`, nil)
 }
 
