@@ -266,6 +266,132 @@ func TestFunctionExpressions(t *testing.T) {
 		[]any{"anonymous", 0})
 }
 
+func TestScalarStringFunctions(t *testing.T) {
+	query := Select(
+		Lower(Col("name")),
+		Upper(Col("name")),
+		CharLength(Col("name")),
+		Trim(Col("name")),
+		Replace(Col("name"), "_", " "),
+		Substring(Col("name"), 1, 3),
+		Lpad(Col("code"), 6, "0"),
+	).From(Table{Name: "t"})
+
+	assertSQL(t, query,
+		`SELECT LOWER("name"), UPPER("name"), CHAR_LENGTH("name"), TRIM("name"), REPLACE("name", $1, $2), SUBSTRING("name", $3, $4), LPAD("code", $5, $6) FROM "t"`,
+		[]any{"_", " ", 1, 3, 6, "0"})
+}
+
+func TestScalarStringFunctionsMore(t *testing.T) {
+	query := Select(
+		ConcatWs("-", Col("area"), Col("number")),
+		Md5(Col("email")),
+		Ascii(Col("code")),
+		Reverse(Col("name")),
+		Lpad(Col("code"), 6, "0"),
+	).From(Table{Name: "t"})
+
+	assertSQL(t, query,
+		`SELECT CONCAT_WS($1, "area", "number"), MD5("email"), ASCII("code"), REVERSE("name"), LPAD("code", $2, $3) FROM "t"`,
+		[]any{"-", 6, "0"})
+}
+
+func TestScalarNumericFunctions(t *testing.T) {
+	query := Select(
+		Abs(Col("balance")),
+		Ceil(Col("rate")),
+		Floor(Col("rate")),
+		Round(Col("rate"), 2),
+		Power(Col("base"), Int(2)),
+		Sqrt(Col("area")),
+		Sign(Col("delta")),
+	).From(Table{Name: "t"})
+
+	assertSQL(t, query,
+		`SELECT ABS("balance"), CEIL("rate"), FLOOR("rate"), ROUND("rate", $1), POWER("base", $2), SQRT("area"), SIGN("delta") FROM "t"`,
+		[]any{2, 2})
+}
+
+func TestTrigonometricFunctions(t *testing.T) {
+	query := Select(
+		Pi(),
+		Sin(Col("x")),
+		Cos(Col("x")),
+		Atan2(Col("y"), Col("x")),
+		Degrees(Col("rad")),
+		Radians(Col("deg")),
+	).From(Table{Name: "t"})
+
+	assertSQL(t, query,
+		`SELECT PI(), SIN("x"), COS("x"), ATAN2("y", "x"), DEGREES("rad"), RADIANS("deg") FROM "t"`,
+		nil)
+}
+
+func TestStatisticalAggregates(t *testing.T) {
+	query := Select(
+		StdDev(Col("v")),
+		StdDevPop(Col("v")),
+		Variance(Col("v")),
+		VarSamp(Col("v")),
+		BitOr(Col("flags")),
+	).From(Table{Name: "samples"}).GroupBy(Col("g"))
+
+	assertSQL(t, query,
+		`SELECT STDDEV("v"), STDDEV_POP("v"), VARIANCE("v"), VAR_SAMP("v"), BIT_OR("flags") FROM "samples" GROUP BY "g"`,
+		nil)
+}
+
+func TestMoreWindowFunctions(t *testing.T) {
+	query := Select(
+		As(PercentRank().Over().OrderBy(Asc(Col("score"))), "pr"),
+		As(CumeDist().Over().OrderBy(Asc(Col("score"))), "cd"),
+		As(Ntile(4).Over().OrderBy(Desc(Col("score"))), "quartile"),
+		FirstValue(Col("name")).Over().PartitionBy(Col("team")).OrderBy(Asc(Col("score"))),
+		NthValue(Col("name"), 2).Over().PartitionBy(Col("team")),
+	).From(Table{Name: "players"})
+
+	assertSQL(t, query,
+		`SELECT PERCENT_RANK() OVER (ORDER BY "score") AS "pr", CUME_DIST() OVER (ORDER BY "score") AS "cd", NTILE($1) OVER (ORDER BY "score" DESC) AS "quartile", FIRST_VALUE("name") OVER (PARTITION BY "team" ORDER BY "score"), NTH_VALUE("name", $2) OVER (PARTITION BY "team") FROM "players"`,
+		[]any{4, 2})
+}
+
+func TestDateTimeFunctions(t *testing.T) {
+	query := Select(
+		Now(),
+		As(CurrentDate(), "today"),
+		CurrentTimestamp(),
+		As(Extract("year", Col("created_at")), "yr"),
+	).From(Table{Name: "events"})
+
+	assertSQL(t, query,
+		`SELECT NOW(), CURRENT_DATE AS "today", CURRENT_TIMESTAMP, EXTRACT(year FROM "created_at") AS "yr" FROM "events"`,
+		nil)
+}
+
+func TestPositionExpression(t *testing.T) {
+	query := Select(As(Position("@", Col("email")), "at")).From(Table{Name: "users"})
+
+	assertSQL(t, query,
+		`SELECT POSITION($1 IN "email") AS "at" FROM "users"`,
+		[]any{"@"})
+}
+
+func TestStringAggPostgres(t *testing.T) {
+	query := Select(As(StringAgg(Col("name"), ", "), "names")).
+		From(Table{Name: "users"}).
+		GroupBy(Col("org_id"))
+
+	assertSQL(t, query,
+		`SELECT STRING_AGG("name", ', ') AS "names" FROM "users" GROUP BY "org_id"`,
+		nil)
+}
+
+func TestExtractRequiresField(t *testing.T) {
+	if _, _, err := Select(ExtractExpression{Operand: Col("x")}).From(Table{Name: "t"}).ToSQL(PostgreSQLDialect{}); err == nil {
+		t.Fatal("EXTRACT without a field compiled, want error")
+	}
+}
+
 func TestAggregatesWithGroupByHaving(t *testing.T) {
 	query := Select(
 		Col("org_id"),
