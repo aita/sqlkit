@@ -254,6 +254,25 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		}
 		// Portable fallback for engines without an ILIKE operator (MySQL).
 		return "(LOWER(" + leftSQL + ") LIKE LOWER(" + patternSQL + "))", args, nil
+	case RegexpExpression:
+		leftSQL, args, err := c.CompileExpression(e.Left)
+		if err != nil {
+			return "", nil, err
+		}
+		patternSQL, patternArgs, err := c.CompileExpression(e.Pattern)
+		if err != nil {
+			return "", nil, err
+		}
+		args = append(args, patternArgs...)
+		matcher, ok := c.Dialect.(RegexpMatcher)
+		if !ok {
+			return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support regular-expression matching", c.Dialect.Name())
+		}
+		out, err := matcher.Regexp(leftSQL, patternSQL, e.Negate, e.CaseInsensitive)
+		if err != nil {
+			return "", nil, err
+		}
+		return out, args, nil
 	case NullPredicate:
 		operandSQL, args, err := c.CompileExpression(e.Operand)
 		if err != nil {
@@ -265,23 +284,25 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		}
 		return "(" + operandSQL + " " + operator + ")", args, nil
 	case FuncExpression:
-		var sb strings.Builder
+		compiled := make([]string, len(e.Args))
 		var args []any
-		sb.WriteString(e.Name)
-		sb.WriteString("(")
 		for i, arg := range e.Args {
-			if i > 0 {
-				sb.WriteString(", ")
-			}
 			argSQL, argArgs, err := c.CompileExpression(arg)
 			if err != nil {
 				return "", nil, err
 			}
-			sb.WriteString(argSQL)
+			compiled[i] = argSQL
 			args = append(args, argArgs...)
 		}
-		sb.WriteString(")")
-		return sb.String(), args, nil
+		// A FuncRenderer dialect may remap a canonical function name/form to its
+		// native spelling; an unknown name (or a dialect without the capability)
+		// falls through to the default name(args...) rendering unchanged.
+		if fr, ok := c.Dialect.(FuncRenderer); ok {
+			if out, handled := fr.RenderFunc(e.Name, compiled); handled {
+				return out, args, nil
+			}
+		}
+		return e.Name + "(" + strings.Join(compiled, ", ") + ")", args, nil
 	case ExtractExpression:
 		if e.Field == "" {
 			return "", nil, fmt.Errorf("sqlkit/sql: EXTRACT requires a field")

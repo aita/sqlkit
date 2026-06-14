@@ -20,7 +20,11 @@ func (c *Compiler) CompileCreateTable(s CreateTableStmt) (string, error) {
 		}
 		defs = append(defs, def)
 	}
-	if len(s.primaryKey) > 0 {
+	// Some dialects declare the primary key inline on the auto-increment column
+	// (SQLite's INTEGER PRIMARY KEY AUTOINCREMENT); for those, a separate
+	// PRIMARY KEY constraint over that single column would be a duplicate, so
+	// skip it. PostgreSQL/MySQL keep the standalone constraint as before.
+	if len(s.primaryKey) > 0 && !c.inlinesAutoIncrementPK(s) {
 		defs = append(defs, "PRIMARY KEY ("+c.quoteAll(s.primaryKey)+")")
 	}
 	for _, check := range s.checks {
@@ -47,6 +51,31 @@ func (c *Compiler) CompileCreateTable(s CreateTableStmt) (string, error) {
 	}
 	sb.WriteString(")" + c.Dialect.InlineTableComment(s.comment) + ";")
 	return sb.String(), nil
+}
+
+// inlinesAutoIncrementPK reports whether the table's primary key is a single
+// auto-increment column whose clause already declares the primary key inline for
+// this dialect (so CompileCreateTable must not also emit a standalone PRIMARY
+// KEY constraint). It is false for dialects that do not implement
+// InlineAutoIncrementPrimaryKey (PostgreSQL, MySQL), keeping their output
+// unchanged.
+func (c *Compiler) inlinesAutoIncrementPK(s CreateTableStmt) bool {
+	ip, ok := c.Dialect.(InlineAutoIncrementPrimaryKey)
+	if !ok || !ip.InlinesAutoIncrementPrimaryKey() || len(s.primaryKey) != 1 {
+		return false
+	}
+	for _, col := range s.columns {
+		if col.Name != s.primaryKey[0] || !col.AutoIncrement {
+			continue
+		}
+		ai, ok := col.Type.(AutoIncrementColumnType)
+		if !ok {
+			return false
+		}
+		_, rendered := ai.RenderAutoIncrement(c.Dialect)
+		return rendered
+	}
+	return false
 }
 
 // compileColumnDef renders a single column definition.
