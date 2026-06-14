@@ -111,8 +111,8 @@ func TestGenerateRelationsGolden(t *testing.T) {
 
 	body := string(got)
 	for _, want := range []string{
-		"func (t UsersTable) Queryer(ex sqlkit.Executor) sqlkit.SelectQuery",
-		"func (t UsersTable) Q(ex sqlkit.Executor) sqlkit.SelectQuery",
+		"func (t UsersTable) Query(ex sqlkit.Querier) sqlkit.SelectQuery",
+		"func (t UsersTable) Q(ex sqlkit.Querier) sqlkit.SelectQuery",
 		"type UsersColumns struct",
 		"func newUsersColumns() UsersColumns",
 		"Profile UsersProfileRel", // has-one (unique FK)
@@ -169,7 +169,7 @@ func TestGenerateSelfReferentialRelations(t *testing.T) {
 
 func TestGenerateRelationsNoForeignKeysOmitsSQLImport(t *testing.T) {
 	// A relation-aware binding for a table without foreign keys emits the
-	// Queryer surface but no JoinOn expressions, so it must not import sql — an
+	// Query surface but no JoinOn expressions, so it must not import sql — an
 	// unused import would make the generated file uncompilable.
 	got := string(generateSingle(t, fixtureTables()[:1], Options{PackageName: "blogdb", EmitRelations: true}))
 	if strings.Contains(got, `"github.com/aita/sqlkit/sql"`) {
@@ -213,7 +213,7 @@ func TestBindingsAreNotAnORM(t *testing.T) {
 	body := string(generateSingle(t, fixtureTables(), Options{PackageName: "blogdb"}))
 	// The binding is metadata: no executor-bound accessors, no relation
 	// navigation methods, and plain NewColumn calls without metadata options.
-	for _, banned := range []string{"sqlkit.Executor", ") Get(", ") User()", ") Posts()", "sqlkit.With"} {
+	for _, banned := range []string{"sqlkit.Querier", ") Get(", ") User()", ") Posts()", "sqlkit.With"} {
 		if strings.Contains(body, banned) {
 			t.Errorf("generated binding should not contain %q:\n%s", banned, body)
 		}

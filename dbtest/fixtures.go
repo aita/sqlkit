@@ -47,9 +47,9 @@ func (f *Fixture) Add(table sqlkit.Table, rows ...any) *Fixture {
 }
 
 // Load inserts every group in declaration order, failing the test on the first
-// error. ex is any sqlkit.Executor, so a fixture loads through a *sqlkit.Database
+// error. ex is any sqlkit.Querier, so a fixture loads through a *sqlkit.Database
 // or within a *sqlkit.Session transaction alike.
-func (f *Fixture) Load(t *testing.T, ex sqlkit.Executor) {
+func (f *Fixture) Load(t *testing.T, ex sqlkit.Querier) {
 	t.Helper()
 	for _, group := range f.groups {
 		if len(group.rows) == 0 {

@@ -159,12 +159,10 @@ func (r rewriteInterceptor) InterceptExec(ctx context.Context, stmt Statement, n
 	return next(ctx, stmt)
 }
 
-// runQuery executes a read statement through ex's interceptor chain, with the
-// raw driver query as the terminal handler.
-func runQuery(ctx context.Context, ex Executor, stmt Statement) (*stdsql.Rows, error) {
-	handler := func(ctx context.Context, s Statement) (*stdsql.Rows, error) {
-		return ex.queryContext(ctx, s.SQL, s.Args...)
-	}
+// runQuery executes a read statement through ex's interceptor chain, with ex's
+// terminal Executor as the innermost handler.
+func runQuery(ctx context.Context, ex executorBinding, stmt Statement) (*stdsql.Rows, error) {
+	handler := QueryHandler(ex.executor().Query)
 	ics := ex.interceptors()
 	for i := len(ics) - 1; i >= 0; i-- {
 		ic, next := ics[i], handler
@@ -176,11 +174,9 @@ func runQuery(ctx context.Context, ex Executor, stmt Statement) (*stdsql.Rows, e
 }
 
 // runExecStmt executes a write statement through ex's interceptor chain, with
-// the raw driver exec as the terminal handler.
-func runExecStmt(ctx context.Context, ex Executor, stmt Statement) (stdsql.Result, error) {
-	handler := func(ctx context.Context, s Statement) (stdsql.Result, error) {
-		return ex.execContext(ctx, s.SQL, s.Args...)
-	}
+// ex's terminal Executor as the innermost handler.
+func runExecStmt(ctx context.Context, ex executorBinding, stmt Statement) (stdsql.Result, error) {
+	handler := ExecHandler(ex.executor().Exec)
 	ics := ex.interceptors()
 	for i := len(ics) - 1; i >= 0; i-- {
 		ic, next := ics[i], handler

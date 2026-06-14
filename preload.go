@@ -29,7 +29,7 @@ const defaultPreloadChunkSize = 1000
 
 // preloadChunkOf reports the executor's configured preload chunk size, or the
 // default when the executor does not expose one.
-func preloadChunkOf(ex Executor) int {
+func preloadChunkOf(ex executorBinding) int {
 	if p, ok := ex.(interface{ preloadChunkSize() int }); ok {
 		return p.preloadChunkSize()
 	}
@@ -37,7 +37,7 @@ func preloadChunkOf(ex Executor) int {
 }
 
 // applyPreloads runs every registered preload against the just-scanned dest.
-func applyPreloads(ctx context.Context, ex Executor, dest any, rels []Relation) error {
+func applyPreloads(ctx context.Context, ex executorBinding, dest any, rels []Relation) error {
 	for _, rel := range rels {
 		if err := preloadRelation(ctx, ex, dest, rel); err != nil {
 			return err
@@ -48,7 +48,7 @@ func applyPreloads(ctx context.Context, ex Executor, dest any, rels []Relation) 
 
 // preloadRelation eager-loads rel onto dest, which is the Scan destination: a
 // pointer to a slice of parents (every row) or to a single parent (First/One).
-func preloadRelation(ctx context.Context, ex Executor, dest any, rel Relation) error {
+func preloadRelation(ctx context.Context, ex executorBinding, dest any, rel Relation) error {
 	rv := reflect.ValueOf(dest)
 	if rv.Kind() != reflect.Pointer || rv.IsNil() {
 		return fmt.Errorf("sqlkit: Preload requires a pointer destination, got %T", dest)
@@ -140,8 +140,10 @@ func preloadRelation(ctx context.Context, ex Executor, dest any, rel Relation) e
 	// keys per follow-up query at the configured preload batch size (selectinload
 	// style) so a wide eager-load runs several plan-cache-friendly statements.
 	childrenPtr := reflect.New(reflect.SliceOf(childElem))
-	rows := ex.Select().From(target).Where(newInPredicate(fkCol, vals)).
-		AutoChunk(ChunkSize(preloadChunkOf(ex))).All(ctx)
+	q := Select().From(target).Where(newInPredicate(fkCol, vals)).
+		AutoChunk(ChunkSize(preloadChunkOf(ex)))
+	q.ex = ex
+	rows := q.All(ctx)
 	if err := rows.Scan(childrenPtr.Interface()); err != nil {
 		return err
 	}

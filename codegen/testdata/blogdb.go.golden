@@ -18,7 +18,7 @@ type UsersTable struct {
 
 // Users provides typed access to table public.users.
 var Users = func() UsersTable {
-	info := sqlkit.TableInfo{Schema: "public", Name: "users", Checksum: "60ad56982385a6951028fb535d6dcd889f83e46784378ea3b23a07f0170b474d", Generator: "fmt1+tple72f770b2047+sqlkit(devel)"}
+	info := sqlkit.TableInfo{Schema: "public", Name: "users", Checksum: "60ad56982385a6951028fb535d6dcd889f83e46784378ea3b23a07f0170b474d", Generator: "fmt1+tpl250a2b88da32+sqlkit(devel)"}
 	return UsersTable{
 		info:      info,
 		ID:        sqlkit.NewColumn[int64](info, "id"),
@@ -76,7 +76,7 @@ type PostsTable struct {
 
 // Posts provides typed access to table public.posts.
 var Posts = func() PostsTable {
-	info := sqlkit.TableInfo{Schema: "public", Name: "posts", Checksum: "ae6c44bc694636209a416d68dd5fe54fd6129f8c000a4475153d31aab3daaa67", Generator: "fmt1+tple72f770b2047+sqlkit(devel)"}
+	info := sqlkit.TableInfo{Schema: "public", Name: "posts", Checksum: "ae6c44bc694636209a416d68dd5fe54fd6129f8c000a4475153d31aab3daaa67", Generator: "fmt1+tpl250a2b88da32+sqlkit(devel)"}
 	return PostsTable{
 		info:      info,
 		ID:        sqlkit.NewColumn[int64](info, "id"),

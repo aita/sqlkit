@@ -16,10 +16,18 @@ import (
 // and Close are no-ops. Once a statement has run, finish with Commit or
 // Rollback (Close rolls back if neither happened).
 //
-// Session implements Executor, so query chains start from it and run inside
+// Session implements Querier, so query chains start from it and run inside
 // its transaction: session.Select().From(t).All(ctx).Scan(&dst).
+//
+// The transaction comes from the database's terminal Executor: when it
+// implements TxExecutor (the default database/sql handle, or a WrapExecutor
+// terminal that opts in) the session runs inside a real transaction; otherwise
+// statements run directly on the terminal and Commit/Rollback are no-ops.
 type Session struct {
-	db           *stdsql.DB
+	// base is the database's terminal Executor, the source of the session's
+	// transaction (when it implements TxExecutor) and the fallback it runs on
+	// otherwise.
+	base         Executor
 	txOpts       *stdsql.TxOptions
 	dialect      sql.Dialect
 	ics          []Interceptor
@@ -31,30 +39,37 @@ type Session struct {
 	identities *meta.IdentityMap
 
 	mu     sync.Mutex
-	tx     *stdsql.Tx
+	tx     Tx
 	closed bool
 	spSeq  int
 }
 
-// ensureTx returns the session's transaction, beginning it on first use.
-func (s *Session) ensureTx(ctx context.Context) (*stdsql.Tx, error) {
+// activeExecutor returns the Executor the session's statements run through: its
+// transaction, begun lazily on first use when base is a TxExecutor, or base
+// itself when base cannot transact (then Commit/Rollback are no-ops).
+func (s *Session) activeExecutor(ctx context.Context) (Executor, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return nil, stdsql.ErrTxDone
 	}
-	if s.tx == nil {
-		tx, err := s.db.BeginTx(ctx, s.txOpts)
-		if err != nil {
-			return nil, err
-		}
-		s.tx = tx
+	if s.tx != nil {
+		return s.tx, nil
 	}
-	return s.tx, nil
+	beginner, ok := s.base.(TxExecutor)
+	if !ok {
+		return s.base, nil
+	}
+	tx, err := beginner.Begin(ctx, s.txOpts)
+	if err != nil {
+		return nil, err
+	}
+	s.tx = tx
+	return tx, nil
 }
 
-// Commit commits the transaction. If no statement ever ran, no transaction
-// was begun and Commit just closes the session.
+// Commit commits the transaction. If no transaction was begun (no statement
+// ran, or the terminal cannot transact), Commit just closes the session.
 func (s *Session) Commit() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -68,7 +83,7 @@ func (s *Session) Commit() error {
 	return s.tx.Commit()
 }
 
-// Rollback rolls back the transaction. If no statement ever ran, it just
+// Rollback rolls back the transaction. If no transaction was begun, it just
 // closes the session.
 func (s *Session) Rollback() error {
 	s.mu.Lock()
@@ -204,7 +219,7 @@ func (s *Session) Savepoint(ctx context.Context) (string, error) {
 	s.spSeq++
 	name := fmt.Sprintf("sp_%d", s.spSeq)
 	s.mu.Unlock()
-	if _, err := s.execContext(ctx, "SAVEPOINT "+name); err != nil {
+	if _, err := s.txControl(ctx, "SAVEPOINT "+name); err != nil {
 		return "", err
 	}
 	return name, nil
@@ -214,15 +229,30 @@ func (s *Session) Savepoint(ctx context.Context) (string, error) {
 // statement since it was opened while leaving the savepoint (and the outer
 // transaction) in place.
 func (s *Session) RollbackTo(ctx context.Context, name string) error {
-	_, err := s.execContext(ctx, "ROLLBACK TO SAVEPOINT "+name)
+	_, err := s.txControl(ctx, "ROLLBACK TO SAVEPOINT "+name)
 	return err
 }
 
 // Release discards the named savepoint, merging its work into the enclosing
 // transaction or savepoint.
 func (s *Session) Release(ctx context.Context, name string) error {
-	_, err := s.execContext(ctx, "RELEASE SAVEPOINT "+name)
+	_, err := s.txControl(ctx, "RELEASE SAVEPOINT "+name)
 	return err
+}
+
+// txControl runs a transaction-control statement (a savepoint) directly on the
+// session's transaction, bypassing the interceptor chain. It requires a real
+// transaction: a session whose terminal is not a TxExecutor has none, so it
+// returns errNoTx rather than sending the SQL to a non-transactional executor.
+func (s *Session) txControl(ctx context.Context, query string) (stdsql.Result, error) {
+	if _, ok := s.base.(TxExecutor); !ok {
+		return nil, errNoTx
+	}
+	ex, err := s.activeExecutor(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return ex.Exec(ctx, Statement{Op: OpExec, SQL: query, Dialect: s.dialect})
 }
 
 func (s *Session) sqlDialect() sql.Dialect { return s.dialect }
@@ -244,18 +274,25 @@ func (s *Session) AutoChunkEnabled() bool { return s.autoChunk }
 
 func (s *Session) preloadChunkSize() int { return s.preloadChunk }
 
-func (s *Session) queryContext(ctx context.Context, query string, args ...any) (*stdsql.Rows, error) {
-	tx, err := s.ensureTx(ctx)
+func (s *Session) executor() Executor { return sessionExecutor{s} }
+
+// sessionExecutor is the terminal Executor for a Session: it routes each
+// statement to the session's active executor (its transaction, or the bare
+// terminal when none backs it), beginning the transaction on first use.
+type sessionExecutor struct{ s *Session }
+
+func (e sessionExecutor) Query(ctx context.Context, stmt Statement) (*stdsql.Rows, error) {
+	ex, err := e.s.activeExecutor(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return tx.QueryContext(ctx, query, args...)
+	return ex.Query(ctx, stmt)
 }
 
-func (s *Session) execContext(ctx context.Context, query string, args ...any) (stdsql.Result, error) {
-	tx, err := s.ensureTx(ctx)
+func (e sessionExecutor) Exec(ctx context.Context, stmt Statement) (stdsql.Result, error) {
+	ex, err := e.s.activeExecutor(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return tx.ExecContext(ctx, query, args...)
+	return ex.Exec(ctx, stmt)
 }

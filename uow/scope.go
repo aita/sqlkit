@@ -1,6 +1,6 @@
 // Package uow provides a Unit of Work over sqlkit table bindings. A uow.Scope
 // tracks entities loaded through it and the rows staged on it, then flushes them
-// as one ordered batch of statements through a sqlkit.Executor — typically a
+// as one ordered batch of statements through a sqlkit.Querier — typically a
 // *sqlkit.Session so load and flush share one transaction.
 //
 // It is deliberately named Scope, not Session, so it reads clearly alongside
@@ -84,7 +84,7 @@ type identityProvider interface {
 // Scope is a Unit of Work over table bindings. Construct one with NewScope (or a
 // child with Scope.NewScope). A Scope is not safe for concurrent use.
 type Scope struct {
-	ex         sqlkit.Executor
+	ex         sqlkit.Querier
 	identities *meta.IdentityMap
 
 	order  []string
@@ -147,7 +147,7 @@ func WithAutoChunk(enabled bool) Option {
 // When ex carries a catalog identity map (a database or session bound with
 // sqlkit.WithMetadata), the scope adopts it automatically and validates its
 // bindings against it; an explicit WithIdentities still overrides that.
-func NewScope(ex sqlkit.Executor, opts ...Option) *Scope {
+func NewScope(ex sqlkit.Querier, opts ...Option) *Scope {
 	s := &Scope{ex: ex, tables: map[string]*tableState{}}
 	if ip, ok := ex.(identityProvider); ok {
 		s.identities = ip.Identities()
