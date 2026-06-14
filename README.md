@@ -567,21 +567,28 @@ catalog targets MySQL or SQLite.
 
 ### Generating bindings and DDL
 
+The `sqlkit` command lives in its own module (`github.com/aita/sqlkit/cmd/sqlkit`)
+so the database drivers it links — needed by `inspect` to open a live database —
+stay out of the root module that library consumers import. Run it with `@latest`
+(or install it once with `go install github.com/aita/sqlkit/cmd/sqlkit@latest` and
+call the `sqlkit` binary directly); your project never takes on the drivers as a
+dependency.
+
 Point `sqlkit generate` at the package that declares the catalog, and
 `sqlkit ddl` at the same package to render the `CREATE TABLE`/`INDEX`/constraint
 statements.
 
 ```sh
-go run github.com/aita/sqlkit/cmd/sqlkit generate ./schema --name appdb --out appdb
-go run github.com/aita/sqlkit/cmd/sqlkit ddl ./schema --out schema.sql
+go run github.com/aita/sqlkit/cmd/sqlkit@latest generate ./schema --name appdb --out appdb
+go run github.com/aita/sqlkit/cmd/sqlkit@latest ddl ./schema --out schema.sql
 ```
 
 The natural home for both is a pair of `go:generate` directives next to the
 catalog, so `go generate ./...` rebuilds them (see `examples/blog`):
 
 ```go
-//go:generate go run github.com/aita/sqlkit/cmd/sqlkit generate ./schema --name blogdb --out blogdb
-//go:generate go run github.com/aita/sqlkit/cmd/sqlkit ddl ./schema --out schema.sql
+//go:generate go run github.com/aita/sqlkit/cmd/sqlkit@latest generate ./schema --name blogdb --out blogdb
+//go:generate go run github.com/aita/sqlkit/cmd/sqlkit@latest ddl ./schema --out schema.sql
 ```
 
 The generated binding exposes `Column[T]` fields and the table identity; all
@@ -598,7 +605,7 @@ maintained as Go code from then on. The output carries no `DO NOT EDIT` marker
 — it is a starting point meant to be edited.
 
 ```sh
-go run github.com/aita/sqlkit/cmd/sqlkit inspect \
+go run github.com/aita/sqlkit/cmd/sqlkit@latest inspect \
   --dsn "$DATABASE_URL" --schema public --package schema --out schema/schema.go
 ```
 
@@ -693,7 +700,8 @@ m := migrations.Registry.NewMigrator(db)
 **CLI.** The `sqlkit` binary runs your migrations as subcommands of
 `sqlkit migrate`. Because migrations are Go code, it compiles the package you
 point it at (one that exposes a `Registry`) and runs that — no app code of your
-own required.
+own required. Install it with `go install github.com/aita/sqlkit/cmd/sqlkit@latest`
+(it is a separate module, so its drivers never enter your project's dependencies).
 
 ```sh
 export DATABASE_URL=postgres://localhost/app
