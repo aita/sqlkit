@@ -5,6 +5,7 @@ import (
 	stdsql "database/sql"
 	"errors"
 
+	"github.com/aita/sqlkit/meta"
 	"github.com/aita/sqlkit/sql"
 )
 
@@ -13,6 +14,14 @@ import (
 type Database struct {
 	db      *stdsql.DB
 	dialect sql.Dialect
+
+	// identities is the catalog identity map compiled from the metadata bound
+	// with WithMetadata, or nil if none was bound. A uow.Scope opened over this
+	// database (or a session derived from it) reads it to validate bindings
+	// automatically. metaErr holds a metadata-compilation failure for Open to
+	// surface.
+	identities *meta.IdentityMap
+	metaErr    error
 }
 
 // DatabaseOption configures a Database.
@@ -23,6 +32,24 @@ func WithDialect(dialect sql.Dialect) DatabaseOption {
 	return func(d *Database) { d.dialect = dialect }
 }
 
+// WithMetadata binds a catalog's Metadata to the database. The metadata is
+// compiled into an identity map (see meta.Metadata.Identities) that every
+// uow.Scope opened over this database — or a session derived from it —
+// validates its table bindings against automatically, without an explicit
+// uow.WithIdentities. A conflict in the metadata (meta.ErrTableConflict) is
+// surfaced by Open; WithMetadata is otherwise opt-in, and a database without
+// it runs uow scopes that skip catalog validation.
+func WithMetadata(m meta.Metadata) DatabaseOption {
+	return func(d *Database) {
+		im, err := m.Identities()
+		if err != nil {
+			d.metaErr = err
+			return
+		}
+		d.identities = im
+	}
+}
+
 // Open opens a database/sql handle from a driver name and DSN string. The
 // dialect is inferred from the driver name (see DialectForDriver); pass
 // WithDialect to override.
@@ -31,7 +58,11 @@ func Open(driverName, dsn string, opts ...DatabaseOption) (*Database, error) {
 	if err != nil {
 		return nil, err
 	}
-	return WrapDB(db, append([]DatabaseOption{WithDialect(DialectForDriver(driverName))}, opts...)...), nil
+	d := WrapDB(db, append([]DatabaseOption{WithDialect(DialectForDriver(driverName))}, opts...)...)
+	if d.metaErr != nil {
+		return nil, d.metaErr
+	}
+	return d, nil
 }
 
 // WrapDB creates a sqlkit database handle from an existing database/sql handle.
@@ -48,6 +79,11 @@ func (d *Database) SQL() *stdsql.DB { return d.db }
 
 // Dialect returns the configured SQL dialect.
 func (d *Database) Dialect() sql.Dialect { return d.dialect }
+
+// Identities returns the catalog identity map compiled from the metadata bound
+// with WithMetadata, or nil if none was bound. A uow.Scope opened over this
+// database reads it to validate table bindings automatically.
+func (d *Database) Identities() *meta.IdentityMap { return d.identities }
 
 // Select starts a typed SELECT builder executed against this database. With
 // no arguments it selects every column of the From source.
@@ -125,7 +161,7 @@ func (d *Database) NewSession(opts ...SessionOption) *Session {
 	for _, opt := range opts {
 		opt(&options)
 	}
-	return &Session{db: d.db, txOpts: options.tx, dialect: d.dialect}
+	return &Session{db: d.db, txOpts: options.tx, dialect: d.dialect, identities: d.identities}
 }
 
 // WithSession runs fn inside a session and commits when fn returns nil; on
