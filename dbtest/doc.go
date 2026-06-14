@@ -13,12 +13,15 @@
 // Result.LastInsertId on MySQL, so fixture code that wires up foreign keys works
 // on both without branching.
 //
-// Three groups of helpers:
+// Four groups of helpers:
 //
 //   - Data insertion: Insert, InsertID, and InsertReturning.
 //   - Fixtures: Fixture, a named, ordered set of rows across tables, with Load.
 //   - Schema lifecycle: SetupSchema (apply now, drop on t.Cleanup), the lower
 //     level ApplySchema, and Truncate.
+//   - Snapshots: Snapshot (and Fixture.LoadSnapshot) capture the seeded state of
+//     a session as a SAVEPOINT and return a restore function, so many cases
+//     reuse one seed by rolling back between them instead of reloading it.
 //
 // Foreign-key ordering is the caller's responsibility: insert parent rows
 // before the children that reference them, exactly as in hand-written seed code.
