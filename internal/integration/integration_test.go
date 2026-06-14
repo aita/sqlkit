@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/aita/sqlkit"
+	"github.com/aita/sqlkit/dbtest"
 	"github.com/aita/sqlkit/examples/blog/blogdb"
 	"github.com/aita/sqlkit/sql"
 )
@@ -28,30 +29,14 @@ type postRow struct {
 	Published bool
 }
 
-// insertUser inserts a user and returns its database-generated id, using
-// RETURNING where the engine supports it and LastInsertId otherwise.
+// insertUser inserts a user and returns its database-generated id. It delegates
+// to dbtest.InsertID, which reads the key back with RETURNING where the engine
+// supports it and LastInsertId otherwise. eng is unused now that the dialect
+// split lives in dbtest, but kept so call sites read uniformly with the rest of
+// the suite.
 func insertUser(t *testing.T, db *sqlkit.Database, eng engine, u userRow) int64 {
 	t.Helper()
-	ctx := context.Background()
-	if eng.supportsReturning {
-		var out []userRow
-		if err := db.Insert(blogdb.Users).Values(u).Returning().All(ctx).Scan(&out); err != nil {
-			t.Fatalf("insert user: %v", err)
-		}
-		if len(out) != 1 || out[0].ID == 0 || out[0].CreatedAt.IsZero() {
-			t.Fatalf("inserted user = %#v, want generated id and created_at", out)
-		}
-		return out[0].ID
-	}
-	res, err := db.Insert(blogdb.Users).Values(u).Exec(ctx)
-	if err != nil {
-		t.Fatalf("insert user: %v", err)
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		t.Fatalf("last insert id: %v", err)
-	}
-	return id
+	return dbtest.InsertID(t, db, blogdb.Users, u)
 }
 
 // seedBlog inserts two users and several posts, returning the author ids. It is
@@ -528,23 +513,10 @@ func sessionUserName(t *testing.T, ctx context.Context, session *sqlkit.Session,
 	return *row.Name
 }
 
-// insertUserTx inserts a user through a session and returns its id.
+// insertUserTx inserts a user through a session and returns its id. A *Session
+// is a sqlkit.Executor, so the same dbtest.InsertID helper seeds inside the
+// transaction. ctx and eng are unused now that dbtest owns the dialect split.
 func insertUserTx(t *testing.T, ctx context.Context, session *sqlkit.Session, eng engine, u userRow) int64 {
 	t.Helper()
-	if eng.supportsReturning {
-		var out []userRow
-		if err := session.Insert(blogdb.Users).Values(u).Returning().All(ctx).Scan(&out); err != nil {
-			t.Fatalf("insert user in tx: %v", err)
-		}
-		return out[0].ID
-	}
-	res, err := session.Insert(blogdb.Users).Values(u).Exec(ctx)
-	if err != nil {
-		t.Fatalf("insert user in tx: %v", err)
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		t.Fatalf("last insert id in tx: %v", err)
-	}
-	return id
+	return dbtest.InsertID(t, session, blogdb.Users, u)
 }

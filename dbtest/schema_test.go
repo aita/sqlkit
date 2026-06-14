@@ -12,23 +12,28 @@ import (
 )
 
 // schemaModel builds a two-table catalog (users, then posts) as meta.Metadata.
+// posts carries a foreign key to users and an index, so the rendered CREATE SQL
+// (and the reverse-order drop that respects the FK) is representative rather
+// than a bare pair of tables.
 func schemaModel(t *testing.T) meta.Metadata {
 	t.Helper()
 	cat := sqldef.NewCatalog()
 	public := cat.Schema("public")
-	public.Table("users",
+	users := public.Table("users",
 		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("email", sqldef.VarChar(255)),
+		sqldef.Column("email", sqldef.VarChar(255), sqldef.Unique()),
 	)
 	public.Table("posts",
 		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+		sqldef.Column("user_id", sqldef.BigInt, sqldef.References(users, "id")),
 		sqldef.Column("title", sqldef.VarChar(255)),
+		sqldef.Index("user_id"),
 	)
-	model, err := cat.Build()
+	md, err := cat.Build()
 	if err != nil {
 		t.Fatalf("build catalog: %v", err)
 	}
-	return model
+	return md
 }
 
 func TestApplySchema(t *testing.T) {
@@ -52,16 +57,25 @@ func TestApplySchema(t *testing.T) {
 	if !hasPrefixIn(stmts[2:], "CREATE TABLE") {
 		t.Fatalf("statements %v, want a CREATE TABLE after the drops", stmts[2:])
 	}
+	// The foreign key and index in the model must reach the database, otherwise
+	// the schema under test would not exercise them.
+	ddl := strings.Join(stmts, "\n")
+	if !strings.Contains(ddl, "REFERENCES") {
+		t.Fatalf("schema DDL missing the foreign key:\n%s", ddl)
+	}
+	if !strings.Contains(ddl, "INDEX") {
+		t.Fatalf("schema DDL missing the index:\n%s", ddl)
+	}
 }
 
 func TestSetupSchemaTearsDown(t *testing.T) {
 	fake := &sqltest.Fake{}
 	db := wrap(fake, sqlkit.PostgreSQLDialect{})
-	model := schemaModel(t)
+	md := schemaModel(t)
 
 	var afterApply int
 	t.Run("inner", func(t *testing.T) {
-		dbtest.SetupSchema(t, db, model)
+		dbtest.SetupSchema(t, db, md)
 		// At this point only the apply (drops + creates) has run; the cleanup
 		// drop is registered but not yet executed.
 		afterApply = len(fake.Statements())
