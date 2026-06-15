@@ -67,14 +67,14 @@ func TestAutogenerateForwardDiff(t *testing.T) {
 
 		// Desired state: widgets gains a column, and a gadgets table referencing it.
 		newCatalog := sqldef.NewCatalog(sqldef.DefaultSchema(testSchema))
-		widgets := newCatalog.Table("widgets",
+		newCatalog.Table("widgets",
 			sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
 			sqldef.Column("name", sqldef.Text),
 			sqldef.Column("sku", sqldef.VarChar(64), sqldef.Nullable()),
 		)
 		newCatalog.Table("gadgets",
 			sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-			sqldef.Column("widget_id", sqldef.BigInt, sqldef.References(widgets, "id")),
+			sqldef.Column("widget_id", sqldef.BigInt, sqldef.References("widgets", "id")),
 		)
 
 		source, err := inspector.Inspect(ctx, db.SQL(), eng.name, testSchema)

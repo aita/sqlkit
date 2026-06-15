@@ -26,7 +26,7 @@ var Users = Public.Table("users",
 // Posts reference the user that wrote them.
 var Posts = Public.Table("posts",
 	sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-	sqldef.Column("user_id", sqldef.BigInt, sqldef.References(Users, "id")),
+	sqldef.Column("user_id", sqldef.BigInt, sqldef.References("users", "id")),
 	sqldef.Column("title", sqldef.Text),
 	sqldef.Column("body", sqldef.Text, sqldef.Nullable()),
 	sqldef.Column("published", sqldef.Bool, sqldef.Default(sql.Raw("false"))),
@@ -38,7 +38,7 @@ var Posts = Public.Table("posts",
 // has-one relation (Users.Rels.Profile), while Posts above is has-many.
 var Profiles = Public.Table("profiles",
 	sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-	sqldef.Column("user_id", sqldef.BigInt, sqldef.References(Users, "id"), sqldef.Unique()),
+	sqldef.Column("user_id", sqldef.BigInt, sqldef.References("users", "id"), sqldef.Unique()),
 	sqldef.Column("bio", sqldef.Text, sqldef.Nullable()),
 	sqldef.Column("public", sqldef.Bool, sqldef.Default(sql.Raw("false"))),
 )

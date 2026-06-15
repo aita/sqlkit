@@ -33,7 +33,7 @@ func newTestCatalog() *sqldef.Catalog {
 	public := cat.Schema(testSchema)
 
 	// Registered blog authors.
-	users := public.Table("users",
+	public.Table("users",
 		sqldef.TableComment("Registered blog authors"),
 		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
 		sqldef.Column("email", sqldef.VarChar(255), sqldef.Unique(), sqldef.Comment("Unique login address")),
@@ -44,7 +44,7 @@ func newTestCatalog() *sqldef.Catalog {
 	// Posts reference the user that wrote them (has-many).
 	public.Table("posts",
 		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("user_id", sqldef.BigInt, sqldef.References(users, "id")),
+		sqldef.Column("user_id", sqldef.BigInt, sqldef.References("users", "id")),
 		sqldef.Column("title", sqldef.Text),
 		sqldef.Column("body", sqldef.Text, sqldef.Nullable()),
 		sqldef.Column("published", sqldef.Bool, sqldef.Default(sql.Raw("false"))),
@@ -56,7 +56,7 @@ func newTestCatalog() *sqldef.Catalog {
 	// has-one relation.
 	public.Table("profiles",
 		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("user_id", sqldef.BigInt, sqldef.References(users, "id"), sqldef.Unique()),
+		sqldef.Column("user_id", sqldef.BigInt, sqldef.References("users", "id"), sqldef.Unique()),
 		sqldef.Column("bio", sqldef.Text, sqldef.Nullable()),
 		sqldef.Column("public", sqldef.Bool, sqldef.Default(sql.Raw("false"))),
 	)
