@@ -107,18 +107,11 @@ func GenerateCatalog(md meta.Metadata, opts CatalogOptions) (File, error) {
 		}
 		fmt.Fprintf(&sb, "\n// %s is schema %q of the catalog.\nvar %s = Catalog.Schema(%q)\n", schemaVars[name], name, schemaVars[name], name)
 	}
-	var trailers []string
 	var usedSQL bool
 	for _, table := range tables {
 		sb.WriteString("\n")
-		if err := renderCatalogTable(&sb, &trailers, table, schemaVars[table.Schema.Name], tableVars, dialect, sqlDialect, &usedSQL); err != nil {
+		if err := renderCatalogTable(&sb, table, schemaVars[table.Schema.Name], tableVars, dialect, sqlDialect, &usedSQL); err != nil {
 			return File{}, err
-		}
-	}
-	if len(trailers) > 0 {
-		sb.WriteString("\n")
-		for _, line := range trailers {
-			sb.WriteString(line + "\n")
 		}
 	}
 
@@ -131,25 +124,22 @@ func GenerateCatalog(md meta.Metadata, opts CatalogOptions) (File, error) {
 	return fb.fileWithHeader(opts.PackageName, fileName, "// Bootstrapped by sqlkit; maintained by hand.\n\n")
 }
 
-func renderCatalogTable(sb *strings.Builder, trailers *[]string, table meta.Table, owner string, tableVars map[string]string, dialect string, sqlDialect sql.Dialect, usedSQL *bool) error {
+func renderCatalogTable(sb *strings.Builder, table meta.Table, owner string, tableVars map[string]string, dialect string, sqlDialect sql.Dialect, usedSQL *bool) error {
 	varName := tableVars[tableVarKey(table.Schema.Name, table.Name)]
 
 	// Single-column foreign keys to another generated table become a
 	// References option on their column; composite ones become ForeignKey
-	// elements. Self-referencing keys cannot mention the table's own variable
-	// inside its declaration and trail behind as method calls; keys into
-	// tables outside the generated set are flagged. References may cross
-	// schemas within the catalog, so only the ref table's presence matters.
+	// elements. Both name their target, so a self-reference is just an ordinary
+	// References to this table. Keys into tables outside the generated set are
+	// flagged. References may cross schemas within the catalog, so only the ref
+	// table's presence matters.
 	refs := map[string]meta.ForeignKey{}
 	var elements, foreign []meta.ForeignKey
 	for _, fk := range table.ForeignKeys {
-		refVar, ok := tableVars[tableVarKey(fk.RefSchema.Name, fk.RefTable)]
+		_, inSet := tableVars[tableVarKey(fk.RefSchema.Name, fk.RefTable)]
 		switch {
-		case !ok:
+		case !inSet:
 			foreign = append(foreign, fk)
-		case fk.RefTable == table.Name && fk.RefSchema.Name == table.Schema.Name:
-			*trailers = append(*trailers, fmt.Sprintf("var _ = Catalog.AddForeignKey(%s, %s, %s, %s%s)",
-				varName, goStringSlice(fk.Columns), refVar, goStringSlice(fk.RefColumns), fkActionArgs(fk)))
 		case len(fk.Columns) == 1 && len(fk.RefColumns) == 1:
 			if _, dup := refs[fk.Columns[0]]; dup {
 				elements = append(elements, fk)
@@ -201,7 +191,7 @@ func renderCatalogTable(sb *strings.Builder, trailers *[]string, table meta.Tabl
 			sb.WriteString(", sqldef.Unique()")
 		}
 		if fk, ok := refs[column.Name]; ok {
-			fmt.Fprintf(sb, ", sqldef.References(%s, %q%s)", tableVars[tableVarKey(fk.RefSchema.Name, fk.RefTable)], fk.RefColumns[0], fkActionArgs(fk))
+			fmt.Fprintf(sb, ", sqldef.References(%q, %q%s)", refName(table.Schema.Name, fk), fk.RefColumns[0], fkActionArgs(fk))
 		}
 		if column.Comment != "" {
 			fmt.Fprintf(sb, ", sqldef.Comment(%q)", column.Comment)
@@ -209,7 +199,7 @@ func renderCatalogTable(sb *strings.Builder, trailers *[]string, table meta.Tabl
 		sb.WriteString("),\n")
 	}
 	for _, fk := range elements {
-		fmt.Fprintf(sb, "\tsqldef.ForeignKey(%s, %s, %s%s),\n", goStringSlice(fk.Columns), tableVars[tableVarKey(fk.RefSchema.Name, fk.RefTable)], goStringSlice(fk.RefColumns), fkActionArgs(fk))
+		fmt.Fprintf(sb, "\tsqldef.ForeignKey(%s, %q, %s%s),\n", goStringSlice(fk.Columns), refName(table.Schema.Name, fk), goStringSlice(fk.RefColumns), fkActionArgs(fk))
 	}
 	for _, ix := range indexes {
 		call := "sqldef.Index"
@@ -253,6 +243,17 @@ func goStringSlice(items []string) string {
 // tableVarKey keys the table-variable map by schema and name so same-named
 // tables in different schemas get distinct entries.
 func tableVarKey(schema, name string) string { return schema + "\x00" + name }
+
+// refName renders a foreign key's target as a name for sqldef.References /
+// sqldef.ForeignKey, seen from the referencing table's schema: a bare table
+// name when the target shares that schema (resolved there at Build), or a
+// "schema.table" qualified name when it crosses schemas.
+func refName(fromSchema string, fk meta.ForeignKey) string {
+	if fk.RefSchema.Name != fromSchema {
+		return fk.RefSchema.Name + "." + fk.RefTable
+	}
+	return fk.RefTable
+}
 
 // ReferentialActionExpr renders a foreign-key referential action as the sqldef
 // package constant that produces it (e.g. "sqldef.Cascade"), or "" when the

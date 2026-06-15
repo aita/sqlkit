@@ -115,8 +115,8 @@ func TestGenerateCatalogForeignKeys(t *testing.T) {
 	got := string(file.Content)
 	for _, want := range []string{
 		`var Public = Catalog.Schema("public")`,
-		`sqldef.ForeignKey([]string{"order_region", "order_number"}, Orders, []string{"region", "number"}),`,
-		`var _ = Catalog.AddForeignKey(OrderLines, []string{"parent_id"}, OrderLines, []string{"id"})`,
+		`sqldef.ForeignKey([]string{"order_region", "order_number"}, "orders", []string{"region", "number"}),`,
+		`sqldef.References("order_lines", "id")`, // self-reference is an ordinary named reference
 		`foreign key fk_other_schema references audit.events outside this catalog`,
 	} {
 		if !strings.Contains(got, want) {
@@ -189,9 +189,9 @@ func TestGenerateCatalogSameNameDifferentSchemas(t *testing.T) {
 	}
 	got := string(mustGenerateCatalog(t, tables))
 	for _, want := range []string{
-		"var Users = Public.Table(\"users\",",     // public.users
-		"var UsersTable = Audit.Table(\"users\",", // audit.users gets a distinct var
-		"sqldef.References(Users, \"id\")",        // audit.users FK targets public.users
+		"var Users = Public.Table(\"users\",",         // public.users
+		"var UsersTable = Audit.Table(\"users\",",     // audit.users gets a distinct var
+		"sqldef.References(\"public.users\", \"id\")", // audit.users FK targets public.users
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("generated catalog missing %q\n%s", want, got)

@@ -22,7 +22,7 @@ var Users = Public.Table("users",
 
 var Posts = Public.Table("posts",
 	sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-	sqldef.Column("user_id", sqldef.BigInt, sqldef.References(Users, "id")),
+	sqldef.Column("user_id", sqldef.BigInt, sqldef.References("users", "id")),
 	sqldef.Column("title", sqldef.Text),
 	sqldef.Column("body", sqldef.Text, sqldef.Nullable()),
 	sqldef.Column("published", sqldef.Bool, sqldef.Default()),

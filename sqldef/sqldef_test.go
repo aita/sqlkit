@@ -16,7 +16,7 @@ import (
 func blogCatalog() *sqldef.Catalog {
 	catalog := sqldef.NewCatalog()
 	public := catalog.Schema("public")
-	users := public.Table("users",
+	public.Table("users",
 		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
 		sqldef.Column("email", sqldef.VarChar(255)),
 		sqldef.Column("name", sqldef.Text, sqldef.Nullable()),
@@ -24,7 +24,7 @@ func blogCatalog() *sqldef.Catalog {
 	)
 	public.Table("posts",
 		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("user_id", sqldef.BigInt, sqldef.References(users, "id")),
+		sqldef.Column("user_id", sqldef.BigInt, sqldef.References("users", "id")),
 		sqldef.Column("title", sqldef.Text),
 		sqldef.Column("body", sqldef.Text, sqldef.Nullable()),
 		sqldef.Column("published", sqldef.Bool, sqldef.Default(querysql.Raw("false"))),
@@ -149,21 +149,24 @@ func TestBuildPortableTypes(t *testing.T) {
 func TestCompositeAndSelfForeignKeys(t *testing.T) {
 	catalog := sqldef.NewCatalog()
 	public := catalog.Schema("public")
-	orders := public.Table("orders",
-		sqldef.Column("region", sqldef.Text, sqldef.PrimaryKey()),
-		sqldef.Column("number", sqldef.BigInt, sqldef.PrimaryKey()),
-	)
+	// order_lines references orders, declared before it; a composite key names
+	// the target table by name.
 	public.Table("order_lines",
 		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey()),
 		sqldef.Column("order_region", sqldef.Text),
 		sqldef.Column("order_number", sqldef.BigInt),
-		sqldef.ForeignKey([]string{"order_region", "order_number"}, orders, []string{"region", "number"}),
+		sqldef.ForeignKey([]string{"order_region", "order_number"}, "orders", []string{"region", "number"}),
 	)
-	employees := public.Table("employees",
+	public.Table("orders",
+		sqldef.Column("region", sqldef.Text, sqldef.PrimaryKey()),
+		sqldef.Column("number", sqldef.BigInt, sqldef.PrimaryKey()),
+	)
+	// employees self-references by name, resolved at Build — no separate
+	// post-declaration step is needed.
+	public.Table("employees",
 		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey()),
-		sqldef.Column("manager_id", sqldef.BigInt, sqldef.Nullable()),
+		sqldef.Column("manager_id", sqldef.BigInt, sqldef.Nullable(), sqldef.References("employees", "id")),
 	)
-	catalog.AddForeignKey(employees, []string{"manager_id"}, employees, []string{"id"})
 
 	got := buildCatalog(t, catalog)
 	wantLines := []meta.ForeignKey{{
@@ -173,8 +176,8 @@ func TestCompositeAndSelfForeignKeys(t *testing.T) {
 		RefTable:   "orders",
 		RefColumns: []string{"region", "number"},
 	}}
-	if !reflect.DeepEqual(got.Tables[1].ForeignKeys, wantLines) {
-		t.Errorf("composite ForeignKeys = %+v\nwant %+v", got.Tables[1].ForeignKeys, wantLines)
+	if !reflect.DeepEqual(got.Tables[0].ForeignKeys, wantLines) {
+		t.Errorf("composite ForeignKeys = %+v\nwant %+v", got.Tables[0].ForeignKeys, wantLines)
 	}
 	wantSelf := []meta.ForeignKey{{
 		Name:       "fk_employees_manager_id",
@@ -206,9 +209,8 @@ func TestDefaultSchema(t *testing.T) {
 // that has no such table, which is the common "add the FK column, then
 // CreateForeignKey" pattern.
 func TestBuildColumnDropsTableLevelConstructs(t *testing.T) {
-	users := meta.Table{Name: "users", Columns: []meta.Column{{Name: "id"}}}
 	col, err := sqldef.BuildColumn(
-		sqldef.Column("user_id", sqldef.BigInt, sqldef.References(users, "id"), sqldef.Unique()),
+		sqldef.Column("user_id", sqldef.BigInt, sqldef.References("users", "id"), sqldef.Unique()),
 	)
 	if err != nil {
 		t.Fatalf("BuildColumn with References/Unique: %v", err)
@@ -220,12 +222,12 @@ func TestBuildColumnDropsTableLevelConstructs(t *testing.T) {
 
 func TestCrossSchemaReference(t *testing.T) {
 	catalog := sqldef.NewCatalog()
-	audit := catalog.Schema("audit").Table("events",
+	catalog.Schema("audit").Table("events",
 		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey()),
 	)
 	catalog.Schema("public").Table("orders",
 		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey()),
-		sqldef.Column("event_id", sqldef.BigInt, sqldef.References(audit, "id")),
+		sqldef.Column("event_id", sqldef.BigInt, sqldef.References("audit.events", "id")),
 	)
 	got, err := catalog.Build()
 	if err != nil {
@@ -439,21 +441,19 @@ func TestBuildErrors(t *testing.T) {
 			want: "primary key column cannot be nullable",
 		},
 		{
-			name: "zero-value reference",
+			name: "empty reference",
 			catalog: func() *sqldef.Catalog {
 				c := sqldef.NewCatalog()
-				c.Table("posts", sqldef.Column("user_id", sqldef.BigInt, sqldef.References(meta.Table{}, "id")))
+				c.Table("posts", sqldef.Column("user_id", sqldef.BigInt, sqldef.References("", "id")))
 				return c
 			},
 			want: "references an unnamed table",
 		},
 		{
-			name: "reference into another catalog",
+			name: "reference to undeclared table",
 			catalog: func() *sqldef.Catalog {
-				other := sqldef.NewCatalog()
-				users := other.Table("users", sqldef.Column("id", sqldef.BigInt))
 				c := sqldef.NewCatalog()
-				c.Table("posts", sqldef.Column("user_id", sqldef.BigInt, sqldef.References(users, "id")))
+				c.Table("posts", sqldef.Column("user_id", sqldef.BigInt, sqldef.References("users", "id")))
 				return c
 			},
 			want: "not declared in this catalog",
@@ -462,8 +462,8 @@ func TestBuildErrors(t *testing.T) {
 			name: "unknown referenced column",
 			catalog: func() *sqldef.Catalog {
 				c := sqldef.NewCatalog()
-				users := c.Table("users", sqldef.Column("id", sqldef.BigInt))
-				c.Table("posts", sqldef.Column("user_id", sqldef.BigInt, sqldef.References(users, "uuid")))
+				c.Table("users", sqldef.Column("id", sqldef.BigInt))
+				c.Table("posts", sqldef.Column("user_id", sqldef.BigInt, sqldef.References("users", "uuid")))
 				return c
 			},
 			want: `references unknown column "uuid"`,
@@ -472,10 +472,10 @@ func TestBuildErrors(t *testing.T) {
 			name: "foreign key column count mismatch",
 			catalog: func() *sqldef.Catalog {
 				c := sqldef.NewCatalog()
-				users := c.Table("users", sqldef.Column("id", sqldef.BigInt))
+				c.Table("users", sqldef.Column("id", sqldef.BigInt))
 				c.Table("posts",
 					sqldef.Column("user_id", sqldef.BigInt),
-					sqldef.ForeignKey([]string{"user_id"}, users, []string{"id", "email"}),
+					sqldef.ForeignKey([]string{"user_id"}, "users", []string{"id", "email"}),
 				)
 				return c
 			},
@@ -485,9 +485,9 @@ func TestBuildErrors(t *testing.T) {
 			name: "duplicate references",
 			catalog: func() *sqldef.Catalog {
 				c := sqldef.NewCatalog()
-				users := c.Table("users", sqldef.Column("id", sqldef.BigInt))
+				c.Table("users", sqldef.Column("id", sqldef.BigInt))
 				c.Table("posts",
-					sqldef.Column("user_id", sqldef.BigInt, sqldef.References(users, "id"), sqldef.References(users, "id")),
+					sqldef.Column("user_id", sqldef.BigInt, sqldef.References("users", "id"), sqldef.References("users", "id")),
 				)
 				return c
 			},

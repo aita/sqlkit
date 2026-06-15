@@ -1,8 +1,9 @@
 // Package sqldef declares database schemas as plain Go values that build
 // directly into the meta model. A catalog (sqldef.NewCatalog) is the reusable
-// root: each Table call assembles and returns a meta.Table immediately, so
-// foreign keys reference those values (References(Users, "id")), catalogs can
-// be split across files or packages, and the catalog Builds into a
+// root: each Table call assembles and returns a meta.Table immediately. Foreign
+// keys name their target table (References("users", "id")) and are resolved
+// when the catalog Builds, so tables may be declared in any order, reference
+// themselves, and be split across files or packages. Build assembles the
 // meta.Metadata that every generator — the typed table bindings (codegen) and
 // the DDL (meta.Metadata.CreateSQL) — consumes.
 //
@@ -27,7 +28,7 @@
 //
 //	var Posts = Catalog.Table("posts",
 //		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-//		sqldef.Column("user_id", sqldef.BigInt, sqldef.References(Users, "id")),
+//		sqldef.Column("user_id", sqldef.BigInt, sqldef.References("users", "id")),
 //		sqldef.Column("title", sqldef.Text),
 //		sqldef.Index("user_id"),
 //		sqldef.Check(sql.Raw("title <> ''")),
@@ -36,9 +37,9 @@
 // Catalog.Table returns a meta.Table, so Users and Posts are meta.Table
 // values. Column types are portable (meta.Type carries both dialects), so the
 // table is dialect-agnostic; the generators resolve the type when you choose a
-// dialect. sqldef is purely the schema DSL: Build assembles the meta.Metadata
-// and the generators consume it directly. A small generator program turns the
-// catalog into Go source and DDL:
+// dialect. sqldef is purely the schema DSL: Build resolves foreign keys,
+// validates, and assembles the meta.Metadata the generators consume. A small
+// generator program turns the catalog into Go source and DDL:
 //
 //	md, err := schema.Catalog.Build()
 //	if err != nil { ... }
@@ -70,8 +71,17 @@ type Catalog struct {
 	schemaNames   []string        // distinct schema names in first-seen order
 	createSchemas map[string]bool // schema name -> managed by migrations (CREATE/DROP SCHEMA)
 	tables        []meta.Table
-	registered    map[string]bool // schema\x00name -> declared, for FK target checks
+	tableIndex    map[string]int // schema\x00name -> index into tables, for FK resolution
+	pendingFKs    []pendingFK    // foreign keys awaiting resolution at Build time
 	errs          []error
+}
+
+// pendingFK is a foreign key collected while a table is declared but resolved
+// only at Build, once every table is registered. Table is the index into
+// Catalog.tables of the table the key belongs to.
+type pendingFK struct {
+	table int
+	def   fkDef
 }
 
 // CatalogOption configures a Catalog at construction.
@@ -88,7 +98,7 @@ func DefaultSchema(name string) CatalogOption {
 // point of the DSL: var Catalog = sqldef.NewCatalog(). Options configure
 // catalog-wide defaults such as DefaultSchema.
 func NewCatalog(opts ...CatalogOption) *Catalog {
-	c := &Catalog{registered: map[string]bool{}, createSchemas: map[string]bool{}}
+	c := &Catalog{tableIndex: map[string]int{}, createSchemas: map[string]bool{}}
 	for _, opt := range opts {
 		opt(c)
 	}
@@ -152,27 +162,35 @@ type Schema struct {
 // Name returns the schema name ("" for the default schema).
 func (s *Schema) Name() string { return s.name }
 
-// Table declares a table in the schema and returns the assembled meta.Table —
-// the value foreign keys in other tables reference.
+// Table declares a table in the schema and returns the assembled meta.Table.
+// Foreign keys it declares are resolved later, by Build, against every table in
+// the catalog — so a table may reference one declared after it, or itself.
 func (s *Schema) Table(name string, elements ...TableElement) meta.Table {
 	d := s.catalog
 	b := &tableBuilder{catalog: d, schema: s.name, name: name}
+	key := tableKey(s.name, name)
 	if name == "" {
 		d.fail("Table requires a name")
-	} else if d.registered[tableKey(s.name, name)] {
+	} else if _, dup := d.tableIndex[key]; dup {
 		d.fail("table %q is declared twice in schema %q", name, s.name)
 	}
 	for _, element := range elements {
 		element.applyTable(b)
 	}
 	table := b.build()
-	if name != "" {
-		if !d.registered[tableKey(s.name, name)] {
-			d.schemaNamesAdd(s.name)
-		}
-		d.registered[tableKey(s.name, name)] = true
-	}
+	idx := len(d.tables)
 	d.tables = append(d.tables, table)
+	if name != "" {
+		if _, exists := d.tableIndex[key]; !exists {
+			d.schemaNamesAdd(s.name)
+			d.tableIndex[key] = idx
+		}
+	}
+	// Foreign keys reference tables by name, which may not be declared yet, so
+	// queue them for Build to resolve once the whole catalog is known.
+	for _, fk := range collectForeignKeys(b) {
+		d.pendingFKs = append(d.pendingFKs, pendingFK{table: idx, def: fk})
+	}
 	return table
 }
 
@@ -183,33 +201,6 @@ func (d *Catalog) schemaNamesAdd(name string) {
 		}
 	}
 	d.schemaNames = append(d.schemaNames, name)
-}
-
-// AddForeignKey declares a (possibly self-referencing) foreign key on an
-// already-declared table, returning the updated table. It is the way to
-// declare a self-reference, which cannot mention the table's own variable
-// inside its Table(...) call:
-//
-//	var Employees = Catalog.Table("employees", ...)
-//	var _ = Catalog.AddForeignKey(Employees, []string{"manager_id"}, Employees, []string{"id"})
-func (d *Catalog) AddForeignKey(table meta.Table, columns []string, ref meta.Table, refColumns []string, opts ...FKOption) meta.Table {
-	key := tableKey(table.Schema.Name, table.Name)
-	for i := range d.tables {
-		t := &d.tables[i]
-		if tableKey(t.Schema.Name, t.Name) != key {
-			continue
-		}
-		def := fkDef{columns: columns, ref: ref, refColumns: refColumns}
-		for _, opt := range opts {
-			opt(&def)
-		}
-		if fk, ok := d.resolveFK(t.Name, t.Columns, def); ok {
-			t.ForeignKeys = append(t.ForeignKeys, fk)
-		}
-		return *t
-	}
-	d.fail("AddForeignKey: table %q is not declared in this catalog", table.Name)
-	return table
 }
 
 // tableBuilder is the mutable scratch a Table's elements write into before it
@@ -248,11 +239,8 @@ func (b *tableBuilder) build() meta.Table {
 		mt.Columns = append(mt.Columns, c.toMeta())
 	}
 
-	for _, fk := range collectForeignKeys(b) {
-		if resolved, ok := d.resolveFK(b.name, mt.Columns, fk); ok {
-			mt.ForeignKeys = append(mt.ForeignKeys, resolved)
-		}
-	}
+	// Foreign keys are not resolved here: Build collects them across the whole
+	// catalog so a key may target a table declared later, or the table itself.
 
 	indexNames := map[string]bool{}
 	for _, ix := range collectIndexes(b) {
@@ -325,12 +313,26 @@ func (c *columnDef) toMeta() meta.Column {
 }
 
 // fkDef is a foreign key; column-level References produce single-column ones.
+// The target table is named (refTable, optionally schema-qualified via
+// refSchema/refQualified) and resolved against the catalog at Build.
 type fkDef struct {
-	columns    []string
-	ref        meta.Table
-	refColumns []string
-	onDelete   meta.ReferentialAction
-	onUpdate   meta.ReferentialAction
+	columns      []string
+	refSchema    string // explicit target schema; used only when refQualified
+	refTable     string
+	refQualified bool // target schema was given explicitly ("schema.table")
+	refColumns   []string
+	onDelete     meta.ReferentialAction
+	onUpdate     meta.ReferentialAction
+}
+
+// splitRef parses a foreign-key target. A "schema.table" string qualifies the
+// schema explicitly; a bare "table" resolves in the referencing table's own
+// schema at Build.
+func splitRef(ref string) (schema, table string, qualified bool) {
+	if i := strings.IndexByte(ref, '.'); i >= 0 {
+		return ref[:i], ref[i+1:], true
+	}
+	return "", ref, false
 }
 
 // ReferentialAction is a foreign-key ON DELETE / ON UPDATE action, re-exported
@@ -402,12 +404,14 @@ func Column(name string, typ DataType, opts ...ColumnOption) TableElement {
 }
 
 // ForeignKey declares a (possibly composite) foreign-key constraint: the local
-// columns reference refColumns of the ref table. For the common single-column
-// case the References column option is more convenient; for a self-referencing
-// key use Catalog.AddForeignKey.
-func ForeignKey(columns []string, ref meta.Table, refColumns []string, opts ...FKOption) TableElement {
+// columns reference refColumns of refTable. refTable names a table in the
+// catalog ("users", or "schema.users" to cross schemas), resolved at Build, so
+// it may be declared after this one or be this table itself. For the common
+// single-column case the References column option is more convenient.
+func ForeignKey(columns []string, refTable string, refColumns []string, opts ...FKOption) TableElement {
 	return tableElement(func(b *tableBuilder) {
-		fk := fkDef{columns: columns, ref: ref, refColumns: refColumns}
+		schema, table, qualified := splitRef(refTable)
+		fk := fkDef{columns: columns, refSchema: schema, refTable: table, refQualified: qualified, refColumns: refColumns}
 		for _, opt := range opts {
 			opt(&fk)
 		}
@@ -512,15 +516,19 @@ func Comment(text string) ColumnOption {
 	return func(c *columnDef) { c.comment = text }
 }
 
-// References declares the column a foreign key to column refColumn of the ref
-// table. Composite keys use the table-level ForeignKey instead.
-func References(ref meta.Table, refColumn string, opts ...FKOption) ColumnOption {
+// References declares the column a foreign key to column refColumn of refTable.
+// refTable names a table in the catalog ("users", or "schema.users" to cross
+// schemas), resolved at Build, so it may be declared after this one or be this
+// table itself (a self-reference). Composite keys use the table-level
+// ForeignKey instead.
+func References(refTable string, refColumn string, opts ...FKOption) ColumnOption {
 	return func(c *columnDef) {
 		if c.ref != nil {
 			c.errs = append(c.errs, fmt.Errorf("References is declared twice"))
 			return
 		}
-		fk := &fkDef{ref: ref, refColumns: []string{refColumn}}
+		schema, table, qualified := splitRef(refTable)
+		fk := &fkDef{refSchema: schema, refTable: table, refQualified: qualified, refColumns: []string{refColumn}}
 		for _, opt := range opts {
 			opt(fk)
 		}

@@ -9,14 +9,14 @@ import (
 
 func blogMeta(t *testing.T) (catalog *sqldef.Catalog) {
 	c := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
-	users := c.Table("users",
+	c.Table("users",
 		sqldef.TableComment("authors"),
 		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
 		sqldef.Column("email", sqldef.VarChar(255), sqldef.Unique(), sqldef.Comment("login")),
 	)
 	c.Table("posts",
 		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("user_id", sqldef.BigInt, sqldef.References(users, "id", sqldef.OnDelete(sqldef.Cascade))),
+		sqldef.Column("user_id", sqldef.BigInt, sqldef.References("users", "id", sqldef.OnDelete(sqldef.Cascade))),
 		sqldef.Column("created_at", sqldef.Timestamp),
 		sqldef.Index("user_id"),
 	)

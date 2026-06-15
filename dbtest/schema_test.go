@@ -19,13 +19,13 @@ func schemaModel(t *testing.T) meta.Metadata {
 	t.Helper()
 	cat := sqldef.NewCatalog()
 	public := cat.Schema("public")
-	users := public.Table("users",
+	public.Table("users",
 		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
 		sqldef.Column("email", sqldef.VarChar(255), sqldef.Unique()),
 	)
 	public.Table("posts",
 		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("user_id", sqldef.BigInt, sqldef.References(users, "id")),
+		sqldef.Column("user_id", sqldef.BigInt, sqldef.References("users", "id")),
 		sqldef.Column("title", sqldef.VarChar(255)),
 		sqldef.Index("user_id"),
 	)

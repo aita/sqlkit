@@ -8,20 +8,39 @@ import (
 	"github.com/aita/sqlkit/meta"
 )
 
-// Build validates the catalog and returns the assembled meta.Metadata. Tables
-// are already built (Table assembles each one eagerly), so Build only checks
-// for declaration errors; no dialect is needed — column types stay portable
-// and the generators resolve them. The returned meta.Metadata is the
-// dialect-agnostic value the codegen generator and the DDL renderer consume.
+// Build resolves the catalog's foreign keys, validates it, and returns the
+// assembled meta.Metadata. Columns, indexes, and checks are assembled eagerly
+// by Table; foreign keys are resolved here, once every table is known, so they
+// may target a table declared later or the table itself. No dialect is needed —
+// column types stay portable and the generators resolve them. Build does not
+// mutate the catalog, so it may be called more than once. The returned
+// meta.Metadata is the dialect-agnostic value the codegen generator and the DDL
+// renderer consume.
 func (d *Catalog) Build() (meta.Metadata, error) {
 	errs := append([]error(nil), d.errs...)
-	if len(d.tables) == 0 {
+
+	// Resolve foreign keys into a copy of the tables so Build stays pure: a table
+	// starts with no foreign keys, so the first append allocates a fresh slice
+	// and the catalog's own tables are never touched.
+	tables := make([]meta.Table, len(d.tables))
+	copy(tables, d.tables)
+	for _, p := range d.pendingFKs {
+		t := &tables[p.table]
+		fk, ferrs := d.resolveFK(t.Schema.Name, t.Name, t.Columns, p.def)
+		if len(ferrs) > 0 {
+			errs = append(errs, ferrs...)
+			continue
+		}
+		t.ForeignKeys = append(t.ForeignKeys, fk)
+	}
+
+	if len(tables) == 0 {
 		errs = append(errs, errors.New("catalog declares no tables"))
 	}
 	if len(errs) > 0 {
 		return meta.Metadata{}, fmt.Errorf("sqldef: invalid catalog: %w", errors.Join(errs...))
 	}
-	return meta.Metadata{Tables: d.tables}, nil
+	return meta.Metadata{Tables: tables}, nil
 }
 
 // BuildTable assembles a single meta.Table from sqldef table elements without a
@@ -33,11 +52,15 @@ func (d *Catalog) Build() (meta.Metadata, error) {
 // (e.g. the migrate operator) instead.
 func BuildTable(schema, name string, elements ...TableElement) (meta.Table, error) {
 	cat := NewCatalog(DefaultSchema(schema))
-	table := cat.Table(name, elements...)
-	if _, err := cat.Build(); err != nil {
+	cat.Table(name, elements...)
+	md, err := cat.Build()
+	if err != nil {
 		return meta.Table{}, err
 	}
-	return table, nil
+	// Build resolves foreign keys (e.g. a self-reference), so return the
+	// assembled table from the metadata rather than the value Table returned
+	// before resolution.
+	return md.Tables[0], nil
 }
 
 // BuildColumn assembles a single meta.Column from one sqldef Column element, for
@@ -65,43 +88,59 @@ func BuildColumn(element TableElement) (meta.Column, error) {
 	return c.toMeta(), nil
 }
 
-// resolveFK validates a foreign key against the local columns and the
-// referenced table, assigns its name, and returns the meta.ForeignKey. It
-// reports failures to the catalog and returns ok=false on error.
-func (d *Catalog) resolveFK(table string, columns []meta.Column, fk fkDef) (meta.ForeignKey, bool) {
-	if fk.ref.Name == "" {
-		d.fail("table %q: foreign key references an unnamed table", table)
-		return meta.ForeignKey{}, false
+// resolveFK looks the foreign key's named target up in the catalog, validates
+// it against the local columns and the referenced table, assigns its name, and
+// returns the meta.ForeignKey. fromSchema is the referencing table's schema,
+// used to resolve an unqualified target. It returns the declaration errors it
+// finds (empty on success) rather than reporting to the catalog, so Build stays
+// pure and idempotent.
+func (d *Catalog) resolveFK(fromSchema, table string, columns []meta.Column, fk fkDef) (meta.ForeignKey, []error) {
+	fail := func(format string, args ...any) []error {
+		return []error{fmt.Errorf("table %q: "+format, append([]any{table}, args...)...)}
 	}
-	if !d.registered[tableKey(fk.ref.Schema.Name, fk.ref.Name)] {
-		d.fail("table %q: foreign key references table %q which is not declared in this catalog", table, fk.ref.Name)
-		return meta.ForeignKey{}, false
+	if fk.refTable == "" {
+		return meta.ForeignKey{}, fail("foreign key references an unnamed table")
 	}
+	refSchema := fromSchema
+	if fk.refQualified {
+		refSchema = fk.refSchema
+	}
+	idx, ok := d.tableIndex[tableKey(refSchema, fk.refTable)]
+	if !ok {
+		return meta.ForeignKey{}, fail("foreign key references table %q which is not declared in this catalog", refDisplay(fk))
+	}
+	ref := d.tables[idx]
 	if len(fk.columns) == 0 || len(fk.columns) != len(fk.refColumns) {
-		d.fail("table %q: foreign key needs matching column lists, got %d local and %d referenced", table, len(fk.columns), len(fk.refColumns))
-		return meta.ForeignKey{}, false
+		return meta.ForeignKey{}, fail("foreign key needs matching column lists, got %d local and %d referenced", len(fk.columns), len(fk.refColumns))
 	}
 	for _, name := range fk.columns {
 		if !hasMetaColumn(columns, name) {
-			d.fail("table %q: foreign key references unknown local column %q", table, name)
-			return meta.ForeignKey{}, false
+			return meta.ForeignKey{}, fail("foreign key references unknown local column %q", name)
 		}
 	}
 	for _, name := range fk.refColumns {
-		if !hasMetaColumn(fk.ref.Columns, name) {
-			d.fail("table %q: foreign key references unknown column %q of table %q", table, name, fk.ref.Name)
-			return meta.ForeignKey{}, false
+		if !hasMetaColumn(ref.Columns, name) {
+			return meta.ForeignKey{}, fail("foreign key references unknown column %q of table %q", name, fk.refTable)
 		}
 	}
 	return meta.ForeignKey{
 		Name:       fmt.Sprintf("fk_%s_%s", table, joinCols(fk.columns)),
 		Columns:    fk.columns,
-		RefSchema:  fk.ref.Schema,
-		RefTable:   fk.ref.Name,
+		RefSchema:  ref.Schema,
+		RefTable:   fk.refTable,
 		RefColumns: fk.refColumns,
 		OnDelete:   fk.onDelete,
 		OnUpdate:   fk.onUpdate,
-	}, true
+	}, nil
+}
+
+// refDisplay renders a foreign key's target as the user named it, for error
+// messages: "schema.table" when the schema was given, bare "table" otherwise.
+func refDisplay(fk fkDef) string {
+	if fk.refQualified {
+		return fk.refSchema + "." + fk.refTable
+	}
+	return fk.refTable
 }
 
 // collectForeignKeys merges column-level References with table-level
@@ -110,13 +149,9 @@ func collectForeignKeys(b *tableBuilder) []fkDef {
 	var fks []fkDef
 	for _, c := range b.columns {
 		if c.ref != nil {
-			fks = append(fks, fkDef{
-				columns:    []string{c.name},
-				ref:        c.ref.ref,
-				refColumns: c.ref.refColumns,
-				onDelete:   c.ref.onDelete,
-				onUpdate:   c.ref.onUpdate,
-			})
+			fk := *c.ref
+			fk.columns = []string{c.name}
+			fks = append(fks, fk)
 		}
 	}
 	return append(fks, b.foreignKeys...)

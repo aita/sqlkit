@@ -75,12 +75,12 @@ func TestRenderAddTable(t *testing.T) {
 	}
 	target := func() *sqldef.Catalog {
 		c := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
-		users := c.Table("users",
+		c.Table("users",
 			sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
 		)
 		c.Table("posts",
 			sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-			sqldef.Column("user_id", sqldef.BigInt, sqldef.References(users, "id", sqldef.OnDelete(sqldef.Cascade))),
+			sqldef.Column("user_id", sqldef.BigInt, sqldef.References("users", "id", sqldef.OnDelete(sqldef.Cascade))),
 		)
 		return c
 	}
@@ -203,10 +203,10 @@ func TestRenderRenameHeuristic(t *testing.T) {
 func TestRenderFKActionChange(t *testing.T) {
 	mk := func(action meta.ReferentialAction) meta.Metadata {
 		c := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
-		users := c.Table("users", sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()))
+		c.Table("users", sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()))
 		c.Table("posts",
 			sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-			sqldef.Column("user_id", sqldef.BigInt, sqldef.References(users, "id", sqldef.OnDelete(action))),
+			sqldef.Column("user_id", sqldef.BigInt, sqldef.References("users", "id", sqldef.OnDelete(action))),
 		)
 		return build(t, c)
 	}
@@ -268,10 +268,10 @@ func TestRenderPlainForeignKeyNoSqldefImport(t *testing.T) {
 		sqldef.Column("user_id", sqldef.BigInt),
 	)
 	target := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
-	users := target.Table("users", sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()))
+	target.Table("users", sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()))
 	target.Table("posts",
 		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("user_id", sqldef.BigInt, sqldef.References(users, "id")), // no action
+		sqldef.Column("user_id", sqldef.BigInt, sqldef.References("users", "id")), // no action
 	)
 	res := render(t, build(t, source), build(t, target), "postgres", Renames{})
 	if !strings.Contains(res.Up, `op.CreateForeignKey(`) {

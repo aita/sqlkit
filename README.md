@@ -539,7 +539,7 @@ var Users = Public.Table("users",
 
 var Posts = Public.Table("posts",
     sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-    sqldef.Column("user_id", sqldef.BigInt, sqldef.References(Users, "id")),
+    sqldef.Column("user_id", sqldef.BigInt, sqldef.References("users", "id")),
     sqldef.Column("title", sqldef.Text),
     sqldef.Column("published", sqldef.Bool, sqldef.Default(sql.Raw("false"))),
     sqldef.Index("user_id"),
@@ -550,8 +550,10 @@ var Posts = Public.Table("posts",
 Columns are NOT NULL unless marked `Nullable()` (nullable columns map to pointer
 types). Types are **portable** (`BigInt`, `Timestamp`, `VarChar(n)`, …): one
 canonical kind resolves to each engine's name, so a single catalog targets
-PostgreSQL, MySQL, and SQLite. Foreign keys reference the table value, so the
-compiler catches typos; add referential actions with `OnDelete`/`OnUpdate`.
+PostgreSQL, MySQL, and SQLite. Foreign keys name their target table
+(`References("users", "id")`, or `"schema.users"` to cross schemas) and are
+resolved when the catalog `Build`s, so a table may reference one declared after
+it or itself; add referential actions with `OnDelete`/`OnUpdate`.
 Indexes (`Index`/`UniqueIndex`), constraints (`Unique`/`Check`), and comments
 (`Comment`/`TableComment`) round out the catalog and carry through to the
 generated code. Because declarations are values, they compose.
