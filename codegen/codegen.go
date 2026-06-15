@@ -24,13 +24,18 @@ type File struct {
 	Content []byte
 }
 
-// Write writes generated files into dir, creating it if needed.
+// Write writes generated files into dir, creating it (and any subdirectories a
+// file's name nests it in, e.g. from Options.FileNameFor) as needed.
 func Write(dir string, files []File) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	for _, file := range files {
-		if err := os.WriteFile(filepath.Join(dir, file.Name), file.Content, 0o644); err != nil {
+		full := filepath.Join(dir, filepath.FromSlash(file.Name))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(full, file.Content, 0o644); err != nil {
 			return err
 		}
 	}
@@ -50,13 +55,22 @@ type Options struct {
 	// default SQL→Go type table.
 	Dialect string
 
-	// FilePerTable writes one file per table (named after the table) instead of
-	// a single combined file.
+	// FilePerTable writes one file per table (named "<table>.go") instead of a
+	// single combined file. Use FileNameFor to customize the per-table path or
+	// split tables across subdirectories.
 	FilePerTable bool
 
 	// FileName overrides the single-file output name (default "tables.go").
-	// Ignored when FilePerTable is set.
+	// Ignored when FilePerTable or FileNameFor is set.
 	FileName string
+
+	// FileNameFor, when set, derives each table's generated file path relative to
+	// the output directory, implying one file per table (FilePerTable). The
+	// returned path may contain slashes to nest the file in a subdirectory, which
+	// Write creates. Defaults to "<table>.go". When DTOSeparateFile is set, the
+	// DTO file sits beside it with "_dto" inserted before the extension
+	// (e.g. "users.go" -> "users_dto.go").
+	FileNameFor func(table meta.Table) string
 
 	// EmitRelations generates the relation-aware surface: foreign-key relation
 	// metadata (table.Rels) implementing sqlkit.Relation, Query/Q entry points
@@ -169,6 +183,9 @@ type tableModel struct {
 	Checksum  string
 	Generator string
 	Columns   []columnModel
+	// source is the table the model was built from, passed to the per-table
+	// layout hook (Options.FileNameFor).
+	source meta.Table
 	// Doc is the table comment as doc-comment lines.
 	Doc []string
 
@@ -288,6 +305,7 @@ func buildTable(table meta.Table, dialect string, mapper TypeMapper, bindingName
 		Name:        table.Name,
 		Qualified:   qualified(table.Schema.Name, table.Name),
 		Checksum:    table.Key().Checksum,
+		source:      table,
 		Doc:         docLines(table.Comment),
 		ColumnsType: varName + "Columns",
 		Ctor:        "new" + varName + "Columns",
@@ -366,8 +384,9 @@ func assemble(models []*tableModel, opts Options) ([]File, error) {
 		return nil
 	}
 
-	if opts.FilePerTable {
+	if opts.FilePerTable || opts.FileNameFor != nil {
 		for _, tm := range models {
+			path := tableFilePath(tm, opts)
 			fb := newFileBuf()
 			fb.add(bindingImports(tm)...)
 			fb.write(renderBinding(tm))
@@ -375,7 +394,7 @@ func assemble(models []*tableModel, opts Options) ([]File, error) {
 				fb.add(dtoImports(tm)...)
 				fb.write(renderDTO(tm))
 			}
-			if err := emit(fb, tm.Name+".go"); err != nil {
+			if err := emit(fb, path); err != nil {
 				return nil, err
 			}
 
@@ -383,7 +402,7 @@ func assemble(models []*tableModel, opts Options) ([]File, error) {
 				db := newFileBuf()
 				db.add(dtoImports(tm)...)
 				db.write(renderDTO(tm))
-				if err := emit(db, tm.Name+"_dto.go"); err != nil {
+				if err := emit(db, dtoFilePath(path)); err != nil {
 					return nil, err
 				}
 			}
@@ -419,6 +438,24 @@ func assemble(models []*tableModel, opts Options) ([]File, error) {
 		}
 	}
 	return files, nil
+}
+
+// tableFilePath is the output path (relative to the output directory) of a
+// table's generated file in per-table mode: FileNameFor when set, else
+// "<table>.go".
+func tableFilePath(tm *tableModel, opts Options) string {
+	if opts.FileNameFor != nil {
+		return opts.FileNameFor(tm.source)
+	}
+	return tm.Name + ".go"
+}
+
+// dtoFilePath derives the DTO file path that sits beside a binding file path by
+// inserting "_dto" before the extension ("users/users.go" ->
+// "users/users_dto.go").
+func dtoFilePath(path string) string {
+	ext := filepath.Ext(path)
+	return strings.TrimSuffix(path, ext) + "_dto" + ext
 }
 
 func bindingImports(tm *tableModel) []string {

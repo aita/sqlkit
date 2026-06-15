@@ -211,6 +211,43 @@ func TestGenerateFilePerTable(t *testing.T) {
 	}
 }
 
+func TestFileNameForCustomNames(t *testing.T) {
+	// FileNameFor implies per-table output and customizes each file's path.
+	files, err := Generate(meta.Metadata{Tables: fixtureTables()}, Options{
+		PackageName:     "blogdb",
+		FileNameFor:     func(table meta.Table) string { return "gen_" + table.Name + ".go" },
+		EmitDTO:         true,
+		DTOSeparateFile: true,
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	got := map[string]bool{}
+	for _, f := range files {
+		got[f.Name] = true
+	}
+	for _, want := range []string{"gen_users.go", "gen_users_dto.go", "gen_posts.go", "gen_posts_dto.go"} {
+		if !got[want] {
+			t.Errorf("missing generated file %q; got %v", want, got)
+		}
+	}
+}
+
+func TestWriteCreatesSubdirectories(t *testing.T) {
+	files := []File{{Name: "users/users.go", Content: []byte("package users\n")}}
+	dir := t.TempDir()
+	if err := Write(dir, files); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "users", "users.go"))
+	if err != nil {
+		t.Fatalf("reading written file: %v", err)
+	}
+	if string(got) != "package users\n" {
+		t.Errorf("unexpected file contents: %q", got)
+	}
+}
+
 func TestGenerateTablesFilter(t *testing.T) {
 	files, err := Generate(meta.Metadata{Tables: fixtureTables()}, Options{PackageName: "blogdb", Tables: []string{"users"}})
 	if err != nil {
