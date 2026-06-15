@@ -49,6 +49,43 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		return c.Dialect.QuoteIdent(e.Reference()), nil, nil
 	case ValueExpression:
 		return c.nextPlaceholder(), []any{e.Value}, nil
+	case GroupingExpression:
+		inner, args, err := c.compileExprList(e.Elements)
+		if err != nil {
+			return "", nil, err
+		}
+		return e.Kind + " (" + inner + ")", args, nil
+	case GroupingSetsExpression:
+		var sb strings.Builder
+		var args []any
+		sb.WriteString("GROUPING SETS (")
+		for i, set := range e.Sets {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			inner, setArgs, err := c.compileExprList(set)
+			if err != nil {
+				return "", nil, err
+			}
+			sb.WriteString("(" + inner + ")")
+			args = append(args, setArgs...)
+		}
+		sb.WriteString(")")
+		return sb.String(), args, nil
+	case SubscriptExpression:
+		return c.compileSubscript(e)
+	case FieldExpression:
+		operandSQL, args, err := c.CompileExpression(e.Operand)
+		if err != nil {
+			return "", nil, err
+		}
+		return "(" + operandSQL + ")." + c.Dialect.QuoteName(e.Field), args, nil
+	case CollateExpression:
+		operandSQL, args, err := c.CompileExpression(e.Operand)
+		if err != nil {
+			return "", nil, err
+		}
+		return operandSQL + " COLLATE " + c.Dialect.QuoteIdent(e.Collation), args, nil
 	case BinaryExpression:
 		leftSQL, leftArgs, err := c.CompileExpression(e.Left)
 		if err != nil {
@@ -1051,12 +1088,37 @@ func (c *Compiler) writeUpsert(sb *strings.Builder, args *[]any, conflict *confl
 	if conflict.doUpdate && len(conflict.sets) == 0 {
 		return fmt.Errorf("sqlkit/sql: ON CONFLICT DO UPDATE requires at least one assignment")
 	}
-	if len(conflict.target) > 0 && conflict.targetConstraint != "" {
-		return fmt.Errorf("sqlkit/sql: ON CONFLICT cannot target both columns and a named constraint")
+	targets := 0
+	if len(conflict.target) > 0 {
+		targets++
 	}
-	target := make([]string, len(conflict.target))
-	for i, col := range conflict.target {
-		target[i] = c.Dialect.QuoteName(col)
+	if len(conflict.targetExprs) > 0 {
+		targets++
+	}
+	if conflict.targetConstraint != "" {
+		targets++
+	}
+	if targets > 1 {
+		return fmt.Errorf("sqlkit/sql: ON CONFLICT can target only columns, expressions, or a named constraint")
+	}
+	var target []string
+	if len(conflict.targetExprs) > 0 {
+		// An expression conflict target renders parenthesized, e.g.
+		// ON CONFLICT ((lower(email))). Its placeholders precede the DO UPDATE
+		// assignments, so compile it first.
+		for _, expr := range conflict.targetExprs {
+			exprSQL, exprArgs, err := c.CompileExpression(expr)
+			if err != nil {
+				return err
+			}
+			target = append(target, "("+exprSQL+")")
+			*args = append(*args, exprArgs...)
+		}
+	} else {
+		target = make([]string, len(conflict.target))
+		for i, col := range conflict.target {
+			target[i] = c.Dialect.QuoteName(col)
+		}
 	}
 	targetConstraint := ""
 	if conflict.targetConstraint != "" {
@@ -1064,11 +1126,16 @@ func (c *Compiler) writeUpsert(sb *strings.Builder, args *[]any, conflict *confl
 	}
 	assignments := make([]string, 0, len(conflict.sets))
 	for _, assignment := range conflict.sets {
+		lhsSQL, lhsArgs, err := c.assignmentLHS(assignment)
+		if err != nil {
+			return err
+		}
 		valueSQL, valueArgs, err := c.CompileExpression(assignment.Value)
 		if err != nil {
 			return err
 		}
-		assignments = append(assignments, c.Dialect.QuoteIdent(assignment.Column)+" = "+valueSQL)
+		assignments = append(assignments, lhsSQL+" = "+valueSQL)
+		*args = append(*args, lhsArgs...)
 		*args = append(*args, valueArgs...)
 	}
 	// Only DO UPDATE carries a WHERE; on DO NOTHING the predicate is dropped, so
@@ -1168,13 +1235,20 @@ func (c *Compiler) CompileUpdate(q UpdateQuery) (string, []any, error) {
 		if i > 0 {
 			sb.WriteString(", ")
 		}
+		// The target's placeholders precede the value's, matching textual order
+		// (col[idx] = value), so compile the left-hand side first.
+		lhsSQL, lhsArgs, err := c.assignmentLHS(assignment)
+		if err != nil {
+			return "", nil, err
+		}
 		valueSQL, valueArgs, err := c.CompileExpression(assignment.Value)
 		if err != nil {
 			return "", nil, err
 		}
-		sb.WriteString(c.Dialect.QuoteIdent(assignment.Column))
+		sb.WriteString(lhsSQL)
 		sb.WriteString(" = ")
 		sb.WriteString(valueSQL)
+		args = append(args, lhsArgs...)
 		args = append(args, valueArgs...)
 	}
 
@@ -1343,6 +1417,77 @@ func (c *Compiler) writeReturning(sb *strings.Builder, args *[]any, returning []
 		*args = append(*args, selectionArgs...)
 	}
 	return nil
+}
+
+// assignmentLHS renders an assignment's left-hand side: the Target expression
+// when set (e.g. a subscripted column), otherwise the quoted column name.
+func (c *Compiler) assignmentLHS(a Assignment) (string, []any, error) {
+	if a.Target != nil {
+		return c.CompileExpression(a.Target)
+	}
+	return c.Dialect.QuoteIdent(a.Column), nil, nil
+}
+
+// compileExprList compiles a comma-separated list of expressions.
+func (c *Compiler) compileExprList(exprs []Expression) (string, []any, error) {
+	var sb strings.Builder
+	var args []any
+	for i, expr := range exprs {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		exprSQL, exprArgs, err := c.CompileExpression(expr)
+		if err != nil {
+			return "", nil, err
+		}
+		sb.WriteString(exprSQL)
+		args = append(args, exprArgs...)
+	}
+	return sb.String(), args, nil
+}
+
+// compileSubscript renders operand[...] for one or more subscript/slice steps.
+func (c *Compiler) compileSubscript(e SubscriptExpression) (string, []any, error) {
+	operandSQL, args, err := c.CompileExpression(e.Operand)
+	if err != nil {
+		return "", nil, err
+	}
+	var sb strings.Builder
+	sb.WriteString(operandSQL)
+	for _, idx := range e.Indices {
+		sb.WriteString("[")
+		if idx.Slice {
+			if idx.Lower != nil {
+				lo, loArgs, err := c.CompileExpression(idx.Lower)
+				if err != nil {
+					return "", nil, err
+				}
+				sb.WriteString(lo)
+				args = append(args, loArgs...)
+			}
+			sb.WriteString(":")
+			if idx.Upper != nil {
+				hi, hiArgs, err := c.CompileExpression(idx.Upper)
+				if err != nil {
+					return "", nil, err
+				}
+				sb.WriteString(hi)
+				args = append(args, hiArgs...)
+			}
+		} else {
+			if idx.Upper == nil {
+				return "", nil, fmt.Errorf("sqlkit/sql: array subscript requires an index")
+			}
+			up, upArgs, err := c.CompileExpression(idx.Upper)
+			if err != nil {
+				return "", nil, err
+			}
+			sb.WriteString(up)
+			args = append(args, upArgs...)
+		}
+		sb.WriteString("]")
+	}
+	return sb.String(), args, nil
 }
 
 func (c *Compiler) nextPlaceholder() string {

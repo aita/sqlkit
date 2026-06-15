@@ -219,7 +219,19 @@ func TestSelectStandaloneValues(t *testing.T) {
 		1, "a", 2, "b")
 }
 
-func TestSelectWindowFrameUnsupported(t *testing.T) {
-	assertUnsupported(t,
-		"SELECT SUM(x) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM t")
+func TestSelectWindowFrame(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT SUM(x) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM t",
+		sql.Select(sql.Over(sql.Func("sum", sql.Col("x"))).
+			OrderBy(sql.Asc(sql.Col("id"))).
+			Frame("ROWS BETWEEN 1 PRECEDING AND CURRENT ROW")).From(sql.Table{Name: "t"}),
+		`SELECT sum("x") OVER (ORDER BY "id" ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM "t"`)
+}
+
+func TestSelectNamedWindowFrame(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT SUM(x) OVER w FROM t WINDOW w AS (ORDER BY id RANGE UNBOUNDED PRECEDING)",
+		sql.Select(sql.Over(sql.Func("sum", sql.Col("x"))).Named("w")).From(sql.Table{Name: "t"}).
+			Window(sql.WindowDef("w").OrderBy(sql.Asc(sql.Col("id"))).Frame("RANGE UNBOUNDED PRECEDING")),
+		`SELECT sum("x") OVER "w" FROM "t" WINDOW "w" AS (ORDER BY "id" RANGE UNBOUNDED PRECEDING)`)
 }

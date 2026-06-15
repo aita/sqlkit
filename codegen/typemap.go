@@ -168,6 +168,15 @@ func tableForDialect(dialect string) (map[string]meta.GoType, string) {
 	}
 }
 
+// decimalType is the Go type exact numeric (decimal/numeric) columns map to by
+// default. database/sql cannot scan an arbitrary-precision number into a Go
+// float without loss, so the default is shopspring/decimal — the de-facto
+// standard exact decimal. Override "numeric"/"decimal" in TypeMapperConfig to
+// pick a different type (e.g. string or a custom decimal). The import is emitted
+// only into generated packages that have such a column; sqlkit itself does not
+// depend on it.
+var decimalType = meta.GoType{ImportPath: "github.com/shopspring/decimal", Name: "decimal.Decimal"}
+
 // pgTypes maps PostgreSQL udt_name values to Go types.
 var pgTypes = map[string]meta.GoType{
 	"bool":        {Name: "bool"},
@@ -176,7 +185,7 @@ var pgTypes = map[string]meta.GoType{
 	"int8":        {Name: "int64"},
 	"float4":      {Name: "float32"},
 	"float8":      {Name: "float64"},
-	"numeric":     {Name: "string"},
+	"numeric":     decimalType,
 	"money":       {Name: "string"},
 	"text":        {Name: "string"},
 	"varchar":     {Name: "string"},
@@ -213,8 +222,8 @@ var mysqlTypes = map[string]meta.GoType{
 	"float":      {Name: "float32"},
 	"double":     {Name: "float64"},
 	"real":       {Name: "float64"},
-	"decimal":    {Name: "string"},
-	"numeric":    {Name: "string"},
+	"decimal":    decimalType,
+	"numeric":    decimalType,
 	"bit":        {Name: "[]byte"},
 	"char":       {Name: "string"},
 	"varchar":    {Name: "string"},
@@ -247,8 +256,8 @@ var sqliteTypes = map[string]meta.GoType{
 	"real":     {Name: "float64"},
 	"float":    {Name: "float64"},
 	"double":   {Name: "float64"},
-	"numeric":  {Name: "string"},
-	"decimal":  {Name: "string"},
+	"numeric":  decimalType,
+	"decimal":  decimalType,
 	"boolean":  {Name: "bool"},
 	"text":     {Name: "string"},
 	"varchar":  {Name: "string"},

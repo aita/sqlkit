@@ -17,6 +17,7 @@ type InsertQuery struct {
 // and an optional WHERE.
 type conflictClause struct {
 	target           []string
+	targetExprs      []Expression
 	targetConstraint string
 	doUpdate         bool
 	sets             []Assignment
@@ -52,62 +53,76 @@ func (q InsertQuery) FromSelect(query Query) InsertQuery {
 	return q
 }
 
-// ConflictOption configures the INSERT upsert clause built by OnConflict. The
-// options compose the conflict target (OnColumns / OnConstraint), the action
-// (DoNothing / DoUpdate), and an optional ConflictWhere predicate.
-type ConflictOption func(*conflictClause)
-
-// OnColumns sets the conflict target to a column list (PostgreSQL ON CONFLICT
-// (cols), SQLAlchemy index_elements). Use this or OnConstraint, not both.
-func OnColumns(columns ...string) ConflictOption {
-	return func(c *conflictClause) { c.target = columns }
+// withConflict copies the pending conflict clause (creating one if absent),
+// applies mut, and stores it, keeping value semantics so a reused InsertQuery is
+// not mutated through a shared pointer.
+func (q InsertQuery) withConflict(mut func(*conflictClause)) InsertQuery {
+	var c conflictClause
+	if q.conflict != nil {
+		c = *q.conflict
+	}
+	mut(&c)
+	q.conflict = &c
+	return q
 }
 
-// OnConstraint sets the conflict target to a named constraint (PostgreSQL
-// ON CONSTRAINT, SQLAlchemy constraint). PostgreSQL/SQLite only.
-func OnConstraint(name string) ConflictOption {
-	return func(c *conflictClause) { c.targetConstraint = name }
+// OnConflict starts an upsert clause targeting a column list — PostgreSQL's
+// ON CONFLICT (cols) — and is followed by an action, DoNothing or DoUpdate:
+//
+//	InsertInto(t).Columns("email", "name").Values("a@x", "Alice").
+//		OnConflict("email").DoUpdate(Set("name", Excluded("name")))
+//
+// Call it with no columns for MySQL's ON DUPLICATE KEY UPDATE, which has no
+// conflict target. Without a following action the clause is DO NOTHING.
+func (q InsertQuery) OnConflict(columns ...string) InsertQuery {
+	return q.withConflict(func(c *conflictClause) {
+		c.target, c.targetExprs, c.targetConstraint = columns, nil, ""
+	})
+}
+
+// OnConflictConstraint starts an upsert clause targeting a named constraint
+// (PostgreSQL ON CONFLICT ON CONSTRAINT). PostgreSQL/SQLite only.
+func (q InsertQuery) OnConflictConstraint(name string) InsertQuery {
+	return q.withConflict(func(c *conflictClause) {
+		c.targetConstraint, c.target, c.targetExprs = name, nil, nil
+	})
+}
+
+// OnConflictExpr starts an upsert clause targeting an expression unique index
+// (PostgreSQL ON CONFLICT ((lower(email)))).
+func (q InsertQuery) OnConflictExpr(exprs ...Expression) InsertQuery {
+	return q.withConflict(func(c *conflictClause) {
+		c.targetExprs, c.target, c.targetConstraint = exprs, nil, ""
+	})
 }
 
 // DoNothing makes the upsert skip conflicting rows (DO NOTHING). PostgreSQL and
 // SQLite only — MySQL has no DO NOTHING form.
-func DoNothing() ConflictOption {
-	return func(c *conflictClause) { c.doUpdate = false }
+func (q InsertQuery) DoNothing() InsertQuery {
+	return q.withConflict(func(c *conflictClause) { c.doUpdate = false })
 }
 
 // DoUpdate makes the upsert update conflicting rows with the given assignments
-// (DO UPDATE SET ..., SQLAlchemy set_). Reference the proposed row's values with
-// Excluded. It is the default action, so passing assignments is enough.
-func DoUpdate(assignments ...Assignment) ConflictOption {
-	return func(c *conflictClause) {
+// (DO UPDATE SET ...). Reference the proposed row's values with Excluded. Refine
+// it with Where.
+func (q InsertQuery) DoUpdate(assignments ...Assignment) InsertQuery {
+	return q.withConflict(func(c *conflictClause) {
 		c.doUpdate = true
 		c.sets = assignments
-	}
+	})
 }
 
-// ConflictWhere adds a predicate to a DO UPDATE action (PostgreSQL ON CONFLICT
-// ... DO UPDATE ... WHERE; SQLAlchemy where). It is ignored by DO NOTHING.
-func ConflictWhere(predicate Expression) ConflictOption {
-	return func(c *conflictClause) { c.where = predicate }
-}
-
-// OnConflict adds an INSERT upsert clause — PostgreSQL's ON CONFLICT or MySQL's
-// ON DUPLICATE KEY UPDATE — configured by the options, matching the option style
-// of ForUpdate and blending GORM's single clause.OnConflict entry point with
-// SQLAlchemy's on_conflict_do_update / on_conflict_do_nothing actions:
-//
-//	InsertInto(t).Columns("email", "name").Values("a@x", "Alice").
-//		OnConflict(OnColumns("email"), DoUpdate(Set("name", Excluded("name"))))
-//
-// The action defaults to DO UPDATE, so DoUpdate may be the only option for a
-// straight upsert; pass DoNothing for the skip form.
-func (q InsertQuery) OnConflict(opts ...ConflictOption) InsertQuery {
-	conflict := &conflictClause{doUpdate: true}
-	for _, opt := range opts {
-		opt(conflict)
-	}
-	q.conflict = conflict
-	return q
+// Where adds a predicate to the upsert's DO UPDATE action (PostgreSQL ON CONFLICT
+// ... DO UPDATE ... WHERE) — the only WHERE an INSERT carries. Repeated calls AND
+// together. It is ignored by DO NOTHING.
+func (q InsertQuery) Where(predicate Expression) InsertQuery {
+	return q.withConflict(func(c *conflictClause) {
+		if c.where == nil {
+			c.where = predicate
+		} else {
+			c.where = And(c.where, predicate)
+		}
+	})
 }
 
 // Returning adds a RETURNING clause.

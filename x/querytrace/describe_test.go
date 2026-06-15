@@ -137,11 +137,9 @@ func TestDescribeSubqueriesAndCTEs(t *testing.T) {
 		{
 			name: "insert on conflict do update with subqueries",
 			query: sql.InsertInto(users).Columns("id", "rank").Values(1, 2).
-				OnConflict(
-					sql.OnColumns("id"),
-					sql.DoUpdate(sql.Set("rank", sql.ScalarSubquery(sql.Select(sql.CountAll()).From(orders)))),
-					sql.ConflictWhere(sql.InQuery(sql.Col("id"), sql.Select(sql.Col("user_id")).From(posts))),
-				),
+				OnConflict("id").
+				DoUpdate(sql.Set("rank", sql.ScalarSubquery(sql.Select(sql.CountAll()).From(orders)))).
+				Where(sql.InQuery(sql.Col("id"), sql.Select(sql.Col("user_id")).From(posts))),
 			wantKind:   querytrace.StmtInsert,
 			wantTables: []string{"users", "orders", "posts"},
 		},

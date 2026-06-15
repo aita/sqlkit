@@ -556,14 +556,24 @@ func (t OrderTerm) NullsFirst() OrderTerm { t.Nulls = "FIRST"; return t }
 func (t OrderTerm) NullsLast() OrderTerm { t.Nulls = "LAST"; return t }
 
 // Assignment is one SET clause item in UPDATE, or a column/value pair in INSERT.
+// Target, when non-nil, is the assignment's left-hand side (e.g. a subscripted
+// column col[i]); otherwise Column names the assigned column.
 type Assignment struct {
 	Column string
+	Target Expression
 	Value  Expression
 }
 
 // Set creates an assignment. A non-expression value becomes a bind value.
 func Set(column string, value any) Assignment {
 	return Assignment{Column: column, Value: Expr(value)}
+}
+
+// SetAt creates an assignment to a subscripted (or otherwise indirected) target,
+// such as an array element or jsonb key: SetAt(Subscript(Col("data"), 1), v)
+// renders "data"[1] = v.
+func SetAt(target Expression, value any) Assignment {
+	return Assignment{Target: target, Value: Expr(value)}
 }
 
 // Expr converts common values into AST expressions.

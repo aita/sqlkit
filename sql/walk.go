@@ -176,6 +176,8 @@ func deref(q Query) Query {
 		return *p
 	case *DeleteQuery:
 		return *p
+	case *MergeQuery:
+		return *p
 	case *ValuesQuery:
 		return *p
 	default:
@@ -296,6 +298,23 @@ func queryChildren(q Query, onName func(string), onQuery func(Query)) {
 			expr(j.On)
 		}
 		expr(v.where)
+		for _, s := range v.returning {
+			sel(s)
+		}
+	case MergeQuery:
+		ctes(v.with)
+		onName(v.target.QualifiedName())
+		src(v.using)
+		expr(v.on)
+		for _, w := range v.whens {
+			expr(w.condition)
+			for _, a := range w.sets {
+				expr(a.Value)
+			}
+			for _, e := range w.insertValues {
+				expr(e)
+			}
+		}
 		for _, s := range v.returning {
 			sel(s)
 		}

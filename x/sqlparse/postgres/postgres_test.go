@@ -1,7 +1,6 @@
 package postgres_test
 
 import (
-	"errors"
 	"reflect"
 	"testing"
 
@@ -44,16 +43,50 @@ func assertRoundTrip(t *testing.T, input string, want sql.Query, wantSQL string,
 	}
 }
 
-// assertUnsupported checks that parsing input fails with an UnsupportedError.
-func assertUnsupported(t *testing.T, input string) {
+// assertRaw checks that input parses to a verbatim RawQuery — the deparse
+// fallback the parser uses for statements (and sub-constructs) the typed
+// converters do not model — and that the passthrough is stable: the RawQuery
+// emits its text unchanged with no args, and that text re-parses to an equal
+// RawQuery.
+func assertRaw(t *testing.T, input string) sql.RawQuery {
 	t.Helper()
-	_, err := postgres.ParseOne(input)
-	if err == nil {
-		t.Fatalf("ParseOne(%q) succeeded, want unsupported error", input)
+	got, err := postgres.ParseOne(input)
+	if err != nil {
+		t.Fatalf("ParseOne(%q) error = %v", input, err)
 	}
-	var unsupported *sqlparse.UnsupportedError
-	if !errors.As(err, &unsupported) {
-		t.Fatalf("ParseOne(%q) error = %v, want UnsupportedError", input, err)
+	raw, ok := got.(sql.RawQuery)
+	if !ok {
+		t.Fatalf("ParseOne(%q) = %T, want sql.RawQuery", input, got)
+	}
+	text, args, err := raw.ToSQL(sql.PostgreSQLDialect{})
+	if err != nil {
+		t.Fatalf("ToSQL() error = %v", err)
+	}
+	if len(args) != 0 {
+		t.Fatalf("RawQuery args = %#v, want none", args)
+	}
+	if text != raw.SQL() {
+		t.Fatalf("RawQuery text = %q, want %q", text, raw.SQL())
+	}
+	again, err := postgres.ParseOne(text)
+	if err != nil {
+		t.Fatalf("re-parse of %q error = %v", text, err)
+	}
+	if !reflect.DeepEqual(again, got) {
+		t.Fatalf("deparse not stable for %q:\n got: %#v\nwant: %#v", input, again, got)
+	}
+	return raw
+}
+
+// Statement types the typed converters do not model (here a utility command)
+// still parse, falling back to a verbatim RawQuery.
+func TestUnmodeledStatementFallsBackToRaw(t *testing.T) {
+	for _, input := range []string{
+		"VACUUM users",
+		"SET search_path TO public",
+		"LISTEN events",
+	} {
+		assertRaw(t, input)
 	}
 }
 

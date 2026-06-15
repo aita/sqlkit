@@ -342,10 +342,10 @@ More write forms:
 - **Partial updates from a struct** — `Update(t).SetStruct(row, cols...)` maps a
   struct's fields to columns and emits one `SET` per column.
 - **Upsert** — `OnConflict(...)` renders PostgreSQL's `ON CONFLICT` and MySQL's
-  `ON DUPLICATE KEY UPDATE`, configured by options that blend GORM's single
-  clause with SQLAlchemy's actions: `OnColumns` / `OnConstraint` choose the
-  conflict target, `DoUpdate` / `DoNothing` the action, and `ConflictWhere` a
-  predicate; `Column.Excluded()` refers to the proposed row.
+  `ON DUPLICATE KEY UPDATE` through a fluent chain: `OnConflict(cols...)` /
+  `OnConflictConstraint(name)` / `OnConflictExpr(...)` choose the conflict target,
+  `DoUpdate(...)` / `DoNothing()` the action, and `Where(...)` adds a predicate;
+  `Column.Excluded()` refers to the proposed row.
 - **Cross-table writes** — `Update(t).From(src...)` and `Delete(t).Using(src...)`
   add `UPDATE … FROM` / `DELETE … USING` source lists.
 - **Optimistic locking** — `Update(t).CheckVersion(t.Version, current)` guards the
@@ -370,8 +370,8 @@ transaction, or check a version to detect a lost update without holding a lock.
 
 ```go
 _, err = db.Insert(appdb.Users).Values(u).
-    OnConflict(sqlkit.OnColumns(appdb.Users.Email),
-        sqlkit.DoUpdate(appdb.Users.Name.SetExpr(appdb.Users.Name.Excluded()))).
+    OnConflict(appdb.Users.Email).
+    DoUpdate(appdb.Users.Name.SetExpr(appdb.Users.Name.Excluded())).
     Exec(ctx)
 ```
 

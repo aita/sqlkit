@@ -10,6 +10,8 @@
 package postgres
 
 import (
+	"errors"
+
 	"github.com/aita/sqlkit/sql"
 	"github.com/aita/sqlkit/x/sqlparse"
 	pg "github.com/pganalyze/pg_query_go/v6"
@@ -41,11 +43,34 @@ func (Parser) Parse(text string) ([]sql.Query, error) {
 	for _, raw := range stmts {
 		query, err := convertStmt(raw.GetStmt())
 		if err != nil {
+			// A construct the converters recognize but cannot model as typed nodes
+			// still round-trips: deparse just this statement back to SQL and keep it
+			// as a RawQuery, so every statement the PostgreSQL grammar accepts yields
+			// a usable Query. Genuine parse failures are not UnsupportedError and so
+			// still surface.
+			var unsupported *sqlparse.UnsupportedError
+			if errors.As(err, &unsupported) {
+				rawSQL, derr := deparseStmt(result, raw)
+				if derr != nil {
+					return nil, err
+				}
+				queries = append(queries, sql.RawSQL(rawSQL))
+				continue
+			}
 			return nil, err
 		}
 		queries = append(queries, query)
 	}
 	return queries, nil
+}
+
+// deparseStmt renders a single statement back to SQL text by deparsing a parse
+// result that holds only that statement, preserving the source version.
+func deparseStmt(result *pg.ParseResult, stmt *pg.RawStmt) (string, error) {
+	return pg.Deparse(&pg.ParseResult{
+		Version: result.GetVersion(),
+		Stmts:   []*pg.RawStmt{stmt},
+	})
 }
 
 // Parse parses one or more PostgreSQL statements using a default Parser.
@@ -68,8 +93,32 @@ func convertStmt(node *pg.Node) (sql.Query, error) {
 		return convertUpdate(node.GetUpdateStmt())
 	case node.GetDeleteStmt() != nil:
 		return convertDelete(node.GetDeleteStmt())
+	case node.GetMergeStmt() != nil:
+		return convertMerge(node.GetMergeStmt())
+	case node.GetGrantStmt() != nil:
+		return convertGrant(node.GetGrantStmt())
 	case node.GetCreateStmt() != nil:
 		return convertCreateTable(node.GetCreateStmt())
+	case node.GetViewStmt() != nil:
+		return convertCreateView(node.GetViewStmt())
+	case node.GetIndexStmt() != nil:
+		return convertCreateIndex(node.GetIndexStmt())
+	case node.GetCommentStmt() != nil:
+		return convertComment(node.GetCommentStmt())
+	case node.GetCreateExtensionStmt() != nil:
+		return convertCreateExtension(node.GetCreateExtensionStmt())
+	case node.GetCreateEnumStmt() != nil:
+		return convertCreateEnum(node.GetCreateEnumStmt())
+	case node.GetRenameStmt() != nil:
+		return convertRename(node.GetRenameStmt())
+	case node.GetCreateSeqStmt() != nil:
+		return convertCreateSequence(node.GetCreateSeqStmt())
+	case node.GetCreateTableAsStmt() != nil:
+		return convertCreateTableAs(node.GetCreateTableAsStmt())
+	case node.GetRefreshMatViewStmt() != nil:
+		return convertRefreshMatView(node.GetRefreshMatViewStmt())
+	case node.GetAlterEnumStmt() != nil:
+		return convertAlterEnum(node.GetAlterEnumStmt())
 	case node.GetCreateSchemaStmt() != nil:
 		return convertCreateSchema(node.GetCreateSchemaStmt())
 	case node.GetAlterTableStmt() != nil:
@@ -78,6 +127,8 @@ func convertStmt(node *pg.Node) (sql.Query, error) {
 		return convertDrop(node.GetDropStmt())
 	case node.GetTruncateStmt() != nil:
 		return convertTruncate(node.GetTruncateStmt())
+	case node.GetTransactionStmt() != nil:
+		return convertTransaction(node.GetTransactionStmt())
 	default:
 		return nil, sqlparse.Unsupportedf("statement node %T", node.GetNode())
 	}

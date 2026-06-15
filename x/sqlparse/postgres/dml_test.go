@@ -26,7 +26,7 @@ func TestInsertOnConflictDoNothing(t *testing.T) {
 	assertRoundTrip(t,
 		"INSERT INTO users (id) VALUES (1) ON CONFLICT (id) DO NOTHING",
 		sql.InsertInto(sql.Table{Name: "users"}).Columns("id").Values(1).
-			OnConflict(sql.OnColumns("id"), sql.DoNothing()),
+			OnConflict("id").DoNothing(),
 		`INSERT INTO "users" ("id") VALUES ($1) ON CONFLICT ("id") DO NOTHING`,
 		1)
 }
@@ -35,7 +35,7 @@ func TestInsertOnConflictDoUpdate(t *testing.T) {
 	assertRoundTrip(t,
 		"INSERT INTO users (id, name) VALUES (1, 'a') ON CONFLICT (id) DO UPDATE SET name = excluded.name RETURNING id",
 		sql.InsertInto(sql.Table{Name: "users"}).Columns("id", "name").Values(1, "a").
-			OnConflict(sql.OnColumns("id"), sql.DoUpdate(sql.Set("name", sql.Excluded("name")))).
+			OnConflict("id").DoUpdate(sql.Set("name", sql.Excluded("name"))).
 			Returning(sql.Col("id")),
 		`INSERT INTO "users" ("id", "name") VALUES ($1, $2) ON CONFLICT ("id") DO UPDATE SET "name" = excluded."name" RETURNING "id"`,
 		1, "a")
@@ -45,7 +45,7 @@ func TestInsertOnConflictOnConstraint(t *testing.T) {
 	assertRoundTrip(t,
 		"INSERT INTO t (id) VALUES (1) ON CONFLICT ON CONSTRAINT t_pkey DO NOTHING",
 		sql.InsertInto(sql.Table{Name: "t"}).Columns("id").Values(1).
-			OnConflict(sql.OnConstraint("t_pkey"), sql.DoNothing()),
+			OnConflictConstraint("t_pkey").DoNothing(),
 		`INSERT INTO "t" ("id") VALUES ($1) ON CONFLICT ON CONSTRAINT "t_pkey" DO NOTHING`,
 		1)
 }

@@ -302,7 +302,7 @@ func TestTypedOnConflictDoUpdate(t *testing.T) {
 	name := "Alice"
 	query := sqlkit.Insert(Users).
 		Values(User{ID: 1, Email: "a@example.com", Name: &name}).
-		OnConflict(sqlkit.OnColumns(Users.ID), sqlkit.DoUpdate(Users.Email.SetExpr(Users.Email.Excluded()))).
+		OnConflict(Users.ID).DoUpdate(Users.Email.SetExpr(Users.Email.Excluded())).
 		Returning(Users.ID)
 	assertToSQL(t, query,
 		`INSERT INTO "public"."users" ("id", "email", "name") VALUES ($1, $2, $3) ON CONFLICT ("id") DO UPDATE SET "email" = excluded."email" RETURNING "public"."users"."id"`,
@@ -313,7 +313,7 @@ func TestTypedOnConflictDoNothing(t *testing.T) {
 	name := "Alice"
 	query := sqlkit.Insert(Users).
 		Values(User{ID: 1, Email: "a@example.com", Name: &name}).
-		OnConflict(sqlkit.OnColumns(Users.ID), sqlkit.DoNothing())
+		OnConflict(Users.ID).DoNothing()
 	assertToSQL(t, query,
 		`INSERT INTO "public"."users" ("id", "email", "name") VALUES ($1, $2, $3) ON CONFLICT ("id") DO NOTHING`,
 		[]any{int64(1), "a@example.com", &name})
@@ -323,7 +323,7 @@ func TestTypedOnConflictOnConstraint(t *testing.T) {
 	name := "Alice"
 	query := sqlkit.Insert(Users).
 		Values(User{ID: 1, Email: "a@example.com", Name: &name}).
-		OnConflict(sqlkit.OnConstraint("users_email_key"), sqlkit.DoUpdate(Users.Email.SetExpr(Users.Email.Excluded())))
+		OnConflictConstraint("users_email_key").DoUpdate(Users.Email.SetExpr(Users.Email.Excluded()))
 	assertToSQL(t, query,
 		`INSERT INTO "public"."users" ("id", "email", "name") VALUES ($1, $2, $3) ON CONFLICT ON CONSTRAINT "users_email_key" DO UPDATE SET "email" = excluded."email"`,
 		[]any{int64(1), "a@example.com", &name})
