@@ -154,6 +154,15 @@ type ExcludedRenderer interface {
 	Excluded(column string) string
 }
 
+// MergeDialect is an optional capability a Dialect implements to report support
+// for the MERGE statement (SQL:2003). The compiler detects it with a type
+// assertion, so it is not a breaking change to Dialect; a dialect without it (or
+// returning false) rejects MERGE at compile time. PostgreSQL (15+) and the
+// standard target support it; MySQL and SQLite do not.
+type MergeDialect interface {
+	SupportsMerge() bool
+}
+
 // BindParamLimiter is an optional capability a Dialect implements to report the
 // maximum number of bind parameters a single statement may carry. Both
 // PostgreSQL and MySQL cap this at 65535, because the parameter count is a
@@ -404,6 +413,9 @@ func (PostgreSQLDialect) Placeholder(position int) string {
 
 // SupportsReturning reports RETURNING support (PostgreSQL has it).
 func (PostgreSQLDialect) SupportsReturning() bool { return true }
+
+// SupportsMerge reports MERGE support (PostgreSQL 15+ has it).
+func (PostgreSQLDialect) SupportsMerge() bool { return true }
 
 // MaxBindParams reports PostgreSQL's per-statement bind-parameter cap (65535),
 // the limit of the 16-bit parameter count in the wire protocol.
@@ -967,6 +979,9 @@ func (StandardSQLDialect) Placeholder(int) string { return "?" }
 
 // SupportsReturning reports RETURNING support (the SQL standard has none).
 func (StandardSQLDialect) SupportsReturning() bool { return false }
+
+// SupportsMerge reports MERGE support (the SQL standard defines MERGE).
+func (StandardSQLDialect) SupportsMerge() bool { return true }
 
 var standardLengthTypes = map[string]bool{"varchar": true, "char": true, "character": true}
 var standardDecimalTypes = map[string]bool{"numeric": true, "decimal": true}

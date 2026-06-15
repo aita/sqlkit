@@ -206,6 +206,94 @@ func convertDrop(s *pg.DropStmt) (sql.Query, error) {
 			stmt = stmt.Cascade()
 		}
 		return stmt, nil
+	case pg.ObjectType_OBJECT_VIEW:
+		if len(s.GetObjects()) != 1 {
+			return nil, sqlparse.Unsupported("DROP VIEW of multiple views")
+		}
+		table, err := tableFromNameList(s.GetObjects()[0])
+		if err != nil {
+			return nil, err
+		}
+		stmt := sql.DropView(table)
+		if s.GetMissingOk() {
+			stmt = stmt.IfExists()
+		}
+		if s.GetBehavior() == pg.DropBehavior_DROP_CASCADE {
+			stmt = stmt.Cascade()
+		}
+		return stmt, nil
+	case pg.ObjectType_OBJECT_INDEX:
+		// The DropIndex builder always renders IF EXISTS on PostgreSQL, so only the
+		// IF EXISTS form round-trips faithfully; a plain DROP INDEX stays raw.
+		if !s.GetMissingOk() {
+			return nil, sqlparse.Unsupported("DROP INDEX without IF EXISTS")
+		}
+		if s.GetConcurrent() || s.GetBehavior() == pg.DropBehavior_DROP_CASCADE {
+			return nil, sqlparse.Unsupported("DROP INDEX CONCURRENTLY/CASCADE")
+		}
+		if len(s.GetObjects()) != 1 {
+			return nil, sqlparse.Unsupported("DROP INDEX of multiple indexes")
+		}
+		index, err := tableFromNameList(s.GetObjects()[0])
+		if err != nil {
+			return nil, err
+		}
+		return sql.DropIndex(index.Name, sql.Table{Schema: index.Schema}), nil
+	case pg.ObjectType_OBJECT_TYPE:
+		names, err := dropObjectNames(s.GetObjects())
+		if err != nil {
+			return nil, err
+		}
+		stmt := sql.DropType(names...)
+		if s.GetMissingOk() {
+			stmt = stmt.IfExists()
+		}
+		if s.GetBehavior() == pg.DropBehavior_DROP_CASCADE {
+			stmt = stmt.Cascade()
+		}
+		return stmt, nil
+	case pg.ObjectType_OBJECT_EXTENSION:
+		names, err := dropObjectNames(s.GetObjects())
+		if err != nil {
+			return nil, err
+		}
+		stmt := sql.DropExtension(names...)
+		if s.GetMissingOk() {
+			stmt = stmt.IfExists()
+		}
+		if s.GetBehavior() == pg.DropBehavior_DROP_CASCADE {
+			stmt = stmt.Cascade()
+		}
+		return stmt, nil
+	case pg.ObjectType_OBJECT_MATVIEW:
+		if len(s.GetObjects()) != 1 {
+			return nil, sqlparse.Unsupported("DROP MATERIALIZED VIEW of multiple views")
+		}
+		table, err := tableFromNameList(s.GetObjects()[0])
+		if err != nil {
+			return nil, err
+		}
+		stmt := sql.DropMaterializedView(table)
+		if s.GetMissingOk() {
+			stmt = stmt.IfExists()
+		}
+		if s.GetBehavior() == pg.DropBehavior_DROP_CASCADE {
+			stmt = stmt.Cascade()
+		}
+		return stmt, nil
+	case pg.ObjectType_OBJECT_SEQUENCE:
+		names, err := dropObjectNames(s.GetObjects())
+		if err != nil {
+			return nil, err
+		}
+		stmt := sql.DropSequence(names...)
+		if s.GetMissingOk() {
+			stmt = stmt.IfExists()
+		}
+		if s.GetBehavior() == pg.DropBehavior_DROP_CASCADE {
+			stmt = stmt.Cascade()
+		}
+		return stmt, nil
 	default:
 		return nil, sqlparse.Unsupportedf("DROP of %s", s.GetRemoveType())
 	}

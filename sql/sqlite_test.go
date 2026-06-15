@@ -66,13 +66,13 @@ func TestSQLiteILike(t *testing.T) {
 func TestSQLiteUpsert(t *testing.T) {
 	// SQLite uses the PostgreSQL-style ON CONFLICT ... excluded.<col> syntax.
 	insert := InsertInto(Table{Name: "users"}).Columns("email", "name").Values("a@x.com", "Alice").
-		OnConflict(OnColumns("email"), DoUpdate(Set("name", Excluded("name"))))
+		OnConflict("email").DoUpdate(Set("name", Excluded("name")))
 	assertSQLite(t, insert,
 		`INSERT INTO "users" ("email", "name") VALUES (?, ?) ON CONFLICT ("email") DO UPDATE SET "name" = excluded."name"`,
 		[]any{"a@x.com", "Alice"})
 
 	doNothing := InsertInto(Table{Name: "users"}).Columns("email").Values("a@x.com").
-		OnConflict(OnColumns("email"), DoNothing())
+		OnConflict("email").DoNothing()
 	assertSQLite(t, doNothing,
 		`INSERT INTO "users" ("email") VALUES (?) ON CONFLICT ("email") DO NOTHING`,
 		[]any{"a@x.com"})

@@ -98,7 +98,7 @@ func TestSelectParts(t *testing.T) {
 func TestInsertPartsConflict(t *testing.T) {
 	users := sql.Table{Name: "users"}
 	q := sql.InsertInto(users).Columns("id").Values(1).
-		OnConflict(sql.OnColumns("id"), sql.DoUpdate(sql.Set("id", sql.Val(2))))
+		OnConflict("id").DoUpdate(sql.Set("id", sql.Val(2)))
 
 	c := q.Parts()
 	if c.Table.Name != "users" {

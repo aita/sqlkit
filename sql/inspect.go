@@ -109,10 +109,12 @@ type InsertParts struct {
 }
 
 // ConflictClause is a read-only snapshot of an INSERT upsert action
-// (ON CONFLICT / ON DUPLICATE KEY). DoUpdate distinguishes DO UPDATE (with Sets
-// and an optional Where) from DO NOTHING.
+// (ON CONFLICT / ON DUPLICATE KEY). At most one of Target, TargetExprs, or
+// TargetConstraint is set. DoUpdate distinguishes DO UPDATE (with Sets and an
+// optional Where) from DO NOTHING.
 type ConflictClause struct {
 	Target           []string
+	TargetExprs      []Expression
 	TargetConstraint string
 	DoUpdate         bool
 	Sets             []Assignment
@@ -131,6 +133,7 @@ func (q InsertQuery) Parts() InsertParts {
 	if q.conflict != nil {
 		c.Conflict = &ConflictClause{
 			Target:           cloneSlice(q.conflict.target),
+			TargetExprs:      cloneSlice(q.conflict.targetExprs),
 			TargetConstraint: q.conflict.targetConstraint,
 			DoUpdate:         q.conflict.doUpdate,
 			Sets:             cloneSlice(q.conflict.sets),
@@ -185,6 +188,74 @@ func (q DeleteQuery) Parts() DeleteParts {
 		Joins:     cloneSlice(q.joins),
 		Where:     q.where,
 		Returning: cloneSlice(q.returning),
+	}
+}
+
+// MergeParts is a read-only snapshot of every clause of a MergeQuery.
+// It is returned by MergeQuery.Parts.
+type MergeParts struct {
+	With        []CTE
+	Target      Table
+	TargetAlias string
+	Using       Source
+	On          Expression
+	When        []MergeWhenClause
+	Returning   []Selection
+}
+
+// MergeWhenClause is a read-only snapshot of one MERGE WHEN clause. Match is
+// "MATCHED", "NOT MATCHED", or "NOT MATCHED BY SOURCE"; Action is "UPDATE",
+// "DELETE", "INSERT", "DO NOTHING", or "" when none was set. Sets applies to
+// UPDATE; InsertColumns/InsertValues (or InsertDefault) to INSERT.
+type MergeWhenClause struct {
+	Match         string
+	Condition     Expression
+	Action        string
+	Sets          []Assignment
+	InsertColumns []string
+	InsertValues  []Expression
+	InsertDefault bool
+}
+
+// Parts returns a read-only snapshot of q's clauses.
+func (q MergeQuery) Parts() MergeParts {
+	c := MergeParts{
+		With:        cloneSlice(q.with),
+		Target:      q.target,
+		TargetAlias: q.targetAlias,
+		Using:       q.using,
+		On:          q.on,
+		Returning:   cloneSlice(q.returning),
+	}
+	if len(q.whens) > 0 {
+		c.When = make([]MergeWhenClause, len(q.whens))
+		for i, w := range q.whens {
+			c.When[i] = mergeWhenView(w)
+		}
+	}
+	return c
+}
+
+func mergeWhenView(w MergeWhen) MergeWhenClause {
+	match := map[mergeMatch]string{
+		mergeMatched:            "MATCHED",
+		mergeNotMatchedByTarget: "NOT MATCHED",
+		mergeNotMatchedBySource: "NOT MATCHED BY SOURCE",
+	}[w.match]
+	action := map[mergeAction]string{
+		mergeDoNothing: "DO NOTHING",
+		mergeUpdate:    "UPDATE",
+		mergeDelete:    "DELETE",
+		mergeInsert:    "INSERT",
+	}[w.action]
+	return MergeWhenClause{
+		Match:         match,
+		Condition:     w.condition,
+		Action:        action,
+		Sets:          cloneSlice(w.sets),
+		InsertColumns: cloneSlice(w.insertColumns),
+		InsertValues:  cloneSlice(w.insertValues),
+		InsertDefault: w.insertDefault,
 	}
 }
 

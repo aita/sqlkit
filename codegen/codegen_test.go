@@ -236,6 +236,49 @@ func TestBindingsAreNotAnORM(t *testing.T) {
 	}
 }
 
+// By default an exact numeric (numeric/decimal) column maps to
+// shopspring/decimal, on every dialect, without any override.
+func TestDefaultDecimalMapping(t *testing.T) {
+	cases := []struct {
+		dialect string
+		typ     meta.Type
+	}{
+		{"postgres", meta.Of("postgres", "numeric", 0, 10, 2)},
+		{"mysql", meta.Of("mysql", "decimal", 0, 10, 2)},
+		{"sqlite", meta.Of("sqlite", "numeric", 0, 10, 2)},
+	}
+	for _, tc := range cases {
+		tables := []meta.Table{{
+			Schema: meta.Schema{Name: "public"},
+			Name:   "items",
+			Columns: []meta.Column{
+				{Name: "id", Type: meta.Of(tc.dialect, intType(tc.dialect), 0, 0, 0), PrimaryKey: true},
+				{Name: "price", Type: tc.typ},
+			},
+		}}
+		body := string(generateSingle(t, tables, Options{PackageName: "shopdb", Dialect: tc.dialect}))
+		for _, want := range []string{
+			`sqlkit.NewColumn[decimal.Decimal](info, "price")`,
+			`"github.com/shopspring/decimal"`,
+		} {
+			if !strings.Contains(body, want) {
+				t.Errorf("[%s] default decimal mapping missing %q:\n%s", tc.dialect, want, body)
+			}
+		}
+	}
+}
+
+func intType(dialect string) string {
+	switch dialect {
+	case "mysql":
+		return "bigint"
+	case "sqlite":
+		return "integer"
+	default:
+		return "int8"
+	}
+}
+
 func TestDTONameCollisionForSingularTable(t *testing.T) {
 	tables := []meta.Table{{
 		Schema:  meta.Schema{Name: "public"},

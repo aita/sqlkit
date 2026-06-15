@@ -119,14 +119,127 @@ func convertSelectionExpr(node *pg.Node) (sql.Selection, error) {
 	return selection, nil
 }
 
-// frameOptionNonDefault is PostgreSQL's FRAMEOPTION_NONDEFAULT bit, set when the
-// window carries an explicit frame clause (ROWS/RANGE/GROUPS BETWEEN ...).
-const frameOptionNonDefault = 0x00001
+// PostgreSQL's FRAMEOPTION_* bits (parsenodes.h), used to reconstruct an
+// explicit window frame clause from WindowDef.FrameOptions.
+const (
+	frameOptionNonDefault              = 0x00001
+	frameOptionRange                   = 0x00002
+	frameOptionRows                    = 0x00004
+	frameOptionGroups                  = 0x00008
+	frameOptionBetween                 = 0x00010
+	frameOptionStartUnboundedPreceding = 0x00020
+	frameOptionEndUnboundedPreceding   = 0x00040
+	frameOptionStartUnboundedFollowing = 0x00080
+	frameOptionEndUnboundedFollowing   = 0x00100
+	frameOptionStartCurrentRow         = 0x00200
+	frameOptionEndCurrentRow           = 0x00400
+	frameOptionStartOffsetPreceding    = 0x00800
+	frameOptionEndOffsetPreceding      = 0x01000
+	frameOptionStartOffsetFollowing    = 0x02000
+	frameOptionEndOffsetFollowing      = 0x04000
+	frameOptionExcludeCurrentRow       = 0x08000
+	frameOptionExcludeGroup            = 0x10000
+	frameOptionExcludeTies             = 0x20000
+)
+
+// windowFrameClause reconstructs the textual frame clause (e.g. "ROWS BETWEEN 1
+// PRECEDING AND CURRENT ROW") from a WindowDef, or "" when the window has no
+// explicit frame.
+func windowFrameClause(w *pg.WindowDef) (string, error) {
+	opts := w.GetFrameOptions()
+	if opts&frameOptionNonDefault == 0 {
+		return "", nil
+	}
+	var mode string
+	switch {
+	case opts&frameOptionRows != 0:
+		mode = "ROWS"
+	case opts&frameOptionRange != 0:
+		mode = "RANGE"
+	case opts&frameOptionGroups != 0:
+		mode = "GROUPS"
+	default:
+		return "", sqlparse.Unsupported("window frame mode")
+	}
+	start, err := frameBound(opts, true, w.GetStartOffset())
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	b.WriteString(mode)
+	b.WriteString(" ")
+	if opts&frameOptionBetween != 0 {
+		end, err := frameBound(opts, false, w.GetEndOffset())
+		if err != nil {
+			return "", err
+		}
+		b.WriteString("BETWEEN ")
+		b.WriteString(start)
+		b.WriteString(" AND ")
+		b.WriteString(end)
+	} else {
+		b.WriteString(start)
+	}
+	switch {
+	case opts&frameOptionExcludeCurrentRow != 0:
+		b.WriteString(" EXCLUDE CURRENT ROW")
+	case opts&frameOptionExcludeGroup != 0:
+		b.WriteString(" EXCLUDE GROUP")
+	case opts&frameOptionExcludeTies != 0:
+		b.WriteString(" EXCLUDE TIES")
+	}
+	return b.String(), nil
+}
+
+func frameBound(opts int32, start bool, offset *pg.Node) (string, error) {
+	if start {
+		switch {
+		case opts&frameOptionStartUnboundedPreceding != 0:
+			return "UNBOUNDED PRECEDING", nil
+		case opts&frameOptionStartCurrentRow != 0:
+			return "CURRENT ROW", nil
+		case opts&frameOptionStartUnboundedFollowing != 0:
+			return "UNBOUNDED FOLLOWING", nil
+		case opts&frameOptionStartOffsetPreceding != 0:
+			return frameOffset(offset, "PRECEDING")
+		case opts&frameOptionStartOffsetFollowing != 0:
+			return frameOffset(offset, "FOLLOWING")
+		}
+		return "", sqlparse.Unsupported("window frame start bound")
+	}
+	switch {
+	case opts&frameOptionEndUnboundedFollowing != 0:
+		return "UNBOUNDED FOLLOWING", nil
+	case opts&frameOptionEndCurrentRow != 0:
+		return "CURRENT ROW", nil
+	case opts&frameOptionEndUnboundedPreceding != 0:
+		return "UNBOUNDED PRECEDING", nil
+	case opts&frameOptionEndOffsetPreceding != 0:
+		return frameOffset(offset, "PRECEDING")
+	case opts&frameOptionEndOffsetFollowing != 0:
+		return frameOffset(offset, "FOLLOWING")
+	}
+	return "", sqlparse.Unsupported("window frame end bound")
+}
+
+// frameOffset renders an "N PRECEDING/FOLLOWING" bound, inlining the offset as a
+// literal (a frame offset is a static expression, not a bind value).
+func frameOffset(offset *pg.Node, dir string) (string, error) {
+	if offset == nil {
+		return "", sqlparse.Unsupported("window frame offset")
+	}
+	expr, err := staticExpr(offset)
+	if err != nil {
+		return "", err
+	}
+	text, err := sql.CompileStatic(sql.PostgreSQLDialect{}, expr)
+	if err != nil {
+		return "", err
+	}
+	return text + " " + dir, nil
+}
 
 func convertWindow(fn sql.Expression, w *pg.WindowDef) (sql.Expression, error) {
-	if w.GetFrameOptions()&frameOptionNonDefault != 0 {
-		return nil, sqlparse.Unsupported("window frame clause")
-	}
 	win := sql.Over(fn)
 	// OVER w references a window named by the WINDOW clause; OVER (w ...) names a
 	// base window in refname.
@@ -153,14 +266,18 @@ func convertWindow(fn sql.Expression, w *pg.WindowDef) (sql.Expression, error) {
 		}
 		win = win.OrderBy(terms...)
 	}
+	frame, err := windowFrameClause(w)
+	if err != nil {
+		return nil, err
+	}
+	if frame != "" {
+		win = win.Frame(frame)
+	}
 	return win, nil
 }
 
 // convertNamedWindow converts a SELECT-level WINDOW clause definition.
 func convertNamedWindow(w *pg.WindowDef) (sql.NamedWindow, error) {
-	if w.GetFrameOptions()&frameOptionNonDefault != 0 {
-		return sql.NamedWindow{}, sqlparse.Unsupported("window frame clause")
-	}
 	def := sql.WindowDef(w.GetName())
 	if parts := w.GetPartitionClause(); len(parts) > 0 {
 		exprs := make([]sql.Expression, 0, len(parts))
@@ -179,6 +296,13 @@ func convertNamedWindow(w *pg.WindowDef) (sql.NamedWindow, error) {
 			return sql.NamedWindow{}, err
 		}
 		def = def.OrderBy(terms...)
+	}
+	frame, err := windowFrameClause(w)
+	if err != nil {
+		return sql.NamedWindow{}, err
+	}
+	if frame != "" {
+		def = def.Frame(frame)
 	}
 	return def, nil
 }

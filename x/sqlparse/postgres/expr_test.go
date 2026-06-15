@@ -19,6 +19,72 @@ func TestExprComparisons(t *testing.T) {
 		1, 2, 3)
 }
 
+// A numeric (decimal) literal is kept verbatim rather than parameterized as a
+// lossy float64, so its exact spelling round-trips.
+func TestExprDecimalLiteral(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT id FROM t WHERE price > 12.34",
+		selWhere(sql.Gt(sql.Col("price"), sql.Raw("12.34"))),
+		`SELECT "id" FROM "t" WHERE ("price" > 12.34)`)
+}
+
+// A wide decimal that no Go numeric type can hold exactly still round-trips
+// because the literal text is preserved.
+func TestExprWideDecimalLiteral(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT id FROM t WHERE n = 99999999999999999999.999999999",
+		selWhere(sql.Eq(sql.Col("n"), sql.Raw("99999999999999999999.999999999"))),
+		`SELECT "id" FROM "t" WHERE ("n" = 99999999999999999999.999999999)`)
+}
+
+// A negated numeric literal keeps its verbatim spelling with the sign folded in.
+func TestExprNegativeDecimalLiteral(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT id FROM t WHERE balance < -0.5",
+		selWhere(sql.Lt(sql.Col("balance"), sql.Raw("-0.5"))),
+		`SELECT "id" FROM "t" WHERE ("balance" < -0.5)`)
+}
+
+// Niladic SQL value functions round-trip as their verbatim keyword.
+func TestExprSQLValueFunctions(t *testing.T) {
+	cases := []struct {
+		expr string
+		raw  string
+	}{
+		{"CURRENT_DATE", "CURRENT_DATE"},
+		{"CURRENT_TIMESTAMP", "CURRENT_TIMESTAMP"},
+		{"CURRENT_USER", "CURRENT_USER"},
+		{"SESSION_USER", "SESSION_USER"},
+	}
+	for _, tc := range cases {
+		assertRoundTrip(t,
+			"SELECT id FROM t WHERE created_by = "+tc.expr,
+			selWhere(sql.Eq(sql.Col("created_by"), sql.Raw(tc.raw))),
+			`SELECT "id" FROM "t" WHERE ("created_by" = `+tc.raw+`)`)
+	}
+}
+
+// CURRENT_TIMESTAMP with a precision is not modeled, so the statement falls back
+// to raw.
+func TestExprCurrentTimestampPrecisionFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT CURRENT_TIMESTAMP(3)")
+}
+
+func TestExprBooleanTest(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT id FROM t WHERE active IS TRUE AND deleted IS NOT TRUE",
+		selWhere(sql.And(
+			sql.BinaryExpression{Left: sql.Col("active"), Operator: "IS", Right: sql.Raw("TRUE")},
+			sql.BinaryExpression{Left: sql.Col("deleted"), Operator: "IS NOT", Right: sql.Raw("TRUE")},
+		)),
+		`SELECT "id" FROM "t" WHERE (("active" IS TRUE) AND ("deleted" IS NOT TRUE))`)
+}
+
+// INSERT ... DEFAULT VALUES is not modeled by the builder; it round-trips raw.
+func TestInsertDefaultValuesFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "INSERT INTO t DEFAULT VALUES")
+}
+
 func TestExprArithmetic(t *testing.T) {
 	assertRoundTrip(t,
 		"SELECT id FROM t WHERE a + 1 = b * 2",

@@ -36,6 +36,16 @@ func convertExpr(node *pg.Node) (sql.Expression, error) {
 		return convertFuncCall(node.GetFuncCall())
 	case node.GetCaseExpr() != nil:
 		return convertCaseExpr(node.GetCaseExpr())
+	case node.GetSqlvalueFunction() != nil:
+		return convertSQLValueFunction(node.GetSqlvalueFunction())
+	case node.GetBooleanTest() != nil:
+		return convertBooleanTest(node.GetBooleanTest())
+	case node.GetGroupingSet() != nil:
+		return convertGroupingSet(node.GetGroupingSet())
+	case node.GetAIndirection() != nil:
+		return convertIndirection(node.GetAIndirection())
+	case node.GetCollateClause() != nil:
+		return convertCollate(node.GetCollateClause())
 	case node.GetTypeCast() != nil:
 		return convertTypeCast(node.GetTypeCast())
 	case node.GetCoalesceExpr() != nil:
@@ -94,11 +104,12 @@ func convertAConst(c *pg.A_Const) (sql.Expression, error) {
 	case c.GetIval() != nil:
 		return sql.Val(int(c.GetIval().GetIval())), nil
 	case c.GetFval() != nil:
-		f, err := strconv.ParseFloat(c.GetFval().GetFval(), 64)
-		if err != nil {
-			return nil, err
-		}
-		return sql.Val(f), nil
+		// A numeric literal (a "float" node in the grammar, but the spelling of any
+		// non-integer constant: 3.14, 1e10, or an exact decimal too wide for any Go
+		// numeric type). Parameterizing it would force a lossy float64, so emit the
+		// literal verbatim instead — exact, and consistent with how a $N param ref
+		// is passed through as Raw.
+		return sql.Raw(c.GetFval().GetFval()), nil
 	case c.GetSval() != nil:
 		return sql.Val(c.GetSval().GetSval()), nil
 	case c.GetBoolval() != nil:
@@ -189,11 +200,15 @@ func convertUnaryOp(op string, operand *pg.Node) (sql.Expression, error) {
 			if op == "+" {
 				return val, nil
 			}
-			switch v := val.(sql.ValueExpression).Value.(type) {
-			case int:
-				return sql.Val(-v), nil
-			case float64:
-				return sql.Val(-v), nil
+			switch v := val.(type) {
+			case sql.ValueExpression:
+				if n, ok := v.Value.(int); ok {
+					return sql.Val(-n), nil
+				}
+			case sql.RawExpression:
+				// A numeric literal kept verbatim (see convertAConst); negate it by
+				// prefixing the minus rather than evaluating it.
+				return sql.Raw("-" + string(v)), nil
 			}
 		}
 	}
@@ -336,6 +351,185 @@ func convertSubLink(e *pg.SubLink) (sql.Expression, error) {
 	default:
 		return nil, sqlparse.Unsupportedf("subquery link type %s", e.GetSubLinkType())
 	}
+}
+
+// convertGroupingSet converts a GROUP BY ROLLUP/CUBE/GROUPING SETS element.
+// Grouping sets that nest ROLLUP/CUBE are not modeled and round-trip raw.
+func convertGroupingSet(gs *pg.GroupingSet) (sql.Expression, error) {
+	switch gs.GetKind() {
+	case pg.GroupingSetKind_GROUPING_SET_ROLLUP:
+		elems, err := convertExprList(gs.GetContent())
+		if err != nil {
+			return nil, err
+		}
+		return sql.Rollup(elems...), nil
+	case pg.GroupingSetKind_GROUPING_SET_CUBE:
+		elems, err := convertExprList(gs.GetContent())
+		if err != nil {
+			return nil, err
+		}
+		return sql.Cube(elems...), nil
+	case pg.GroupingSetKind_GROUPING_SET_SETS:
+		sets := make([][]sql.Expression, 0, len(gs.GetContent()))
+		for _, item := range gs.GetContent() {
+			if inner := item.GetGroupingSet(); inner != nil {
+				switch inner.GetKind() {
+				case pg.GroupingSetKind_GROUPING_SET_EMPTY:
+					sets = append(sets, nil)
+				case pg.GroupingSetKind_GROUPING_SET_SIMPLE:
+					elems, err := convertExprList(inner.GetContent())
+					if err != nil {
+						return nil, err
+					}
+					sets = append(sets, elems)
+				default:
+					return nil, sqlparse.Unsupported("nested grouping set")
+				}
+				continue
+			}
+			// A multi-column set "(a, b)" parses as a row expression.
+			if row := item.GetRowExpr(); row != nil {
+				elems, err := convertExprList(row.GetArgs())
+				if err != nil {
+					return nil, err
+				}
+				sets = append(sets, elems)
+				continue
+			}
+			expr, err := convertExpr(item)
+			if err != nil {
+				return nil, err
+			}
+			sets = append(sets, []sql.Expression{expr})
+		}
+		return sql.GroupingSets(sets...), nil
+	default:
+		return nil, sqlparse.Unsupportedf("grouping set kind %s", gs.GetKind())
+	}
+}
+
+// convertExprList converts a list of expression nodes.
+func convertExprList(nodes []*pg.Node) ([]sql.Expression, error) {
+	exprs := make([]sql.Expression, 0, len(nodes))
+	for _, node := range nodes {
+		expr, err := convertExpr(node)
+		if err != nil {
+			return nil, err
+		}
+		exprs = append(exprs, expr)
+	}
+	return exprs, nil
+}
+
+// convertIndirection converts an array subscript/slice (a[1], a[1:2], a[1][2])
+// or a composite field access ((x).y). A chain that mixes subscripts and fields
+// is not modeled and round-trips raw.
+func convertIndirection(e *pg.A_Indirection) (sql.Expression, error) {
+	operand, err := convertExpr(e.GetArg())
+	if err != nil {
+		return nil, err
+	}
+	items := e.GetIndirection()
+	// A single String element is a composite field access.
+	if len(items) == 1 && items[0].GetString_() != nil {
+		return sql.Field(operand, items[0].GetString_().GetSval()), nil
+	}
+	// Otherwise every element must be a subscript/slice.
+	indices := make([]sql.SubscriptIndex, 0, len(items))
+	for _, item := range items {
+		ai := item.GetAIndices()
+		if ai == nil {
+			return nil, sqlparse.Unsupportedf("indirection element %T", item.GetNode())
+		}
+		idx := sql.SubscriptIndex{Slice: ai.GetIsSlice()}
+		if lo := ai.GetLidx(); lo != nil {
+			if idx.Lower, err = convertExpr(lo); err != nil {
+				return nil, err
+			}
+		}
+		if up := ai.GetUidx(); up != nil {
+			if idx.Upper, err = convertExpr(up); err != nil {
+				return nil, err
+			}
+		}
+		indices = append(indices, idx)
+	}
+	return sql.SubscriptExpression{Operand: operand, Indices: indices}, nil
+}
+
+// convertCollate converts an operand COLLATE "name" expression.
+func convertCollate(e *pg.CollateClause) (sql.Expression, error) {
+	operand, err := convertExpr(e.GetArg())
+	if err != nil {
+		return nil, err
+	}
+	name, err := dottedName(e.GetCollname())
+	if err != nil {
+		return nil, err
+	}
+	return sql.Collate(operand, name), nil
+}
+
+// convertSQLValueFunction maps the niladic SQL value functions (CURRENT_DATE,
+// CURRENT_TIMESTAMP, CURRENT_USER, ...) to their verbatim keyword, which renders
+// inline and round-trips. The precision-qualified forms (CURRENT_TIME(n)) are
+// not modeled and fall back to raw.
+func convertSQLValueFunction(e *pg.SQLValueFunction) (sql.Expression, error) {
+	var text string
+	switch e.GetOp() {
+	case pg.SQLValueFunctionOp_SVFOP_CURRENT_DATE:
+		text = "CURRENT_DATE"
+	case pg.SQLValueFunctionOp_SVFOP_CURRENT_TIME:
+		text = "CURRENT_TIME"
+	case pg.SQLValueFunctionOp_SVFOP_CURRENT_TIMESTAMP:
+		text = "CURRENT_TIMESTAMP"
+	case pg.SQLValueFunctionOp_SVFOP_LOCALTIME:
+		text = "LOCALTIME"
+	case pg.SQLValueFunctionOp_SVFOP_LOCALTIMESTAMP:
+		text = "LOCALTIMESTAMP"
+	case pg.SQLValueFunctionOp_SVFOP_CURRENT_ROLE:
+		text = "CURRENT_ROLE"
+	case pg.SQLValueFunctionOp_SVFOP_CURRENT_USER:
+		text = "CURRENT_USER"
+	case pg.SQLValueFunctionOp_SVFOP_USER:
+		text = "USER"
+	case pg.SQLValueFunctionOp_SVFOP_SESSION_USER:
+		text = "SESSION_USER"
+	case pg.SQLValueFunctionOp_SVFOP_CURRENT_CATALOG:
+		text = "CURRENT_CATALOG"
+	case pg.SQLValueFunctionOp_SVFOP_CURRENT_SCHEMA:
+		text = "CURRENT_SCHEMA"
+	default:
+		return nil, sqlparse.Unsupportedf("SQL value function %s", e.GetOp())
+	}
+	return sql.Raw(text), nil
+}
+
+// convertBooleanTest maps IS [NOT] TRUE/FALSE/UNKNOWN to an IS comparison
+// against the verbatim truth-value keyword.
+func convertBooleanTest(e *pg.BooleanTest) (sql.Expression, error) {
+	arg, err := convertExpr(e.GetArg())
+	if err != nil {
+		return nil, err
+	}
+	var op, value string
+	switch e.GetBooltesttype() {
+	case pg.BoolTestType_IS_TRUE:
+		op, value = "IS", "TRUE"
+	case pg.BoolTestType_IS_NOT_TRUE:
+		op, value = "IS NOT", "TRUE"
+	case pg.BoolTestType_IS_FALSE:
+		op, value = "IS", "FALSE"
+	case pg.BoolTestType_IS_NOT_FALSE:
+		op, value = "IS NOT", "FALSE"
+	case pg.BoolTestType_IS_UNKNOWN:
+		op, value = "IS", "UNKNOWN"
+	case pg.BoolTestType_IS_NOT_UNKNOWN:
+		op, value = "IS NOT", "UNKNOWN"
+	default:
+		return nil, sqlparse.Unsupportedf("boolean test %s", e.GetBooltesttype())
+	}
+	return sql.BinaryExpression{Left: arg, Operator: op, Right: sql.Raw(value)}, nil
 }
 
 func convertCaseExpr(e *pg.CaseExpr) (sql.Expression, error) {

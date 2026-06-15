@@ -126,7 +126,7 @@ func TestSQLiteUpsert(t *testing.T) {
 	upsert := func(name string) {
 		ins := sql.InsertInto(sql.Table{Name: "users"}).
 			Columns("email", "name").Values("a@x.com", name).
-			OnConflict(sql.OnColumns("email"), sql.DoUpdate(sql.Set("name", sql.Excluded("name"))))
+			OnConflict("email").DoUpdate(sql.Set("name", sql.Excluded("name")))
 		text, args, err := ins.ToSQL(db.Dialect())
 		if err != nil {
 			t.Fatalf("upsert ToSQL() error = %v", err)
