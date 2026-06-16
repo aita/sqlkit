@@ -1,5 +1,7 @@
 # sqlkit
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/aita/sqlkit.svg)](https://pkg.go.dev/github.com/aita/sqlkit)
+
 A typed SQL toolkit for Go, built on a single **SQL DSL** — you write SQL as
 Go, and the compiler checks it. One notation and one compiler cover both
 queries (DML) and schema changes (DDL), and the schema you declare in Go feeds
