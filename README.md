@@ -1,5 +1,7 @@
 # sqlkit
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/aita/sqlkit.svg)](https://pkg.go.dev/github.com/aita/sqlkit)
+
 A typed SQL toolkit for Go, built on a single **SQL DSL** — you write SQL as
 Go, and the compiler checks it. One notation and one compiler cover both
 queries (DML) and schema changes (DDL), and the schema you declare in Go feeds
@@ -967,3 +969,7 @@ With no DSN set, the integration suite boots a throwaway container per engine
 with [testcontainers](https://golang.testcontainers.org/) (skipping when neither
 a DSN nor Docker is available); set `SQLKIT_TEST_POSTGRES_DSN` /
 `SQLKIT_TEST_MYSQL_DSN` to point at existing servers instead.
+
+## License
+
+Released under the [MIT License](LICENSE).
