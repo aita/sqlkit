@@ -52,8 +52,9 @@ context ── carries ──▶ Trace ── records ──▶ Event(s) ──�
 - **driver/** — a `database/sql/driver` wrapper. This is the primary
   integration: it works with any driver and, by wrapping the row cursor,
   captures the rows lifecycle.
-- **testkit/** — assertions over a `Trace` (`AssertMaxQueries`, `AssertNoWrites`,
-  `AssertNoNPlusOne`, …).
+- **querytest/** — a test spy and mock over a `Trace`: fluent assertions on what
+  ran (`Expect(t, trace).MaxQueries(5).NoWrites().Query(Select(), Table("users")).Times(1)`)
+  and a programmable `database/sql` double (`NewDB`).
 - **slog/** — a summary exporter to `log/slog`.
 - **otel/** — an exporter to OpenTelemetry: one operation-level span per trace
   with a child DB span per statement. It is a separate module so the core stays
@@ -106,6 +107,11 @@ fmt.Println(querytrace.TextReport(trace))
 
 ### In tests
 
+The `querytest` subpackage turns a `Trace` into a **test spy**: run the code
+under a `Trace`, then assert on what it actually issued. `Expect` is a fluent
+assertion bound to the test; `Query(matchers...)` narrows to a set of statements
+and checks how many ran.
+
 ```go
 func TestUserPageQueryCount(t *testing.T) {
     trace := querytrace.New("UserPage")
@@ -115,8 +121,10 @@ func TestUserPageQueryCount(t *testing.T) {
         t.Fatal(err)
     }
 
-    testkit.AssertMaxQueries(t, trace, 5)
-    testkit.AssertNoNPlusOne(t, trace)
+    querytest.Expect(t, trace).
+        MaxQueries(5).
+        NoNPlusOne().
+        Query(querytest.Select(), querytest.Table("users")).Times(1)
 }
 
 func TestCacheHitDoesNotAccessDB(t *testing.T) {
@@ -126,9 +134,52 @@ func TestCacheHitDoesNotAccessDB(t *testing.T) {
     if _, err := service.GetUser(ctx, id); err != nil {
         t.Fatal(err)
     }
-    testkit.AssertWarning(t, trace, querytrace.WarnQueryForbidden)
+    querytest.Expect(t, trace).Warns(querytrace.WarnQueryForbidden)
 }
 ```
+
+For a unit test without a real database, `querytest.NewDB` returns a programmable
+**mock** `*sql.DB` already traced, so the same spy assertions apply to its
+statements. It registers a `t.Cleanup` that verifies the mock and closes the DB,
+so a missed `Required` stub — or, by default, any statement no stub answered —
+fails the test automatically (`querytest.Lenient()` opts out):
+
+```go
+func TestLoadUser(t *testing.T) {
+    db, mock := querytest.NewDB(t)
+    mock.ExpectQuery(querytest.Contains("FROM users")).
+        Return(querytest.NewRows("id", "name").AddRow(1, "alice"))
+
+    trace := querytrace.New("LoadUser")
+    ctx := querytrace.WithTrace(context.Background(), trace)
+
+    user, err := repo.Load(ctx, db, 1) // db.QueryContext(ctx, ...)
+    if err != nil {
+        t.Fatal(err)
+    }
+
+    querytest.Expect(t, trace).
+        NoWrites().
+        Query(querytest.Select(), querytest.Table("users")).Times(1)
+    _ = user
+}
+```
+
+An expectation can also be a `sql.Query` built with the sqlkit builder, with
+holes left for the parts a test does not pin down — `AnyTable`, `AnyColumn`, and
+`AnyExpr` for structure, and `Arg`, `AnyArg`, or `ArgMatch` for a bind value:
+
+```go
+mock.ExpectQuery(
+    sql.Select(querytest.AnyColumn()).
+        From(sql.Tbl("users")).
+        Where(sql.Eq(sql.Col("id"), querytest.Arg(42))),
+).Return(querytest.NewRows("id", "name").AddRow(42, "alice"))
+```
+
+This answers any `SELECT` from `users` filtered by `id = 42`, whatever columns it
+selects. A plain bind value (`sql.Expr(...)`) is left unconstrained, so only the
+parts you spell out with `Arg`/`ArgMatch` are checked.
 
 ### Exporting to OpenTelemetry
 

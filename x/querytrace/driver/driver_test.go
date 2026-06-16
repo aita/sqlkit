@@ -7,7 +7,7 @@ import (
 
 	querytrace "github.com/aita/sqlkit/x/querytrace"
 	qtdriver "github.com/aita/sqlkit/x/querytrace/driver"
-	"github.com/aita/sqlkit/x/querytrace/testkit"
+	"github.com/aita/sqlkit/x/querytrace/querytest"
 )
 
 func testConfig() querytrace.Config {
@@ -113,7 +113,7 @@ func TestNPlusOneLoopDetected(t *testing.T) {
 	}
 
 	// All three queries share a fingerprint and a single call site: a loop.
-	testkit.AssertWarning(t, trace, querytrace.WarnQueryInLoop)
+	querytest.Expect(t, trace).Warns(querytrace.WarnQueryInLoop)
 }
 
 func TestForbidQueries(t *testing.T) {
@@ -127,7 +127,7 @@ func TestForbidQueries(t *testing.T) {
 	}
 	drainRows(t, rows)
 
-	testkit.AssertWarning(t, trace, querytrace.WarnQueryForbidden)
+	querytest.Expect(t, trace).Warns(querytrace.WarnQueryForbidden)
 }
 
 func TestReadOnlyWriteWarns(t *testing.T) {
@@ -138,7 +138,7 @@ func TestReadOnlyWriteWarns(t *testing.T) {
 	if _, err := db.ExecContext(ctx, "UPDATE users SET name = $1 WHERE id = $2", "x", 1); err != nil {
 		t.Fatalf("exec: %v", err)
 	}
-	testkit.AssertWarning(t, trace, querytrace.WarnWriteInReadOnly)
+	querytest.Expect(t, trace).Warns(querytrace.WarnWriteInReadOnly)
 }
 
 func TestUpdateWithoutWhere(t *testing.T) {
@@ -150,7 +150,7 @@ func TestUpdateWithoutWhere(t *testing.T) {
 		if _, err := db.ExecContext(ctx, "UPDATE users SET name = $1", "x"); err != nil {
 			t.Fatalf("exec: %v", err)
 		}
-		testkit.AssertWarning(t, trace, querytrace.WarnUpdateWithoutWhere)
+		querytest.Expect(t, trace).Warns(querytrace.WarnUpdateWithoutWhere)
 	})
 
 	t.Run("with where is clean", func(t *testing.T) {
@@ -259,7 +259,7 @@ func TestNoTracePassthrough(t *testing.T) {
 	}
 }
 
-func TestTestkitAssertions(t *testing.T) {
+func TestQuerytestAssertions(t *testing.T) {
 	db := newDB(t, testConfig(), 1)
 	trace := querytrace.New("op")
 	ctx := querytrace.WithTrace(context.Background(), trace)
@@ -270,7 +270,9 @@ func TestTestkitAssertions(t *testing.T) {
 	}
 	drainRows(t, rows)
 
-	testkit.AssertMaxQueries(t, trace, 5)
-	testkit.AssertNoWrites(t, trace)
-	testkit.AssertNoNPlusOne(t, trace)
+	querytest.Expect(t, trace).
+		MaxQueries(5).
+		NoWrites().
+		NoNPlusOne().
+		Query(querytest.Select(), querytest.Table("users")).Times(1)
 }
