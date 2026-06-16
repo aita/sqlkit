@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	querytrace "github.com/aita/sqlkit/x/querytrace"
-	"github.com/aita/sqlkit/x/querytrace/testkit"
+	"github.com/aita/sqlkit/x/querytrace/querytest"
 )
 
 // TestExecutionErrorsAreNotWarned documents the scope decision: a statement
@@ -24,7 +24,7 @@ func TestExecutionErrorsAreNotWarned(t *testing.T) {
 			Query: &querytrace.QueryInfo{Operation: querytrace.StmtSelect},
 			Err:   err,
 		})
-		testkit.AssertNoWarnings(t, trace)
+		querytest.Expect(t, trace).NoWarnings()
 	}
 }
 
@@ -36,7 +36,7 @@ func TestTooManyParametersWarns(t *testing.T) {
 		Kind:  querytrace.EventQuery,
 		Query: &querytrace.QueryInfo{Operation: querytrace.StmtSelect, ParamCount: 100, Fingerprint: "SELECT * FROM t WHERE id IN (?)"},
 	})
-	testkit.AssertWarning(t, trace, querytrace.WarnTooManyParameters)
+	querytest.Expect(t, trace).Warns(querytrace.WarnTooManyParameters)
 }
 
 func TestParametersBelowBudgetIsClean(t *testing.T) {
@@ -47,7 +47,7 @@ func TestParametersBelowBudgetIsClean(t *testing.T) {
 		Kind:  querytrace.EventQuery,
 		Query: &querytrace.QueryInfo{Operation: querytrace.StmtSelect, ParamCount: 99},
 	})
-	testkit.AssertNoWarnings(t, trace)
+	querytest.Expect(t, trace).NoWarnings()
 }
 
 func TestIterationCanceledWarns(t *testing.T) {
@@ -59,7 +59,7 @@ func TestIterationCanceledWarns(t *testing.T) {
 		Query: &querytrace.QueryInfo{Operation: querytrace.StmtSelect},
 		Rows:  &querytrace.RowsInfo{NextCount: 3, Closed: true, IterErr: context.Canceled},
 	})
-	testkit.AssertWarning(t, trace, querytrace.WarnQueryCanceled)
+	querytest.Expect(t, trace).Warns(querytrace.WarnQueryCanceled)
 	for _, w := range trace.Warnings() {
 		if w.Code == querytrace.WarnQueryCanceled {
 			if w.Details["phase"] != "iteration" {
@@ -79,7 +79,7 @@ func TestIterationDeadlineExceededWarns(t *testing.T) {
 		Query: &querytrace.QueryInfo{Operation: querytrace.StmtSelect},
 		Rows:  &querytrace.RowsInfo{NextCount: 1, Closed: true, IterErr: context.DeadlineExceeded},
 	})
-	testkit.AssertWarning(t, trace, querytrace.WarnQueryDeadlineExceeded)
+	querytest.Expect(t, trace).Warns(querytrace.WarnQueryDeadlineExceeded)
 }
 
 func TestCleanIterationIsQuiet(t *testing.T) {
@@ -89,7 +89,7 @@ func TestCleanIterationIsQuiet(t *testing.T) {
 		Query: &querytrace.QueryInfo{Operation: querytrace.StmtSelect},
 		Rows:  &querytrace.RowsInfo{NextCount: 3, Closed: true}, // IterErr nil
 	})
-	testkit.AssertNoWarnings(t, trace)
+	querytest.Expect(t, trace).NoWarnings()
 }
 
 // TestIterationWarningsAreIdempotent guards the derived-warning contract:

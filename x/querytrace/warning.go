@@ -65,7 +65,7 @@ const (
 )
 
 // Warning is one problem querytrace found in a Trace. Warnings are advisory: a
-// Trace records them, exporters surface them, and testkit asserts on them, but
+// Trace records them, exporters surface them, and querytest asserts on them, but
 // they never interrupt execution.
 type Warning struct {
 	// Code identifies the kind of warning.

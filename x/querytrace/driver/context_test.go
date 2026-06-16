@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	querytrace "github.com/aita/sqlkit/x/querytrace"
-	"github.com/aita/sqlkit/x/querytrace/testkit"
+	"github.com/aita/sqlkit/x/querytrace/querytest"
 )
 
 // TestRowsIterationCanceled checks that the rows wrapper records a context
@@ -42,7 +42,7 @@ func TestRowsIterationCanceled(t *testing.T) {
 	if !errors.Is(ev.Rows.IterErr, context.Canceled) {
 		t.Fatalf("IterErr = %v, want context.Canceled", ev.Rows.IterErr)
 	}
-	testkit.AssertWarning(t, trace, querytrace.WarnQueryCanceled)
+	querytest.Expect(t, trace).Warns(querytrace.WarnQueryCanceled)
 }
 
 // TestRowsDrainedCleanlyHasNoIterErr guards against a false positive: a cursor
