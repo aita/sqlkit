@@ -55,7 +55,7 @@ func instrumentQuery(ctx context.Context, cfg qt.Config, sqlText string, args []
 		info := &qt.RowsInfo{QueryReturnedAt: time.Now()}
 		ev.Rows = info
 		tr.RecordStatement(ctx, ev)
-		return newRows(rs, info), nil
+		return newRows(ctx, rs, info), nil
 	}
 	tr.RecordStatement(ctx, ev)
 	return rs, err

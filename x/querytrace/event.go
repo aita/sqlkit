@@ -161,6 +161,15 @@ type RowsInfo struct {
 	// Closed reports whether the cursor was closed.
 	Closed bool
 
+	// IterErr is the error that ended row iteration, if any: the first non-EOF
+	// error returned by Next, or — when database/sql closed the cursor in
+	// response to a context cancellation rather than surfacing an error through
+	// Next — the context's error captured at Close. It is nil when the cursor was
+	// drained to completion. A context.Canceled or context.DeadlineExceeded here
+	// means the request was abandoned mid-stream, after the database had begun
+	// returning rows.
+	IterErr error
+
 	// IterationDuration is LastNextAt-QueryReturnedAt, the time spent reading
 	// rows.
 	IterationDuration time.Duration

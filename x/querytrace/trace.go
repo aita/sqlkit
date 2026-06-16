@@ -133,9 +133,9 @@ func (t *Trace) RecordTxBegin() string {
 	return id
 }
 
-// RecordTxEnd records a commit or rollback event for txID, computing the
-// transaction's duration and raising long_transaction when it exceeds the
-// budget. It is part of the instrumentation contract used by wrapped drivers.
+// RecordTxEnd records a commit or rollback event for txID, carrying the
+// transaction's start time so the timeline can show its span. It is part of the
+// instrumentation contract used by wrapped drivers.
 func (t *Trace) RecordTxEnd(action TxAction, txID string) {
 	t.recordTx(action, txID)
 }
@@ -160,8 +160,8 @@ func (t *Trace) recordMark(m MarkInfo) {
 }
 
 // recordTx appends a transaction control event. For a commit or rollback it
-// computes the transaction's duration from the matching begin and raises
-// long_transaction when it exceeds the budget.
+// carries the matching begin's time on the event so the timeline can show the
+// transaction's span.
 func (t *Trace) recordTx(action TxAction, txID string) string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -176,17 +176,7 @@ func (t *Trace) recordTx(action TxAction, txID string) string {
 	if action != TxBegin {
 		if began, ok := t.openTx[txID]; ok {
 			ev.Tx.StartedAt = began
-			dur := ev.EndedAt.Sub(began)
 			delete(t.openTx, txID)
-			if budget := t.cfg.Warnings.LongTransaction; budget > 0 && dur >= budget {
-				t.warnings = append(t.warnings, Warning{
-					Code:     WarnLongTransaction,
-					Message:  fmt.Sprintf("transaction %s ran for %s", txID, dur.Round(time.Millisecond)),
-					Severity: SeverityWarn,
-					EventID:  ev.ID,
-					Details:  map[string]any{"tx_id": txID, "duration_ms": dur.Milliseconds()},
-				})
-			}
 		}
 	}
 	t.events = append(t.events, ev)
