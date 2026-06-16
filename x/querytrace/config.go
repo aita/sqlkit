@@ -100,9 +100,9 @@ type WarningConfig struct {
 	// MaxQueries is the per-Trace query count above which too_many_queries
 	// fires. Zero disables the check.
 	MaxQueries int
-	// LongTransaction is the transaction duration above which long_transaction
-	// fires. Zero disables the check.
-	LongTransaction time.Duration
+	// MaxParams is the bind-parameter count at or above which a statement raises
+	// too_many_parameters. Zero disables the check.
+	MaxParams int
 }
 
 // DebugConfig returns a Config tuned for development and tests for the named

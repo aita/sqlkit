@@ -1,6 +1,8 @@
 package querytrace
 
 import (
+	"context"
+	"errors"
 	"fmt"
 )
 
@@ -13,6 +15,48 @@ func (t *Trace) deriveWarnings() []Warning {
 	out = append(out, t.deriveTooManyQueries()...)
 	out = append(out, t.deriveRepeated()...)
 	out = append(out, t.deriveRowsNotClosed()...)
+	out = append(out, t.derivePerStatement()...)
+	return out
+}
+
+// derivePerStatement scans the recorded statements once and raises the
+// per-statement warnings querytrace keeps when database-side statistics and
+// OpenTelemetry tracing are assumed to cover the rest: a context cancellation
+// or deadline that ended row iteration (a request abandoned after the database
+// began streaming, invisible to a query span that has already ended), and a
+// statement at or above the bind-parameter budget. Execution latency and
+// errors are left to tracing. The caller holds t.mu.
+func (t *Trace) derivePerStatement() []Warning {
+	maxParams := t.cfg.Warnings.MaxParams
+
+	var out []Warning
+	for _, ev := range t.events {
+		if ev.Kind != EventQuery && ev.Kind != EventExec {
+			continue
+		}
+		// A context cancellation or deadline that ended row iteration — the
+		// request abandoned after the database began streaming rows.
+		if ev.Rows != nil && ev.Rows.IterErr != nil {
+			if code, ok := classifyCtxErr(ev.Rows.IterErr); ok {
+				w := ctxCancelWarning(ev, code, "iteration")
+				w.Details["rows_read"] = ev.Rows.NextCount
+				out = append(out, w)
+			}
+		}
+		if maxParams > 0 && ev.Query != nil && ev.Query.ParamCount >= maxParams {
+			d := fingerprintDetails(ev.Query)
+			d["param_count"] = ev.Query.ParamCount
+			d["budget"] = maxParams
+			out = append(out, Warning{
+				Code:     WarnTooManyParameters,
+				Message:  fmt.Sprintf("statement carries %d bind parameters, at or above the budget of %d", ev.Query.ParamCount, maxParams),
+				Severity: SeverityWarn,
+				EventID:  ev.ID,
+				Caller:   ev.Caller,
+				Details:  d,
+			})
+		}
+	}
 	return out
 }
 
@@ -179,11 +223,43 @@ func callerKey(c *Caller) string {
 // warnings: the fingerprint and operation of the offending query.
 func fingerprintDetails(q *QueryInfo) map[string]any {
 	if q == nil {
-		return nil
+		return map[string]any{}
 	}
 	d := map[string]any{"operation": q.Operation.String()}
 	if q.Fingerprint != "" {
 		d["fingerprint"] = q.Fingerprint
 	}
 	return d
+}
+
+// classifyCtxErr maps a context cancellation or deadline error to its warning
+// code, returning ok=false for any other (or nil) error.
+func classifyCtxErr(err error) (WarningCode, bool) {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return WarnQueryCanceled, true
+	case errors.Is(err, context.DeadlineExceeded):
+		return WarnQueryDeadlineExceeded, true
+	default:
+		return "", false
+	}
+}
+
+// ctxCancelWarning builds a query_canceled or query_deadline_exceeded warning
+// for the given phase ("iteration"), recorded in the Details.
+func ctxCancelWarning(ev Event, code WarningCode, phase string) Warning {
+	verb := "was canceled"
+	if code == WarnQueryDeadlineExceeded {
+		verb = "exceeded its deadline"
+	}
+	d := fingerprintDetails(ev.Query)
+	d["phase"] = phase
+	return Warning{
+		Code:     code,
+		Message:  fmt.Sprintf("query %s during %s", verb, phase),
+		Severity: SeverityWarn,
+		EventID:  ev.ID,
+		Caller:   ev.Caller,
+		Details:  d,
+	}
 }

@@ -1,13 +1,20 @@
 # querytrace (experimental)
 
-`querytrace` is an application-level SQL tracing middleware for `database/sql`.
-It records the queries a unit of work — a request, a job, a usecase — issues,
+`querytrace` is an application-level SQL tracing library for `database/sql`. It
+records the queries one operation — a request, a job, a usecase — issues,
 together with the application context around them, and surfaces problems that
 database-side statistics cannot see.
 
+It is a **standalone tool**. It wraps any `database/sql` driver and observes
+whatever runs through it — hand-written SQL, an ORM, another query builder, or
+sqlkit's. You do **not** need to use the rest of sqlkit (its query builder or
+models) to use it. Its only sqlkit touchpoint is the optional `sqlparse` parser
+used for best-effort structural analysis and fingerprinting; without it,
+querytrace falls back to lightweight string analysis.
+
 It deliberately does **not** do execution-plan analysis, index/buffer/lock
-inspection, or per-query global latency percentiles. Those belong to the
-database and to OpenTelemetry/APM. `querytrace` answers a different question:
+inspection, or per-query latency percentiles — those belong to the database and
+to your APM stack. `querytrace` answers a different question:
 
 > For this request/usecase, what did the code ask the database to do, and from
 > where?
@@ -24,6 +31,13 @@ This package is experimental and lives under `x/` with its own module.
 - **Rows not closed** — a cursor opened and never closed.
 - **Rows lifecycle cost** — the time spent *iterating* a cursor versus the time
   the query took to return, which a plain `QueryContext` span hides.
+- **Cancellation mid-iteration** — a read abandoned through context
+  cancellation or its deadline *while its rows were still being iterated*: the
+  request gave up after the database had begun streaming rows, work it then
+  threw away.
+- **Too many parameters** — a statement carrying at or above
+  `Warnings.MaxParams` bind arguments, the signature of an oversized `IN` list
+  or batch.
 
 ## How it fits together
 
@@ -76,7 +90,7 @@ db := sql.OpenDB(qtdriver.WrapConnector(connector, cfg))
 To override the parser (for example a custom one), set `cfg.Parser` after
 constructing the config.
 
-Create a trace per unit of work and put it in the context:
+Create a trace per operation and put it in the context:
 
 ```go
 trace := querytrace.New("GET /users/:id")
@@ -126,8 +140,7 @@ unless you turn it on.
 
 ## Status / not yet here
 
-Out of scope for this first cut: OpenTelemetry export, an `net/http` middleware,
-query-builder integration (`.Name()` / `.ExpectRows()`), strict transaction-to-
-query linking, sampling, and the more advanced analyzer warnings (tenant/soft-
-delete predicates, `SELECT *`, large `IN`). Only PostgreSQL has a parser today;
-other dialects use the string-analysis fallback.
+Out of scope for this first cut: an `net/http` middleware, strict
+transaction-to-query linking, sampling, and the more advanced analyzer warnings
+(tenant/soft-delete predicates, `SELECT *`, large `IN`). Only PostgreSQL has a
+parser today; other dialects use the string-analysis fallback.

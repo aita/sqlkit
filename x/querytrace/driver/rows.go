@@ -1,7 +1,9 @@
 package driver
 
 import (
+	"context"
 	stddriver "database/sql/driver"
+	"errors"
 	"io"
 	"reflect"
 	"time"
@@ -13,12 +15,18 @@ import (
 // and last rows are read, how many rows pass, and when it is closed. It records
 // the timings into the shared RowsInfo also held by the query's Event.
 //
+// It also captures the error that ends iteration, so a request abandoned while
+// the cursor was still streaming — a context cancellation or deadline mid-scan —
+// is visible as RowsInfo.IterErr, a cost the query call alone cannot see.
+//
 // It implements the optional column-type interfaces transparently, delegating
 // to the underlying cursor when it supports them and returning database/sql's
 // own defaults when it does not, so wrapping does not change how rows scan.
 type rows struct {
-	r    stddriver.Rows
-	info *qt.RowsInfo
+	ctx    context.Context
+	r      stddriver.Rows
+	info   *qt.RowsInfo
+	sawEOF bool
 }
 
 var (
@@ -31,17 +39,16 @@ var (
 	_ stddriver.RowsColumnTypePrecisionScale   = (*rows)(nil)
 )
 
-func newRows(r stddriver.Rows, info *qt.RowsInfo) *rows {
-	return &rows{r: r, info: info}
+func newRows(ctx context.Context, r stddriver.Rows, info *qt.RowsInfo) *rows {
+	return &rows{ctx: ctx, r: r, info: info}
 }
 
-// Columns returns the underlying column names.
-func (rw *rows) Columns() []string { return rw.r.Columns() }
-
-// Next reads the next row and updates the iteration timings on success.
+// Next reads the next row, updating the iteration timings on success and
+// recording the first non-EOF error that ends iteration.
 func (rw *rows) Next(dest []stddriver.Value) error {
 	err := rw.r.Next(dest)
-	if err == nil {
+	switch {
+	case err == nil:
 		now := time.Now()
 		if rw.info.FirstNextAt.IsZero() {
 			rw.info.FirstNextAt = now
@@ -49,17 +56,34 @@ func (rw *rows) Next(dest []stddriver.Value) error {
 		rw.info.LastNextAt = now
 		rw.info.NextCount++
 		rw.info.IterationDuration = now.Sub(rw.info.QueryReturnedAt)
+	case errors.Is(err, io.EOF):
+		rw.sawEOF = true
+	default:
+		if rw.info.IterErr == nil {
+			rw.info.IterErr = err
+		}
 	}
 	return err
 }
 
-// Close closes the cursor and records the close time and open duration.
+// Columns returns the underlying column names.
+func (rw *rows) Columns() []string { return rw.r.Columns() }
+
+// Close closes the cursor and records the close time and open duration. When
+// iteration neither completed (no EOF) nor surfaced an error through Next but
+// the context is done, database/sql closed the cursor in response to a
+// cancellation; Close records that context error as the iteration error.
 func (rw *rows) Close() error {
 	err := rw.r.Close()
 	now := time.Now()
 	rw.info.ClosedAt = now
 	rw.info.Closed = true
 	rw.info.OpenDuration = now.Sub(rw.info.QueryReturnedAt)
+	if rw.info.IterErr == nil && !rw.sawEOF {
+		if ce := rw.ctx.Err(); ce != nil {
+			rw.info.IterErr = ce
+		}
+	}
 	return err
 }
 

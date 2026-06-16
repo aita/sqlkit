@@ -50,11 +50,18 @@ const (
 	WarnDeleteWithoutWhere WarningCode = "delete_without_where"
 	// WarnRowsNotClosed marks a row cursor that was never closed.
 	WarnRowsNotClosed WarningCode = "rows_not_closed"
-	// WarnLongTransaction marks a transaction exceeding its duration budget.
-	WarnLongTransaction WarningCode = "long_transaction"
-	// WarnNoContextTrace marks a statement run through an API without a context
-	// (db.Query/db.Exec), which cannot be tied to a Trace.
-	WarnNoContextTrace WarningCode = "no_context_trace"
+	// WarnQueryCanceled marks a row cursor abandoned through context
+	// cancellation while it was still being iterated. Execution-level
+	// cancellation, slow queries, and plain errors are left to OpenTelemetry
+	// tracing, which records them as span duration and status; the mid-iteration
+	// case is invisible to a query span that has already ended.
+	WarnQueryCanceled WarningCode = "query_canceled"
+	// WarnQueryDeadlineExceeded marks a row cursor that hit its context deadline
+	// while it was still being iterated. See WarnQueryCanceled on scope.
+	WarnQueryDeadlineExceeded WarningCode = "query_deadline_exceeded"
+	// WarnTooManyParameters marks a statement carrying at or above the bind
+	// parameter budget, the signature of a large IN list or oversized batch.
+	WarnTooManyParameters WarningCode = "too_many_parameters"
 )
 
 // Warning is one problem querytrace found in a Trace. Warnings are advisory: a
