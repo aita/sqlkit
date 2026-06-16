@@ -13,10 +13,11 @@
 // github.com/aita/sqlkit/sqlparse/postgres, which is backed by pg_query_go.
 // Additional dialects (MySQL, ...) can be added the same way.
 //
-// Each frontend registers itself under its dialect name (matching
-// sql.Dialect.Name()) from init, so blank-importing a frontend makes its parser
-// resolvable by name through Register and For without coupling callers to the
-// frontend's (often heavy) dependency tree.
+// Frontends are used directly, not through a global registry: import the one
+// you need and construct its parser.
+//
+//	p := postgres.New()
+//	queries, err := p.Parse("SELECT id FROM users")
 package sqlparse
 
 import "github.com/aita/sqlkit/sql"
