@@ -55,6 +55,9 @@ context ── carries ──▶ Trace ── records ──▶ Event(s) ──�
 - **testkit/** — assertions over a `Trace` (`AssertMaxQueries`, `AssertNoWrites`,
   `AssertNoNPlusOne`, …).
 - **slog/** — a summary exporter to `log/slog`.
+- **otel/** — an exporter to OpenTelemetry: one operation-level span per trace
+  with a child DB span per statement. It is a separate module so the core stays
+  dependency-free.
 
 SQL analysis (operation, tables, `WHERE`/`JOIN` presence) and fingerprinting are
 best-effort through a `sqlparse.Parser`. `DebugConfig` wires one automatically
@@ -127,6 +130,64 @@ func TestCacheHitDoesNotAccessDB(t *testing.T) {
 }
 ```
 
+### Exporting to OpenTelemetry
+
+The `otel/` subpackage exports a finished `Trace` to OpenTelemetry as a span
+tree: one operation-level span with a child span per statement carrying the
+database semantic conventions (`db.system.name`, `db.query.text`,
+`db.operation.name`, `db.collection.name`), warnings as span events, and the rows
+lifecycle as attributes. Because a `Trace` already records each statement's
+timestamps, it *replays* the trace into spans rather than instrumenting live.
+
+It is a separate Go module (`github.com/aita/sqlkit/x/querytrace/otel`) so the
+core querytrace module carries no OpenTelemetry dependency.
+
+```go
+import oteltrace "github.com/aita/sqlkit/x/querytrace/otel"
+
+exporter := oteltrace.New(tp.Tracer("querytrace"), oteltrace.WithDBSystem("postgresql"))
+
+trace := querytrace.New("GET /users/:id")
+ctx := querytrace.WithTrace(r.Context(), trace)
+defer exporter.ExportTrace(ctx, trace)
+```
+
+Each statement span carries the application-level signals a plain SQL driver span
+cannot — the rows lifecycle, caller, fingerprint — and warnings ride the spans
+they concern. A whole-trace warning such as an **N+1 / query-in-loop**, which
+belongs to no single statement, lands on the operation span as a
+`querytrace.warning` event carrying its fingerprint and repeat count.
+`WithWarningsAsErrors` raises a span's status on a forbidden/read-only violation.
+
+The operation span becomes a child of any span already in the context (for
+example an `otelhttp` server span), or a new trace root when there is none — so
+querytrace alone yields a DB-centric trace without needing a separate driver
+instrumentation. Its spans carry more than a generic SQL driver span would, so
+running it *alongside* one (such as [otelsql](https://github.com/XSAM/otelsql))
+is possible but produces a second, richer span per query. Spans are created with
+the recorded timestamps, so they render at the right place on the timeline even
+though export happens once at the end.
+
+#### net/http middleware
+
+`Exporter.Middleware` (and the single-handler `Exporter.Handler`) wires this into
+a web server: it creates a `Trace` per request, places it in the request context,
+and exports it when the request finishes. Every statement issued under the
+request through a querytrace-wrapped driver becomes part of the operation's span
+tree, with no per-handler boilerplate.
+
+```go
+exporter := oteltrace.New(tp.Tracer("querytrace"), oteltrace.WithDBSystem("postgresql"))
+
+mux := http.NewServeMux()
+mux.Handle("GET /users/{id}", exporter.Handler(usersHandler))
+```
+
+The operation is named after the routed pattern (`GET /users/{id}`), so it stays
+low cardinality; pass `WithOperationNamer` to override. Place the middleware
+inside any HTTP-level instrumentation (such as `otelhttp`) and the operation span
+nests under the HTTP server span, joining querytrace's view to the request trace.
+
 ## Configuration
 
 `Config` controls what is captured. `DebugConfig(dialect)` is the recommended
@@ -140,7 +201,7 @@ unless you turn it on.
 
 ## Status / not yet here
 
-Out of scope for this first cut: an `net/http` middleware, strict
-transaction-to-query linking, sampling, and the more advanced analyzer warnings
-(tenant/soft-delete predicates, `SELECT *`, large `IN`). Only PostgreSQL has a
+Out of scope for this first cut: strict transaction-to-query linking, sampling,
+and the more advanced analyzer warnings (tenant/soft-delete predicates,
+`SELECT *`, large `IN`). Only PostgreSQL has a
 parser today; other dialects use the string-analysis fallback.

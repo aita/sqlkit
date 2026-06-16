@@ -60,6 +60,10 @@ func New(operation string, opts ...Option) *Trace {
 // ID returns the trace's identifier.
 func (t *Trace) ID() string { return t.id }
 
+// StartedAt returns when the Trace was created, the start of the unit of work it
+// records. Exporters use it as the start of the operation-level span.
+func (t *Trace) StartedAt() time.Time { return t.startedAt }
+
 // Operation returns the trace's operation name.
 func (t *Trace) Operation() string {
 	t.mu.Lock()

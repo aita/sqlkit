@@ -94,6 +94,16 @@ jobs:
           go vet ./...
           go test -race ./...
 
+      # The OpenTelemetry exporter is its own module so the otel dependency
+      # stays out of the core querytrace module that consumers import.
+      - name: Build, vet & test querytrace/otel module
+        working-directory: x/querytrace/otel
+        run: |
+          test -z "$(gofmt -l .)"
+          go build ./...
+          go vet ./...
+          go test -race ./...
+
   # Run the integration suite against real PostgreSQL and MySQL service
   # containers. The suite connects via the SQLKIT_TEST_*_DSN variables instead
   # of starting its own containers (no Docker socket needed inside the job).
