@@ -15,6 +15,8 @@ type Report struct {
 	TraceID string
 	// Operation is the unit of work the trace covers.
 	Operation string
+	// StartedAt is when the Trace was created, the start of the unit of work.
+	StartedAt time.Time
 
 	// QueryCount is the number of read and write statements.
 	QueryCount int
@@ -45,6 +47,7 @@ func (t *Trace) Report() Report {
 	r := Report{
 		TraceID:   t.id,
 		Operation: t.operation,
+		StartedAt: t.startedAt,
 		Events:    append([]Event(nil), t.events...),
 		Marks:     append([]MarkInfo(nil), t.marks...),
 	}
