@@ -969,3 +969,7 @@ With no DSN set, the integration suite boots a throwaway container per engine
 with [testcontainers](https://golang.testcontainers.org/) (skipping when neither
 a DSN nor Docker is available); set `SQLKIT_TEST_POSTGRES_DSN` /
 `SQLKIT_TEST_MYSQL_DSN` to point at existing servers instead.
+
+## License
+
+Released under the [MIT License](LICENSE).
