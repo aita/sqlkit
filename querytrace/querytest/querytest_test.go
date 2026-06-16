@@ -14,12 +14,11 @@ import (
 	sqlpkg "github.com/aita/sqlkit/sql"
 )
 
-// debugConfig is DebugConfig with a small parser wired in, so the structural
-// matchers (Table, Fingerprint, HasWhere) work without a real sqlparse frontend.
+// debugConfig is a verbose NewConfig with a small parser wired in, so the
+// structural matchers (Table, Fingerprint, HasWhere) and raw-SQL matchers work
+// without a real sqlparse frontend.
 func debugConfig() querytrace.Config {
-	cfg := querytrace.DebugConfig("postgres")
-	cfg.Parser = fakeParser{}
-	return cfg
+	return querytrace.NewConfig(querytrace.WithParser(fakeParser{}), querytrace.WithVerboseCapture())
 }
 
 func newDB(t *testing.T, opts ...querytest.Option) (*sql.DB, *querytest.Mock) {
