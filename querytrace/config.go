@@ -93,7 +93,7 @@ type NPlusOneConfig struct {
 	IgnoreOperations []StmtKind
 }
 
-// WarningConfig configures the threshold-based warnings.
+// WarningConfig configures the threshold-based and policy-based warnings.
 type WarningConfig struct {
 	// MaxQueries is the per-Trace query count above which too_many_queries
 	// fires. Zero disables the check.
@@ -101,6 +101,24 @@ type WarningConfig struct {
 	// MaxParams is the bind-parameter count at or above which a statement raises
 	// too_many_parameters. Zero disables the check.
 	MaxParams int
+	// MaxInListLen is the IN (...) value-list length at or above which a
+	// statement raises large_in_list. Zero disables the check. It needs the
+	// parsed AST, so it is silent on the keyword-fallback path.
+	MaxInListLen int
+	// SelectStar enables the select_star warning for SELECT * queries. It needs
+	// the parsed AST.
+	SelectStar bool
+	// RequireTenantColumns lists the tenant-scoping column names (such as
+	// "tenant_id" or "org_id"); a read or write touching a base table whose
+	// top-level WHERE references none of them raises missing_tenant_predicate.
+	// Matching is by bare, case-insensitive column name. Empty disables the
+	// check, which needs the parsed AST.
+	RequireTenantColumns []string
+	// SoftDeleteColumns lists soft-delete marker columns (such as "deleted_at");
+	// a SELECT touching a base table whose top-level WHERE references none of them
+	// raises missing_soft_delete_predicate. Matching is by bare, case-insensitive
+	// column name. Empty disables the check, which needs the parsed AST.
+	SoftDeleteColumns []string
 }
 
 // ConfigOption configures a Config built by NewConfig. Options compose, so a

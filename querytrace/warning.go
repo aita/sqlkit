@@ -62,6 +62,23 @@ const (
 	// WarnTooManyParameters marks a statement carrying at or above the bind
 	// parameter budget, the signature of a large IN list or oversized batch.
 	WarnTooManyParameters WarningCode = "too_many_parameters"
+	// WarnLargeInList marks a statement whose top-level WHERE carries an IN (...)
+	// value list at or above the configured length, a shape that strains the
+	// planner and the bind-parameter limit and is usually better expressed as a
+	// join or a temporary table.
+	WarnLargeInList WarningCode = "large_in_list"
+	// WarnSelectStar marks a SELECT that projects every column with "*", which
+	// over-fetches, couples the caller to the table's column set, and defeats
+	// covering indexes.
+	WarnSelectStar WarningCode = "select_star"
+	// WarnMissingTenantPredicate marks a read or write that touches a base table
+	// without referencing any of the required tenant-scoping columns in its
+	// top-level WHERE, the signature of a query that can cross tenant boundaries.
+	WarnMissingTenantPredicate WarningCode = "missing_tenant_predicate"
+	// WarnMissingSoftDeletePredicate marks a SELECT that touches a base table
+	// without referencing a soft-delete marker column in its top-level WHERE, so
+	// it may return logically deleted rows.
+	WarnMissingSoftDeletePredicate WarningCode = "missing_soft_delete_predicate"
 )
 
 // Warning is one problem querytrace found in a Trace. Warnings are advisory: a

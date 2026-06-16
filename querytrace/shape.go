@@ -48,6 +48,13 @@ func (k StmtKind) IsWrite() bool {
 	return k == StmtInsert || k == StmtUpdate || k == StmtDelete
 }
 
+// filtersRows reports whether the statement selects the rows it acts on through a
+// WHERE clause — a SELECT, UPDATE, or DELETE. An INSERT does not (it names its
+// rows directly), so the tenant predicate check skips it.
+func (k StmtKind) filtersRows() bool {
+	return k == StmtSelect || k == StmtUpdate || k == StmtDelete
+}
+
 // Shape is a read-only description of a parsed query's structure, used to drive
 // tracing and analysis without recompiling the query or re-parsing its SQL.
 //
@@ -81,4 +88,9 @@ type Shape struct {
 	HasLimit bool
 	// HasReturning reports whether a write carries a RETURNING clause.
 	HasReturning bool
+	// SelectStar reports whether the top-level SELECT projects every column with a
+	// "*" (qualified or not) in its select list. It backs the select_star warning.
+	// It is always false for a non-SELECT and for a set operation, whose arms own
+	// their own select lists.
+	SelectStar bool
 }

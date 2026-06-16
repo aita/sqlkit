@@ -1,4 +1,4 @@
-# querytrace (experimental)
+# querytrace
 
 `querytrace` is an application-level SQL tracing library for `database/sql`. It
 records the queries one operation — a request, a job, a usecase — issues,
@@ -19,7 +19,7 @@ to your APM stack. `querytrace` answers a different question:
 > For this request/usecase, what did the code ask the database to do, and from
 > where?
 
-This package is experimental and lives under `x/` with its own module.
+This package lives under `x/` with its own module.
 
 ## What it catches
 
@@ -38,6 +38,19 @@ This package is experimental and lives under `x/` with its own module.
 - **Too many parameters** — a statement carrying at or above
   `Warnings.MaxParams` bind arguments, the signature of an oversized `IN` list
   or batch.
+- **Large `IN` list** — a top-level `WHERE` carrying an `IN (...)` value list at
+  or above `Warnings.MaxInListLen`, a shape better expressed as a join or a
+  temporary table.
+- **`SELECT *`** — a query that projects every column (`Warnings.SelectStar`),
+  which over-fetches and couples the caller to the table's column set.
+- **Missing tenant / soft-delete predicate** — a read or write that touches a
+  base table without filtering on a required tenant column
+  (`Warnings.RequireTenantColumns`), or a `SELECT` that does not filter on a
+  soft-delete marker (`Warnings.SoftDeleteColumns`) — the signature of a query
+  that can cross tenant boundaries or return logically deleted rows.
+
+These last three read predicate structure from the parsed AST, so they need a
+parser (see below) and stay silent on the string-analysis fallback.
 
 ## How it fits together
 
@@ -250,9 +263,67 @@ capture (raw SQL and a caller for every statement) that the defaults leave off.
 Defaults lean safe: argument **values** are never captured, and raw SQL is off
 unless you turn it on.
 
-## Status / not yet here
+### Warnings
 
-Out of scope for this first cut: strict transaction-to-query linking, sampling,
-and the more advanced analyzer warnings (tenant/soft-delete predicates,
-`SELECT *`, large `IN`). Only PostgreSQL has a
-parser today; other dialects use the string-analysis fallback.
+The `WithWarnings` option holds the threshold- and policy-based checks. All are
+off when zero/empty, so you opt into each one:
+
+```go
+cfg := querytrace.NewConfig(
+    querytrace.WithParser(postgres.New()),
+    querytrace.WithWarnings(querytrace.WarningConfig{
+        MaxQueries:           50,                     // too_many_queries
+        MaxParams:            900,                    // too_many_parameters
+        MaxInListLen:         100,                    // large_in_list
+        SelectStar:           true,                   // select_star
+        RequireTenantColumns: []string{"tenant_id"},  // missing_tenant_predicate
+        SoftDeleteColumns:    []string{"deleted_at"}, // missing_soft_delete_predicate
+    }),
+)
+```
+
+The tenant and soft-delete checks match by **bare, case-insensitive column
+name** in the statement's top-level `WHERE`: any read or write touching a base
+table whose `WHERE` references none of `RequireTenantColumns` raises
+`missing_tenant_predicate` (an `INSERT` is exempt — it carries its tenant value
+in the row, not a filter), and any `SELECT` whose `WHERE` references none of
+`SoftDeleteColumns` raises `missing_soft_delete_predicate`. They are deliberately
+a blunt instrument applied across every analyzed statement, so scope them to the
+columns your schema actually uses. Like `large_in_list` and `select_star`, they
+read the parsed AST and stay silent when no parser is wired.
+
+### Transaction linking
+
+Each statement run inside a `database/sql` transaction records the id of that
+transaction on its event (`QueryInfo.TxID`), so a report — and the OpenTelemetry
+export — can attribute every query and exec to the `BEGIN`/`COMMIT` pair around
+it. Statements run on a pooled connection after the transaction ends carry no tx
+id again. Linking follows `database/sql`'s connection ownership, which holds one
+driver connection for the life of a transaction.
+
+### Sampling
+
+In production you usually want to observe a *fraction* of traffic, not every
+request, so analysis and caller capture stay off the hot path most of the time.
+A `Sampler` decides **once per Trace, at creation,** whether that Trace records;
+a sampled-out Trace turns the wrapped driver into a thin pass-through for its
+whole lifetime and reports nothing. Sampling is a whole-Trace decision on
+purpose — a per-statement sampler would fragment a trace and make N+1 detection
+and query budgets meaningless.
+
+```go
+// Record ~5% of traces; the rest are pass-throughs.
+trace := querytrace.New("GET /users/:id", querytrace.WithSampler(querytrace.SampleFraction(0.05)))
+```
+
+`AlwaysSample` (the default), `NeverSample`, and `SampleFraction(p)` cover the
+common cases; implement `Sampler` for anything else (per-tenant, header-driven,
+…). The OpenTelemetry middleware takes the same sampler with
+`otelquery.WithSampler`, and skips exporting a sampled-out request entirely.
+
+## Dialects
+
+Only PostgreSQL has a parser today; other dialects use the string-analysis
+fallback, which still recognizes the statement kind and fingerprints queries but
+cannot drive the AST-based checks (missing `WHERE`, large `IN`, `SELECT *`, and
+the tenant/soft-delete predicates).

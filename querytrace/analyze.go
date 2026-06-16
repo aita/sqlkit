@@ -39,9 +39,17 @@ func (c Config) Analyze(sqlText string, args []any) *QueryInfo {
 			qi.HasJoin = shape.HasJoin
 			qi.HasLimit = shape.HasLimit
 			qi.HasReturning = shape.HasReturning
+			qi.SelectStar = shape.SelectStar
 			qi.analyzed = true
 		} else {
 			qi.Operation = detectOperation(sqlText)
+		}
+		// The advanced analyzer checks (large IN, tenant/soft-delete predicates)
+		// read predicate structure that only the parsed AST carries; on the
+		// keyword-fallback path they simply stay empty.
+		if parsed != nil {
+			qi.MaxInList = maxInListLen(parsed)
+			qi.filterColumns = topLevelFilterColumns(parsed)
 		}
 	}
 

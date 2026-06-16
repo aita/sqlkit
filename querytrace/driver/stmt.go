@@ -8,11 +8,13 @@ import (
 )
 
 // stmt wraps a prepared driver.Stmt, remembering the SQL it was prepared from so
-// each execution can be recorded with its statement text.
+// each execution can be recorded with its statement text, and the transaction it
+// was prepared under (if any) so its executions link to that transaction.
 type stmt struct {
-	cfg qt.Config
-	sql string
-	s   stddriver.Stmt
+	cfg  qt.Config
+	txID string
+	sql  string
+	s    stddriver.Stmt
 }
 
 var (
@@ -41,7 +43,7 @@ func (st *stmt) Query(args []stddriver.Value) (stddriver.Rows, error) {
 
 // ExecContext runs the prepared write, recording it.
 func (st *stmt) ExecContext(ctx context.Context, args []stddriver.NamedValue) (stddriver.Result, error) {
-	return instrumentExec(ctx, st.cfg, st.sql, args, func() (stddriver.Result, error) {
+	return instrumentExec(ctx, st.cfg, st.txID, st.sql, args, func() (stddriver.Result, error) {
 		if ec, ok := st.s.(stddriver.StmtExecContext); ok {
 			return ec.ExecContext(ctx, args)
 		}
@@ -51,7 +53,7 @@ func (st *stmt) ExecContext(ctx context.Context, args []stddriver.NamedValue) (s
 
 // QueryContext runs the prepared read, recording it and wrapping the cursor.
 func (st *stmt) QueryContext(ctx context.Context, args []stddriver.NamedValue) (stddriver.Rows, error) {
-	return instrumentQuery(ctx, st.cfg, st.sql, args, func() (stddriver.Rows, error) {
+	return instrumentQuery(ctx, st.cfg, st.txID, st.sql, args, func() (stddriver.Rows, error) {
 		if qc, ok := st.s.(stddriver.StmtQueryContext); ok {
 			return qc.QueryContext(ctx, args)
 		}

@@ -109,11 +109,12 @@ func describeSelect(q sql.SelectQuery, scope cteNameSet) Shape {
 		t.orderTerms(w.OrderByTerms)
 	}
 	return Shape{
-		Kind:     StmtSelect,
-		Tables:   t.tables(),
-		HasWhere: parts.Where != nil,
-		HasJoin:  len(parts.Joins) > 0,
-		HasLimit: parts.Limit != nil,
+		Kind:       StmtSelect,
+		Tables:     t.tables(),
+		HasWhere:   parts.Where != nil,
+		HasJoin:    len(parts.Joins) > 0,
+		HasLimit:   parts.Limit != nil,
+		SelectStar: hasStar(parts.Columns),
 	}
 }
 
@@ -206,6 +207,31 @@ func describeDelete(q sql.DeleteQuery, scope cteNameSet) Shape {
 		HasWhere:     parts.Where != nil,
 		HasJoin:      len(parts.Joins) > 0,
 		HasReturning: len(parts.Returning) > 0,
+	}
+}
+
+// hasStar reports whether a select list projects a "*" item (qualified or not),
+// unwrapping an AS alias. A "*" anywhere in the list counts: "SELECT users.*, id"
+// is still an unbounded projection of one source.
+func hasStar(cols []sql.Selection) bool {
+	for _, c := range cols {
+		if isStar(c) {
+			return true
+		}
+	}
+	return false
+}
+
+// isStar reports whether a single select-list item is a "*" selection, looking
+// through an AS alias.
+func isStar(s sql.Selection) bool {
+	switch v := s.(type) {
+	case sql.StarSelection:
+		return true
+	case sql.AliasedSelection:
+		return isStar(v.Selection)
+	default:
+		return false
 	}
 }
 

@@ -19,6 +19,7 @@ type Trace struct {
 	startedAt time.Time
 	cfg       Config
 	cfgSet    bool
+	sampled   bool
 
 	events   []Event
 	marks    []MarkInfo
@@ -42,6 +43,25 @@ func WithConfig(cfg Config) Option {
 	}
 }
 
+// WithSampler decides at creation whether the Trace records, by calling
+// s.ShouldSample once. A sampled-out Trace makes the wrapped driver a
+// pass-through for its lifetime: it records no statements and reports nothing.
+// Without this option (or WithSampled) a Trace always records.
+func WithSampler(s Sampler) Option {
+	return func(t *Trace) {
+		if s != nil {
+			t.sampled = s.ShouldSample()
+		}
+	}
+}
+
+// WithSampled sets the Trace's sampling decision directly, for callers that have
+// already decided whether to observe this unit of work. WithSampled(false) makes
+// the wrapped driver a pass-through.
+func WithSampled(sampled bool) Option {
+	return func(t *Trace) { t.sampled = sampled }
+}
+
 // New creates a Trace for the named operation, such as "GET /users/:id" or
 // "CreateOrder".
 func New(operation string, opts ...Option) *Trace {
@@ -49,6 +69,7 @@ func New(operation string, opts ...Option) *Trace {
 		operation: operation,
 		startedAt: time.Now(),
 		openTx:    make(map[string]time.Time),
+		sampled:   true,
 	}
 	t.id = fmt.Sprintf("trace_%d", t.startedAt.UnixNano())
 	for _, opt := range opts {
@@ -63,6 +84,11 @@ func (t *Trace) ID() string { return t.id }
 // StartedAt returns when the Trace was created, the start of the unit of work it
 // records. Exporters use it as the start of the operation-level span.
 func (t *Trace) StartedAt() time.Time { return t.startedAt }
+
+// Sampled reports whether the Trace records the statements run under it. It is
+// fixed when the Trace is created (see WithSampler / WithSampled) and defaults to
+// true. A wrapped driver consults it to skip recording for a sampled-out Trace.
+func (t *Trace) Sampled() bool { return t.sampled }
 
 // Operation returns the trace's operation name.
 func (t *Trace) Operation() string {
