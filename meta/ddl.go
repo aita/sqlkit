@@ -8,9 +8,11 @@ import (
 )
 
 // CreateSQL returns the SQL that creates the whole schema for dialect d (it
-// does not touch a database): a CREATE SCHEMA IF NOT EXISTS for each distinct
-// schema marked for creation (Schema.Create) first — so the tables that live in
-// them never reference a missing schema — then CREATE TABLE statements with
+// does not touch a database): CREATE EXTENSION statements first, then a CREATE
+// SCHEMA IF NOT EXISTS for each distinct schema marked for creation
+// (Schema.Create) — so the tables that live in them never reference a missing
+// schema — then the enum types and sequences the tables may use, then CREATE
+// TABLE statements with
 // primary keys and CHECK constraints, then CREATE INDEX statements, then ALTER
 // TABLE statements for foreign keys (emitted after all tables so declaration
 // order never matters), then comments. Schemas not marked Create (including the
@@ -29,11 +31,36 @@ import (
 // has no type on the dialect or a default/check expression cannot be compiled.
 func (md Metadata) CreateSQL(d sql.Dialect) (string, error) {
 	var stmts []string
+	// Extensions first: an extension may provide a type or function a table or
+	// enum then uses.
+	for _, ext := range md.Extensions {
+		out, _, err := ext.CreateStatement().ToSQL(d)
+		if err != nil {
+			return "", err
+		}
+		stmts = append(stmts, out)
+	}
 	for _, s := range md.Schemas() {
 		if !s.Create || s.Name == "" {
 			continue
 		}
 		out, _, err := s.CreateStatement().ToSQL(d)
+		if err != nil {
+			return "", err
+		}
+		stmts = append(stmts, out)
+	}
+	// Enums and sequences before the tables, whose columns may use an enum type or
+	// a sequence-backed default.
+	for _, enum := range md.Enums {
+		out, _, err := enum.CreateStatement().ToSQL(d)
+		if err != nil {
+			return "", err
+		}
+		stmts = append(stmts, out)
+	}
+	for _, seq := range md.Sequences {
+		out, _, err := seq.CreateStatement().ToSQL(d)
 		if err != nil {
 			return "", err
 		}
@@ -83,11 +110,25 @@ func (md Metadata) DropSQL(d sql.Dialect) string {
 	for _, table := range md.Tables {
 		stmts = append(stmts, table.DropSQL(d))
 	}
+	// Reverse of CreateSQL: sequences and enums after the tables that used them,
+	// then schemas, then extensions last.
+	for _, seq := range md.Sequences {
+		out, _, _ := seq.DropStatement().ToSQL(d)
+		stmts = append(stmts, out)
+	}
+	for _, enum := range md.Enums {
+		out, _, _ := enum.DropStatement().ToSQL(d)
+		stmts = append(stmts, out)
+	}
 	for _, s := range md.Schemas() {
 		if !s.Create || s.Name == "" {
 			continue
 		}
 		out, _, _ := s.DropStatement().ToSQL(d)
+		stmts = append(stmts, out)
+	}
+	for _, ext := range md.Extensions {
+		out, _, _ := ext.DropStatement().ToSQL(d)
 		stmts = append(stmts, out)
 	}
 	return strings.Join(stmts, "\n\n") + "\n"

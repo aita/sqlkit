@@ -20,6 +20,13 @@ import "github.com/aita/sqlkit/sql"
 // returns one, and the generators take it (plus the target dialect) from there.
 type Metadata struct {
 	Tables []Table
+	// Extensions, Enums, and Sequences are the non-table objects the schema
+	// declares (PostgreSQL). CreateSQL emits them around the tables in dependency
+	// order — extensions and enums before the tables that use them, sequences too,
+	// and DropSQL in reverse.
+	Extensions []Extension
+	Enums      []Enum
+	Sequences  []Sequence
 }
 
 // Schemas returns the distinct schemas of the tables, in first-seen order. When
