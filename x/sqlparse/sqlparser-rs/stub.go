@@ -8,7 +8,7 @@ package sqlparser
 
 // Parse always returns ErrUnavailable in the stub build. Rebuild with
 // `-tags sqlparser_rs` (and a prebuilt Rust static library) to enable parsing.
-func Parse(dialect, sql string) ([]Statement, error) {
+func Parse(dialect Dialect, sql string) ([]Statement, error) {
 	return nil, ErrUnavailable
 }
 

@@ -15,12 +15,12 @@ import (
 	"unsafe"
 )
 
-// Parse parses sql using the named dialect (see the Dialect* constants; an
-// empty string means generic) and returns the parsed statements in
-// sqlparser-rs's native AST shape as raw JSON. A SQL syntax error is returned
-// as a *ParseError.
-func Parse(dialect, sql string) ([]Statement, error) {
-	cDialect := C.CString(dialect)
+// Parse parses sql using the given dialect (see the Dialect constants; the zero
+// value means DialectGeneric) and returns the parsed statements in
+// sqlparser-rs's native AST shape as raw JSON. A SQL syntax error, or an
+// unrecognized dialect, is returned as a *ParseError.
+func Parse(dialect Dialect, sql string) ([]Statement, error) {
+	cDialect := C.CString(string(dialect))
 	defer C.free(unsafe.Pointer(cDialect))
 	cSQL := C.CString(sql)
 	defer C.free(unsafe.Pointer(cSQL))

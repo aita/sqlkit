@@ -64,19 +64,50 @@ pub unsafe extern "C" fn sqlkit_parse(
 }
 
 fn parse_to_json(dialect_name: &str, sql_text: &str) -> Result<String, String> {
-    let dialect = resolve_dialect(dialect_name);
+    let dialect = resolve_dialect(dialect_name)?;
     let statements = Parser::parse_sql(dialect.as_ref(), sql_text).map_err(|e| e.to_string())?;
     let body = serde_json::json!({ "statements": statements });
     serde_json::to_string(&body).map_err(|e| e.to_string())
 }
 
-fn resolve_dialect(name: &str) -> Box<dyn sqlparser::dialect::Dialect> {
-    match name.trim().to_ascii_lowercase().as_str() {
-        "" | "generic" => Box::new(GenericDialect {}),
-        // Accept a few aliases that sqlparser's dialect_from_str does not.
-        "postgres" | "postgresql" => dialect_from_str("postgresql").unwrap(),
-        "sqlite" | "sqlite3" => dialect_from_str("sqlite").unwrap(),
-        other => dialect_from_str(other).unwrap_or_else(|| Box::new(GenericDialect {})),
+/// Dialect names this bridge accepts, kept in sync with the Go Dialect
+/// constants. Mirrors sqlparser's dialect_from_str plus the empty/"generic"
+/// default.
+const SUPPORTED_DIALECTS: &[&str] = &[
+    "generic",
+    "mysql",
+    "postgresql",
+    "hive",
+    "sqlite",
+    "snowflake",
+    "redshift",
+    "mssql",
+    "clickhouse",
+    "bigquery",
+    "ansi",
+    "duckdb",
+    "databricks",
+    "spark",
+    "oracle",
+    "teradata",
+];
+
+/// Resolve a dialect by name. Unlike a bare `dialect_from_str`, an unrecognized
+/// name is a hard error rather than a silent fall back to the generic dialect,
+/// so a mistyped dialect surfaces instead of changing parse behavior.
+fn resolve_dialect(name: &str) -> Result<Box<dyn sqlparser::dialect::Dialect>, String> {
+    let key = name.trim().to_ascii_lowercase();
+    match key.as_str() {
+        "" | "generic" => Ok(Box::new(GenericDialect {})),
+        // Aliases sqlparser's dialect_from_str already accepts are covered by
+        // the fallthrough; nothing extra needed here.
+        other => dialect_from_str(other).ok_or_else(|| {
+            format!(
+                "unknown dialect {:?}; supported: {}",
+                name,
+                SUPPORTED_DIALECTS.join(", ")
+            )
+        }),
     }
 }
 

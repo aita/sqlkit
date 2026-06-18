@@ -55,6 +55,32 @@ func TestParseDialectDifference(t *testing.T) {
 	}
 }
 
+func TestParseZeroDialectIsGeneric(t *testing.T) {
+	// The zero value of Dialect must behave like DialectGeneric.
+	if _, err := Parse("", "SELECT 1"); err != nil {
+		t.Fatalf("zero dialect should parse as generic: %v", err)
+	}
+}
+
+func TestParseUnknownDialectErrors(t *testing.T) {
+	_, err := Parse("nope", "SELECT 1")
+	if err == nil {
+		t.Fatal("expected an error for an unknown dialect")
+	}
+	if _, ok := err.(*ParseError); !ok {
+		t.Fatalf("expected *ParseError, got %T: %v", err, err)
+	}
+}
+
+func TestEveryAdvertisedDialectParses(t *testing.T) {
+	// Every dialect from Dialects() must be accepted by the Rust side.
+	for _, d := range Dialects() {
+		if _, err := Parse(d, "SELECT 1"); err != nil {
+			t.Errorf("dialect %q rejected: %v", d, err)
+		}
+	}
+}
+
 func TestParseEmptyInput(t *testing.T) {
 	stmts, err := Parse(DialectGeneric, "")
 	if err != nil {
