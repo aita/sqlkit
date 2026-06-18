@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit/sql"
-	"github.com/aita/sqlkit/sqlparse"
 	"github.com/aita/sqlkit/sqlparse/postgres"
 )
 
@@ -109,18 +108,5 @@ func TestParseOneRejectsMultiple(t *testing.T) {
 func TestParseSyntaxError(t *testing.T) {
 	if _, err := postgres.Parse("SELECT FROM WHERE"); err == nil {
 		t.Fatal("Parse() of invalid SQL succeeded, want error")
-	}
-}
-
-// TestSelfRegistration verifies the package's init registered its parser under
-// the PostgreSQL dialect name, so a blank import makes it resolvable by name.
-func TestSelfRegistration(t *testing.T) {
-	name := sql.PostgreSQLDialect{}.Name()
-	p, ok := sqlparse.For(name)
-	if !ok {
-		t.Fatalf("sqlparse.For(%q) not registered", name)
-	}
-	if _, isPostgres := p.(postgres.Parser); !isPostgres {
-		t.Fatalf("sqlparse.For(%q) returned %T, want postgres.Parser", name, p)
 	}
 }

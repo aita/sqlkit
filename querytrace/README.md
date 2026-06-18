@@ -62,13 +62,13 @@ context ── carries ──▶ Trace ── records ──▶ Event(s) ──�
   stays dependency-free.
 
 SQL analysis (operation, tables, `WHERE`/`JOIN` presence) and fingerprinting are
-best-effort through a `sqlparse.Parser`. `DebugConfig` wires one automatically
-from its dialect name, provided the matching frontend is blank-imported (for
-example `github.com/aita/sqlkit/sqlparse/postgres`); you can also set
-`Config.Parser` explicitly to override it. A parse failure or a missing parser
-falls back to lightweight string analysis and **never** aborts execution. The
-parser produces a `sql.Query`, which `sql.Describe` introspects for the analysis
-and `ToSQL` recompiles into a normalized fingerprint.
+best-effort through a `sqlparse.Parser`. You wire one explicitly — pass a
+frontend's parser (for example `postgres.New()` from
+`github.com/aita/sqlkit/sqlparse/postgres`) via `WithParser`, or set
+`Config.Parser` directly. A parse failure or a `nil` parser falls back to
+lightweight string analysis and **never** aborts execution. The parser produces
+a `sql.Query`, which `sql.Describe` introspects for the analysis and `ToSQL`
+recompiles into a normalized fingerprint.
 
 ## Usage
 
@@ -80,20 +80,18 @@ import (
 
     querytrace "github.com/aita/sqlkit/querytrace"
     qtdriver "github.com/aita/sqlkit/querytrace/driver"
-
-    // Blank-imported so its PostgreSQL parser registers itself; DebugConfig
-    // then wires it from the "postgres" dialect name.
-    _ "github.com/aita/sqlkit/sqlparse/postgres"
+    "github.com/aita/sqlkit/sqlparse/postgres"
 )
 
-// Pick the dialect by name; the matching parser is wired automatically.
-cfg := querytrace.DebugConfig("postgres")
+// NewConfig starts from safe defaults (PostgreSQL dialect, no raw SQL, callers
+// on error); layer options to wire a parser or capture more.
+cfg := querytrace.NewConfig(querytrace.WithParser(postgres.New()))
 
 db := sql.OpenDB(qtdriver.WrapConnector(connector, cfg))
 ```
 
-To override the parser (for example a custom one), set `cfg.Parser` after
-constructing the config.
+To capture everything for development, add `WithVerboseCapture`; to use a custom
+parser, pass it to `WithParser` or set `cfg.Parser` after constructing the config.
 
 Create a trace per operation and put it in the context:
 
@@ -242,11 +240,12 @@ nests under the HTTP server span, joining querytrace's view to the request trace
 
 ## Configuration
 
-`Config` controls what is captured. `DebugConfig(dialect)` is the recommended
-starting point for development and tests; it captures raw SQL, argument *types* (never
-values), and callers, and enables analysis, fingerprinting, and N+1 detection.
-Production setups should capture less — leave raw SQL off and capture callers
-only on error or slow queries.
+`Config` controls what is captured. `NewConfig(opts...)` is the recommended
+starting point: its defaults are production-minded — argument *types* only (never
+values), no raw SQL, and callers only on error — with analysis, fingerprinting,
+and N+1 detection enabled. Layer options such as `WithParser`, `WithRawSQL`, or
+`WithCaller` to adjust; `WithVerboseCapture` turns on the development-grade
+capture (raw SQL and a caller for every statement) that the defaults leave off.
 
 Defaults lean safe: argument **values** are never captured, and raw SQL is off
 unless you turn it on.

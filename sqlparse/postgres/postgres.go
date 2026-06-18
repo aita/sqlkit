@@ -26,12 +26,6 @@ func New() Parser { return Parser{} }
 
 var _ sqlparse.Parser = Parser{}
 
-// init registers this frontend under the PostgreSQL dialect name, so a
-// blank import of this package makes its parser resolvable via sqlparse.For.
-func init() {
-	sqlparse.Register(sql.PostgreSQLDialect{}.Name(), func() sqlparse.Parser { return New() })
-}
-
 // Parse parses one or more PostgreSQL statements in source order.
 func (Parser) Parse(text string) ([]sql.Query, error) {
 	result, err := pg.Parse(text)

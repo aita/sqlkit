@@ -11,9 +11,11 @@ import (
 )
 
 func testConfig() querytrace.Config {
-	cfg := querytrace.DebugConfig("postgres")
-	cfg.Parser = fakeParser{}
-	cfg.NPlusOne.MinCount = 3
+	cfg := querytrace.NewConfig(
+		querytrace.WithParser(fakeParser{}),
+		querytrace.WithVerboseCapture(),
+		querytrace.WithNPlusOne(querytrace.NPlusOneConfig{Enabled: true, MinCount: 3}),
+	)
 	return cfg
 }
 

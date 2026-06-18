@@ -100,9 +100,10 @@ type config struct {
 }
 
 // WithConfig sets the querytrace.Config the mock DB records with. The default is
-// DebugConfig("postgres"), which captures raw SQL and callers so every matcher
-// works; supply your own (for example with a parser wired in) to enable the
-// structural matchers Table, HasWhere, and Fingerprint.
+// NewConfig(WithVerboseCapture()): the PostgreSQL dialect, no parser, raw SQL and
+// callers captured so every matcher works; supply your own (for example with a
+// parser wired in) to enable the structural matchers Table, HasWhere, and
+// Fingerprint.
 func WithConfig(cfg querytrace.Config) Option {
 	return func(c *config) { c.cfg = cfg }
 }
@@ -132,7 +133,7 @@ func Lenient() Option {
 //	querytest.Expect(t, trace).Query(querytest.Select(), querytest.Table("users")).Times(1)
 func NewDB(t testing.TB, opts ...Option) (*sql.DB, *Mock) {
 	t.Helper()
-	c := config{cfg: querytrace.DebugConfig("postgres"), strict: true}
+	c := config{cfg: querytrace.NewConfig(querytrace.WithVerboseCapture()), strict: true}
 	for _, o := range opts {
 		o(&c)
 	}

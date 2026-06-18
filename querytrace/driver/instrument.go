@@ -6,7 +6,7 @@
 //
 // Wrap a driver.Connector and open a database/sql handle over it:
 //
-//	db := sql.OpenDB(querytracedriver.WrapConnector(connector, querytrace.DebugConfig("postgres")))
+//	db := sql.OpenDB(querytracedriver.WrapConnector(connector, querytrace.NewConfig(querytrace.WithParser(postgres.New()))))
 //
 // A statement is recorded only when its context carries a Trace (see
 // querytrace.WithTrace) and the Config is enabled; otherwise the wrapper is a

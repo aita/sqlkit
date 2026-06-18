@@ -37,8 +37,7 @@ const (
 )
 
 // Config configures a wrapped driver and the Traces it records. The zero value
-// is usable but minimal; DebugConfig is the recommended starting point for
-// development and tests.
+// is usable but minimal; NewConfig is the recommended starting point.
 type Config struct {
 	// Enabled turns tracing on. A disabled Config makes the wrapped driver a
 	// thin pass-through.
@@ -52,10 +51,9 @@ type Config struct {
 	// fingerprinting. It is best-effort: a parse failure or a nil Parser falls
 	// back to lightweight string analysis and never aborts execution.
 	//
-	// DebugConfig wires this automatically from its dialect argument, provided a
-	// frontend such as github.com/aita/sqlkit/sqlparse/postgres is
-	// blank-imported. Set it explicitly to override that, for example to use a
-	// custom parser.
+	// Wire it explicitly with a frontend's parser, for example postgres.New()
+	// from github.com/aita/sqlkit/sqlparse/postgres. NewConfig sets it via
+	// WithParser.
 	Parser sqlparse.Parser
 
 	// CaptureRawSQL keeps the executed SQL text on each QueryInfo. Leave it off
@@ -105,43 +103,97 @@ type WarningConfig struct {
 	MaxParams int
 }
 
-// DebugConfig returns a Config tuned for development and tests for the named
-// dialect ("postgres", "mysql", or "sqlite"; "" and unknown names default to
-// postgres): raw SQL and argument types captured, callers always captured,
-// fingerprinting and analysis on, and N+1 detection enabled. It captures more
-// than is appropriate for production.
+// ConfigOption configures a Config built by NewConfig. Options compose, so a
+// caller layers only the choices that differ from the defaults.
+type ConfigOption func(*Config)
+
+// NewConfig returns a Config built from opts. With no options it is enabled with
+// production-minded defaults: no raw SQL, argument *types* only (never values),
+// callers captured on error, fingerprinting, structural analysis, and N+1
+// detection on, and the PostgreSQL dialect. Layer options to capture more for
+// development (WithVerboseCapture) or to adjust any single field.
 //
-// The matching sql.Dialect is stored in Dialect, and a parser registered for
-// that dialect — via a blank-imported frontend such as
-// github.com/aita/sqlkit/sqlparse/postgres — is wired into Parser
-// automatically. Without such an import Parser stays nil and analysis falls
-// back to lightweight string analysis.
-func DebugConfig(dialect string) Config {
+//	// Development: capture everything, wire a parser for structural analysis.
+//	cfg := querytrace.NewConfig(
+//		querytrace.WithParser(postgres.New()),
+//		querytrace.WithVerboseCapture(),
+//	)
+//
+//	// Production: defaults are already safe; just wire the parser.
+//	cfg := querytrace.NewConfig(querytrace.WithParser(postgres.New()))
+func NewConfig(opts ...ConfigOption) Config {
 	cfg := Config{
 		Enabled:            true,
-		Dialect:            dialectByName(dialect),
-		CaptureRawSQL:      true,
+		Dialect:            sql.PostgreSQLDialect{},
 		CaptureArgs:        ArgsTypesOnly,
-		CaptureCaller:      CallerAlways,
+		CaptureCaller:      CallerOnError,
 		Fingerprint:        true,
 		AnalyzeSQL:         true,
 		SlowQueryThreshold: 100 * time.Millisecond,
 		NPlusOne:           NPlusOneConfig{Enabled: true, MinCount: 10},
 	}
-	cfg.Parser, _ = sqlparse.For(cfg.Dialect.Name())
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 	return cfg
 }
 
-// dialectByName maps a dialect name (matching sql.Dialect.Name()) to its
-// sql.Dialect. "" and unknown names default to PostgreSQL.
-func dialectByName(name string) sql.Dialect {
-	switch name {
-	case "mysql":
-		return sql.MySQLDialect{}
-	case "sqlite":
-		return sql.SQLiteDialect{}
-	default:
-		return sql.PostgreSQLDialect{}
+// WithDialect sets the SQL dialect used to recompile parsed queries into
+// fingerprints. A nil dialect is ignored, leaving the PostgreSQL default.
+func WithDialect(d sql.Dialect) ConfigOption {
+	return func(c *Config) {
+		if d != nil {
+			c.Dialect = d
+		}
+	}
+}
+
+// WithParser sets the parser that drives structural analysis and fingerprinting.
+// Pass a frontend's parser, for example postgres.New() from
+// github.com/aita/sqlkit/sqlparse/postgres. Without a parser, analysis falls
+// back to lightweight string heuristics.
+func WithParser(p sqlparse.Parser) ConfigOption {
+	return func(c *Config) { c.Parser = p }
+}
+
+// WithRawSQL keeps the executed SQL text on each statement. Leave it off for
+// production exporters; raw SQL can carry sensitive shapes.
+func WithRawSQL() ConfigOption {
+	return func(c *Config) { c.CaptureRawSQL = true }
+}
+
+// WithArgCapture controls how much of the bind arguments are kept.
+func WithArgCapture(mode ArgCaptureMode) ConfigOption {
+	return func(c *Config) { c.CaptureArgs = mode }
+}
+
+// WithCaller controls when the calling code is captured.
+func WithCaller(mode CallerMode) ConfigOption {
+	return func(c *Config) { c.CaptureCaller = mode }
+}
+
+// WithSlowQueryThreshold sets the duration above which a query counts as slow.
+func WithSlowQueryThreshold(d time.Duration) ConfigOption {
+	return func(c *Config) { c.SlowQueryThreshold = d }
+}
+
+// WithNPlusOne sets the repeated-query and loop detection configuration.
+func WithNPlusOne(n NPlusOneConfig) ConfigOption {
+	return func(c *Config) { c.NPlusOne = n }
+}
+
+// WithWarnings sets the threshold-based warning configuration.
+func WithWarnings(w WarningConfig) ConfigOption {
+	return func(c *Config) { c.Warnings = w }
+}
+
+// WithVerboseCapture turns on the development-grade capture the safe defaults
+// leave off: raw SQL and a caller for every statement. It captures more than is
+// appropriate for production.
+func WithVerboseCapture() ConfigOption {
+	return func(c *Config) {
+		c.CaptureRawSQL = true
+		c.CaptureCaller = CallerAlways
 	}
 }
 
