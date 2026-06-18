@@ -88,6 +88,22 @@ func (md Metadata) CreateSQL(d sql.Dialect) (string, error) {
 			stmts = append(stmts, block)
 		}
 	}
+	// Materialized views read the tables, and grants target them, so both come
+	// after the tables exist.
+	for _, mv := range md.MaterializedViews {
+		out, _, err := mv.CreateStatement().ToSQL(d)
+		if err != nil {
+			return "", err
+		}
+		stmts = append(stmts, out)
+	}
+	for _, g := range md.Grants {
+		out, _, err := g.CreateStatement().ToSQL(d)
+		if err != nil {
+			return "", err
+		}
+		stmts = append(stmts, out)
+	}
 	return strings.Join(stmts, "\n\n") + "\n", nil
 }
 
@@ -102,6 +118,15 @@ func (md Metadata) CreateSQL(d sql.Dialect) (string, error) {
 // drops the database.
 func (md Metadata) DropSQL(d sql.Dialect) string {
 	var stmts []string
+	// Grants and materialized views go first, before the tables they depend on.
+	for _, g := range md.Grants {
+		out, _, _ := g.DropStatement().ToSQL(d)
+		stmts = append(stmts, out)
+	}
+	for _, mv := range md.MaterializedViews {
+		out, _, _ := mv.DropStatement().ToSQL(d)
+		stmts = append(stmts, out)
+	}
 	for _, table := range md.Tables {
 		for _, fk := range table.ForeignKeys {
 			stmts = append(stmts, fk.dropConstraintSQL(table, d))

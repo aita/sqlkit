@@ -1,6 +1,9 @@
 package decl
 
-import "github.com/aita/sqlkit/meta"
+import (
+	"github.com/aita/sqlkit/meta"
+	"github.com/aita/sqlkit/sql"
+)
 
 // This file adds declarative, non-table schema objects to the catalog DSL:
 // extensions, enum types, and sequences (PostgreSQL). They build into the
@@ -131,4 +134,88 @@ func SequenceCycle(cycle bool) SequenceOption {
 // to that column, or "NONE" to detach it.
 func SequenceOwnedBy(column string) SequenceOption {
 	return func(s *meta.Sequence) { s.OwnedBy = column }
+}
+
+// MaterializedView declares a materialized view in the catalog's default schema.
+// Use Catalog.Schema("other").MaterializedView(...) to place it elsewhere.
+func (d *Catalog) MaterializedView(name string, query sql.Query, opts ...MaterializedViewOption) {
+	d.Schema(d.defaultSchema).MaterializedView(name, query, opts...)
+}
+
+// MaterializedView declares a materialized view (PostgreSQL) in the schema,
+// defined by query. The query must compile to plain SQL with no bind values;
+// inline literals with sql.Raw.
+func (s *Schema) MaterializedView(name string, query sql.Query, opts ...MaterializedViewOption) {
+	d := s.catalog
+	if !d.declareObject(s.name, "materialized view", name) {
+		return
+	}
+	if query == nil {
+		d.fail("materialized view %q requires a query", name)
+		return
+	}
+	mv := meta.MaterializedView{Schema: s.name, Name: name, Query: query}
+	for _, opt := range opts {
+		opt(&mv)
+	}
+	d.schemaNamesAdd(s.name)
+	d.matviews = append(d.matviews, mv)
+}
+
+// MaterializedViewOption customizes a materialized view declared with
+// MaterializedView.
+type MaterializedViewOption func(*meta.MaterializedView)
+
+// MaterializedViewColumns names the view's columns explicitly.
+func MaterializedViewColumns(columns ...string) MaterializedViewOption {
+	return func(v *meta.MaterializedView) { v.Columns = columns }
+}
+
+// MaterializedViewWithNoData creates the view unpopulated (WITH NO DATA).
+func MaterializedViewWithNoData() MaterializedViewOption {
+	return func(v *meta.MaterializedView) { v.WithNoData = true }
+}
+
+// Grant declares a privilege grant (GRANT ... ON ... TO ...). Pass no privileges
+// for ALL PRIVILEGES. The grant needs at least one object (GrantOn / GrantOnType)
+// and one grantee (GrantTo); CreateSQL emits the GRANT and DropSQL the REVOKE.
+func (d *Catalog) Grant(privileges []string, opts ...GrantOption) {
+	g := meta.Grant{Privileges: privileges}
+	for _, opt := range opts {
+		opt(&g)
+	}
+	if len(g.Objects) == 0 {
+		d.fail("Grant requires at least one object (GrantOn/GrantOnType)")
+		return
+	}
+	if len(g.Grantees) == 0 {
+		d.fail("Grant requires at least one grantee (GrantTo)")
+		return
+	}
+	d.grants = append(d.grants, g)
+}
+
+// GrantOption customizes a grant declared with Grant.
+type GrantOption func(*meta.Grant)
+
+// GrantOn sets the objects the privileges apply to, with the default object type
+// TABLE.
+func GrantOn(objects ...string) GrantOption {
+	return func(g *meta.Grant) { g.Objects = objects }
+}
+
+// GrantOnType sets the object-type keyword (e.g. "SEQUENCE", "SCHEMA") and the
+// objects the privileges apply to.
+func GrantOnType(objectType string, objects ...string) GrantOption {
+	return func(g *meta.Grant) { g.ObjectType, g.Objects = objectType, objects }
+}
+
+// GrantTo sets the grantee roles. Use "PUBLIC" for the PUBLIC pseudo-role.
+func GrantTo(grantees ...string) GrantOption {
+	return func(g *meta.Grant) { g.Grantees = grantees }
+}
+
+// GrantWithGrantOption adds WITH GRANT OPTION.
+func GrantWithGrantOption() GrantOption {
+	return func(g *meta.Grant) { g.WithGrantOption = true }
 }

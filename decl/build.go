@@ -34,17 +34,20 @@ func (d *Catalog) Build() (meta.Metadata, error) {
 		t.ForeignKeys = append(t.ForeignKeys, fk)
 	}
 
-	if len(tables) == 0 && len(d.extensions) == 0 && len(d.enums) == 0 && len(d.sequences) == 0 {
+	if len(tables) == 0 && len(d.extensions) == 0 && len(d.enums) == 0 &&
+		len(d.sequences) == 0 && len(d.matviews) == 0 && len(d.grants) == 0 {
 		errs = append(errs, errors.New("catalog declares no objects"))
 	}
 	if len(errs) > 0 {
 		return meta.Metadata{}, fmt.Errorf("decl: invalid catalog: %w", errors.Join(errs...))
 	}
 	return meta.Metadata{
-		Tables:     tables,
-		Extensions: append([]meta.Extension(nil), d.extensions...),
-		Enums:      append([]meta.Enum(nil), d.enums...),
-		Sequences:  append([]meta.Sequence(nil), d.sequences...),
+		Tables:            tables,
+		Extensions:        append([]meta.Extension(nil), d.extensions...),
+		Enums:             append([]meta.Enum(nil), d.enums...),
+		Sequences:         append([]meta.Sequence(nil), d.sequences...),
+		MaterializedViews: append([]meta.MaterializedView(nil), d.matviews...),
+		Grants:            append([]meta.Grant(nil), d.grants...),
 	}, nil
 }
 

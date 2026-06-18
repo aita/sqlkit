@@ -27,6 +27,10 @@ type Metadata struct {
 	Extensions []Extension
 	Enums      []Enum
 	Sequences  []Sequence
+	// MaterializedViews and Grants are emitted after the tables (a view reads
+	// them, a grant targets them) and dropped before them.
+	MaterializedViews []MaterializedView
+	Grants            []Grant
 }
 
 // Schemas returns the distinct schemas of the tables, in first-seen order. When

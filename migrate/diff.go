@@ -16,7 +16,11 @@ import (
 // It detects added/dropped tables; added/dropped columns; column type,
 // nullability, and default changes; primary-key membership changes;
 // added/dropped/changed indexes, foreign keys (including ON DELETE/UPDATE
-// actions), and CHECK constraints; and table/column comment changes. Column
+// actions), and CHECK constraints; table/column comment changes; and
+// added/dropped/changed non-table objects — extensions, enum types, sequences,
+// materialized views, and grants — ordered so each is created before the tables
+// that depend on it and dropped after (a changed object is dropped and
+// recreated). Column
 // modifications render for both PostgreSQL (separate ALTER COLUMN actions) and
 // MySQL (a single MODIFY COLUMN). Statements are ordered for safety: drop
 // foreign keys, drop indexes, and drop tables first; then create tables, alter
@@ -76,9 +80,15 @@ func Diff(old, next meta.Metadata, dialect sql.Dialect) ([]sql.Statement, error)
 		comments = append(comments, tableDiff.comments...)
 	}
 
-	objs := diffObjects(old, next)
+	objs, err := diffObjects(old, next, dialect)
+	if err != nil {
+		return nil, err
+	}
 
 	var out []sql.Statement
+	// Grants and materialized views drop first, before the tables they depend on.
+	out = append(out, objs.dropGrants...)
+	out = append(out, objs.dropMatviews...)
 	out = append(out, dropFKs...)
 	out = append(out, dropIndexes...)
 	out = append(out, dropTables...)
@@ -97,6 +107,10 @@ func Diff(old, next meta.Metadata, dialect sql.Dialect) ([]sql.Statement, error)
 	out = append(out, createIndexes...)
 	out = append(out, addFKs...)
 	out = append(out, comments...)
+	// Materialized views read the tables, and grants target them, so both create
+	// last, mirroring meta.CreateSQL.
+	out = append(out, objs.createMatviews...)
+	out = append(out, objs.createGrants...)
 	return out, nil
 }
 

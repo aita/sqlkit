@@ -198,6 +198,8 @@ func (r *renderer) plan(from, to meta.Metadata) (string, error) {
 	var out []string
 	out = append(out, renameTables...)
 	out = append(out, renameColumns...)
+	out = append(out, objs.dropGrants...)
+	out = append(out, objs.dropMatviews...)
 	out = append(out, dropFKs...)
 	out = append(out, dropIndexes...)
 	out = append(out, dropTables...)
@@ -212,6 +214,8 @@ func (r *renderer) plan(from, to meta.Metadata) (string, error) {
 	out = append(out, createIndexes...)
 	out = append(out, addFKs...)
 	out = append(out, comments...)
+	out = append(out, objs.createMatviews...)
+	out = append(out, objs.createGrants...)
 	return strings.Join(out, "\n"), nil
 }
 
@@ -277,6 +281,44 @@ func (r *renderer) objectOps(from, to meta.Metadata) renderedObjects {
 			o.createSequences = append(o.createSequences, r.sequenceCreate(s))
 		}
 	}
+
+	oldMV := map[string]meta.MaterializedView{}
+	for _, v := range from.MaterializedViews {
+		oldMV[v.QualifiedName()] = v
+	}
+	newMV := map[string]meta.MaterializedView{}
+	for _, v := range to.MaterializedViews {
+		newMV[v.QualifiedName()] = v
+	}
+	for _, v := range from.MaterializedViews {
+		if n, ok := newMV[v.QualifiedName()]; !ok || !r.matviewEqual(v, n) {
+			o.dropMatviews = append(o.dropMatviews, fmt.Sprintf("op.DropMaterializedView(%q)", v.Name))
+		}
+	}
+	for _, v := range to.MaterializedViews {
+		if old, ok := oldMV[v.QualifiedName()]; !ok || !r.matviewEqual(old, v) {
+			o.createMatviews = append(o.createMatviews, r.matviewCreate(v))
+		}
+	}
+
+	oldGrant := map[string]meta.Grant{}
+	for _, g := range from.Grants {
+		oldGrant[grantKey(g)] = g
+	}
+	newGrant := map[string]meta.Grant{}
+	for _, g := range to.Grants {
+		newGrant[grantKey(g)] = g
+	}
+	for _, g := range from.Grants {
+		if n, ok := newGrant[grantKey(g)]; !ok || !g.Equal(n) {
+			o.dropGrants = append(o.dropGrants, r.grantRevoke(g))
+		}
+	}
+	for _, g := range to.Grants {
+		if old, ok := oldGrant[grantKey(g)]; !ok || !old.Equal(g) {
+			o.createGrants = append(o.createGrants, r.grantCreate(g))
+		}
+	}
 	return o
 }
 
@@ -285,9 +327,82 @@ type renderedObjects struct {
 	createExtensions []string
 	createEnums      []string
 	createSequences  []string
+	createMatviews   []string
+	createGrants     []string
 	dropExtensions   []string
 	dropEnums        []string
 	dropSequences    []string
+	dropMatviews     []string
+	dropGrants       []string
+}
+
+// grantKey identifies a grant by its target (object type and objects), so a
+// change to the privileges or grantees of the same target is one modification.
+func grantKey(g meta.Grant) string {
+	return g.ObjectType + "\x00" + strings.Join(g.Objects, ",")
+}
+
+// matviewEqual compares two materialized views, rendering their bodies for the
+// dialect. A missing view never matches.
+func (r *renderer) matviewEqual(a, b meta.MaterializedView) bool {
+	if a.Query == nil || b.Query == nil {
+		return false
+	}
+	if a.Schema != b.Schema || a.Name != b.Name || a.WithNoData != b.WithNoData || !stringsEqual(a.Columns, b.Columns) {
+		return false
+	}
+	at, _, err := a.Query.ToSQL(r.dialect)
+	if err != nil {
+		return false
+	}
+	bt, _, err := b.Query.ToSQL(r.dialect)
+	if err != nil {
+		return false
+	}
+	return at == bt
+}
+
+func (r *renderer) matviewCreate(v meta.MaterializedView) string {
+	r.usesSQL = true
+	body, _, _ := v.Query.ToSQL(r.dialect)
+	var opts strings.Builder
+	if len(v.Columns) > 0 {
+		fmt.Fprintf(&opts, ", func(s sql.CreateMaterializedViewStmt) sql.CreateMaterializedViewStmt {\nreturn s.Columns(%s)\n}", quotedList(v.Columns))
+	} else if v.WithNoData {
+		opts.WriteString(", func(s sql.CreateMaterializedViewStmt) sql.CreateMaterializedViewStmt {\nreturn s.WithNoData()\n}")
+	}
+	return fmt.Sprintf("op.CreateMaterializedView(%q, sql.RawSQL(%q)%s)", v.Name, body, opts.String())
+}
+
+func (r *renderer) grantCreate(g meta.Grant) string {
+	r.usesSQL = true
+	return fmt.Sprintf("op.Grant(%s)", grantBuilderExpr("sql.Grant", g, true))
+}
+
+func (r *renderer) grantRevoke(g meta.Grant) string {
+	r.usesSQL = true
+	return fmt.Sprintf("op.Revoke(%s)", grantBuilderExpr("sql.Revoke", g, false))
+}
+
+// grantBuilderExpr renders a sql.Grant/sql.Revoke builder chain. grant chooses To
+// vs From and whether WITH GRANT OPTION applies (Revoke has no such clause).
+func grantBuilderExpr(ctor string, g meta.Grant, grant bool) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s(%s)", ctor, quotedList(g.Privileges))
+	if g.ObjectType != "" {
+		fmt.Fprintf(&b, ".OnType(%q, %s)", g.ObjectType, quotedList(g.Objects))
+	} else {
+		fmt.Fprintf(&b, ".On(%s)", quotedList(g.Objects))
+	}
+	if grant {
+		fmt.Fprintf(&b, ".To(%s)", quotedList(g.Grantees))
+		if g.WithGrantOption {
+			b.WriteString(".WithGrantOption()")
+		}
+	} else {
+		fmt.Fprintf(&b, ".From(%s)", quotedList(g.Grantees))
+	}
+	return b.String()
 }
 
 func (r *renderer) extensionCreate(e meta.Extension) string {
