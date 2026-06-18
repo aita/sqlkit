@@ -26,8 +26,38 @@ import (
 // takes when it crosses the shim→command process boundary. Both ends are Go, so
 // the snapshot is encoded with encoding/gob.
 type Snapshot struct {
-	Dialect string
-	Tables  []SnapshotTable
+	Dialect    string
+	Tables     []SnapshotTable
+	Extensions []SnapshotExtension
+	Enums      []SnapshotEnum
+	Sequences  []SnapshotSequence
+}
+
+// SnapshotExtension is one database extension.
+type SnapshotExtension struct {
+	Name   string
+	Schema string
+}
+
+// SnapshotEnum is one enum type and its labels.
+type SnapshotEnum struct {
+	Schema string
+	Name   string
+	Values []string
+}
+
+// SnapshotSequence is one sequence. The numeric options are pointers so an unset
+// option round-trips as unset rather than zero.
+type SnapshotSequence struct {
+	Schema    string
+	Name      string
+	Increment *int64
+	Start     *int64
+	MinValue  *int64
+	MaxValue  *int64
+	Cache     *int64
+	Cycle     *bool
+	OwnedBy   string
 }
 
 // Encode writes the snapshot to w as gob — the shim end of the boundary.
@@ -156,6 +186,21 @@ func Resolve(md meta.Metadata, d sql.Dialect) (Snapshot, error) {
 		}
 		snap.Tables = append(snap.Tables, st)
 	}
+	// Non-table objects carry no portable types or expressions, so they copy
+	// across unchanged.
+	for _, e := range md.Extensions {
+		snap.Extensions = append(snap.Extensions, SnapshotExtension{Name: e.Name, Schema: e.Schema})
+	}
+	for _, e := range md.Enums {
+		snap.Enums = append(snap.Enums, SnapshotEnum{Schema: e.Schema, Name: e.Name, Values: e.Values})
+	}
+	for _, s := range md.Sequences {
+		snap.Sequences = append(snap.Sequences, SnapshotSequence{
+			Schema: s.Schema, Name: s.Name,
+			Increment: s.Increment, Start: s.Start, MinValue: s.MinValue,
+			MaxValue: s.MaxValue, Cache: s.Cache, Cycle: s.Cycle, OwnedBy: s.OwnedBy,
+		})
+	}
 	return snap, nil
 }
 
@@ -198,6 +243,19 @@ func (s Snapshot) Metadata() meta.Metadata {
 			t.Checks = append(t.Checks, meta.Check{Name: ck.Name, Expression: sql.Raw(ck.Expression)})
 		}
 		md.Tables = append(md.Tables, t)
+	}
+	for _, e := range s.Extensions {
+		md.Extensions = append(md.Extensions, meta.Extension{Name: e.Name, Schema: e.Schema})
+	}
+	for _, e := range s.Enums {
+		md.Enums = append(md.Enums, meta.Enum{Schema: e.Schema, Name: e.Name, Values: e.Values})
+	}
+	for _, sq := range s.Sequences {
+		md.Sequences = append(md.Sequences, meta.Sequence{
+			Schema: sq.Schema, Name: sq.Name,
+			Increment: sq.Increment, Start: sq.Start, MinValue: sq.MinValue,
+			MaxValue: sq.MaxValue, Cache: sq.Cache, Cycle: sq.Cycle, OwnedBy: sq.OwnedBy,
+		})
 	}
 	return md
 }
