@@ -9,12 +9,12 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/internal/testutil"
 	"github.com/aita/sqlkit/migrate"
 )
 
 func TestCLIUpAndDown(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: appliedHistory()}
+	fake := &testutil.Fake{QueryFunc: appliedHistory()}
 	m := migrate.New(sqlkit.WrapDB(fake.DB()), sampleMigrations())
 
 	if err := migrate.NewCLI().Dispatch(m.Runner(context.Background()), []string{"up"}); err != nil {
@@ -27,7 +27,7 @@ func TestCLIUpAndDown(t *testing.T) {
 
 func TestCLIHeadsAndStatusOutput(t *testing.T) {
 	var buf bytes.Buffer
-	fake := &sqltest.Fake{QueryFunc: appliedHistory("0001")}
+	fake := &testutil.Fake{QueryFunc: appliedHistory("0001")}
 	m := migrate.New(sqlkit.WrapDB(fake.DB()), sampleMigrations(), migrate.WithOutput(&buf))
 
 	if err := migrate.NewCLI().Dispatch(m.Runner(context.Background()), []string{"heads"}); err != nil {
@@ -52,7 +52,7 @@ func TestCLIHeadsAndStatusOutput(t *testing.T) {
 
 func TestCLISQLOffline(t *testing.T) {
 	var buf bytes.Buffer
-	m := migrate.New(sqlkit.WrapDB((&sqltest.Fake{}).DB()), sampleMigrations(), migrate.WithOutput(&buf))
+	m := migrate.New(sqlkit.WrapDB((&testutil.Fake{}).DB()), sampleMigrations(), migrate.WithOutput(&buf))
 	if err := migrate.NewCLI().Dispatch(m.Runner(context.Background()), []string{"sql", "up", "base", "head"}); err != nil {
 		t.Fatalf("sql up: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestCLINewScaffold(t *testing.T) {
 	dir := t.TempDir()
 	var buf bytes.Buffer
 	// One existing migration, so the new file's DownRevision is its head.
-	m := migrate.New(sqlkit.WrapDB((&sqltest.Fake{}).DB()),
+	m := migrate.New(sqlkit.WrapDB((&testutil.Fake{}).DB()),
 		[]migrate.Migration{mk("0001", "", "base", "t1")},
 		migrate.WithOutput(&buf))
 
@@ -104,7 +104,7 @@ func TestCLINewScaffold(t *testing.T) {
 
 func TestCLINewScaffoldEqualsFlags(t *testing.T) {
 	dir := t.TempDir()
-	m := migrate.New(sqlkit.WrapDB((&sqltest.Fake{}).DB()),
+	m := migrate.New(sqlkit.WrapDB((&testutil.Fake{}).DB()),
 		[]migrate.Migration{mk("0001", "", "base", "t1")},
 		migrate.WithOutput(&bytes.Buffer{}))
 
@@ -130,7 +130,7 @@ func TestCLINewMerge(t *testing.T) {
 		mk("0002a", "0001", "branch_a", "t2a"),
 		mk("0002b", "0001", "branch_b", "t2b"),
 	}
-	m := migrate.New(sqlkit.WrapDB((&sqltest.Fake{}).DB()), migs, migrate.WithOutput(&bytes.Buffer{}))
+	m := migrate.New(sqlkit.WrapDB((&testutil.Fake{}).DB()), migs, migrate.WithOutput(&bytes.Buffer{}))
 
 	if err := migrate.NewCLI().Dispatch(m.Runner(context.Background()), []string{"new", "x", "--dir", dir, "--package", "migrations"}); err == nil {
 		t.Error("expected error scaffolding onto multiple heads without --merge")
@@ -150,7 +150,7 @@ func TestCLINewMerge(t *testing.T) {
 }
 
 func TestCLIUnknownCommand(t *testing.T) {
-	m := migrate.New(sqlkit.WrapDB((&sqltest.Fake{}).DB()), sampleMigrations(), migrate.WithOutput(&bytes.Buffer{}))
+	m := migrate.New(sqlkit.WrapDB((&testutil.Fake{}).DB()), sampleMigrations(), migrate.WithOutput(&bytes.Buffer{}))
 	if err := migrate.NewCLI().Dispatch(m.Runner(context.Background()), []string{"bogus"}); err == nil {
 		t.Error("expected error for unknown command")
 	}

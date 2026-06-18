@@ -7,13 +7,13 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/internal/testutil"
 )
 
 func TestMySQLDialectEndToEnd(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(string, []any) (sqltest.Result, error) {
-			return sqltest.Result{
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			return testutil.Result{
 				Columns: []string{"id", "email", "name"},
 				Rows:    [][]driver.Value{{int64(1), "a@example.com", nil}},
 			}, nil
@@ -41,7 +41,7 @@ func TestMySQLDialectEndToEnd(t *testing.T) {
 }
 
 func TestMySQLReturningFailsAtScanWithoutQuerying(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithDialect(sqlkit.MySQLDialect{}))
 
 	var inserted []User

@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/internal/testutil"
 	"github.com/aita/sqlkit/sql"
 )
 
@@ -103,7 +103,7 @@ func (t PostsTable) PrimaryKey() []sqlkit.AnyColumn { return []sqlkit.AnyColumn{
 
 func (t PostsTable) Defaulted() []sqlkit.AnyColumn { return []sqlkit.AnyColumn{t.ID} }
 
-func newSession(t *testing.T, fake *sqltest.Fake) *sqlkit.Session {
+func newSession(t *testing.T, fake *testutil.Fake) *sqlkit.Session {
 	t.Helper()
 	db := sqlkit.WrapDB(fake.DB())
 	session := db.NewSession()
@@ -112,7 +112,7 @@ func newSession(t *testing.T, fake *sqltest.Fake) *sqlkit.Session {
 }
 
 func TestSessionRunsStatementsInTransactionAndCommits(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	session := newSession(t, fake)
 	ctx := context.Background()
 
@@ -135,7 +135,7 @@ func TestSessionRunsStatementsInTransactionAndCommits(t *testing.T) {
 }
 
 func TestSessionCloseRollsBackUncommitted(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	session := newSession(t, fake)
 	if err := session.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -149,9 +149,9 @@ func TestSessionCloseRollsBackUncommitted(t *testing.T) {
 }
 
 func TestGetByPrimaryKey(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(sql string, args []any) (sqltest.Result, error) {
-			return sqltest.Result{
+	fake := &testutil.Fake{
+		QueryFunc: func(sql string, args []any) (testutil.Result, error) {
+			return testutil.Result{
 				Columns: []string{"id", "email", "name"},
 				Rows:    [][]driver.Value{{int64(7), "a@example.com", nil}},
 			}, nil
@@ -176,7 +176,7 @@ func TestGetByPrimaryKey(t *testing.T) {
 }
 
 func TestGetReportsNotFound(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 
 	var user User
@@ -190,9 +190,9 @@ func TestGetReportsNotFound(t *testing.T) {
 }
 
 func TestInsertReturningScansIntoSlice(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(sql string, args []any) (sqltest.Result, error) {
-			return sqltest.Result{
+	fake := &testutil.Fake{
+		QueryFunc: func(sql string, args []any) (testutil.Result, error) {
+			return testutil.Result{
 				Columns: []string{"id", "email", "name"},
 				Rows:    [][]driver.Value{{int64(101), "alice@example.com", nil}},
 			}, nil
@@ -218,9 +218,9 @@ func TestInsertReturningScansIntoSlice(t *testing.T) {
 }
 
 func TestSessionBeginsLazily(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(string, []any) (sqltest.Result, error) {
-			return sqltest.Result{Columns: []string{"id", "email", "name"}}, nil
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			return testutil.Result{Columns: []string{"id", "email", "name"}}, nil
 		},
 	}
 	db := sqlkit.WrapDB(fake.DB())
@@ -256,7 +256,7 @@ func TestSessionBeginsLazily(t *testing.T) {
 }
 
 func TestUntouchedSessionCommitAndCloseAreNoOps(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 
 	// Commit on an untouched session: nothing begun, nothing committed.
@@ -275,7 +275,7 @@ func TestUntouchedSessionCommitAndCloseAreNoOps(t *testing.T) {
 }
 
 func TestClosedSessionRejectsStatements(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 	session := db.NewSession()
 	if err := session.Commit(); err != nil {
@@ -293,7 +293,7 @@ func TestClosedSessionRejectsStatements(t *testing.T) {
 }
 
 func TestWithSessionCommitsOnSuccess(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 	ctx := context.Background()
 
@@ -310,7 +310,7 @@ func TestWithSessionCommitsOnSuccess(t *testing.T) {
 }
 
 func TestWithSessionRollsBackOnError(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 	ctx := context.Background()
 
@@ -330,7 +330,7 @@ func TestWithSessionRollsBackOnError(t *testing.T) {
 }
 
 func TestWithSessionRollsBackOnPanicAndRepanics(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 	ctx := context.Background()
 
@@ -349,7 +349,7 @@ func TestWithSessionRollsBackOnPanicAndRepanics(t *testing.T) {
 }
 
 func TestWithSessionNoStatementsIsFree(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 
 	if err := db.WithSession(func(*sqlkit.Session) error { return nil }); err != nil {
@@ -364,7 +364,7 @@ func TestWithSessionNoStatementsIsFree(t *testing.T) {
 // open, roll back to it, then release it — and verifies each transaction-control
 // statement reaches the database in order, inside the session's transaction.
 func TestSessionSavepointWorkflow(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	session := newSession(t, fake)
 	ctx := context.Background()
 
@@ -408,7 +408,7 @@ func TestSessionSavepointWorkflow(t *testing.T) {
 // Release reject a session whose terminal cannot transact, rather than sending
 // transaction-control SQL outside any transaction.
 func TestSavepointControlWithoutTransactionErrors(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	rec := &recordingExecutor{db: fake.DB()} // implements only Executor, not TxExecutor
 	db := sqlkit.WrapExecutor(rec)
 	session := db.NewSession()
@@ -429,7 +429,7 @@ func TestSavepointControlWithoutTransactionErrors(t *testing.T) {
 // TestSessionExecRunsInTransaction covers Session.Exec: an arbitrary sql.Query
 // runs through the session's lazily-begun transaction.
 func TestSessionExecRunsInTransaction(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	session := newSession(t, fake)
 
 	stmt := sql.Update(sql.Table{Schema: "public", Name: "users"}).Set(sql.Set("email", sql.Val("x@x")))
@@ -448,7 +448,7 @@ func TestSessionExecRunsInTransaction(t *testing.T) {
 // TestSessionDialect covers Session.Dialect, which mirrors the database dialect
 // the session was opened from.
 func TestSessionDialect(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithDialect(sqlkit.MySQLDialect{}))
 	session := db.NewSession()
 	defer session.Close()
@@ -461,9 +461,9 @@ func TestSessionDialect(t *testing.T) {
 // Except: each runs through the session's transaction regardless of the
 // operands' own (absent) executors.
 func TestSessionSetOperations(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(string, []any) (sqltest.Result, error) {
-			return sqltest.Result{Columns: []string{"id"}}, nil
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			return testutil.Result{Columns: []string{"id"}}, nil
 		},
 	}
 	db := sqlkit.WrapDB(fake.DB())
@@ -491,7 +491,7 @@ func TestSessionSetOperations(t *testing.T) {
 // TestSessionExplicitRollback covers Rollback on a touched session and the
 // double-finish guard.
 func TestSessionExplicitRollback(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 	session := db.NewSession()
 	ctx := context.Background()

@@ -1,6 +1,6 @@
-// Package sqltest provides a scriptable database/sql driver for testing
+// Package testutil provides a scriptable database/sql driver for testing
 // sqlkit without a live database.
-package sqltest
+package testutil
 
 import (
 	"context"

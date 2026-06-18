@@ -7,7 +7,7 @@ import (
 
 	querytrace "github.com/aita/sqlkit/querytrace"
 	qtdriver "github.com/aita/sqlkit/querytrace/driver"
-	"github.com/aita/sqlkit/querytrace/querytest"
+	"github.com/aita/sqlkit/sqltest"
 )
 
 func testConfig() querytrace.Config {
@@ -115,7 +115,7 @@ func TestNPlusOneLoopDetected(t *testing.T) {
 	}
 
 	// All three queries share a fingerprint and a single call site: a loop.
-	querytest.Expect(t, trace).Warns(querytrace.WarnQueryInLoop)
+	sqltest.Expect(t, trace).Warns(querytrace.WarnQueryInLoop)
 }
 
 func TestForbidQueries(t *testing.T) {
@@ -129,7 +129,7 @@ func TestForbidQueries(t *testing.T) {
 	}
 	drainRows(t, rows)
 
-	querytest.Expect(t, trace).Warns(querytrace.WarnQueryForbidden)
+	sqltest.Expect(t, trace).Warns(querytrace.WarnQueryForbidden)
 }
 
 func TestReadOnlyWriteWarns(t *testing.T) {
@@ -140,7 +140,7 @@ func TestReadOnlyWriteWarns(t *testing.T) {
 	if _, err := db.ExecContext(ctx, "UPDATE users SET name = $1 WHERE id = $2", "x", 1); err != nil {
 		t.Fatalf("exec: %v", err)
 	}
-	querytest.Expect(t, trace).Warns(querytrace.WarnWriteInReadOnly)
+	sqltest.Expect(t, trace).Warns(querytrace.WarnWriteInReadOnly)
 }
 
 func TestUpdateWithoutWhere(t *testing.T) {
@@ -152,7 +152,7 @@ func TestUpdateWithoutWhere(t *testing.T) {
 		if _, err := db.ExecContext(ctx, "UPDATE users SET name = $1", "x"); err != nil {
 			t.Fatalf("exec: %v", err)
 		}
-		querytest.Expect(t, trace).Warns(querytrace.WarnUpdateWithoutWhere)
+		sqltest.Expect(t, trace).Warns(querytrace.WarnUpdateWithoutWhere)
 	})
 
 	t.Run("with where is clean", func(t *testing.T) {
@@ -358,9 +358,9 @@ func TestQuerytestAssertions(t *testing.T) {
 	}
 	drainRows(t, rows)
 
-	querytest.Expect(t, trace).
+	sqltest.Expect(t, trace).
 		MaxQueries(5).
 		NoWrites().
 		NoNPlusOne().
-		Query(querytest.Select(), querytest.Table("users")).Times(1)
+		Query(sqltest.Select(), sqltest.Table("users")).Times(1)
 }

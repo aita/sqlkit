@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/dbtest"
 	"github.com/aita/sqlkit/examples/blog/blogdb"
 	"github.com/aita/sqlkit/sql"
+	"github.com/aita/sqlkit/sqltest"
 )
 
 // userRow and postRow are test-defined DTOs; the generated blogdb package
@@ -30,13 +30,13 @@ type postRow struct {
 }
 
 // insertUser inserts a user and returns its database-generated id. It delegates
-// to dbtest.InsertID, which reads the key back with RETURNING where the engine
+// to sqltest.InsertID, which reads the key back with RETURNING where the engine
 // supports it and LastInsertId otherwise. eng is unused now that the dialect
 // split lives in dbtest, but kept so call sites read uniformly with the rest of
 // the suite.
 func insertUser(t *testing.T, db *sqlkit.Database, eng engine, u userRow) int64 {
 	t.Helper()
-	return dbtest.InsertID(t, db, blogdb.Users, u)
+	return sqltest.InsertID(t, db, blogdb.Users, u)
 }
 
 // seedBlog inserts two users and several posts, returning the author ids. It is
@@ -494,9 +494,9 @@ func sessionUserName(t *testing.T, ctx context.Context, session *sqlkit.Session,
 }
 
 // insertUserTx inserts a user through a session and returns its id. A *Session
-// is a sqlkit.Executor, so the same dbtest.InsertID helper seeds inside the
+// is a sqlkit.Executor, so the same sqltest.InsertID helper seeds inside the
 // transaction. ctx and eng are unused now that dbtest owns the dialect split.
 func insertUserTx(t *testing.T, ctx context.Context, session *sqlkit.Session, eng engine, u userRow) int64 {
 	t.Helper()
-	return dbtest.InsertID(t, session, blogdb.Users, u)
+	return sqltest.InsertID(t, session, blogdb.Users, u)
 }

@@ -7,22 +7,22 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/internal/testutil"
 )
 
 func TestPreloadToManyPopulatesSliceField(t *testing.T) {
 	// The base query returns the three users; the preload follow-up returns the
 	// posts. The fake serves each by inspecting the SQL.
-	fake := &sqltest.Fake{
-		QueryFunc: func(s string, _ []any) (sqltest.Result, error) {
+	fake := &testutil.Fake{
+		QueryFunc: func(s string, _ []any) (testutil.Result, error) {
 			if contains(s, `"public"."posts"`) {
-				return sqltest.Result{Columns: []string{"id", "user_id", "title"}, Rows: [][]driver.Value{
+				return testutil.Result{Columns: []string{"id", "user_id", "title"}, Rows: [][]driver.Value{
 					{int64(10), int64(1), "a"},
 					{int64(11), int64(1), "b"},
 					{int64(12), int64(2), "c"},
 				}}, nil
 			}
-			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{
+			return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{
 				{int64(1)}, {int64(2)}, {int64(3)},
 			}}, nil
 		},
@@ -77,8 +77,8 @@ func TestPreloadSingleStructViaFirst(t *testing.T) {
 }
 
 func TestPreloadEmptyParentsIsNoop(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: func(string, []any) (sqltest.Result, error) {
-		return sqltest.Result{Columns: []string{"id"}}, nil // no rows
+	fake := &testutil.Fake{QueryFunc: func(string, []any) (testutil.Result, error) {
+		return testutil.Result{Columns: []string{"id"}}, nil // no rows
 	}}
 	db := sqlkit.WrapDB(fake.DB())
 	var users []preUser
@@ -91,8 +91,8 @@ func TestPreloadMissingFieldErrors(t *testing.T) {
 	type noPostsUser struct {
 		ID int64 `sqlkit:"id"`
 	}
-	fake := &sqltest.Fake{QueryFunc: func(string, []any) (sqltest.Result, error) {
-		return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}}}, nil
+	fake := &testutil.Fake{QueryFunc: func(string, []any) (testutil.Result, error) {
+		return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}}}, nil
 	}}
 	db := sqlkit.WrapDB(fake.DB())
 	var users []noPostsUser
@@ -127,15 +127,15 @@ func TestPreloadRelExplicit(t *testing.T) {
 // TestPreloadNested loads Users -> Posts -> (each post's) User in three batched
 // queries and threads the grandchildren onto the value-type child slice.
 func TestPreloadNested(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(s string, _ []any) (sqltest.Result, error) {
+	fake := &testutil.Fake{
+		QueryFunc: func(s string, _ []any) (testutil.Result, error) {
 			if contains(s, `"public"."posts"`) {
-				return sqltest.Result{Columns: []string{"id", "user_id", "title"}, Rows: [][]driver.Value{
+				return testutil.Result{Columns: []string{"id", "user_id", "title"}, Rows: [][]driver.Value{
 					{int64(10), int64(1), "a"}, {int64(11), int64(2), "b"},
 				}}, nil
 			}
 			// Both the base users query and the nested users follow-up land here.
-			return sqltest.Result{Columns: []string{"id", "name"}, Rows: [][]driver.Value{
+			return testutil.Result{Columns: []string{"id", "name"}, Rows: [][]driver.Value{
 				{int64(1), "Alice"}, {int64(2), "Bob"},
 			}}, nil
 		},
@@ -166,14 +166,14 @@ func TestPreloadNested(t *testing.T) {
 // deferred filter.
 func TestPreloadConditionalAppliesWhere(t *testing.T) {
 	var postsSQL string
-	fake := &sqltest.Fake{QueryFunc: func(s string, _ []any) (sqltest.Result, error) {
+	fake := &testutil.Fake{QueryFunc: func(s string, _ []any) (testutil.Result, error) {
 		if contains(s, `"public"."posts"`) {
 			postsSQL = s
-			return sqltest.Result{Columns: []string{"id", "user_id", "title"}, Rows: [][]driver.Value{
+			return testutil.Result{Columns: []string{"id", "user_id", "title"}, Rows: [][]driver.Value{
 				{int64(10), int64(1), "a"},
 			}}, nil
 		}
-		return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}}}, nil
+		return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}}}, nil
 	}}
 	db := sqlkit.WrapDB(fake.DB())
 
@@ -209,13 +209,13 @@ func TestPreloadRelPathUnrelatedHopErrors(t *testing.T) {
 // plain Preload and a RelPath hop is loaded once, with the deeper hop nested under
 // the existing spec rather than duplicated.
 func TestPreloadRelPathReusesRegisteredLevel(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: func(s string, _ []any) (sqltest.Result, error) {
+	fake := &testutil.Fake{QueryFunc: func(s string, _ []any) (testutil.Result, error) {
 		if contains(s, `"public"."posts"`) {
-			return sqltest.Result{Columns: []string{"id", "user_id", "title"}, Rows: [][]driver.Value{
+			return testutil.Result{Columns: []string{"id", "user_id", "title"}, Rows: [][]driver.Value{
 				{int64(10), int64(1), "a"}, {int64(11), int64(2), "b"},
 			}}, nil
 		}
-		return sqltest.Result{Columns: []string{"id", "name"}, Rows: [][]driver.Value{
+		return testutil.Result{Columns: []string{"id", "name"}, Rows: [][]driver.Value{
 			{int64(1), "Alice"}, {int64(2), "Bob"},
 		}}, nil
 	}}
@@ -242,17 +242,17 @@ func TestPreloadRelPathReusesRegisteredLevel(t *testing.T) {
 // the last table on a RelPath, not the intermediate hops.
 func TestPreloadRelPathConditionOnFinalHop(t *testing.T) {
 	var postsSQL, nestedUsersSQL string
-	fake := &sqltest.Fake{QueryFunc: func(s string, _ []any) (sqltest.Result, error) {
+	fake := &testutil.Fake{QueryFunc: func(s string, _ []any) (testutil.Result, error) {
 		if contains(s, `"public"."posts"`) {
 			postsSQL = s
-			return sqltest.Result{Columns: []string{"id", "user_id", "title"}, Rows: [][]driver.Value{
+			return testutil.Result{Columns: []string{"id", "user_id", "title"}, Rows: [][]driver.Value{
 				{int64(10), int64(1), "a"},
 			}}, nil
 		}
 		if contains(s, "IN") { // the nested users follow-up carries the parent-key IN
 			nestedUsersSQL = s
 		}
-		return sqltest.Result{Columns: []string{"id", "name"}, Rows: [][]driver.Value{{int64(1), "Alice"}}}, nil
+		return testutil.Result{Columns: []string{"id", "name"}, Rows: [][]driver.Value{{int64(1), "Alice"}}}, nil
 	}}
 	db := sqlkit.WrapDB(fake.DB())
 
@@ -273,13 +273,13 @@ func TestPreloadRelPathConditionOnFinalHop(t *testing.T) {
 
 // TestPreloadRelSingleTable checks a one-element RelPath behaves like Preload(t).
 func TestPreloadRelPathSingleTable(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: func(s string, _ []any) (sqltest.Result, error) {
+	fake := &testutil.Fake{QueryFunc: func(s string, _ []any) (testutil.Result, error) {
 		if contains(s, `"public"."posts"`) {
-			return sqltest.Result{Columns: []string{"id", "user_id", "title"}, Rows: [][]driver.Value{
+			return testutil.Result{Columns: []string{"id", "user_id", "title"}, Rows: [][]driver.Value{
 				{int64(10), int64(1), "a"},
 			}}, nil
 		}
-		return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}}}, nil
+		return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}}}, nil
 	}}
 	db := sqlkit.WrapDB(fake.DB())
 
@@ -307,12 +307,12 @@ func TestPreloadEmptyRelPathErrors(t *testing.T) {
 // TestPreloadRelAppliesCondition checks PreloadRel takes conditions too.
 func TestPreloadRelAppliesCondition(t *testing.T) {
 	var usersSQL string
-	fake := &sqltest.Fake{QueryFunc: func(s string, _ []any) (sqltest.Result, error) {
+	fake := &testutil.Fake{QueryFunc: func(s string, _ []any) (testutil.Result, error) {
 		if contains(s, `"public"."users"`) {
 			usersSQL = s
-			return sqltest.Result{Columns: []string{"id", "name"}, Rows: [][]driver.Value{{int64(1), "Alice"}}}, nil
+			return testutil.Result{Columns: []string{"id", "name"}, Rows: [][]driver.Value{{int64(1), "Alice"}}}, nil
 		}
-		return sqltest.Result{Columns: []string{"id", "user_id", "title"}, Rows: [][]driver.Value{
+		return testutil.Result{Columns: []string{"id", "user_id", "title"}, Rows: [][]driver.Value{
 			{int64(10), int64(1), "a"},
 		}}, nil
 	}}
@@ -344,14 +344,14 @@ func TestPreloadRequiresFromTable(t *testing.T) {
 // TestPreloadResolvesFieldByTag covers relationField's tag branch: the relation
 // rows land in the tagged field even though it is not named after the relation.
 func TestPreloadResolvesFieldByTag(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(s string, _ []any) (sqltest.Result, error) {
+	fake := &testutil.Fake{
+		QueryFunc: func(s string, _ []any) (testutil.Result, error) {
 			if contains(s, `"public"."posts"`) {
-				return sqltest.Result{Columns: []string{"id", "user_id", "title"}, Rows: [][]driver.Value{
+				return testutil.Result{Columns: []string{"id", "user_id", "title"}, Rows: [][]driver.Value{
 					{int64(10), int64(1), "a"},
 				}}, nil
 			}
-			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}}}, nil
+			return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}}}, nil
 		},
 	}
 	db := sqlkit.WrapDB(fake.DB())
@@ -368,8 +368,8 @@ func TestPreloadResolvesFieldByTag(t *testing.T) {
 // TestPreloadToManyNonSliceFieldErrors covers the guard that a to-many relation
 // requires a slice destination field.
 func TestPreloadToManyNonSliceFieldErrors(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: func(string, []any) (sqltest.Result, error) {
-		return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}}}, nil
+	fake := &testutil.Fake{QueryFunc: func(string, []any) (testutil.Result, error) {
+		return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}}}, nil
 	}}
 	db := sqlkit.WrapDB(fake.DB())
 
@@ -384,15 +384,15 @@ func TestPreloadToManyNonSliceFieldErrors(t *testing.T) {
 // skipped, while parents with a non-nil key are still loaded.
 func TestPreloadSkipsNullParentKey(t *testing.T) {
 	var postsQueried int
-	fake := &sqltest.Fake{
-		QueryFunc: func(s string, _ []any) (sqltest.Result, error) {
+	fake := &testutil.Fake{
+		QueryFunc: func(s string, _ []any) (testutil.Result, error) {
 			if contains(s, `"public"."posts"`) {
 				postsQueried++
-				return sqltest.Result{Columns: []string{"id", "user_id", "title"}, Rows: [][]driver.Value{
+				return testutil.Result{Columns: []string{"id", "user_id", "title"}, Rows: [][]driver.Value{
 					{int64(10), int64(1), "a"},
 				}}, nil
 			}
-			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{
+			return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{
 				{int64(1)}, {nil},
 			}}, nil
 		},
@@ -420,13 +420,13 @@ func TestPreloadSkipsNullParentKey(t *testing.T) {
 // distinct parent keys than the batch size runs several follow-up IN queries.
 func TestPreloadThroughSessionUsesItsChunkSize(t *testing.T) {
 	var postsQueries int
-	fake := &sqltest.Fake{
-		QueryFunc: func(s string, _ []any) (sqltest.Result, error) {
+	fake := &testutil.Fake{
+		QueryFunc: func(s string, _ []any) (testutil.Result, error) {
 			if contains(s, `"public"."posts"`) {
 				postsQueries++
-				return sqltest.Result{Columns: []string{"id", "user_id", "title"}}, nil
+				return testutil.Result{Columns: []string{"id", "user_id", "title"}}, nil
 			}
-			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{
+			return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{
 				{int64(1)}, {int64(2)}, {int64(3)},
 			}}, nil
 		},

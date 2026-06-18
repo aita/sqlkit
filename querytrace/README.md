@@ -65,8 +65,9 @@ context ── carries ──▶ Trace ── records ──▶ Event(s) ──�
 - **driver/** — a `database/sql/driver` wrapper. This is the primary
   integration: it works with any driver and, by wrapping the row cursor,
   captures the rows lifecycle.
-- **querytest/** — a test spy and mock over a `Trace`: fluent assertions on what
-  ran (`Expect(t, trace).MaxQueries(5).NoWrites().Query(Select(), Table("users")).Times(1)`)
+- **`sqltest`** (top-level `github.com/aita/sqlkit/sqltest`) — a test spy and
+  mock built over a `Trace`: fluent assertions on what ran
+  (`Expect(t, trace).MaxQueries(5).NoWrites().Query(Select(), Table("users")).Times(1)`)
   and a programmable `database/sql` double (`NewDB`).
 - **`LogExporter`** — a summary exporter to `log/slog`, built into this package
   (`querytrace.NewLogExporter`); it needs only the standard library.
@@ -119,10 +120,10 @@ fmt.Println(querytrace.TextReport(trace))
 
 ### In tests
 
-The `querytest` subpackage turns a `Trace` into a **test spy**: run the code
-under a `Trace`, then assert on what it actually issued. `Expect` is a fluent
-assertion bound to the test; `Query(matchers...)` narrows to a set of statements
-and checks how many ran.
+The top-level [`sqltest`](../sqltest) package turns a `Trace` into a **test
+spy**: run the code under a `Trace`, then assert on what it actually issued.
+`Expect` is a fluent assertion bound to the test; `Query(matchers...)` narrows to
+a set of statements and checks how many ran.
 
 ```go
 func TestUserPageQueryCount(t *testing.T) {
@@ -133,10 +134,10 @@ func TestUserPageQueryCount(t *testing.T) {
         t.Fatal(err)
     }
 
-    querytest.Expect(t, trace).
+    sqltest.Expect(t, trace).
         MaxQueries(5).
         NoNPlusOne().
-        Query(querytest.Select(), querytest.Table("users")).Times(1)
+        Query(sqltest.Select(), sqltest.Table("users")).Times(1)
 }
 
 func TestCacheHitDoesNotAccessDB(t *testing.T) {
@@ -146,21 +147,21 @@ func TestCacheHitDoesNotAccessDB(t *testing.T) {
     if _, err := service.GetUser(ctx, id); err != nil {
         t.Fatal(err)
     }
-    querytest.Expect(t, trace).Warns(querytrace.WarnQueryForbidden)
+    sqltest.Expect(t, trace).Warns(querytrace.WarnQueryForbidden)
 }
 ```
 
-For a unit test without a real database, `querytest.NewDB` returns a programmable
+For a unit test without a real database, `sqltest.NewDB` returns a programmable
 **mock** `*sql.DB` already traced, so the same spy assertions apply to its
 statements. It registers a `t.Cleanup` that verifies the mock and closes the DB,
 so a missed `Required` stub — or, by default, any statement no stub answered —
-fails the test automatically (`querytest.Lenient()` opts out):
+fails the test automatically (`sqltest.Lenient()` opts out):
 
 ```go
 func TestLoadUser(t *testing.T) {
-    db, mock := querytest.NewDB(t)
-    mock.ExpectQuery(querytest.Contains("FROM users")).
-        Return(querytest.NewRows("id", "name").AddRow(1, "alice"))
+    db, mock := sqltest.NewDB(t)
+    mock.ExpectQuery(sqltest.Contains("FROM users")).
+        Return(sqltest.NewRows("id", "name").AddRow(1, "alice"))
 
     trace := querytrace.New("LoadUser")
     ctx := querytrace.WithTrace(context.Background(), trace)
@@ -170,9 +171,9 @@ func TestLoadUser(t *testing.T) {
         t.Fatal(err)
     }
 
-    querytest.Expect(t, trace).
+    sqltest.Expect(t, trace).
         NoWrites().
-        Query(querytest.Select(), querytest.Table("users")).Times(1)
+        Query(sqltest.Select(), sqltest.Table("users")).Times(1)
     _ = user
 }
 ```
@@ -183,10 +184,10 @@ holes left for the parts a test does not pin down — `AnyTable`, `AnyColumn`, a
 
 ```go
 mock.ExpectQuery(
-    sql.Select(querytest.AnyColumn()).
+    sql.Select(sqltest.AnyColumn()).
         From(sql.Tbl("users")).
-        Where(sql.Eq(sql.Col("id"), querytest.Arg(42))),
-).Return(querytest.NewRows("id", "name").AddRow(42, "alice"))
+        Where(sql.Eq(sql.Col("id"), sqltest.Arg(42))),
+).Return(sqltest.NewRows("id", "name").AddRow(42, "alice"))
 ```
 
 This answers any `SELECT` from `users` filtered by `id = 42`, whatever columns it

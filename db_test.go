@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/internal/testutil"
 	"github.com/aita/sqlkit/meta"
 	"github.com/aita/sqlkit/sql"
 )
@@ -25,7 +25,7 @@ func usersCatalog() meta.Table {
 }
 
 func TestWithMetadataExposesIdentities(t *testing.T) {
-	db := sqlkit.WrapDB((&sqltest.Fake{}).DB(),
+	db := sqlkit.WrapDB((&testutil.Fake{}).DB(),
 		sqlkit.WithMetadata(meta.Metadata{Tables: []meta.Table{usersCatalog()}}))
 	im := db.Identities()
 	if im == nil {
@@ -41,7 +41,7 @@ func TestWithMetadataExposesIdentities(t *testing.T) {
 }
 
 func TestWithoutMetadataIdentitiesNil(t *testing.T) {
-	db := sqlkit.WrapDB((&sqltest.Fake{}).DB())
+	db := sqlkit.WrapDB((&testutil.Fake{}).DB())
 	if db.Identities() != nil {
 		t.Fatal("Identities() should be nil when no metadata is bound")
 	}
@@ -52,7 +52,7 @@ func TestWithoutMetadataIdentitiesNil(t *testing.T) {
 func TestWithMetadataConflictLeavesIdentitiesNil(t *testing.T) {
 	drifted := usersCatalog()
 	drifted.Columns[1].Type = meta.Of("postgres", "text", 0, 0, 0)
-	db := sqlkit.WrapDB((&sqltest.Fake{}).DB(),
+	db := sqlkit.WrapDB((&testutil.Fake{}).DB(),
 		sqlkit.WithMetadata(meta.Metadata{Tables: []meta.Table{usersCatalog(), drifted}}))
 	if db.Identities() != nil {
 		t.Fatal("Identities() should be nil when the bound metadata conflicts")
@@ -91,7 +91,7 @@ func TestDatabaseUnionMethod(t *testing.T) {
 
 // TestDatabaseSQLAndDialect covers the SQL() and Dialect() accessors.
 func TestDatabaseSQLAndDialect(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 	if db.SQL() == nil {
 		t.Fatal("SQL() = nil, want the wrapped *sql.DB handle")
@@ -105,9 +105,9 @@ func TestDatabaseSQLAndDialect(t *testing.T) {
 // package-level helpers but bind the result to the database. Each is run so the
 // binding (and thus the executor) is exercised end to end.
 func TestDatabaseSetOpMethods(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(string, []any) (sqltest.Result, error) {
-			return sqltest.Result{Columns: []string{"id"}}, nil
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			return testutil.Result{Columns: []string{"id"}}, nil
 		},
 	}
 	db := sqlkit.WrapDB(fake.DB())
@@ -130,7 +130,7 @@ func TestDatabaseSetOpMethods(t *testing.T) {
 // TestDatabaseExec covers Database.Exec, the auto-commit path for an arbitrary
 // sql.Query (here an UPDATE built with the sql package).
 func TestDatabaseExec(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 
 	stmt := sql.Update(sql.Table{Schema: "public", Name: "users"}).Set(sql.Set("email", sql.Val("x@x")))

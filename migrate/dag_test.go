@@ -7,7 +7,7 @@ import (
 
 	"github.com/aita/sqlkit"
 	"github.com/aita/sqlkit/decl"
-	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/internal/testutil"
 	"github.com/aita/sqlkit/migrate"
 )
 
@@ -44,7 +44,7 @@ func mergeMigrations() []migrate.Migration {
 	}
 }
 
-func creates(execs []sqltest.Call) []string {
+func creates(execs []testutil.Call) []string {
 	var out []string
 	for _, e := range execs {
 		line := firstLine(e.SQL)
@@ -56,7 +56,7 @@ func creates(execs []sqltest.Call) []string {
 }
 
 func TestDAGUpAppliesMergeInTopoOrder(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: appliedHistory()}
+	fake := &testutil.Fake{QueryFunc: appliedHistory()}
 	m := migrate.New(sqlkit.WrapDB(fake.DB()), mergeMigrations())
 
 	if err := m.Up(context.Background()); err != nil {
@@ -80,19 +80,19 @@ func TestHeads(t *testing.T) {
 		mk("0002a", "0001", "a", "t2a"),
 		mk("0002b", "0001", "b", "t2b"),
 	}
-	m := migrate.New(sqlkit.WrapDB((&sqltest.Fake{}).DB()), branched)
+	m := migrate.New(sqlkit.WrapDB((&testutil.Fake{}).DB()), branched)
 	if got, want := m.Heads(), []string{"0002a", "0002b"}; !equalStrings(got, want) {
 		t.Errorf("heads = %v, want %v", got, want)
 	}
 
-	m = migrate.New(sqlkit.WrapDB((&sqltest.Fake{}).DB()), mergeMigrations())
+	m = migrate.New(sqlkit.WrapDB((&testutil.Fake{}).DB()), mergeMigrations())
 	if got, want := m.Heads(), []string{"0003"}; !equalStrings(got, want) {
 		t.Errorf("heads after merge = %v, want %v", got, want)
 	}
 }
 
 func TestCurrent(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: appliedHistory("0001", "0002a")}
+	fake := &testutil.Fake{QueryFunc: appliedHistory("0001", "0002a")}
 	m := migrate.New(sqlkit.WrapDB(fake.DB()), mergeMigrations())
 	got, err := m.Current(context.Background())
 	if err != nil {
@@ -105,7 +105,7 @@ func TestCurrent(t *testing.T) {
 
 func TestUpgradeRelativeAndRevision(t *testing.T) {
 	// +1 applies only the first pending migration.
-	fake := &sqltest.Fake{QueryFunc: appliedHistory()}
+	fake := &testutil.Fake{QueryFunc: appliedHistory()}
 	m := migrate.New(sqlkit.WrapDB(fake.DB()), sampleMigrations())
 	if err := m.Upgrade(context.Background(), "+1"); err != nil {
 		t.Fatalf("Upgrade +1: %v", err)
@@ -115,7 +115,7 @@ func TestUpgradeRelativeAndRevision(t *testing.T) {
 	}
 
 	// Upgrading to a specific revision applies it and its ancestors only.
-	fake = &sqltest.Fake{QueryFunc: appliedHistory()}
+	fake = &testutil.Fake{QueryFunc: appliedHistory()}
 	m = migrate.New(sqlkit.WrapDB(fake.DB()), sampleMigrations())
 	if err := m.Upgrade(context.Background(), "0001"); err != nil {
 		t.Fatalf("Upgrade 0001: %v", err)
@@ -126,7 +126,7 @@ func TestUpgradeRelativeAndRevision(t *testing.T) {
 }
 
 func TestUpgradeAmbiguousPrefix(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: appliedHistory()}
+	fake := &testutil.Fake{QueryFunc: appliedHistory()}
 	m := migrate.New(sqlkit.WrapDB(fake.DB()), sampleMigrations()) // 0001, 0002
 	if err := m.Upgrade(context.Background(), "00"); err == nil {
 		t.Error("expected ambiguous-prefix error")
@@ -134,7 +134,7 @@ func TestUpgradeAmbiguousPrefix(t *testing.T) {
 }
 
 func TestStampMarksWithoutRunning(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: appliedHistory()}
+	fake := &testutil.Fake{QueryFunc: appliedHistory()}
 	m := migrate.New(sqlkit.WrapDB(fake.DB()), sampleMigrations())
 	if err := m.Stamp(context.Background(), "head"); err != nil {
 		t.Fatalf("Stamp: %v", err)
@@ -159,7 +159,7 @@ func TestStampMarksWithoutRunning(t *testing.T) {
 
 func TestUpgradeSQLOffline(t *testing.T) {
 	// Offline rendering does not query the database.
-	m := migrate.New(sqlkit.WrapDB((&sqltest.Fake{}).DB()), sampleMigrations())
+	m := migrate.New(sqlkit.WrapDB((&testutil.Fake{}).DB()), sampleMigrations())
 	script, err := m.UpgradeSQL("", "head")
 	if err != nil {
 		t.Fatalf("UpgradeSQL: %v", err)
@@ -173,7 +173,7 @@ func TestUpgradeSQLOffline(t *testing.T) {
 }
 
 func TestDowngradeSQLOffline(t *testing.T) {
-	m := migrate.New(sqlkit.WrapDB((&sqltest.Fake{}).DB()), sampleMigrations())
+	m := migrate.New(sqlkit.WrapDB((&testutil.Fake{}).DB()), sampleMigrations())
 	script, err := m.DowngradeSQL("head", "base")
 	if err != nil {
 		t.Fatalf("DowngradeSQL: %v", err)
@@ -193,7 +193,7 @@ func TestDownRollsBackMostRecentlyApplied(t *testing.T) {
 		mk("z", "", "branch_z", "tz"),
 	}
 	// History: z applied first, then a (a is most recent).
-	fake := &sqltest.Fake{QueryFunc: appliedHistory("z", "a")}
+	fake := &testutil.Fake{QueryFunc: appliedHistory("z", "a")}
 	m := migrate.New(sqlkit.WrapDB(fake.DB()), migs)
 
 	if err := m.Down(context.Background()); err != nil {

@@ -1,4 +1,4 @@
-package querytest
+package sqltest
 
 // QueryAssertion narrows an Assertion to the statements matching a set of
 // matchers, ready to check how many of them ran. Build one with

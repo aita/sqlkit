@@ -1,4 +1,4 @@
-package dbtest
+package sqltest
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 // it once and Load it into a database in any test that needs the same starting
 // data:
 //
-//	var blog = dbtest.NewFixture("blog").
+//	var blog = sqltest.NewFixture("blog").
 //		Add(blogdb.Users, userRow{Email: "alice@example.com"}, userRow{Email: "bob@example.com"}).
 //		Add(blogdb.Posts, postRow{Title: "Hello"})
 //
@@ -39,7 +39,7 @@ func NewFixture(name string) *Fixture {
 }
 
 // Add appends a group of rows for table, preserving call order. It returns the
-// fixture so calls chain. Each row follows the same shapes Insert accepts
+// fixture so calls chain. Each row follows the same shapes InsertRows accepts
 // (struct, pointer to struct, or slice of either).
 func (f *Fixture) Add(table sqlkit.Table, rows ...any) *Fixture {
 	f.groups = append(f.groups, fixtureGroup{table: table, rows: rows})
@@ -56,7 +56,7 @@ func (f *Fixture) Load(t *testing.T, ex sqlkit.Querier) {
 			continue
 		}
 		if _, err := ex.Insert(group.table).Values(group.rows...).Exec(context.Background()); err != nil {
-			t.Fatalf("dbtest: load fixture %q into %s: %v", f.name, group.table.Info().QualifiedName(), err)
+			t.Fatalf("sqltest: load fixture %q into %s: %v", f.name, group.table.Info().QualifiedName(), err)
 		}
 	}
 }

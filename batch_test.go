@@ -8,15 +8,15 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/internal/testutil"
 )
 
 // TestPreloadInChunksByBindParamLimit drives a Preload whose follow-up IN list
 // exceeds the limit, so it splits into several statements whose rows concatenate.
 func TestPreloadInChunksByBindParamLimit(t *testing.T) {
 	postQueries := 0
-	fake := &sqltest.Fake{
-		QueryFunc: func(s string, args []any) (sqltest.Result, error) {
+	fake := &testutil.Fake{
+		QueryFunc: func(s string, args []any) (testutil.Result, error) {
 			if strings.Contains(s, `"public"."posts"`) {
 				postQueries++
 				// One post per IN value, its user_id equal to that value, so every
@@ -25,9 +25,9 @@ func TestPreloadInChunksByBindParamLimit(t *testing.T) {
 				for i, a := range args {
 					rows = append(rows, []driver.Value{int64(1000 + i), a, "t"})
 				}
-				return sqltest.Result{Columns: []string{"id", "user_id", "title"}, Rows: rows}, nil
+				return testutil.Result{Columns: []string{"id", "user_id", "title"}, Rows: rows}, nil
 			}
-			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{
+			return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{
 				{int64(1)}, {int64(2)}, {int64(3)}, {int64(4)}, {int64(5)},
 			}}, nil
 		},
@@ -54,13 +54,13 @@ func TestPreloadInChunksByBindParamLimit(t *testing.T) {
 
 func TestPreloadWithinLimitIsSingleQuery(t *testing.T) {
 	postQueries := 0
-	fake := &sqltest.Fake{
-		QueryFunc: func(s string, args []any) (sqltest.Result, error) {
+	fake := &testutil.Fake{
+		QueryFunc: func(s string, args []any) (testutil.Result, error) {
 			if strings.Contains(s, `"public"."posts"`) {
 				postQueries++
-				return sqltest.Result{Columns: []string{"id", "user_id", "title"}, Rows: nil}, nil
+				return testutil.Result{Columns: []string{"id", "user_id", "title"}, Rows: nil}, nil
 			}
-			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{
+			return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{
 				{int64(1)}, {int64(2)}, {int64(3)},
 			}}, nil
 		},
@@ -78,15 +78,15 @@ func TestPreloadWithinLimitIsSingleQuery(t *testing.T) {
 
 // returningFake returns one row per inserted/affected row in a chunk, derived
 // from the chunk's bind-argument count.
-func returningFake(rowsPerChunk func(args []any) int) *sqltest.Fake {
-	return &sqltest.Fake{
-		QueryFunc: func(_ string, args []any) (sqltest.Result, error) {
+func returningFake(rowsPerChunk func(args []any) int) *testutil.Fake {
+	return &testutil.Fake{
+		QueryFunc: func(_ string, args []any) (testutil.Result, error) {
 			n := rowsPerChunk(args)
 			rows := make([][]driver.Value, 0, n)
 			for i := 0; i < n; i++ {
 				rows = append(rows, []driver.Value{int64(i + 1), "x@example.com", nil})
 			}
-			return sqltest.Result{Columns: []string{"id", "email", "name"}, Rows: rows}, nil
+			return testutil.Result{Columns: []string{"id", "email", "name"}, Rows: rows}, nil
 		},
 	}
 }
@@ -182,7 +182,7 @@ func TestDeleteReturningSplitsByInList(t *testing.T) {
 }
 
 func TestWithAutoChunkFalseDisablesSplitting(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(false))
 
 	rows := []User{{Email: "a"}, {Email: "b"}, {Email: "c"}, {Email: "d"}, {Email: "e"}}
@@ -213,7 +213,7 @@ func TestWithAutoChunkFalseSelectInIsSingleQuery(t *testing.T) {
 }
 
 func TestWithAutoChunkFalseExplicitBatchSizeStillSplits(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(false))
 
 	rows := []User{{Email: "a"}, {Email: "b"}, {Email: "c"}, {Email: "d"}, {Email: "e"}}
@@ -227,7 +227,7 @@ func TestWithAutoChunkFalseExplicitBatchSizeStillSplits(t *testing.T) {
 }
 
 func TestWithSessionAutoChunkDisablesPerSession(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true)) // database: auto-chunk on
 	s := db.NewSession(sqlkit.WithSessionAutoChunk(false))
 	defer s.Close()
@@ -248,7 +248,7 @@ func TestWithSessionAutoChunkDisablesPerSession(t *testing.T) {
 }
 
 func TestWithSessionAutoChunkEnablesOverDisabledDatabase(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(false))
 	s := db.NewSession(sqlkit.WithSessionAutoChunk(true))
 	defer s.Close()
@@ -270,17 +270,17 @@ func TestWithSessionAutoChunkEnablesOverDisabledDatabase(t *testing.T) {
 // preload batch size even though the bind-parameter limit alone would not split.
 func TestPreloadBatchSizeChunksBelowLimit(t *testing.T) {
 	postQueries := 0
-	fake := &sqltest.Fake{
-		QueryFunc: func(s string, args []any) (sqltest.Result, error) {
+	fake := &testutil.Fake{
+		QueryFunc: func(s string, args []any) (testutil.Result, error) {
 			if strings.Contains(s, `"public"."posts"`) {
 				postQueries++
 				rows := make([][]driver.Value, 0, len(args))
 				for i, a := range args {
 					rows = append(rows, []driver.Value{int64(1000 + i), a, "t"})
 				}
-				return sqltest.Result{Columns: []string{"id", "user_id", "title"}, Rows: rows}, nil
+				return testutil.Result{Columns: []string{"id", "user_id", "title"}, Rows: rows}, nil
 			}
-			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{
+			return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{
 				{int64(1)}, {int64(2)}, {int64(3)}, {int64(4)}, {int64(5)},
 			}}, nil
 		},
@@ -308,13 +308,13 @@ func TestPreloadBatchSizeChunksBelowLimit(t *testing.T) {
 // preload follow-up uncapped, so keys that fit the dialect limit run as one query.
 func TestPreloadBatchSizeZeroUsesHardLimitOnly(t *testing.T) {
 	postQueries := 0
-	fake := &sqltest.Fake{
-		QueryFunc: func(s string, _ []any) (sqltest.Result, error) {
+	fake := &testutil.Fake{
+		QueryFunc: func(s string, _ []any) (testutil.Result, error) {
 			if strings.Contains(s, `"public"."posts"`) {
 				postQueries++
-				return sqltest.Result{Columns: []string{"id", "user_id", "title"}, Rows: nil}, nil
+				return testutil.Result{Columns: []string{"id", "user_id", "title"}, Rows: nil}, nil
 			}
-			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{
+			return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{
 				{int64(1)}, {int64(2)}, {int64(3)}, {int64(4)}, {int64(5)},
 			}}, nil
 		},
@@ -379,7 +379,7 @@ func TestAutoChunkOffForcesSingleSelect(t *testing.T) {
 }
 
 func TestAutoChunkChunkSizeSplitsDelete(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true))
 
 	if _, err := db.Delete(Users).Where(Users.ID.In(1, 2, 3, 4, 5)).
@@ -392,7 +392,7 @@ func TestAutoChunkChunkSizeSplitsDelete(t *testing.T) {
 }
 
 func TestAutoChunkOffForcesSingleUpdate(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 
 	if _, err := db.Update(Users).Set(Users.Email.Set("x")).Where(Users.ID.In(1, 2, 3, 4, 5)).
@@ -414,7 +414,7 @@ func TestAutoChunkOffForcesSingleUpdate(t *testing.T) {
 var repeatableRead = driver.IsolationLevel(stdsql.LevelRepeatableRead)
 
 func TestInsertAutoSplitsByBindParamLimit(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	// 2 rows per statement (old limit 4 / 2 columns) via a per-query chunk size.
 	db := sqlkit.WrapDB(fake.DB())
 
@@ -447,7 +447,7 @@ func TestInsertAutoSplitsByBindParamLimit(t *testing.T) {
 }
 
 func TestInsertNoLimitNoBatchSizeIsSingleStatement(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB()) // no limit configured
 
 	rows := []User{{Email: "a"}, {Email: "b"}, {Email: "c"}}
@@ -463,7 +463,7 @@ func TestInsertNoLimitNoBatchSizeIsSingleStatement(t *testing.T) {
 }
 
 func TestInsertWithinLimitIsSingleStatement(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 
 	rows := []User{{Email: "a"}, {Email: "b"}}
@@ -480,10 +480,10 @@ func TestInsertWithinLimitIsSingleStatement(t *testing.T) {
 
 // idFromArgsFake returns one row per query whose id is the number of bind args,
 // so a scan reveals how the IN list was split across statements.
-func idFromArgsFake() *sqltest.Fake {
-	return &sqltest.Fake{
-		QueryFunc: func(_ string, args []any) (sqltest.Result, error) {
-			return sqltest.Result{
+func idFromArgsFake() *testutil.Fake {
+	return &testutil.Fake{
+		QueryFunc: func(_ string, args []any) (testutil.Result, error) {
+			return testutil.Result{
 				Columns: []string{"id", "email", "name"},
 				Rows:    [][]driver.Value{{int64(len(args)), "x@example.com", nil}},
 			}, nil
@@ -653,7 +653,7 @@ func TestSelectInCombinedWithFilterToSQLUnchanged(t *testing.T) {
 }
 
 func TestUpdateInChunksByBindParamLimit(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true))
 
 	ids := []int64{1, 2, 3, 4, 5, 6, 7}
@@ -681,7 +681,7 @@ func TestUpdateInChunksByBindParamLimit(t *testing.T) {
 }
 
 func TestDeleteInChunksByBindParamLimit(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true))
 
 	ids := []int64{1, 2, 3, 4, 5, 6, 7}
@@ -702,7 +702,7 @@ func TestDeleteInChunksByBindParamLimit(t *testing.T) {
 // A split UPDATE/DELETE through a Session joins its transaction rather than
 // opening a new one.
 func TestUpdateInChunksJoinsSessionTransaction(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true))
 	session := db.NewSession()
 	t.Cleanup(func() { _ = session.Close() })
@@ -725,7 +725,7 @@ func TestUpdateInChunksJoinsSessionTransaction(t *testing.T) {
 // A reference UPDATE — SET plus a correlated FROM source — splits its IN list
 // the same way, each chunk re-running the full statement for its id subset.
 func TestReferenceUpdateInChunks(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true))
 
 	ids := []int64{1, 2, 3, 4, 5, 6, 7}
@@ -757,7 +757,7 @@ func TestReferenceUpdateInChunks(t *testing.T) {
 }
 
 func TestBatchWriteSnapshotUsesRepeatableRead(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB(),
 		sqlkit.WithAutoChunk(true),
 		sqlkit.WithBatchWriteSnapshot(true))

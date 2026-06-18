@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/internal/testutil"
 )
 
 // Items exercises the write-time tag options: a JSON column, an optimistic-lock
@@ -62,7 +62,7 @@ func TestInsertSkipsReadonlyAndMarshalsJSON(t *testing.T) {
 		nil)
 
 	// At execution the JSON column reaches the driver as its JSON encoding.
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 	if _, err := db.Insert(Items).Values(item).Exec(context.Background()); err != nil {
 		t.Fatalf("Exec() error = %v", err)
@@ -79,7 +79,7 @@ func TestInsertSkipsReadonlyAndMarshalsJSON(t *testing.T) {
 
 func TestInsertJSONNilWritesNull(t *testing.T) {
 	// A nil map encodes as SQL NULL rather than the JSON literal null.
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 	if _, err := db.Insert(Items).Values(Item{ID: 1, SKU: "x"}).Exec(context.Background()); err != nil {
 		t.Fatalf("Exec() error = %v", err)
@@ -105,14 +105,14 @@ func TestSetStructVersionGuardConflict(t *testing.T) {
 
 	// Zero rows affected under the tag-driven version guard is a conflict.
 	zero := int64(0)
-	db := sqlkit.WrapDB((&sqltest.Fake{RowsAffected: &zero}).DB())
+	db := sqlkit.WrapDB((&testutil.Fake{RowsAffected: &zero}).DB())
 	_, err := db.Update(Items).SetStruct(item).Where(Items.ID.Eq(item.ID)).Exec(context.Background())
 	if !errors.Is(err, sqlkit.ErrVersionConflict) {
 		t.Fatalf("Exec() error = %v, want ErrVersionConflict", err)
 	}
 
 	// A matched row is not a conflict.
-	ok := sqlkit.WrapDB((&sqltest.Fake{}).DB())
+	ok := sqlkit.WrapDB((&testutil.Fake{}).DB())
 	if _, err := ok.Update(Items).SetStruct(item).Where(Items.ID.Eq(item.ID)).Exec(context.Background()); err != nil {
 		t.Fatalf("Exec() error = %v, want nil", err)
 	}
@@ -130,9 +130,9 @@ func TestExplicitColumnsIgnoreReadonlyAndVersionSemantics(t *testing.T) {
 }
 
 func TestScanJSONColumn(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(string, []any) (sqltest.Result, error) {
-			return sqltest.Result{
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			return testutil.Result{
 				Columns: []string{"id", "sku", "meta", "rev", "created"},
 				Rows: [][]driver.Value{
 					{int64(1), "abc", []byte(`{"k":"v"}`), int64(3), int64(99)},

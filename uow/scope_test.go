@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/internal/testutil"
 	"github.com/aita/sqlkit/meta"
 	"github.com/aita/sqlkit/sql"
 	"github.com/aita/sqlkit/uow"
@@ -69,16 +69,16 @@ func usersMeta() meta.Table {
 func ctx() context.Context { return context.Background() }
 
 // usersResult scripts a one-row users result for QueryFunc.
-func usersResult(id int64, email, name string) func(string, []any) (sqltest.Result, error) {
-	return func(string, []any) (sqltest.Result, error) {
-		return sqltest.Result{
+func usersResult(id int64, email, name string) func(string, []any) (testutil.Result, error) {
+	return func(string, []any) (testutil.Result, error) {
+		return testutil.Result{
 			Columns: []string{"id", "email", "name"},
 			Rows:    [][]driver.Value{{id, email, name}},
 		}, nil
 	}
 }
 
-func verbs(calls []sqltest.Call) []string {
+func verbs(calls []testutil.Call) []string {
 	out := make([]string, len(calls))
 	for i, c := range calls {
 		out[i] = strings.Fields(c.SQL)[0]
@@ -89,7 +89,7 @@ func verbs(calls []sqltest.Call) []string {
 // --- staging: Add / Update / Remove ---
 
 func TestAddValueBatchesIntoOneInsert(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()))
 	if err := scope.Add(newUsers(), userRow{Email: "a@x"}, userRow{Email: "b@x"}); err != nil {
 		t.Fatal(err)
@@ -106,7 +106,7 @@ func TestAddValueBatchesIntoOneInsert(t *testing.T) {
 }
 
 func TestWithBatchSizeSplitsValueInserts(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()), uow.WithBatchSize(2))
 	if err := scope.Add(newUsers(),
 		userRow{Email: "a@x"}, userRow{Email: "b@x"},
@@ -127,7 +127,7 @@ func TestWithBatchSizeKeepsColumnSetAcrossBatches(t *testing.T) {
 	// id is defaulted. Only a later batch carries a non-zero id, so every batch
 	// must include the id column — the staged rows are compiled as one insert
 	// (column set derived from all rows) before being split.
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()), uow.WithBatchSize(2))
 	if err := scope.Add(newUsers(),
 		userRow{Email: "a@x"}, // id zero
@@ -154,7 +154,7 @@ func TestWithBatchSizeKeepsColumnSetAcrossBatches(t *testing.T) {
 }
 
 func TestAddPointerWritesBackViaReturning(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: usersResult(99, "c@x", "")}
+	fake := &testutil.Fake{QueryFunc: usersResult(99, "c@x", "")}
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB())) // postgres default => RETURNING
 	carol := &userRow{Email: "c@x"}
 	if err := scope.Add(newUsers(), carol); err != nil {
@@ -172,7 +172,7 @@ func TestAddPointerWritesBackViaReturning(t *testing.T) {
 }
 
 func TestAddPointerWritesBackViaLastInsertId(t *testing.T) {
-	fake := &sqltest.Fake{LastInsertID: 42}
+	fake := &testutil.Fake{LastInsertID: 42}
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB(), sqlkit.WithDialect(sql.MySQLDialect{})))
 	carol := &userRow{Email: "c@x"}
 	if err := scope.Add(newUsers(), carol); err != nil {
@@ -187,7 +187,7 @@ func TestAddPointerWritesBackViaLastInsertId(t *testing.T) {
 }
 
 func TestExplicitUpdateWritesAllColumns(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()))
 	if err := scope.Update(newUsers(), userRow{ID: 5, Email: "e@x", Name: "n"}); err != nil {
 		t.Fatal(err)
@@ -206,7 +206,7 @@ func TestExplicitUpdateWritesAllColumns(t *testing.T) {
 }
 
 func TestAttachUpdatesOnlyChangedColumns(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()))
 	u := &userRow{ID: 7, Email: "a@x", Name: "Alice"} // detached, e.g. from a cache
 	if err := scope.Attach(newUsers(), u); err != nil {
@@ -227,7 +227,7 @@ func TestAttachUpdatesOnlyChangedColumns(t *testing.T) {
 }
 
 func TestAttachNoChangeEmitsNothing(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()))
 	u := &userRow{ID: 7, Email: "a@x", Name: "Alice"}
 	if err := scope.Attach(newUsers(), u); err != nil {
@@ -242,7 +242,7 @@ func TestAttachNoChangeEmitsNothing(t *testing.T) {
 }
 
 func TestAttachRejectsNonPointer(t *testing.T) {
-	scope := uow.NewScope(sqlkit.WrapDB((&sqltest.Fake{}).DB()))
+	scope := uow.NewScope(sqlkit.WrapDB((&testutil.Fake{}).DB()))
 	err := scope.Attach(newUsers(), userRow{ID: 7, Email: "a@x", Name: "Alice"})
 	if !errors.Is(err, uow.ErrAttachRequiresPointer) {
 		t.Fatalf("Attach(value) error = %v, want ErrAttachRequiresPointer", err)
@@ -250,7 +250,7 @@ func TestAttachRejectsNonPointer(t *testing.T) {
 }
 
 func TestRemoveDeletesByPrimaryKey(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()))
 	if err := scope.Remove(newUsers(), userRow{ID: 9}); err != nil {
 		t.Fatal(err)
@@ -270,7 +270,7 @@ func TestRemoveDeletesByPrimaryKey(t *testing.T) {
 // --- tracking: Get / Find + automatic dirty UPDATE ---
 
 func TestManagedDirtyUpdatesOnlyChangedColumns(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: usersResult(7, "a@x", "Alice")}
+	fake := &testutil.Fake{QueryFunc: usersResult(7, "a@x", "Alice")}
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()))
 	var u userRow
 	found, err := scope.Get(ctx(), newUsers(), &u, int64(7))
@@ -292,7 +292,7 @@ func TestManagedDirtyUpdatesOnlyChangedColumns(t *testing.T) {
 }
 
 func TestManagedNoChangeEmitsNothing(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: usersResult(7, "a@x", "Alice")}
+	fake := &testutil.Fake{QueryFunc: usersResult(7, "a@x", "Alice")}
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()))
 	var u userRow
 	if _, err := scope.Get(ctx(), newUsers(), &u, int64(7)); err != nil {
@@ -307,8 +307,8 @@ func TestManagedNoChangeEmitsNothing(t *testing.T) {
 }
 
 func TestFindTracksSliceElements(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: func(string, []any) (sqltest.Result, error) {
-		return sqltest.Result{
+	fake := &testutil.Fake{QueryFunc: func(string, []any) (testutil.Result, error) {
+		return testutil.Result{
 			Columns: []string{"id", "email", "name"},
 			Rows:    [][]driver.Value{{int64(1), "a@x", "A"}, {int64(2), "b@x", "B"}},
 		}, nil
@@ -331,7 +331,7 @@ func TestFindTracksSliceElements(t *testing.T) {
 }
 
 func TestManagedPrimaryKeyChangeIsRejected(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: usersResult(7, "a@x", "Alice")}
+	fake := &testutil.Fake{QueryFunc: usersResult(7, "a@x", "Alice")}
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()))
 	var u userRow
 	if _, err := scope.Get(ctx(), newUsers(), &u, int64(7)); err != nil {
@@ -346,7 +346,7 @@ func TestManagedPrimaryKeyChangeIsRejected(t *testing.T) {
 // --- nested scopes (savepoints) ---
 
 func TestNestedScopeUsesSavepoint(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 	err := db.WithSession(func(s *sqlkit.Session) error {
 		scope := uow.NewScope(s)
@@ -372,7 +372,7 @@ func TestNestedScopeUsesSavepoint(t *testing.T) {
 }
 
 func TestNestedScopeRollback(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 	err := db.WithSession(func(s *sqlkit.Session) error {
 		child := uow.NewScope(s).NewScope()
@@ -395,7 +395,7 @@ func TestNestedScopeRollback(t *testing.T) {
 }
 
 func TestNestedScopeRequiresTransaction(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB())) // a Database is not savepoint-capable
 	child := scope.NewScope()
 	if err := child.Add(newUsers(), userRow{Email: "x"}); err != nil {
@@ -409,7 +409,7 @@ func TestNestedScopeRequiresTransaction(t *testing.T) {
 // --- identity reconciliation ---
 
 func TestGeneratorMismatchConflicts(t *testing.T) {
-	scope := uow.NewScope(sqlkit.WrapDB((&sqltest.Fake{}).DB()))
+	scope := uow.NewScope(sqlkit.WrapDB((&testutil.Fake{}).DB()))
 	if err := scope.Add(newUsersFull(usersChecksum, "fmt1+sqlkitv1"), userRow{Email: "a@x"}); err != nil {
 		t.Fatal(err)
 	}
@@ -420,7 +420,7 @@ func TestGeneratorMismatchConflicts(t *testing.T) {
 }
 
 func TestStructureMismatchConflicts(t *testing.T) {
-	scope := uow.NewScope(sqlkit.WrapDB((&sqltest.Fake{}).DB()))
+	scope := uow.NewScope(sqlkit.WrapDB((&testutil.Fake{}).DB()))
 	if err := scope.Add(newUsersFull("checksum-a", "gen"), userRow{Email: "a@x"}); err != nil {
 		t.Fatal(err)
 	}
@@ -435,7 +435,7 @@ func TestWithIdentitiesMatching(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()), uow.WithIdentities(im))
 	binding := newUsersFull(usersMeta().Key().Checksum, "")
 	if err := scope.Add(binding, userRow{Email: "a@x"}); err != nil {
@@ -451,7 +451,7 @@ func TestWithIdentitiesConflict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	scope := uow.NewScope(sqlkit.WrapDB((&sqltest.Fake{}).DB()), uow.WithIdentities(im))
+	scope := uow.NewScope(sqlkit.WrapDB((&testutil.Fake{}).DB()), uow.WithIdentities(im))
 	// A binding whose checksum differs from the catalog table.
 	err = scope.Add(newUsersFull("drifted", ""), userRow{Email: "a@x"})
 	if !errors.Is(err, meta.ErrTableConflict) {
@@ -468,7 +468,7 @@ func TestWithIdentitiesUnknownTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	scope := uow.NewScope(sqlkit.WrapDB((&sqltest.Fake{}).DB()), uow.WithIdentities(im))
+	scope := uow.NewScope(sqlkit.WrapDB((&testutil.Fake{}).DB()), uow.WithIdentities(im))
 	if err := scope.Add(newUsers(), userRow{Email: "a@x"}); err == nil {
 		t.Fatal("expected an error staging a table absent from the identity map")
 	}
@@ -478,7 +478,7 @@ func TestWithIdentitiesUnknownTable(t *testing.T) {
 // scope opened over it, so validation happens without an explicit
 // WithIdentities.
 func TestWithMetadataAutoAdoptsIdentities(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithMetadata(meta.Metadata{Tables: []meta.Table{usersMeta()}}))
 	scope := uow.NewScope(db)
 	binding := newUsersFull(usersMeta().Key().Checksum, "")
@@ -491,7 +491,7 @@ func TestWithMetadataAutoAdoptsIdentities(t *testing.T) {
 }
 
 func TestWithMetadataRejectsDriftedBinding(t *testing.T) {
-	db := sqlkit.WrapDB((&sqltest.Fake{}).DB(), sqlkit.WithMetadata(meta.Metadata{Tables: []meta.Table{usersMeta()}}))
+	db := sqlkit.WrapDB((&testutil.Fake{}).DB(), sqlkit.WithMetadata(meta.Metadata{Tables: []meta.Table{usersMeta()}}))
 	scope := uow.NewScope(db)
 	// A binding whose checksum differs from the catalog table.
 	err := scope.Add(newUsersFull("drifted", ""), userRow{Email: "a@x"})
@@ -504,7 +504,7 @@ func TestWithMetadataRejectsDriftedBinding(t *testing.T) {
 // metadata.
 func TestWithIdentitiesOverridesMetadata(t *testing.T) {
 	// The database's catalog omits users, which would reject the binding...
-	db := sqlkit.WrapDB((&sqltest.Fake{}).DB(), sqlkit.WithMetadata(meta.Metadata{Tables: []meta.Table{{
+	db := sqlkit.WrapDB((&testutil.Fake{}).DB(), sqlkit.WithMetadata(meta.Metadata{Tables: []meta.Table{{
 		Schema:  meta.Schema{Name: "public"},
 		Name:    "orgs",
 		Columns: []meta.Column{{Name: "id", Type: meta.Of("postgres", "bigint", 0, 0, 0), PrimaryKey: true}},
@@ -527,7 +527,7 @@ func TestWithIdentitiesOverridesMetadata(t *testing.T) {
 // --- Item 7: uow flush DELETE batching + bulk UPDATE. ---
 
 func TestRemoveBatchesIntoChunkedInDeletes(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()), uow.WithBatchSize(2))
 	for _, id := range []int64{1, 2, 3, 4, 5} {
 		if err := scope.Remove(newUsers(), userRow{ID: id}); err != nil {
@@ -549,7 +549,7 @@ func TestRemoveBatchesIntoChunkedInDeletes(t *testing.T) {
 }
 
 func TestRemoveBatchSizeChunksDeletes(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	// No bind-param limit, but an explicit batch size still merges and chunks.
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()), uow.WithBatchSize(2))
 	for _, id := range []int64{1, 2, 3, 4, 5} {
@@ -566,7 +566,7 @@ func TestRemoveBatchSizeChunksDeletes(t *testing.T) {
 }
 
 func TestExplicitUpdateBatchesViaValuesJoin(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	// Auto-split is off by default; enable it so multiple row updates combine
 	// into one VALUES-join statement.
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true)))
@@ -595,7 +595,7 @@ func TestExplicitUpdateBatchesViaValuesJoin(t *testing.T) {
 }
 
 func TestExplicitUpdateBulkChunksByBatchSize(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	// 3 values per row (id, email, name); batch size 2 => 2 rows per statement.
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()), uow.WithBatchSize(2))
 	if err := scope.Update(newUsers(),
@@ -622,7 +622,7 @@ func TestExplicitUpdateBulkChunksByBatchSize(t *testing.T) {
 }
 
 func TestScopeAutoChunkFalseFlushesPerRow(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	// The executor has auto-chunk enabled; the scope overrides it off.
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true)), uow.WithAutoChunk(false))
 	for _, id := range []int64{1, 2, 3} {
@@ -651,7 +651,7 @@ func TestScopeAutoChunkFalseFlushesPerRow(t *testing.T) {
 }
 
 func TestScopeAutoChunkTrueOverDisabledExecutor(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	// The executor has auto-chunk off; the scope turns it on and sizes its own
 	// chunks to the configured batch size.
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(false))
@@ -680,8 +680,8 @@ func TestScopeAutoChunkTrueOverDisabledExecutor(t *testing.T) {
 // TestGetReportsNotFound covers Get's ErrNoRows branch: a missing row yields
 // found=false with no error and nothing tracked.
 func TestGetReportsNotFound(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: func(string, []any) (sqltest.Result, error) {
-		return sqltest.Result{Columns: []string{"id", "email", "name"}}, nil // no rows
+	fake := &testutil.Fake{QueryFunc: func(string, []any) (testutil.Result, error) {
+		return testutil.Result{Columns: []string{"id", "email", "name"}}, nil // no rows
 	}}
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()))
 
@@ -705,7 +705,7 @@ func TestGetReportsNotFound(t *testing.T) {
 // TestGetWrongPrimaryKeyArity covers the arity guard: a single-column key
 // rejects two supplied values before touching the database.
 func TestGetWrongPrimaryKeyArity(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()))
 
 	var u userRow
@@ -720,8 +720,8 @@ func TestGetWrongPrimaryKeyArity(t *testing.T) {
 // TestFindWithPredicatesAppliesWhere covers Find's predicate branch: the WHERE
 // is compiled into the load query.
 func TestFindWithPredicatesAppliesWhere(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: func(string, []any) (sqltest.Result, error) {
-		return sqltest.Result{
+	fake := &testutil.Fake{QueryFunc: func(string, []any) (testutil.Result, error) {
+		return testutil.Result{
 			Columns: []string{"id", "email", "name"},
 			Rows:    [][]driver.Value{{int64(1), "a@x", "A"}},
 		}, nil
@@ -742,8 +742,8 @@ func TestFindWithPredicatesAppliesWhere(t *testing.T) {
 // TestFindIntoPointerSlice covers Find's pointer-element branch: elements of a
 // []*Row are tracked through their own pointers.
 func TestFindIntoPointerSlice(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: func(string, []any) (sqltest.Result, error) {
-		return sqltest.Result{
+	fake := &testutil.Fake{QueryFunc: func(string, []any) (testutil.Result, error) {
+		return testutil.Result{
 			Columns: []string{"id", "email", "name"},
 			Rows:    [][]driver.Value{{int64(1), "a@x", "A"}, {int64(2), "b@x", "B"}},
 		}, nil
@@ -766,7 +766,7 @@ func TestFindIntoPointerSlice(t *testing.T) {
 // TestFindIntoNonSliceErrors covers Find's destination guard: a pointer to a
 // struct (not a slice) is rejected.
 func TestFindIntoNonSliceErrors(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: usersResult(1, "a@x", "A")}
+	fake := &testutil.Fake{QueryFunc: usersResult(1, "a@x", "A")}
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()))
 
 	var one userRow
@@ -778,7 +778,7 @@ func TestFindIntoNonSliceErrors(t *testing.T) {
 // TestRollbackOnRootScopeErrors covers the guard that Rollback is only valid on
 // a nested scope.
 func TestRollbackOnRootScopeErrors(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()))
 	if err := scope.Rollback(ctx()); err == nil {
 		t.Fatal("Rollback() on a root scope should error")
@@ -826,7 +826,7 @@ func strptr(s string) *string { return &s }
 // valueEqual (time.Time.Equal): an attached row that is not mutated — including
 // its nullable pointer and timestamp fields — emits no UPDATE.
 func TestAttachNoChangeAcrossPointerAndTime(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()))
 
 	row := &profileRow{ID: 1, Bio: strptr("hi"), Updated: time.Now()}
@@ -845,7 +845,7 @@ func TestAttachNoChangeAcrossPointerAndTime(t *testing.T) {
 // the pointee in place is still detected (normalize snapshots a copy of the
 // pointee), so only the changed column is written.
 func TestAttachDetectsInPlacePointerMutation(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()))
 
 	row := &profileRow{ID: 1, Bio: strptr("hi"), Updated: time.Unix(0, 0).UTC()}

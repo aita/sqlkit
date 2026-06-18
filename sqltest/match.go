@@ -1,4 +1,4 @@
-package querytest
+package sqltest
 
 import (
 	"fmt"

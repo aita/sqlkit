@@ -8,16 +8,16 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/internal/testutil"
 	"github.com/aita/sqlkit/sql"
 )
 
 func TestUnionFirstAppliesLimit(t *testing.T) {
 	var gotSQL string
-	fake := &sqltest.Fake{
-		QueryFunc: func(sqlText string, args []any) (sqltest.Result, error) {
+	fake := &testutil.Fake{
+		QueryFunc: func(sqlText string, args []any) (testutil.Result, error) {
 			gotSQL = sqlText
-			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}}}, nil
+			return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}}}, nil
 		},
 	}
 	db := sqlkit.WrapDB(fake.DB())
@@ -35,9 +35,9 @@ func TestUnionFirstAppliesLimit(t *testing.T) {
 }
 
 func TestUnionOneMultipleRowsIsErrTooManyRows(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(string, []any) (sqltest.Result, error) {
-			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}, {int64(2)}}}, nil
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}, {int64(2)}}}, nil
 		},
 	}
 	db := sqlkit.WrapDB(fake.DB())
@@ -53,10 +53,10 @@ func TestUnionOneMultipleRowsIsErrTooManyRows(t *testing.T) {
 
 func TestUnionPageAppliesLimitAndOffset(t *testing.T) {
 	var gotSQL string
-	fake := &sqltest.Fake{
-		QueryFunc: func(sqlText string, args []any) (sqltest.Result, error) {
+	fake := &testutil.Fake{
+		QueryFunc: func(sqlText string, args []any) (testutil.Result, error) {
 			gotSQL = sqlText
-			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}}}, nil
+			return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}}}, nil
 		},
 	}
 	db := sqlkit.WrapDB(fake.DB())
@@ -143,9 +143,9 @@ func TestUnionScans(t *testing.T) {
 }
 
 func TestUnionCount(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(sqlText string, args []any) (sqltest.Result, error) {
-			return sqltest.Result{Columns: []string{"count"}, Rows: [][]driver.Value{{int64(5)}}}, nil
+	fake := &testutil.Fake{
+		QueryFunc: func(sqlText string, args []any) (testutil.Result, error) {
+			return testutil.Result{Columns: []string{"count"}, Rows: [][]driver.Value{{int64(5)}}}, nil
 		},
 	}
 	db := sqlkit.WrapDB(fake.DB())

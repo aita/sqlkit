@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/internal/testutil"
 	"github.com/aita/sqlkit/sql"
 )
 
@@ -135,9 +135,9 @@ func TestInsertFromSelectAcceptsRawSQLQuery(t *testing.T) {
 }
 
 func TestInsertFromSelectReturningScan(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(string, []any) (sqltest.Result, error) {
-			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}, {int64(2)}}}, nil
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}, {int64(2)}}}, nil
 		},
 	}
 	db := sqlkit.WrapDB(fake.DB())
@@ -160,7 +160,7 @@ func TestInsertFromSelectReturningScan(t *testing.T) {
 }
 
 func TestInsertExecThroughDatabase(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 
 	if _, err := db.Insert(Users).Values(User{Email: "a@example.com"}).Exec(context.Background()); err != nil {
@@ -176,7 +176,7 @@ func TestInsertExecThroughDatabase(t *testing.T) {
 }
 
 func TestInsertBatchSizeSplitsExec(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 
 	users := []User{
@@ -212,13 +212,13 @@ func TestInsertBatchSizeSplitsExec(t *testing.T) {
 }
 
 func TestInsertBatchSizeSingleStatementWhenNotExceeded(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 
 	users := []User{{Email: "a@example.com"}, {Email: "b@example.com"}}
 	// batchSize >= rows, and batchSize <= 0, both run as a single statement.
 	for _, size := range []int{2, 5, 0, -1} {
-		fake = &sqltest.Fake{}
+		fake = &testutil.Fake{}
 		db = sqlkit.WrapDB(fake.DB())
 		if _, err := db.Insert(Users).Values(users).BatchSize(size).Exec(context.Background()); err != nil {
 			t.Fatalf("BatchSize(%d) Exec() error = %v", size, err)
@@ -233,7 +233,7 @@ func TestInsertBatchSizeKeepsColumnSetAcrossBatches(t *testing.T) {
 	// id is defaulted. Only a later batch carries a non-zero id, so the whole
 	// insert must include id in every batch (binding explicit zeroes) — the
 	// column set is derived from all rows, not per chunk.
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 
 	_, err := db.Insert(Users).Values(
@@ -273,7 +273,7 @@ func TestInsertBatchSizeIgnoredByToSQL(t *testing.T) {
 }
 
 func TestBuildErrorsSurfaceAtScanWithoutQuerying(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 
 	var out []User
@@ -287,7 +287,7 @@ func TestBuildErrorsSurfaceAtScanWithoutQuerying(t *testing.T) {
 }
 
 func TestBuildErrorsSurfaceAtExecWithoutQuerying(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 
 	if _, err := db.Insert(Users).Exec(context.Background()); err == nil {
@@ -409,7 +409,7 @@ func TestInsertValuesPassesValuerFields(t *testing.T) {
 	}
 	// database/sql converts the args via driver.Valuer at execution time;
 	// verify what the driver actually receives.
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 	q := db.Insert(Users).Values(struct {
 		Email upperString

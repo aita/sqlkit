@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/internal/testutil"
 )
 
 // captureObserver records every result it observes, as the destination given to
@@ -22,8 +22,8 @@ func (c *captureObserver) ObserveResult(_ context.Context, stmt sqlkit.Statement
 }
 
 // twoUsersResult is a canned two-row result for the Users fixture.
-func twoUsersResult() sqltest.Result {
-	return sqltest.Result{
+func twoUsersResult() testutil.Result {
+	return testutil.Result{
 		Columns: []string{"id", "email", "name"},
 		Rows: [][]driver.Value{
 			{int64(7), "a@example.com", nil},
@@ -35,7 +35,7 @@ func twoUsersResult() sqltest.Result {
 // TestResultObserverSeesScannedSlice verifies an observer receives the whole
 // materialized slice once, with the statement that produced it.
 func TestResultObserverSeesScannedSlice(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: func(string, []any) (sqltest.Result, error) { return twoUsersResult(), nil }}
+	fake := &testutil.Fake{QueryFunc: func(string, []any) (testutil.Result, error) { return twoUsersResult(), nil }}
 	obs := &captureObserver{}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithResultObserver(obs))
 
@@ -58,7 +58,7 @@ func TestResultObserverSeesScannedSlice(t *testing.T) {
 // TestResultObserverSingleRow verifies a single-row destination yields one
 // observation carrying that struct.
 func TestResultObserverSingleRow(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: func(string, []any) (sqltest.Result, error) { return usersResult(), nil }}
+	fake := &testutil.Fake{QueryFunc: func(string, []any) (testutil.Result, error) { return usersResult(), nil }}
 	obs := &captureObserver{}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithResultObserver(obs))
 
@@ -77,7 +77,7 @@ func TestResultObserverSingleRow(t *testing.T) {
 // TestResultObserverInheritedBySession verifies a session runs the database's
 // observers over results scanned through its transaction.
 func TestResultObserverInheritedBySession(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: func(string, []any) (sqltest.Result, error) { return usersResult(), nil }}
+	fake := &testutil.Fake{QueryFunc: func(string, []any) (testutil.Result, error) { return usersResult(), nil }}
 	obs := &captureObserver{}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithResultObserver(obs))
 	session := db.NewSession()
@@ -95,7 +95,7 @@ func TestResultObserverInheritedBySession(t *testing.T) {
 // TestResultObserverNotRunForWrites verifies observers are a read-side hook: a
 // write that returns no rows produces no observations.
 func TestResultObserverNotRunForWrites(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	obs := &captureObserver{}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithResultObserver(obs))
 

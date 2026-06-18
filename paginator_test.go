@@ -9,21 +9,21 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/internal/testutil"
 )
 
 // paginatorFake returns a fake that serves the given rows and records the last
 // statement and args.
-func paginatorFake(rows [][]driver.Value, sqlOut *string, argsOut *[]any) *sqltest.Fake {
-	return &sqltest.Fake{
-		QueryFunc: func(sqlText string, args []any) (sqltest.Result, error) {
+func paginatorFake(rows [][]driver.Value, sqlOut *string, argsOut *[]any) *testutil.Fake {
+	return &testutil.Fake{
+		QueryFunc: func(sqlText string, args []any) (testutil.Result, error) {
 			if sqlOut != nil {
 				*sqlOut = sqlText
 			}
 			if argsOut != nil {
 				*argsOut = args
 			}
-			return sqltest.Result{Columns: []string{"id", "email", "name"}, Rows: rows}, nil
+			return testutil.Result{Columns: []string{"id", "email", "name"}, Rows: rows}, nil
 		},
 	}
 }
