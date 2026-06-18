@@ -4,13 +4,13 @@ import (
 	"context"
 	"testing"
 
-	"github.com/aita/sqlkit/inspector"
+	"github.com/aita/sqlkit/introspect"
 	"github.com/aita/sqlkit/meta"
 	"github.com/aita/sqlkit/migrate"
 )
 
 // TestMigratorAgainstPostgres applies and rolls back versioned migrations
-// against a real PostgreSQL instance, confirming the sqldef-authored operations
+// against a real PostgreSQL instance, confirming the decl-authored operations
 // and the schema_migrations history work end to end.
 func TestMigratorAgainstPostgres(t *testing.T) {
 	eng := engineNamed(t, "postgres")
@@ -35,7 +35,7 @@ func TestMigratorAgainstPostgres(t *testing.T) {
 		t.Fatalf("Up: %v", err)
 	}
 
-	model, err := inspector.Inspect(ctx, db.SQL(), eng.name, testSchema)
+	model, err := introspect.Schema(ctx, db.SQL(), eng.name, testSchema)
 	if err != nil {
 		t.Fatalf("inspect after up: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestMigratorAgainstPostgres(t *testing.T) {
 	if err := m.DownTo(ctx, ""); err != nil {
 		t.Fatalf("DownTo: %v", err)
 	}
-	model, err = inspector.Inspect(ctx, db.SQL(), eng.name, testSchema)
+	model, err = introspect.Schema(ctx, db.SQL(), eng.name, testSchema)
 	if err != nil {
 		t.Fatalf("inspect after down: %v", err)
 	}

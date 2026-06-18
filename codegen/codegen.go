@@ -188,8 +188,8 @@ type relationModel struct {
 
 // Generate renders the catalog into one or more Go source files according to
 // opts and returns their formatted contents. The md argument is the built
-// schema model (meta.Metadata) — produce it with sqldef's Catalog.Build, the
-// inspector, or by hand. The dialect (opts.Dialect, default postgres) selects
+// schema model (meta.Metadata) — produce it with decl's Catalog.Build, the
+// introspection, or by hand. The dialect (opts.Dialect, default postgres) selects
 // the default SQL→Go type table.
 func Generate(md meta.Metadata, opts Options) ([]File, error) {
 	if opts.PackageName == "" {

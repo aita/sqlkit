@@ -2,7 +2,7 @@ package main
 
 // migrateCmd groups the migration subcommands. Every command needs the project's
 // migrations, which are Go code, so each compiles the migrations package on the
-// fly and dispatches to migrate.RunCLI inside it — see bridge.go. "new" only
+// fly and dispatches to migrate.NewCLI().Dispatch inside it — see bridge.go. "new" only
 // reads the migration set to scaffold a file, so it does not touch the database.
 type migrateCmd struct {
 	New          migrateNewCmd   `cmd:"" help:"Scaffold a new migration file whose DownRevision is the current head."`

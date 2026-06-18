@@ -2,7 +2,7 @@
 // receive an Operator. A Migration's Up and Down functions call
 // op.CreateTable / op.AddColumn / op.DropColumn / op.CreateIndex /
 // op.CreateForeignKey / ... to perform the change; columns are declared with the
-// sqldef DSL (portable types and options), and the migrate package never asks
+// decl DSL (portable types and options), and the migrate package never asks
 // the author to touch the sql package directly. The Migrator applies pending
 // migrations inside a transaction and records every apply and rollback in an
 // append-only history table (schema_migrations by default).
@@ -18,8 +18,8 @@
 //		Name:         "create_tags",
 //		Up: func(op *migrate.Operator) {
 //			op.CreateTable("tags",
-//				sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-//				sqldef.Column("name", sqldef.VarChar(64), sqldef.Unique()),
+//				decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+//				decl.Column("name", decl.VarChar(64), decl.Unique()),
 //			)
 //		},
 //		Down: func(op *migrate.Operator) { op.DropTable("tags") },

@@ -12,10 +12,10 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/aita/sqlkit/codegen"
-	"github.com/aita/sqlkit/inspector"
+	"github.com/aita/sqlkit/introspect"
 )
 
-// inspectCmd introspects a live database and emits a sqldef catalog file.
+// inspectCmd introspects a live database and emits a decl catalog file.
 type inspectCmd struct {
 	DSN     string   `help:"Database connection string." required:""`
 	Driver  string   `help:"database/sql driver name (pgx or mysql)." default:"pgx"`
@@ -39,7 +39,7 @@ func (c *inspectCmd) Run() error {
 	}
 	defer db.Close()
 
-	inspected, err := inspector.Inspect(ctx, db, dialect, c.Schema)
+	inspected, err := introspect.Schema(ctx, db, dialect, c.Schema)
 	if err != nil {
 		return err
 	}
@@ -95,7 +95,7 @@ func writeFiles(files []codegen.File, out string) error {
 	return nil
 }
 
-// dialectFor maps a driver name to the inspector dialect.
+// dialectFor maps a driver name to the introspection dialect.
 func dialectFor(driver string) string {
 	switch driver {
 	case "mysql":

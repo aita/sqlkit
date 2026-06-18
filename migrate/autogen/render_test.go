@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aita/sqlkit/decl"
 	"github.com/aita/sqlkit/meta"
 	"github.com/aita/sqlkit/sql"
-	"github.com/aita/sqlkit/sqldef"
 )
 
 // assertValidGo wraps a rendered body in a migration scaffold and gofmts it, so
@@ -20,7 +20,7 @@ func assertValidGo(t *testing.T, body string) {
 import (
 	"github.com/aita/sqlkit/migrate"
 	"github.com/aita/sqlkit/sql"
-	"github.com/aita/sqlkit/sqldef"
+	"github.com/aita/sqlkit/decl"
 )
 
 var _ = func(op *migrate.Operator) {
@@ -29,7 +29,7 @@ var _ = func(op *migrate.Operator) {
 
 var (
 	_ = sql.Raw
-	_ = sqldef.BigInt
+	_ = decl.BigInt
 )
 `, body)
 	if _, err := format.Source([]byte(src)); err != nil {
@@ -47,7 +47,7 @@ func mustDialect(t *testing.T, name string) sql.Dialect {
 }
 
 // build assembles a catalog into meta.Metadata, failing the test on error.
-func build(t *testing.T, c *sqldef.Catalog) meta.Metadata {
+func build(t *testing.T, c *decl.Catalog) meta.Metadata {
 	t.Helper()
 	md, err := c.Build()
 	if err != nil {
@@ -66,21 +66,21 @@ func render(t *testing.T, source, target meta.Metadata, dialect string, renames 
 }
 
 func TestRenderAddTable(t *testing.T) {
-	source := func() *sqldef.Catalog {
-		c := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
+	source := func() *decl.Catalog {
+		c := decl.NewCatalog(decl.DefaultSchema("public"))
 		c.Table("users",
-			sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+			decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
 		)
 		return c
 	}
-	target := func() *sqldef.Catalog {
-		c := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
+	target := func() *decl.Catalog {
+		c := decl.NewCatalog(decl.DefaultSchema("public"))
 		c.Table("users",
-			sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+			decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
 		)
 		c.Table("posts",
-			sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-			sqldef.Column("user_id", sqldef.BigInt, sqldef.References("users", "id", sqldef.OnDelete(sqldef.Cascade))),
+			decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+			decl.Column("user_id", decl.BigInt, decl.References("users", "id", decl.OnDelete(decl.Cascade))),
 		)
 		return c
 	}
@@ -90,8 +90,8 @@ func TestRenderAddTable(t *testing.T) {
 	assertValidGo(t, res.Down)
 	wantUp := []string{
 		`op.CreateTable("posts",`,
-		`sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default())`,
-		`op.CreateForeignKey("fk_posts_user_id", "posts", []string{"user_id"}, "users", []string{"id"}, migrate.OnDelete(sqldef.Cascade))`,
+		`decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default())`,
+		`op.CreateForeignKey("fk_posts_user_id", "posts", []string{"user_id"}, "users", []string{"id"}, migrate.OnDelete(decl.Cascade))`,
 	}
 	for _, w := range wantUp {
 		if !strings.Contains(res.Up, w) {
@@ -109,26 +109,26 @@ func TestRenderAddTable(t *testing.T) {
 }
 
 func TestRenderAddDropColumn(t *testing.T) {
-	source := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
+	source := decl.NewCatalog(decl.DefaultSchema("public"))
 	source.Table("users",
-		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("old", sqldef.Text, sqldef.Nullable()),
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("old", decl.Text, decl.Nullable()),
 	)
-	target := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
+	target := decl.NewCatalog(decl.DefaultSchema("public"))
 	target.Table("users",
-		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("email", sqldef.VarChar(255)),
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("email", decl.VarChar(255)),
 	)
 
 	res := render(t, build(t, source), build(t, target), "postgres", Renames{})
-	if !strings.Contains(res.Up, `op.AddColumn("users", sqldef.Column("email", sqldef.VarChar(255)))`) {
+	if !strings.Contains(res.Up, `op.AddColumn("users", decl.Column("email", decl.VarChar(255)))`) {
 		t.Errorf("Up missing AddColumn:\n%s", res.Up)
 	}
 	if !strings.Contains(res.Up, `op.DropColumn("users", "old")`) {
 		t.Errorf("Up missing DropColumn:\n%s", res.Up)
 	}
 	// Down reverses: adds back "old", drops "email".
-	if !strings.Contains(res.Down, `op.AddColumn("users", sqldef.Column("old", sqldef.Text, sqldef.Nullable()))`) {
+	if !strings.Contains(res.Down, `op.AddColumn("users", decl.Column("old", decl.Text, decl.Nullable()))`) {
 		t.Errorf("Down missing AddColumn(old):\n%s", res.Down)
 	}
 	if !strings.Contains(res.Down, `op.DropColumn("users", "email")`) {
@@ -137,20 +137,20 @@ func TestRenderAddDropColumn(t *testing.T) {
 }
 
 func TestRenderModifyColumn(t *testing.T) {
-	source := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
+	source := decl.NewCatalog(decl.DefaultSchema("public"))
 	source.Table("users",
-		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("name", sqldef.VarChar(100)),
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("name", decl.VarChar(100)),
 	)
-	target := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
+	target := decl.NewCatalog(decl.DefaultSchema("public"))
 	target.Table("users",
-		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("name", sqldef.Text, sqldef.Nullable()),
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("name", decl.Text, decl.Nullable()),
 	)
 
 	for _, dialect := range []string{"postgres", "mysql"} {
 		res := render(t, build(t, source), build(t, target), dialect, Renames{})
-		want := `op.ModifyColumn("users", sqldef.Column("name", sqldef.Text, sqldef.Nullable()))`
+		want := `op.ModifyColumn("users", decl.Column("name", decl.Text, decl.Nullable()))`
 		if !strings.Contains(res.Up, want) {
 			t.Errorf("[%s] Up missing %q\n%s", dialect, want, res.Up)
 		}
@@ -158,15 +158,15 @@ func TestRenderModifyColumn(t *testing.T) {
 }
 
 func TestRenderColumnRename(t *testing.T) {
-	source := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
+	source := decl.NewCatalog(decl.DefaultSchema("public"))
 	source.Table("users",
-		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("name", sqldef.Text),
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("name", decl.Text),
 	)
-	target := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
+	target := decl.NewCatalog(decl.DefaultSchema("public"))
 	target.Table("users",
-		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("full_name", sqldef.Text),
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("full_name", decl.Text),
 	)
 
 	renames := Renames{Columns: []ColumnRename{{Table: "users", From: "name", To: "full_name"}}}
@@ -184,15 +184,15 @@ func TestRenderColumnRename(t *testing.T) {
 }
 
 func TestRenderRenameHeuristic(t *testing.T) {
-	source := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
+	source := decl.NewCatalog(decl.DefaultSchema("public"))
 	source.Table("users",
-		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("name", sqldef.Text),
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("name", decl.Text),
 	)
-	target := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
+	target := decl.NewCatalog(decl.DefaultSchema("public"))
 	target.Table("users",
-		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("full_name", sqldef.Text),
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("full_name", decl.Text),
 	)
 	res := render(t, build(t, source), build(t, target), "postgres", Renames{})
 	if !strings.Contains(res.Up, "possible rename: column users.name -> full_name?") {
@@ -202,11 +202,11 @@ func TestRenderRenameHeuristic(t *testing.T) {
 
 func TestRenderFKActionChange(t *testing.T) {
 	mk := func(action meta.ReferentialAction) meta.Metadata {
-		c := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
-		c.Table("users", sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()))
+		c := decl.NewCatalog(decl.DefaultSchema("public"))
+		c.Table("users", decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()))
 		c.Table("posts",
-			sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-			sqldef.Column("user_id", sqldef.BigInt, sqldef.References("users", "id", sqldef.OnDelete(action))),
+			decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+			decl.Column("user_id", decl.BigInt, decl.References("users", "id", decl.OnDelete(action))),
 		)
 		return build(t, c)
 	}
@@ -214,15 +214,15 @@ func TestRenderFKActionChange(t *testing.T) {
 	if !strings.Contains(res.Up, `op.DropForeignKey("fk_posts_user_id", "posts")`) {
 		t.Errorf("Up missing DropForeignKey for changed action:\n%s", res.Up)
 	}
-	if !strings.Contains(res.Up, `migrate.OnDelete(sqldef.Cascade)`) {
+	if !strings.Contains(res.Up, `migrate.OnDelete(decl.Cascade)`) {
 		t.Errorf("Up missing re-created FK with new action:\n%s", res.Up)
 	}
 }
 
 func TestRenderNoChange(t *testing.T) {
 	mk := func() meta.Metadata {
-		c := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
-		c.Table("users", sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()))
+		c := decl.NewCatalog(decl.DefaultSchema("public"))
+		c.Table("users", decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()))
 		return build(t, c)
 	}
 	res := render(t, mk(), mk(), "postgres", Renames{})
@@ -232,19 +232,19 @@ func TestRenderNoChange(t *testing.T) {
 }
 
 func TestRenderIndexesAsVariadic(t *testing.T) {
-	source := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
-	source.Table("users", sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()))
-	target := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
+	source := decl.NewCatalog(decl.DefaultSchema("public"))
+	source.Table("users", decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()))
+	target := decl.NewCatalog(decl.DefaultSchema("public"))
 	target.Table("users",
-		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("email", sqldef.Text),
-		sqldef.UniqueIndex("email"),
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("email", decl.Text),
+		decl.UniqueIndex("email"),
 	)
-	// New table with an inline index, to exercise sqldef.Index rendering too.
+	// New table with an inline index, to exercise decl.Index rendering too.
 	target.Table("posts",
-		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("author", sqldef.BigInt),
-		sqldef.Index("author"),
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("author", decl.BigInt),
+		decl.Index("author"),
 	)
 	res := render(t, build(t, source), build(t, target), "postgres", Renames{})
 	assertValidGo(t, res.Up)
@@ -252,7 +252,7 @@ func TestRenderIndexesAsVariadic(t *testing.T) {
 	if !strings.Contains(res.Up, `op.CreateUniqueIndex("uq_users_email", "users", "email")`) {
 		t.Errorf("index columns must be variadic args, not a slice:\n%s", res.Up)
 	}
-	if !strings.Contains(res.Up, `sqldef.Index("author")`) {
+	if !strings.Contains(res.Up, `decl.Index("author")`) {
 		t.Errorf("created-table index must be variadic args:\n%s", res.Up)
 	}
 	if strings.Contains(res.Up, `[]string{"email"}`) || strings.Contains(res.Up, `[]string{"author"}`) {
@@ -260,35 +260,35 @@ func TestRenderIndexesAsVariadic(t *testing.T) {
 	}
 }
 
-func TestRenderPlainForeignKeyNoSqldefImport(t *testing.T) {
-	source := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
-	source.Table("users", sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()))
+func TestRenderPlainForeignKeyNoDeclImport(t *testing.T) {
+	source := decl.NewCatalog(decl.DefaultSchema("public"))
+	source.Table("users", decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()))
 	source.Table("posts",
-		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("user_id", sqldef.BigInt),
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("user_id", decl.BigInt),
 	)
-	target := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
-	target.Table("users", sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()))
+	target := decl.NewCatalog(decl.DefaultSchema("public"))
+	target.Table("users", decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()))
 	target.Table("posts",
-		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("user_id", sqldef.BigInt, sqldef.References("users", "id")), // no action
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("user_id", decl.BigInt, decl.References("users", "id")), // no action
 	)
 	res := render(t, build(t, source), build(t, target), "postgres", Renames{})
 	if !strings.Contains(res.Up, `op.CreateForeignKey(`) {
 		t.Fatalf("expected CreateForeignKey:\n%s", res.Up)
 	}
-	if res.UsesSqldef {
-		t.Errorf("a plain foreign key must not flag the sqldef import (unused import); Up=%s", res.Up)
+	if res.UsesDecl {
+		t.Errorf("a plain foreign key must not flag the decl import (unused import); Up=%s", res.Up)
 	}
 }
 
 func TestRenderAddedColumnComment(t *testing.T) {
-	source := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
-	source.Table("users", sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()))
-	target := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
+	source := decl.NewCatalog(decl.DefaultSchema("public"))
+	source.Table("users", decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()))
+	target := decl.NewCatalog(decl.DefaultSchema("public"))
 	target.Table("users",
-		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("email", sqldef.Text, sqldef.Comment("login")),
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("email", decl.Text, decl.Comment("login")),
 	)
 	res := render(t, build(t, source), build(t, target), "postgres", Renames{})
 	if !strings.Contains(res.Up, `op.Execute(sql.CommentOnColumn(sql.Table{Name: "users"}, "email", "login"))`) {
@@ -297,15 +297,15 @@ func TestRenderAddedColumnComment(t *testing.T) {
 }
 
 func TestRenderRenameTableBeforeDrops(t *testing.T) {
-	source := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
+	source := decl.NewCatalog(decl.DefaultSchema("public"))
 	source.Table("clients",
-		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("note", sqldef.Text),
-		sqldef.Index("note"),
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("note", decl.Text),
+		decl.Index("note"),
 	)
-	target := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
+	target := decl.NewCatalog(decl.DefaultSchema("public"))
 	target.Table("customers",
-		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
 	)
 	renames := Renames{Tables: []TableRename{{From: "clients", To: "customers"}}}
 	res := render(t, build(t, source), build(t, target), "postgres", renames)
@@ -324,20 +324,20 @@ func TestRenderRenameTableBeforeDrops(t *testing.T) {
 }
 
 func TestRenderMultiSchemaSameName(t *testing.T) {
-	mk := func(auditCols ...sqldef.TableElement) meta.Metadata {
-		c := sqldef.NewCatalog()
+	mk := func(auditCols ...decl.TableElement) meta.Metadata {
+		c := decl.NewCatalog()
 		pub := c.Schema("public")
 		aud := c.Schema("audit")
-		pub.Table("users", sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()))
-		aud.Table("users", append([]sqldef.TableElement{
-			sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+		pub.Table("users", decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()))
+		aud.Table("users", append([]decl.TableElement{
+			decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
 		}, auditCols...)...)
 		return build(t, c)
 	}
 	// audit.users gains a column; public.users is unchanged. The same-named
 	// public table must not mask the audit one.
-	res := render(t, mk(), mk(sqldef.Column("at", sqldef.Timestamp)), "postgres", Renames{})
-	if !strings.Contains(res.Up, `op.AddColumn("users", sqldef.Column("at", sqldef.Timestamp))`) {
+	res := render(t, mk(), mk(decl.Column("at", decl.Timestamp)), "postgres", Renames{})
+	if !strings.Contains(res.Up, `op.AddColumn("users", decl.Column("at", decl.Timestamp))`) {
 		t.Errorf("multi-schema change on audit.users was lost:\n%s", res.Up)
 	}
 }

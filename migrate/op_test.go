@@ -6,8 +6,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/aita/sqlkit/decl"
 	"github.com/aita/sqlkit/sql"
-	"github.com/aita/sqlkit/sqldef"
 )
 
 // captureExec is a fake Execer that compiles each statement and records its SQL.
@@ -38,8 +38,8 @@ func TestOperatorCreateTable(t *testing.T) {
 	cap := newCapture()
 	op := newOperator(context.Background(), cap, "public")
 	op.CreateTable("users",
-		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("email", sqldef.VarChar(255), sqldef.Unique()),
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("email", decl.VarChar(255), decl.Unique()),
 	)
 	if err := op.Err(); err != nil {
 		t.Fatalf("Err = %v", err)
@@ -58,10 +58,10 @@ func TestOperatorCreateTable(t *testing.T) {
 func TestOperatorAlterations(t *testing.T) {
 	cap := newCapture()
 	op := newOperator(context.Background(), cap, "public")
-	op.AddColumn("users", sqldef.Column("name", sqldef.Text, sqldef.Nullable()))
+	op.AddColumn("users", decl.Column("name", decl.Text, decl.Nullable()))
 	op.DropColumn("users", "age")
 	op.RenameColumn("users", "name", "full_name")
-	op.AlterColumn("users", "score", TypeTo(sqldef.BigInt), SetNullable(true))
+	op.AlterColumn("users", "score", TypeTo(decl.BigInt), SetNullable(true))
 	op.CreateForeignKey("fk_posts_user_id", "posts", []string{"user_id"}, "users", []string{"id"})
 	op.DropForeignKey("fk_posts_user_id", "posts")
 	op.CreateIndex("idx_posts_user_id", "posts", "user_id")
@@ -86,7 +86,7 @@ func TestOperatorCreateTemporaryTable(t *testing.T) {
 	cap := newCapture()
 	op := newOperator(context.Background(), cap, "public")
 	op.CreateTemporaryTable("scratch",
-		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
 	)
 	if err := op.Err(); err != nil {
 		t.Fatalf("Err = %v", err)

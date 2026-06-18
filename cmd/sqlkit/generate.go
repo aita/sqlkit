@@ -9,13 +9,13 @@ import (
 )
 
 // generateCmd renders the typed table bindings from a package that declares a
-// sqldef catalog, so you don't have to write the small generator program
+// decl catalog, so you don't have to write the small generator program
 // yourself. It runs a throwaway program that imports the catalog package and
 // calls codegen.Generate (see shim.go). DDL is a separate concern — use the
 // ddl subcommand for schema.sql.
 type generateCmd struct {
-	Package         string   `arg:"" help:"Import path or directory of the package that declares the sqldef catalog."`
-	Var             string   `help:"Name of the *sqldef.Catalog variable to generate from." default:"Catalog" name:"var"`
+	Package         string   `arg:"" help:"Import path or directory of the package that declares the decl catalog."`
+	Var             string   `help:"Name of the *decl.Catalog variable to generate from." default:"Catalog" name:"var"`
 	Name            string   `help:"Package name of the generated bindings." required:""`
 	Out             string   `help:"Output directory for the generated bindings." required:""`
 	Tables          []string `help:"Tables to include (default: all)."`
@@ -69,12 +69,12 @@ import (
 
 	schema {{printf "%q" .ImportPath}}
 	"github.com/aita/sqlkit/codegen"
-	"github.com/aita/sqlkit/sqldef"
+	"github.com/aita/sqlkit/decl"
 )
 
-// Compile-time guarantee that the named variable is a *sqldef.Catalog, so an
+// Compile-time guarantee that the named variable is a *decl.Catalog, so an
 // ill-typed --var fails with a clear error instead of a confusing one.
-var _ *sqldef.Catalog = schema.{{.Var}}
+var _ *decl.Catalog = schema.{{.Var}}
 
 func main() {
 	md, err := schema.{{.Var}}.Build()

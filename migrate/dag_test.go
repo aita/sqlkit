@@ -6,9 +6,9 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit"
+	"github.com/aita/sqlkit/decl"
 	"github.com/aita/sqlkit/internal/sqltest"
 	"github.com/aita/sqlkit/migrate"
-	"github.com/aita/sqlkit/sqldef"
 )
 
 // mk builds a simple create/drop migration for one table.
@@ -18,7 +18,7 @@ func mk(rev, down, name, table string) migrate.Migration {
 		DownRevision: down,
 		Name:         name,
 		Up: func(op *migrate.Operator) {
-			op.CreateTable(table, sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()))
+			op.CreateTable(table, decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()))
 		},
 		Down: func(op *migrate.Operator) { op.DropTable(table) },
 	}
@@ -31,7 +31,7 @@ func mergeMigrations() []migrate.Migration {
 		DownRevisions: []string{"0002a", "0002b"},
 		Name:          "merge",
 		Up: func(op *migrate.Operator) {
-			op.CreateTable("t3", sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()))
+			op.CreateTable("t3", decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()))
 		},
 		Down: func(op *migrate.Operator) { op.DropTable("t3") },
 	}

@@ -6,9 +6,9 @@ import (
 
 	"github.com/aita/sqlkit"
 	"github.com/aita/sqlkit/dbtest"
+	"github.com/aita/sqlkit/decl"
 	"github.com/aita/sqlkit/internal/sqltest"
 	"github.com/aita/sqlkit/meta"
-	"github.com/aita/sqlkit/sqldef"
 )
 
 // schemaModel builds a two-table catalog (users, then posts) as meta.Metadata.
@@ -17,17 +17,17 @@ import (
 // than a bare pair of tables.
 func schemaModel(t *testing.T) meta.Metadata {
 	t.Helper()
-	cat := sqldef.NewCatalog()
+	cat := decl.NewCatalog()
 	public := cat.Schema("public")
 	public.Table("users",
-		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("email", sqldef.VarChar(255), sqldef.Unique()),
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("email", decl.VarChar(255), decl.Unique()),
 	)
 	public.Table("posts",
-		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("user_id", sqldef.BigInt, sqldef.References("users", "id")),
-		sqldef.Column("title", sqldef.VarChar(255)),
-		sqldef.Index("user_id"),
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("user_id", decl.BigInt, decl.References("users", "id")),
+		decl.Column("title", decl.VarChar(255)),
+		decl.Index("user_id"),
 	)
 	md, err := cat.Build()
 	if err != nil {

@@ -11,9 +11,9 @@ package integration
 // renders matches the columns those bindings name.
 
 import (
+	"github.com/aita/sqlkit/decl"
 	"github.com/aita/sqlkit/migrate"
 	"github.com/aita/sqlkit/sql"
-	"github.com/aita/sqlkit/sqldef"
 )
 
 // testSchema is the schema (PostgreSQL schema / MySQL database) the suite's
@@ -28,37 +28,37 @@ var testCatalog = newTestCatalog()
 // newTestCatalog declares the blog schema: users authored posts (has-many) and
 // own at most one profile (has-one). It matches the blogdb bindings exactly so
 // the same schema backs both the DDL path and the typed query path.
-func newTestCatalog() *sqldef.Catalog {
-	cat := sqldef.NewCatalog()
+func newTestCatalog() *decl.Catalog {
+	cat := decl.NewCatalog()
 	public := cat.Schema(testSchema)
 
 	// Registered blog authors.
 	public.Table("users",
-		sqldef.TableComment("Registered blog authors"),
-		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("email", sqldef.VarChar(255), sqldef.Unique(), sqldef.Comment("Unique login address")),
-		sqldef.Column("name", sqldef.Text, sqldef.Nullable()),
-		sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default(sql.Raw("now()"))),
+		decl.TableComment("Registered blog authors"),
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("email", decl.VarChar(255), decl.Unique(), decl.Comment("Unique login address")),
+		decl.Column("name", decl.Text, decl.Nullable()),
+		decl.Column("created_at", decl.Timestamp, decl.Default(sql.Raw("now()"))),
 	)
 
 	// Posts reference the user that wrote them (has-many).
 	public.Table("posts",
-		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("user_id", sqldef.BigInt, sqldef.References("users", "id")),
-		sqldef.Column("title", sqldef.Text),
-		sqldef.Column("body", sqldef.Text, sqldef.Nullable()),
-		sqldef.Column("published", sqldef.Bool, sqldef.Default(sql.Raw("false"))),
-		sqldef.Index("user_id"),
-		sqldef.Check(sql.Raw("title <> ''")),
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("user_id", decl.BigInt, decl.References("users", "id")),
+		decl.Column("title", decl.Text),
+		decl.Column("body", decl.Text, decl.Nullable()),
+		decl.Column("published", decl.Bool, decl.Default(sql.Raw("false"))),
+		decl.Index("user_id"),
+		decl.Check(sql.Raw("title <> ''")),
 	)
 
 	// Profiles hold one optional profile per user; the unique user_id makes it a
 	// has-one relation.
 	public.Table("profiles",
-		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("user_id", sqldef.BigInt, sqldef.References("users", "id"), sqldef.Unique()),
-		sqldef.Column("bio", sqldef.Text, sqldef.Nullable()),
-		sqldef.Column("public", sqldef.Bool, sqldef.Default(sql.Raw("false"))),
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("user_id", decl.BigInt, decl.References("users", "id"), decl.Unique()),
+		decl.Column("bio", decl.Text, decl.Nullable()),
+		decl.Column("public", decl.Bool, decl.Default(sql.Raw("false"))),
 	)
 
 	return cat
@@ -81,8 +81,8 @@ func testMigrations() []migrate.Migration {
 			Name:         "create_tags",
 			Up: func(op *migrate.Operator) {
 				op.CreateTable("tags",
-					sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-					sqldef.Column("name", sqldef.VarChar(64), sqldef.Unique()),
+					decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+					decl.Column("name", decl.VarChar(64), decl.Unique()),
 				)
 			},
 			Down: func(op *migrate.Operator) { op.DropTable("tags") },
@@ -92,7 +92,7 @@ func testMigrations() []migrate.Migration {
 			DownRevision: "0001",
 			Name:         "add_tags_color",
 			Up: func(op *migrate.Operator) {
-				op.AddColumn("tags", sqldef.Column("color", sqldef.VarChar(16), sqldef.Nullable()))
+				op.AddColumn("tags", decl.Column("color", decl.VarChar(16), decl.Nullable()))
 			},
 			Down: func(op *migrate.Operator) { op.DropColumn("tags", "color") },
 		},

@@ -59,10 +59,10 @@ type Options struct {
 
 // Result is the rendered migration bodies and the imports they need.
 type Result struct {
-	Up         string
-	Down       string
-	UsesSQL    bool // references the sql package (sql.Raw, sql.CommentOn...)
-	UsesSqldef bool // references the sqldef package (almost always true)
+	Up       string
+	Down     string
+	UsesSQL  bool // references the sql package (sql.Raw, sql.CommentOn...)
+	UsesDecl bool // references the decl package (almost always true)
 }
 
 // Empty reports whether the diff produced no operations in either direction.
@@ -88,19 +88,19 @@ func Render(source, target meta.Metadata, opts Options) (Result, error) {
 		return Result{}, err
 	}
 	return Result{
-		Up:         upBody,
-		Down:       downBody,
-		UsesSQL:    up.usesSQL || down.usesSQL,
-		UsesSqldef: up.usesSqldef || down.usesSqldef,
+		Up:       upBody,
+		Down:     downBody,
+		UsesSQL:  up.usesSQL || down.usesSQL,
+		UsesDecl: up.usesDecl || down.usesDecl,
 	}, nil
 }
 
 // renderer accumulates the op.* statements for one direction of a plan.
 type renderer struct {
-	dialect    sql.Dialect
-	renames    Renames
-	usesSQL    bool
-	usesSqldef bool
+	dialect  sql.Dialect
+	renames  Renames
+	usesSQL  bool
+	usesDecl bool
 }
 
 // plan walks from -> to and returns the ordered op.* statements as Go source
@@ -410,9 +410,9 @@ func (r *renderer) columnChange(table string, oc, nc meta.Column, alters, commen
 func (r *renderer) createTable(t meta.Table) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "op.CreateTable(%q,\n", t.Name)
-	r.usesSqldef = true
+	r.usesDecl = true
 	if t.Comment != "" {
-		fmt.Fprintf(&b, "sqldef.TableComment(%q),\n", t.Comment)
+		fmt.Fprintf(&b, "decl.TableComment(%q),\n", t.Comment)
 	}
 	for _, c := range t.Columns {
 		el, err := r.columnElement(c)
@@ -422,9 +422,9 @@ func (r *renderer) createTable(t meta.Table) (string, error) {
 		fmt.Fprintf(&b, "%s,\n", el)
 	}
 	for _, ix := range t.Indexes {
-		call := "sqldef.Index"
+		call := "decl.Index"
 		if ix.Unique {
-			call = "sqldef.UniqueIndex"
+			call = "decl.UniqueIndex"
 		}
 		fmt.Fprintf(&b, "%s(%s),\n", call, quotedList(ix.Columns))
 	}
@@ -433,20 +433,20 @@ func (r *renderer) createTable(t meta.Table) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		fmt.Fprintf(&b, "sqldef.Check(sql.Raw(%q)),\n", text)
+		fmt.Fprintf(&b, "decl.Check(sql.Raw(%q)),\n", text)
 		r.usesSQL = true
 	}
 	b.WriteString(")")
 	return b.String(), nil
 }
 
-// columnElement renders a sqldef.Column element with its intrinsic options.
+// columnElement renders a decl.Column element with its intrinsic options.
 func (r *renderer) columnElement(c meta.Column) (string, error) {
-	r.usesSqldef = true
+	r.usesDecl = true
 	var b strings.Builder
-	fmt.Fprintf(&b, "sqldef.Column(%q, %s", c.Name, codegen.SqldefTypeExpr(c, r.dialect.Name()))
+	fmt.Fprintf(&b, "decl.Column(%q, %s", c.Name, codegen.DeclTypeExpr(c, r.dialect.Name()))
 	if c.PrimaryKey {
-		b.WriteString(", sqldef.PrimaryKey()")
+		b.WriteString(", decl.PrimaryKey()")
 	}
 	if c.HasDefault {
 		if c.DefaultExpr != nil {
@@ -454,35 +454,35 @@ func (r *renderer) columnElement(c meta.Column) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			fmt.Fprintf(&b, ", sqldef.Default(sql.Raw(%q))", text)
+			fmt.Fprintf(&b, ", decl.Default(sql.Raw(%q))", text)
 			r.usesSQL = true
 		} else {
-			b.WriteString(", sqldef.Default()")
+			b.WriteString(", decl.Default()")
 		}
 	}
 	if c.Nullable {
-		b.WriteString(", sqldef.Nullable()")
+		b.WriteString(", decl.Nullable()")
 	}
 	if c.Comment != "" {
-		fmt.Fprintf(&b, ", sqldef.Comment(%q)", c.Comment)
+		fmt.Fprintf(&b, ", decl.Comment(%q)", c.Comment)
 	}
 	b.WriteString(")")
 	return b.String(), nil
 }
 
 // fkCreate renders an op.CreateForeignKey call with any referential actions. It
-// flags the sqldef import only when an action constant (sqldef.*) is emitted —
-// a plain foreign key references neither sqldef nor sql.
+// flags the decl import only when an action constant (decl.*) is emitted —
+// a plain foreign key references neither decl nor sql.
 func (r *renderer) fkCreate(table string, fk meta.ForeignKey) string {
 	s := fmt.Sprintf("op.CreateForeignKey(%q, %q, %s, %q, %s",
 		fk.Name, table, quotedArgs(fk.Columns), fk.RefTable, quotedArgs(fk.RefColumns))
 	if expr := codegen.ReferentialActionExpr(fk.OnDelete); expr != "" {
 		s += ", migrate.OnDelete(" + expr + ")"
-		r.usesSqldef = true
+		r.usesDecl = true
 	}
 	if expr := codegen.ReferentialActionExpr(fk.OnUpdate); expr != "" {
 		s += ", migrate.OnUpdate(" + expr + ")"
-		r.usesSqldef = true
+		r.usesDecl = true
 	}
 	return s + ")"
 }
@@ -580,7 +580,7 @@ func quotedArgs(items []string) string {
 }
 
 // quotedList renders a bare, comma-separated list of quoted strings, for
-// variadic string parameters (op.CreateIndex, op.AddPrimaryKey, sqldef.Index).
+// variadic string parameters (op.CreateIndex, op.AddPrimaryKey, decl.Index).
 func quotedList(items []string) string {
 	quoted := make([]string, len(items))
 	for i, item := range items {

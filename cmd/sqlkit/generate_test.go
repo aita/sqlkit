@@ -28,8 +28,8 @@ func TestRenderShimIsValidGo(t *testing.T) {
 	s := string(src)
 	for _, want := range []string{
 		`schema "github.com/me/app/schema"`,
-		`"github.com/aita/sqlkit/sqldef"`,
-		"var _ *sqldef.Catalog = schema.Catalog",
+		`"github.com/aita/sqlkit/decl"`,
+		"var _ *decl.Catalog = schema.Catalog",
 		"schema.Catalog.Build()",
 		"codegen.Generate(md,",
 		`PackageName:     "appdb"`,
@@ -58,7 +58,7 @@ func TestRenderDDLShim(t *testing.T) {
 	s := string(src)
 	for _, want := range []string{
 		`schema "github.com/me/app/schema"`,
-		"var _ *sqldef.Catalog = schema.Catalog",
+		"var _ *decl.Catalog = schema.Catalog",
 		`sql.DialectByName("postgres")`,
 		`md.CreateSQL(dialect)`,
 		`os.WriteFile("/tmp/schema.sql"`,

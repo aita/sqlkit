@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/aita/sqlkit"
+	"github.com/aita/sqlkit/decl"
 	"github.com/aita/sqlkit/internal/sqltest"
 	"github.com/aita/sqlkit/migrate"
-	"github.com/aita/sqlkit/sqldef"
 )
 
 // appliedHistory returns a QueryFunc that reports the given revisions as applied
@@ -36,7 +36,7 @@ func sampleMigrations() []migrate.Migration {
 			DownRevision: "0001",
 			Name:         "create_posts",
 			Up: func(op *migrate.Operator) {
-				op.CreateTable("posts", sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()))
+				op.CreateTable("posts", decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()))
 			},
 			Down: func(op *migrate.Operator) { op.DropTable("posts") },
 		},
@@ -45,7 +45,7 @@ func sampleMigrations() []migrate.Migration {
 			DownRevision: "",
 			Name:         "create_tags",
 			Up: func(op *migrate.Operator) {
-				op.CreateTable("tags", sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()))
+				op.CreateTable("tags", decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()))
 			},
 			Down: func(op *migrate.Operator) { op.DropTable("tags") },
 		},

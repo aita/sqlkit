@@ -1,9 +1,9 @@
 package migrations
 
 import (
+	"github.com/aita/sqlkit/decl"
 	"github.com/aita/sqlkit/migrate"
 	"github.com/aita/sqlkit/sql"
-	"github.com/aita/sqlkit/sqldef"
 )
 
 var _ = Registry.Add(migrate.Migration{
@@ -12,9 +12,9 @@ var _ = Registry.Add(migrate.Migration{
 	Name:         "create_users",
 	Up: func(op *migrate.Operator) {
 		op.CreateTable("users",
-			sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-			sqldef.Column("email", sqldef.VarChar(255), sqldef.Unique()),
-			sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default(sql.Raw("now()"))),
+			decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+			decl.Column("email", decl.VarChar(255), decl.Unique()),
+			decl.Column("created_at", decl.Timestamp, decl.Default(sql.Raw("now()"))),
 		)
 	},
 	Down: func(op *migrate.Operator) {

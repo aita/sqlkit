@@ -3,25 +3,25 @@ package migrate
 import (
 	"context"
 
+	"github.com/aita/sqlkit/decl"
 	"github.com/aita/sqlkit/meta"
 	"github.com/aita/sqlkit/sql"
-	"github.com/aita/sqlkit/sqldef"
 )
 
 // Operator performs the schema (and data) changes of one migration. A
 // Migration's Up/Down callbacks receive it and call its operations —
 // CreateTable, AddColumn, CreateForeignKey, and so on — which execute
 // immediately against the migration's transaction. Columns are declared with
-// the sqldef DSL, and tables are referenced by name; foreign keys reference
+// the decl DSL, and tables are referenced by name; foreign keys reference
 // their target table by name too. The first failing operation is recorded and
 // the rest become no-ops, so callbacks need not check an error on every line;
 // the Migrator inspects Err after running the callback.
 //
 //	Up: func(op *migrate.Operator) {
 //		op.CreateTable("posts",
-//			sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-//			sqldef.Column("user_id", sqldef.BigInt),
-//			sqldef.Column("title", sqldef.Text),
+//			decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+//			decl.Column("user_id", decl.BigInt),
+//			decl.Column("title", decl.Text),
 //		)
 //		op.CreateForeignKey("fk_posts_user_id", "posts",
 //			[]string{"user_id"}, "users", []string{"id"})
@@ -61,25 +61,25 @@ func (o *Operator) table(name string) sql.Table {
 	return sql.Table{Schema: o.schema, Name: name}
 }
 
-// CreateTable creates a table declared with sqldef elements (Column, Index,
+// CreateTable creates a table declared with decl elements (Column, Index,
 // UniqueIndex, Check, PrimaryKey, TableComment). It also emits the table's
 // indexes and comments. Foreign keys belong in CreateForeignKey (referenced by
 // name), not inline.
-func (o *Operator) CreateTable(name string, elements ...sqldef.TableElement) {
+func (o *Operator) CreateTable(name string, elements ...decl.TableElement) {
 	o.createTable(name, false, elements...)
 }
 
 // CreateTemporaryTable creates a session-scoped TEMPORARY table, otherwise
 // identical to CreateTable. The engine drops it at the end of the session.
-func (o *Operator) CreateTemporaryTable(name string, elements ...sqldef.TableElement) {
+func (o *Operator) CreateTemporaryTable(name string, elements ...decl.TableElement) {
 	o.createTable(name, true, elements...)
 }
 
-func (o *Operator) createTable(name string, temporary bool, elements ...sqldef.TableElement) {
+func (o *Operator) createTable(name string, temporary bool, elements ...decl.TableElement) {
 	if o.err != nil {
 		return
 	}
-	tbl, err := sqldef.BuildTable(o.schema, name, elements...)
+	tbl, err := decl.BuildTable(o.schema, name, elements...)
 	if err != nil {
 		o.fail(err)
 		return
@@ -135,12 +135,12 @@ func ViewColumns(columns ...string) ViewOption {
 	return func(s sql.CreateViewStmt) sql.CreateViewStmt { return s.Columns(columns...) }
 }
 
-// AddColumn adds a column, declared with a single sqldef.Column element.
-func (o *Operator) AddColumn(table string, column sqldef.TableElement) {
+// AddColumn adds a column, declared with a single decl.Column element.
+func (o *Operator) AddColumn(table string, column decl.TableElement) {
 	if o.err != nil {
 		return
 	}
-	col, err := sqldef.BuildColumn(column)
+	col, err := decl.BuildColumn(column)
 	if err != nil {
 		o.fail(err)
 		return
@@ -176,16 +176,16 @@ func (o *Operator) AlterColumn(table, column string, changes ...AlterColumnChang
 }
 
 // ModifyColumn restates a column's full definition — type, nullability, and
-// default — from a single sqldef.Column element, the dialect-agnostic way to
+// default — from a single decl.Column element, the dialect-agnostic way to
 // change those properties at once. MySQL renders one MODIFY COLUMN; PostgreSQL
 // renders the equivalent ALTER COLUMN TYPE / SET|DROP NOT NULL / SET|DROP
 // DEFAULT actions. It is what the migration autogenerator emits for a column
 // change.
-func (o *Operator) ModifyColumn(table string, column sqldef.TableElement) {
+func (o *Operator) ModifyColumn(table string, column decl.TableElement) {
 	if o.err != nil {
 		return
 	}
-	col, err := sqldef.BuildColumn(column)
+	col, err := decl.BuildColumn(column)
 	if err != nil {
 		o.fail(err)
 		return
@@ -286,7 +286,7 @@ func (o *Operator) Exec(query sql.Query) {
 type AlterColumnChange func(stmt sql.AlterTableStmt, column string) sql.AlterTableStmt
 
 // TypeTo changes a column's type to the given portable type.
-func TypeTo(typ sqldef.DataType) AlterColumnChange {
+func TypeTo(typ decl.DataType) AlterColumnChange {
 	return func(stmt sql.AlterTableStmt, column string) sql.AlterTableStmt {
 		return stmt.AlterColumnType(column, meta.Column{Name: column, Type: typ}.ColumnDef().Type)
 	}

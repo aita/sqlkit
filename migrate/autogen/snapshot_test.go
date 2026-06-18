@@ -4,21 +4,21 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/aita/sqlkit/sqldef"
+	"github.com/aita/sqlkit/decl"
 )
 
-func blogMeta(t *testing.T) (catalog *sqldef.Catalog) {
-	c := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
+func blogMeta(t *testing.T) (catalog *decl.Catalog) {
+	c := decl.NewCatalog(decl.DefaultSchema("public"))
 	c.Table("users",
-		sqldef.TableComment("authors"),
-		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("email", sqldef.VarChar(255), sqldef.Unique(), sqldef.Comment("login")),
+		decl.TableComment("authors"),
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("email", decl.VarChar(255), decl.Unique(), decl.Comment("login")),
 	)
 	c.Table("posts",
-		sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("user_id", sqldef.BigInt, sqldef.References("users", "id", sqldef.OnDelete(sqldef.Cascade))),
-		sqldef.Column("created_at", sqldef.Timestamp),
-		sqldef.Index("user_id"),
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("user_id", decl.BigInt, decl.References("users", "id", decl.OnDelete(decl.Cascade))),
+		decl.Column("created_at", decl.Timestamp),
+		decl.Index("user_id"),
 	)
 	return c
 }

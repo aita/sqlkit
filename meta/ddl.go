@@ -15,7 +15,7 @@ import (
 // TABLE statements for foreign keys (emitted after all tables so declaration
 // order never matters), then comments. Schemas not marked Create (including the
 // default schema) are assumed to already exist and are left alone. Catalogs
-// built with the sqldef package and schemas read by the inspector both feed it
+// built with the decl package and schemas read by the introspection both feed it
 // through the same model.
 //
 // The statements are built as sql-package DDL nodes (the DDL side of the SQL
@@ -23,7 +23,7 @@ import (
 // hand-written migrations share one rendering path.
 //
 // Default expressions render only when the model carries them (Column.DefaultExpr,
-// declared as sqldef.Default(sql.Raw("now()"))), compiled for the dialect; an
+// declared as decl.Default(sql.Raw("now()"))), compiled for the dialect; an
 // integer primary key with a default but no expression renders as a serial
 // (PostgreSQL) or AUTO_INCREMENT (MySQL) column. It returns an error if a column
 // has no type on the dialect or a default/check expression cannot be compiled.

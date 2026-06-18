@@ -542,11 +542,11 @@ an untouched session's `Commit`/`Close` are free no-ops.
 
 ## Schema as code & code generation
 
-The schema is the source of truth. You author it once — as a `sqldef` catalog
+The schema is the source of truth. You author it once — as a `decl` catalog
 in Go, or bootstrapped from a live database — and generate the typed bindings
 and the DDL from it.
 
-### Declaring the schema (sqldef)
+### Declaring the schema (decl)
 
 Declare the schema as plain Go values, no live database required. A `Catalog` is
 the reusable root; `Catalog.Table(...)` returns a value you store and reference
@@ -557,26 +557,26 @@ package schema
 
 import (
     "github.com/aita/sqlkit/sql"
-    "github.com/aita/sqlkit/sqldef"
+    "github.com/aita/sqlkit/decl"
 )
 
-var Catalog = sqldef.NewCatalog()
+var Catalog = decl.NewCatalog()
 var Public = Catalog.Schema("public")
 
 var Users = Public.Table("users",
-    sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-    sqldef.Column("email", sqldef.VarChar(255), sqldef.Unique()),
-    sqldef.Column("name", sqldef.Text, sqldef.Nullable()),
-    sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default(sql.Raw("now()"))),
+    decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+    decl.Column("email", decl.VarChar(255), decl.Unique()),
+    decl.Column("name", decl.Text, decl.Nullable()),
+    decl.Column("created_at", decl.Timestamp, decl.Default(sql.Raw("now()"))),
 )
 
 var Posts = Public.Table("posts",
-    sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-    sqldef.Column("user_id", sqldef.BigInt, sqldef.References("users", "id")),
-    sqldef.Column("title", sqldef.Text),
-    sqldef.Column("published", sqldef.Bool, sqldef.Default(sql.Raw("false"))),
-    sqldef.Index("user_id"),
-    sqldef.Check(sql.Raw("title <> ''")),
+    decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+    decl.Column("user_id", decl.BigInt, decl.References("users", "id")),
+    decl.Column("title", decl.Text),
+    decl.Column("published", decl.Bool, decl.Default(sql.Raw("false"))),
+    decl.Index("user_id"),
+    decl.Check(sql.Raw("title <> ''")),
 )
 ```
 
@@ -592,8 +592,8 @@ Indexes (`Index`/`UniqueIndex`), constraints (`Unique`/`Check`), and comments
 generated code. Because declarations are values, they compose.
 
 `Array(elem)` declares a PostgreSQL **array** column, e.g.
-`sqldef.Column("tags", sqldef.Array(sqldef.Text))` for `text[]`. The DDL renders
-`elem[]`, the inspector reads array columns back (PostgreSQL reports them as
+`decl.Column("tags", decl.Array(decl.Text))` for `text[]`. The DDL renders
+`elem[]`, the introspection reads array columns back (PostgreSQL reports them as
 `_text`, `_int4`, …), and the code generator maps the column to a Go slice of the
 element's type (`[]string`, `[]int32`, and `[]T` for an element whose Go type is
 pinned). A slice is already nilable, so a nullable array stays a slice rather than
@@ -654,7 +654,7 @@ like `op.CreateTable`, `op.AddColumn`, `op.CreateIndex`, and
 `op.CreateForeignKey`. Session-scoped tables and views have their own operations
 too — `op.CreateTemporaryTable`, and `op.CreateView` / `op.DropView` (the view
 body is a `sql` package query, with `OrReplace()` / `ViewColumns(...)` options).
-Columns are declared with the same `sqldef` DSL.
+Columns are declared with the same `decl` DSL.
 Migrations are self-contained — they don't import your schema catalog — and
 target PostgreSQL or MySQL through the same code.
 
@@ -671,8 +671,8 @@ var migrations = []migrate.Migration{
         Name:         "create_tags",
         Up: func(op *migrate.Operator) {
             op.CreateTable("tags",
-                sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-                sqldef.Column("name", sqldef.VarChar(64), sqldef.Unique()),
+                decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+                decl.Column("name", decl.VarChar(64), decl.Unique()),
             )
         },
         Down: func(op *migrate.Operator) { op.DropTable("tags") },
@@ -748,8 +748,13 @@ sqlkit migrate stamp head --migrations ./migrations
 sqlkit migrate new "add tags" --migrations ./migrations  # scaffold a new migration file
 ```
 
-If you would rather ship your own binary, the same command set is available as
-`Migrator.RunCLI(ctx, args)`. See `examples/migrate` for a runnable example.
+If you would rather ship your own binary, the same command set is available
+without `migrate` pulling in a CLI dependency: `migrate.NewCLI()` returns the
+command grammar and `CLI.Dispatch(m.Runner(ctx), args)` parses and runs it
+directly, so a minimal binary needs no third-party parser. If you want richer
+`--help` and flag handling, hand `migrate.NewCLI()` to a parser like kong in
+your own program and run the result against `m.Runner(ctx)`. See
+`examples/migrate` for a runnable example.
 
 ### Autogenerating migrations
 
@@ -910,7 +915,7 @@ PostgreSQL; override with `WithDialect`).
 
 Engine-specific gaps surface at compile time: since MySQL has no `RETURNING`,
 `Returning(...)` fails to compile on the MySQL dialect with a pointer to
-`Result.LastInsertId`. The portable `sqldef` types additionally resolve for
+`Result.LastInsertId`. The portable `decl` types additionally resolve for
 SQLite, so a schema declared once can render DDL for all three.
 
 ---
@@ -959,7 +964,7 @@ What surfaces at runtime: column-to-field mapping (during `Scan` and
 
 Unit tests use a scriptable in-memory `database/sql` driver, so `go test ./...`
 needs no database. Integration tests run the full stack — builder, scanner, DDL
-generator, and inspector — against real PostgreSQL **and** MySQL servers:
+generator, and introspection — against real PostgreSQL **and** MySQL servers:
 
 ```sh
 cd internal/integration && go test ./...

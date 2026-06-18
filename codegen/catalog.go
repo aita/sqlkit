@@ -20,16 +20,16 @@ type CatalogOptions struct {
 	Tables []string
 
 	// Dialect ("postgres" or "mysql", default postgres) selects how engine
-	// type names map back to sqldef package types.
+	// type names map back to decl package types.
 	Dialect string
 }
 
 const (
-	sqldefImport = "github.com/aita/sqlkit/sqldef"
-	sqlImport    = "github.com/aita/sqlkit/sql"
+	declImport = "github.com/aita/sqlkit/decl"
+	sqlImport  = "github.com/aita/sqlkit/sql"
 )
 
-// GenerateCatalog renders the schema as sqldef catalog source — the inverse of
+// GenerateCatalog renders the schema as decl catalog source — the inverse of
 // building a catalog: introspect a live database once, then maintain the
 // schema as Go code and generate bindings and DDL from it. Unlike binding
 // generation the result is a starting point meant to be edited, so it carries
@@ -100,7 +100,7 @@ func GenerateCatalog(md meta.Metadata, opts CatalogOptions) (File, error) {
 	var sb strings.Builder
 	sb.WriteString("// Catalog holds the schema bootstrapped from a live database; edit it\n")
 	sb.WriteString("// and regenerate the bindings and DDL from it.\n")
-	sb.WriteString("var Catalog = sqldef.NewCatalog()\n")
+	sb.WriteString("var Catalog = decl.NewCatalog()\n")
 	for _, name := range schemaOrder {
 		if name == "" {
 			continue
@@ -116,7 +116,7 @@ func GenerateCatalog(md meta.Metadata, opts CatalogOptions) (File, error) {
 	}
 
 	fb := newFileBuf()
-	fb.add(sqldefImport)
+	fb.add(declImport)
 	if usedSQL {
 		fb.add(sqlImport)
 	}
@@ -165,12 +165,12 @@ func renderCatalogTable(sb *strings.Builder, table meta.Table, owner string, tab
 
 	fmt.Fprintf(sb, "var %s = %s.Table(%q,\n", varName, owner, table.Name)
 	if table.Comment != "" {
-		fmt.Fprintf(sb, "\tsqldef.TableComment(%q),\n", table.Comment)
+		fmt.Fprintf(sb, "\tdecl.TableComment(%q),\n", table.Comment)
 	}
 	for _, column := range table.Columns {
-		fmt.Fprintf(sb, "\tsqldef.Column(%q, %s", column.Name, SqldefTypeExpr(column, dialect))
+		fmt.Fprintf(sb, "\tdecl.Column(%q, %s", column.Name, DeclTypeExpr(column, dialect))
 		if column.PrimaryKey {
-			sb.WriteString(", sqldef.PrimaryKey()")
+			sb.WriteString(", decl.PrimaryKey()")
 		}
 		if column.HasDefault {
 			if column.DefaultExpr != nil {
@@ -178,33 +178,33 @@ func renderCatalogTable(sb *strings.Builder, table meta.Table, owner string, tab
 				if err != nil {
 					return fmt.Errorf("codegen: table %q column %q default: %w", table.Name, column.Name, err)
 				}
-				fmt.Fprintf(sb, ", sqldef.Default(sql.Raw(%q))", text)
+				fmt.Fprintf(sb, ", decl.Default(sql.Raw(%q))", text)
 				*usedSQL = true
 			} else {
-				sb.WriteString(", sqldef.Default()")
+				sb.WriteString(", decl.Default()")
 			}
 		}
 		if column.Nullable {
-			sb.WriteString(", sqldef.Nullable()")
+			sb.WriteString(", decl.Nullable()")
 		}
 		if uniques[column.Name] {
-			sb.WriteString(", sqldef.Unique()")
+			sb.WriteString(", decl.Unique()")
 		}
 		if fk, ok := refs[column.Name]; ok {
-			fmt.Fprintf(sb, ", sqldef.References(%q, %q%s)", refName(table.Schema.Name, fk), fk.RefColumns[0], fkActionArgs(fk))
+			fmt.Fprintf(sb, ", decl.References(%q, %q%s)", refName(table.Schema.Name, fk), fk.RefColumns[0], fkActionArgs(fk))
 		}
 		if column.Comment != "" {
-			fmt.Fprintf(sb, ", sqldef.Comment(%q)", column.Comment)
+			fmt.Fprintf(sb, ", decl.Comment(%q)", column.Comment)
 		}
 		sb.WriteString("),\n")
 	}
 	for _, fk := range elements {
-		fmt.Fprintf(sb, "\tsqldef.ForeignKey(%s, %q, %s%s),\n", goStringSlice(fk.Columns), refName(table.Schema.Name, fk), goStringSlice(fk.RefColumns), fkActionArgs(fk))
+		fmt.Fprintf(sb, "\tdecl.ForeignKey(%s, %q, %s%s),\n", goStringSlice(fk.Columns), refName(table.Schema.Name, fk), goStringSlice(fk.RefColumns), fkActionArgs(fk))
 	}
 	for _, ix := range indexes {
-		call := "sqldef.Index"
+		call := "decl.Index"
 		if ix.Unique {
-			call = "sqldef.UniqueIndex"
+			call = "decl.UniqueIndex"
 		}
 		fmt.Fprintf(sb, "\t%s(%s),\n", call, quotedList(ix.Columns))
 	}
@@ -213,7 +213,7 @@ func renderCatalogTable(sb *strings.Builder, table meta.Table, owner string, tab
 		if err != nil {
 			return fmt.Errorf("codegen: table %q check %q: %w", table.Name, check.Name, err)
 		}
-		fmt.Fprintf(sb, "\tsqldef.Check(sql.Raw(%q)),\n", text)
+		fmt.Fprintf(sb, "\tdecl.Check(sql.Raw(%q)),\n", text)
 		*usedSQL = true
 	}
 	for _, fk := range foreign {
@@ -244,8 +244,8 @@ func goStringSlice(items []string) string {
 // tables in different schemas get distinct entries.
 func tableVarKey(schema, name string) string { return schema + "\x00" + name }
 
-// refName renders a foreign key's target as a name for sqldef.References /
-// sqldef.ForeignKey, seen from the referencing table's schema: a bare table
+// refName renders a foreign key's target as a name for decl.References /
+// decl.ForeignKey, seen from the referencing table's schema: a bare table
 // name when the target shares that schema (resolved there at Build), or a
 // "schema.table" qualified name when it crosses schemas.
 func refName(fromSchema string, fk meta.ForeignKey) string {
@@ -255,127 +255,127 @@ func refName(fromSchema string, fk meta.ForeignKey) string {
 	return fk.RefTable
 }
 
-// ReferentialActionExpr renders a foreign-key referential action as the sqldef
-// package constant that produces it (e.g. "sqldef.Cascade"), or "" when the
+// ReferentialActionExpr renders a foreign-key referential action as the decl
+// package constant that produces it (e.g. "decl.Cascade"), or "" when the
 // action is empty (the engine default). It is shared with the migration
-// autogenerator, which emits the same sqldef vocabulary.
+// autogenerator, which emits the same decl vocabulary.
 func ReferentialActionExpr(action meta.ReferentialAction) string {
 	switch action {
 	case "":
 		return ""
 	case meta.NoAction:
-		return "sqldef.NoAction"
+		return "decl.NoAction"
 	case meta.Restrict:
-		return "sqldef.Restrict"
+		return "decl.Restrict"
 	case meta.Cascade:
-		return "sqldef.Cascade"
+		return "decl.Cascade"
 	case meta.SetNull:
-		return "sqldef.SetNull"
+		return "decl.SetNull"
 	case meta.SetDefault:
-		return "sqldef.SetDefault"
+		return "decl.SetDefault"
 	default:
-		return fmt.Sprintf("sqldef.ReferentialAction(%q)", string(action))
+		return fmt.Sprintf("decl.ReferentialAction(%q)", string(action))
 	}
 }
 
 // fkActionArgs renders the trailing OnDelete/OnUpdate FK options for a foreign
-// key, e.g. ", sqldef.OnDelete(sqldef.Cascade)", or "" when both are default.
+// key, e.g. ", decl.OnDelete(decl.Cascade)", or "" when both are default.
 func fkActionArgs(fk meta.ForeignKey) string {
 	var s string
 	if expr := ReferentialActionExpr(fk.OnDelete); expr != "" {
-		s += ", sqldef.OnDelete(" + expr + ")"
+		s += ", decl.OnDelete(" + expr + ")"
 	}
 	if expr := ReferentialActionExpr(fk.OnUpdate); expr != "" {
-		s += ", sqldef.OnUpdate(" + expr + ")"
+		s += ", decl.OnUpdate(" + expr + ")"
 	}
 	return s
 }
 
-// SqldefTypeExpr maps an engine type name back to the sqldef package expression
-// that produces it. Types without a portable name fall back to sqldef.Type,
+// DeclTypeExpr maps an engine type name back to the decl package expression
+// that produces it. Types without a portable name fall back to decl.Type,
 // which keeps the engine name verbatim. It is exported for reuse by the
-// migration autogenerator, which renders the same sqldef vocabulary.
-func SqldefTypeExpr(column meta.Column, dialect string) string {
+// migration autogenerator, which renders the same decl vocabulary.
+func DeclTypeExpr(column meta.Column, dialect string) string {
 	engine, _ := column.Type.Engine(dialect)
-	expr := sqldefElementTypeExpr(engine, dialect)
+	expr := declElementTypeExpr(engine, dialect)
 	if engine.Array {
-		return "sqldef.Array(" + expr + ")"
+		return "decl.Array(" + expr + ")"
 	}
 	return expr
 }
 
-// sqldefElementTypeExpr renders the sqldef expression for a (non-array) engine
-// type; SqldefTypeExpr wraps it in sqldef.Array for array columns.
-func sqldefElementTypeExpr(engine meta.Engine, dialect string) string {
+// declElementTypeExpr renders the decl expression for a (non-array) engine
+// type; DeclTypeExpr wraps it in decl.Array for array columns.
+func declElementTypeExpr(engine meta.Engine, dialect string) string {
 	dataType := strings.ToLower(strings.TrimSpace(engine.Name))
 	if dialect == "mysql" {
 		switch dataType {
 		case "bool", "boolean":
-			return "sqldef.Bool"
+			return "decl.Bool"
 		case "smallint":
-			return "sqldef.SmallInt"
+			return "decl.SmallInt"
 		case "int", "integer":
-			return "sqldef.Int"
+			return "decl.Int"
 		case "bigint":
-			return "sqldef.BigInt"
+			return "decl.BigInt"
 		case "float":
-			return "sqldef.Float"
+			return "decl.Float"
 		case "double":
-			return "sqldef.Double"
+			return "decl.Double"
 		case "decimal":
-			return fmt.Sprintf("sqldef.Decimal(%d, %d)", engine.Precision, engine.Scale)
+			return fmt.Sprintf("decl.Decimal(%d, %d)", engine.Precision, engine.Scale)
 		case "text":
-			return "sqldef.Text"
+			return "decl.Text"
 		case "varchar":
-			return fmt.Sprintf("sqldef.VarChar(%d)", engine.Length)
+			return fmt.Sprintf("decl.VarChar(%d)", engine.Length)
 		case "char":
-			return fmt.Sprintf("sqldef.Char(%d)", engine.Length)
+			return fmt.Sprintf("decl.Char(%d)", engine.Length)
 		case "blob":
-			return "sqldef.Bytes"
+			return "decl.Bytes"
 		case "json":
-			return "sqldef.JSON"
+			return "decl.JSON"
 		case "date":
-			return "sqldef.Date"
+			return "decl.Date"
 		case "time":
-			return "sqldef.Time"
+			return "decl.Time"
 		case "datetime":
-			return "sqldef.Timestamp"
+			return "decl.Timestamp"
 		}
-		return fmt.Sprintf("sqldef.Type(%q)", dataType)
+		return fmt.Sprintf("decl.Type(%q)", dataType)
 	}
 	switch dataType {
 	case "bool":
-		return "sqldef.Bool"
+		return "decl.Bool"
 	case "int2":
-		return "sqldef.SmallInt"
+		return "decl.SmallInt"
 	case "int4":
-		return "sqldef.Int"
+		return "decl.Int"
 	case "int8":
-		return "sqldef.BigInt"
+		return "decl.BigInt"
 	case "float4":
-		return "sqldef.Float"
+		return "decl.Float"
 	case "float8":
-		return "sqldef.Double"
+		return "decl.Double"
 	case "numeric":
-		return fmt.Sprintf("sqldef.Decimal(%d, %d)", engine.Precision, engine.Scale)
+		return fmt.Sprintf("decl.Decimal(%d, %d)", engine.Precision, engine.Scale)
 	case "text":
-		return "sqldef.Text"
+		return "decl.Text"
 	case "varchar":
-		return fmt.Sprintf("sqldef.VarChar(%d)", engine.Length)
+		return fmt.Sprintf("decl.VarChar(%d)", engine.Length)
 	case "bpchar":
-		return fmt.Sprintf("sqldef.Char(%d)", engine.Length)
+		return fmt.Sprintf("decl.Char(%d)", engine.Length)
 	case "uuid":
-		return "sqldef.UUID"
+		return "decl.UUID"
 	case "bytea":
-		return "sqldef.Bytes"
+		return "decl.Bytes"
 	case "jsonb":
-		return "sqldef.JSON"
+		return "decl.JSON"
 	case "date":
-		return "sqldef.Date"
+		return "decl.Date"
 	case "time":
-		return "sqldef.Time"
+		return "decl.Time"
 	case "timestamptz":
-		return "sqldef.Timestamp"
+		return "decl.Timestamp"
 	}
-	return fmt.Sprintf("sqldef.Type(%q)", dataType)
+	return fmt.Sprintf("decl.Type(%q)", dataType)
 }

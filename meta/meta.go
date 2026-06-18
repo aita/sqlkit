@@ -1,6 +1,6 @@
 // Package meta is the database schema metadata model: the flat, value-only
 // abstraction of tables and columns that sqlkit's SQL generators consume. The
-// sqldef package builds it from in-code catalogs and the inspector introspects
+// decl package builds it from in-code catalogs and the introspection introspects
 // a live database into it (for the initial bootstrap); the codegen generator
 // takes it from there, and the model renders its own DDL (see ddl.go). Default
 // and check expressions are carried as dialect-agnostic sql.Expression AST
@@ -15,8 +15,8 @@ package meta
 import "github.com/aita/sqlkit/sql"
 
 // Metadata is a resolved set of tables — the dialect-agnostic value that a
-// sqldef catalog builds into and that the codegen generator and the DDL
-// renderer consume. It is the meta-level hand-off type: sqldef.Catalog.Build
+// decl catalog builds into and that the codegen generator and the DDL
+// renderer consume. It is the meta-level hand-off type: decl.Catalog.Build
 // returns one, and the generators take it (plus the target dialect) from there.
 type Metadata struct {
 	Tables []Table
@@ -88,8 +88,8 @@ type Engine struct {
 
 // Type is a portable column type. It commits to an engine type name only when
 // a generator picks a dialect (Engine), so the model stores no dialect itself.
-// The sqldef DSL supplies portable types that resolve on both dialects; the
-// inspector supplies single-dialect ones (see Of).
+// The decl DSL supplies portable types that resolve on both dialects; the
+// introspection supplies single-dialect ones (see Of).
 type Type interface {
 	// Engine resolves the type for the dialect ("postgres" or "mysql"); ok is
 	// false when the type has no representation on it.
@@ -100,8 +100,8 @@ type Type interface {
 // it maps to, letting the schema fix the SQL→Go mapping at the source instead of
 // relying on the code generator's built-in type tables. codegen's
 // DefaultTypeMapper honors it (after its explicit Overrides, so a codegen-side
-// override still wins). The sqldef DSL's DataType implements it via DataType.Go;
-// the inspector's single-dialect types do not, so introspected schemas keep
+// override still wins). The decl DSL's DataType implements it via DataType.Go;
+// the introspection's single-dialect types do not, so introspected schemas keep
 // using the generator's tables.
 type GoTyped interface {
 	// GoType returns the Go type pinned for the dialect ("postgres" or "mysql");
@@ -110,7 +110,7 @@ type GoTyped interface {
 	GoType(dialect string) (GoType, bool)
 }
 
-// Of returns a Type known only on the given dialect — what the inspector
+// Of returns a Type known only on the given dialect — what the introspection
 // produces from one introspected engine type, and a convenient way to build a
 // meta.Column by hand for a single target dialect.
 func Of(dialect, name string, length, precision, scale int) Type {
@@ -120,7 +120,7 @@ func Of(dialect, name string, length, precision, scale int) Type {
 // OfArray is Of for a one-dimensional array column whose elements are the named
 // engine type (PostgreSQL only): the resolved Engine carries Array=true, so the
 // DDL renderer appends "[]" and the code generator maps the column to a Go slice
-// of the element's type. It is what the inspector produces from an array column.
+// of the element's type. It is what the introspection produces from an array column.
 func OfArray(dialect, name string, length, precision, scale int) Type {
 	return single{dialect: dialect, eng: Engine{Name: name, Length: length, Precision: precision, Scale: scale, Array: true}}
 }
@@ -146,7 +146,7 @@ type Column struct {
 	HasDefault bool
 	// DefaultExpr is the default's SQL expression when known (catalogs declare
 	// it with Default(sql.Raw("now()"))); it is nil when HasDefault is set
-	// without one, e.g. by the inspector. The DDL generator renders integer
+	// without one, e.g. by the introspect. The DDL generator renders integer
 	// primary keys that have a default but no expression as serial/auto-increment
 	// columns, and compiles the expression for the target dialect otherwise.
 	DefaultExpr sql.Expression
@@ -165,7 +165,7 @@ type Index struct {
 
 // Check is a CHECK constraint with its bare boolean expression (no CHECK
 // keyword or outer parentheses). The DDL generator compiles Expression for the
-// target dialect; the inspector supplies it as a sql.Raw of the introspected
+// target dialect; the introspection supplies it as a sql.Raw of the introspected
 // clause.
 type Check struct {
 	Name       string
