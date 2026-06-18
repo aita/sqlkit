@@ -22,7 +22,9 @@ var relationMethodNames = []string{
 // FK is unique, else has-many) on the parent. Self-references emit both
 // relations on the one table with the target aliased (so the self-join is
 // unambiguous). Foreign keys to tables outside the generated set are skipped.
-func buildRelations(tables []meta.Table) map[string][]relationModel {
+// bindingName resolves each table's binding base identifier, so relation type
+// and target references stay consistent with renamed bindings.
+func buildRelations(tables []meta.Table, bindingName func(meta.Table) string) map[string][]relationModel {
 	byName := make(map[string]meta.Table, len(tables))
 	for _, t := range tables {
 		byName[qualified(t.Schema.Name, t.Name)] = t
@@ -55,8 +57,8 @@ func buildRelations(tables []meta.Table) map[string][]relationModel {
 				continue // malformed FK; skip rather than emit broken code
 			}
 
-			childVar := goName(child.Name)
-			parentVar := goName(parent.Name)
+			childVar := bindingName(child)
+			parentVar := bindingName(parent)
 			childCtor := "new" + childVar + "Columns"
 			parentCtor := "new" + parentVar + "Columns"
 

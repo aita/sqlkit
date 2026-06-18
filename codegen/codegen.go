@@ -24,13 +24,18 @@ type File struct {
 	Content []byte
 }
 
-// Write writes generated files into dir, creating it if needed.
+// Write writes generated files into dir, creating it (and any subdirectories a
+// file's name nests it in, e.g. from Options.FileNameFor) as needed.
 func Write(dir string, files []File) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	for _, file := range files {
-		if err := os.WriteFile(filepath.Join(dir, file.Name), file.Content, 0o644); err != nil {
+		full := filepath.Join(dir, filepath.FromSlash(file.Name))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(full, file.Content, 0o644); err != nil {
 			return err
 		}
 	}
@@ -50,13 +55,22 @@ type Options struct {
 	// default SQL→Go type table.
 	Dialect string
 
-	// FilePerTable writes one file per table (named after the table) instead of
-	// a single combined file.
+	// FilePerTable writes one file per table (named "<table>.go") instead of a
+	// single combined file. Use FileNameFor to customize the per-table path or
+	// split tables across subdirectories.
 	FilePerTable bool
 
 	// FileName overrides the single-file output name (default "tables.go").
-	// Ignored when FilePerTable is set.
+	// Ignored when FilePerTable or FileNameFor is set.
 	FileName string
+
+	// FileNameFor, when set, derives each table's generated file path relative to
+	// the output directory, implying one file per table (FilePerTable). The
+	// returned path may contain slashes to nest the file in a subdirectory, which
+	// Write creates. Defaults to "<table>.go". When DTOSeparateFile is set, the
+	// DTO file sits beside it with "_dto" inserted before the extension
+	// (e.g. "users.go" -> "users_dto.go").
+	FileNameFor func(table meta.Table) string
 
 	// EmitRelations generates the relation-aware surface: foreign-key relation
 	// metadata (table.Rels) implementing sqlkit.Relation, Query/Q entry points
@@ -79,6 +93,20 @@ type Options struct {
 	// collision-avoiding name (e.g. table "users" -> "User"). When the derived
 	// name collides with a binding identifier, "Row" is appended.
 	DTOName func(table meta.Table) string
+
+	// BindingName derives the table binding's base Go identifier from a table.
+	// The returned name backs every binding identifier: the package var
+	// ("Users"), its table type ("UsersTable"), and—in the relation-aware
+	// layout—the columns type ("UsersColumns"), its constructor
+	// ("newUsersColumns"), the relations type ("UsersRels"), and the filter
+	// bundle ("UsersFilter"). It is the caller's responsibility to keep the
+	// returned names valid and distinct across tables.
+	//
+	// Returning the empty string for a table (or leaving BindingName nil) falls
+	// back to the default: the exported camel-case of the table name (e.g. table
+	// "users" -> "Users"). A decl catalog exposes its declared overrides as a
+	// ready-made hook via Catalog.BindingNames.
+	BindingName func(table meta.Table) string
 }
 
 const sqlkitImport = "github.com/aita/sqlkit"
@@ -155,6 +183,9 @@ type tableModel struct {
 	Checksum  string
 	Generator string
 	Columns   []columnModel
+	// source is the table the model was built from, passed to the per-table
+	// layout hook (Options.FileNameFor).
+	source meta.Table
 	// Doc is the table comment as doc-comment lines.
 	Doc []string
 
@@ -207,6 +238,17 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 	if dtoName == nil {
 		dtoName = defaultDTOName
 	}
+	// bindingName resolves each table's binding identifier: the Options.BindingName
+	// hook when it returns a non-empty name, otherwise the default derived from
+	// the table name. A nil hook (or an empty return) always falls back.
+	bindingName := func(table meta.Table) string {
+		if opts.BindingName != nil {
+			if name := opts.BindingName(table); name != "" {
+				return name
+			}
+		}
+		return goName(table.Name)
+	}
 
 	tables := filterTables(md.Tables, opts.Tables)
 	if len(tables) == 0 {
@@ -216,7 +258,7 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 	// Reserve binding identifiers so generated DTO names never collide.
 	reserved := map[string]bool{}
 	for _, table := range tables {
-		varName := goName(table.Name)
+		varName := bindingName(table)
 		reserved[varName] = true
 		reserved[varName+"Table"] = true
 	}
@@ -224,7 +266,7 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 	generator := GeneratorID()
 	models := make([]*tableModel, 0, len(tables))
 	for _, table := range tables {
-		tm, err := buildTable(table, dialect, mapper)
+		tm, err := buildTable(table, dialect, mapper, bindingName)
 		if err != nil {
 			return nil, err
 		}
@@ -241,7 +283,7 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 	}
 
 	if opts.EmitRelations {
-		relations := buildRelations(tables)
+		relations := buildRelations(tables, bindingName)
 		for i, tm := range models {
 			tm.Relational = true
 			tm.Relations = relations[qualified(tables[i].Schema.Name, tables[i].Name)]
@@ -251,9 +293,11 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 	return assemble(models, opts)
 }
 
-// buildTable builds the binding model for a single table.
-func buildTable(table meta.Table, dialect string, mapper TypeMapper) (*tableModel, error) {
-	varName := goName(table.Name)
+// buildTable builds the binding model for a single table. bindingName derives
+// the binding's base identifier, off which every binding type and var name is
+// formed.
+func buildTable(table meta.Table, dialect string, mapper TypeMapper, bindingName func(meta.Table) string) (*tableModel, error) {
+	varName := bindingName(table)
 	tm := &tableModel{
 		TypeName:    varName + "Table",
 		VarName:     varName,
@@ -261,6 +305,7 @@ func buildTable(table meta.Table, dialect string, mapper TypeMapper) (*tableMode
 		Name:        table.Name,
 		Qualified:   qualified(table.Schema.Name, table.Name),
 		Checksum:    table.Key().Checksum,
+		source:      table,
 		Doc:         docLines(table.Comment),
 		ColumnsType: varName + "Columns",
 		Ctor:        "new" + varName + "Columns",
@@ -339,8 +384,9 @@ func assemble(models []*tableModel, opts Options) ([]File, error) {
 		return nil
 	}
 
-	if opts.FilePerTable {
+	if opts.FilePerTable || opts.FileNameFor != nil {
 		for _, tm := range models {
+			path := tableFilePath(tm, opts)
 			fb := newFileBuf()
 			fb.add(bindingImports(tm)...)
 			fb.write(renderBinding(tm))
@@ -348,7 +394,7 @@ func assemble(models []*tableModel, opts Options) ([]File, error) {
 				fb.add(dtoImports(tm)...)
 				fb.write(renderDTO(tm))
 			}
-			if err := emit(fb, tm.Name+".go"); err != nil {
+			if err := emit(fb, path); err != nil {
 				return nil, err
 			}
 
@@ -356,7 +402,7 @@ func assemble(models []*tableModel, opts Options) ([]File, error) {
 				db := newFileBuf()
 				db.add(dtoImports(tm)...)
 				db.write(renderDTO(tm))
-				if err := emit(db, tm.Name+"_dto.go"); err != nil {
+				if err := emit(db, dtoFilePath(path)); err != nil {
 					return nil, err
 				}
 			}
@@ -392,6 +438,24 @@ func assemble(models []*tableModel, opts Options) ([]File, error) {
 		}
 	}
 	return files, nil
+}
+
+// tableFilePath is the output path (relative to the output directory) of a
+// table's generated file in per-table mode: FileNameFor when set, else
+// "<table>.go".
+func tableFilePath(tm *tableModel, opts Options) string {
+	if opts.FileNameFor != nil {
+		return opts.FileNameFor(tm.source)
+	}
+	return tm.Name + ".go"
+}
+
+// dtoFilePath derives the DTO file path that sits beside a binding file path by
+// inserting "_dto" before the extension ("users/users.go" ->
+// "users/users_dto.go").
+func dtoFilePath(path string) string {
+	ext := filepath.Ext(path)
+	return strings.TrimSuffix(path, ext) + "_dto" + ext
 }
 
 func bindingImports(tm *tableModel) []string {

@@ -211,6 +211,43 @@ func TestGenerateFilePerTable(t *testing.T) {
 	}
 }
 
+func TestFileNameForCustomNames(t *testing.T) {
+	// FileNameFor implies per-table output and customizes each file's path.
+	files, err := Generate(meta.Metadata{Tables: fixtureTables()}, Options{
+		PackageName:     "blogdb",
+		FileNameFor:     func(table meta.Table) string { return "gen_" + table.Name + ".go" },
+		EmitDTO:         true,
+		DTOSeparateFile: true,
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	got := map[string]bool{}
+	for _, f := range files {
+		got[f.Name] = true
+	}
+	for _, want := range []string{"gen_users.go", "gen_users_dto.go", "gen_posts.go", "gen_posts_dto.go"} {
+		if !got[want] {
+			t.Errorf("missing generated file %q; got %v", want, got)
+		}
+	}
+}
+
+func TestWriteCreatesSubdirectories(t *testing.T) {
+	files := []File{{Name: "users/users.go", Content: []byte("package users\n")}}
+	dir := t.TempDir()
+	if err := Write(dir, files); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "users", "users.go"))
+	if err != nil {
+		t.Fatalf("reading written file: %v", err)
+	}
+	if string(got) != "package users\n" {
+		t.Errorf("unexpected file contents: %q", got)
+	}
+}
+
 func TestGenerateTablesFilter(t *testing.T) {
 	files, err := Generate(meta.Metadata{Tables: fixtureTables()}, Options{PackageName: "blogdb", Tables: []string{"users"}})
 	if err != nil {
@@ -290,6 +327,76 @@ func TestDTONameCollisionForSingularTable(t *testing.T) {
 	// AccountRow.
 	if !strings.Contains(body, "type AccountRow struct") {
 		t.Fatalf("singular table DTO should be AccountRow to avoid collision:\n%s", body)
+	}
+}
+
+func TestCustomBindingName(t *testing.T) {
+	// BindingName overrides the binding's base identifier; every binding type
+	// and var name is formed off it.
+	body := string(generateSingle(t, fixtureTables(), Options{
+		PackageName: "blogdb",
+		BindingName: func(table meta.Table) string { return goName(singular(table.Name)) + "Tbl" },
+	}))
+	for _, want := range []string{
+		"type UserTblTable struct",
+		"var UserTbl = func() UserTblTable",
+		"func (t UserTblTable) As(alias string) UserTblTable",
+		"var _ sqlkit.Table = UserTbl",
+		"type PostTblTable struct",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("expected renamed binding %q:\n%s", want, body)
+		}
+	}
+	// The default-derived names must no longer appear.
+	for _, banned := range []string{"type UsersTable struct", "var Users ="} {
+		if strings.Contains(body, banned) {
+			t.Errorf("default binding name %q should be replaced:\n%s", banned, body)
+		}
+	}
+}
+
+func TestCustomBindingNameWithRelations(t *testing.T) {
+	// In the relation-aware layout, BindingName must flow through the columns
+	// type, constructor, relation types, and relation target references so the
+	// generated code stays consistent and compiles.
+	body := string(generateSingle(t, relationFixtureTables(), Options{
+		PackageName:   "blogdb",
+		EmitRelations: true,
+		BindingName:   func(table meta.Table) string { return "Tbl" + goName(table.Name) },
+	}))
+	for _, want := range []string{
+		"type TblUsersColumns struct",
+		"func newTblUsersColumns() TblUsersColumns",
+		"type TblUsersTable struct",
+		"type TblUsersRels struct",
+		"type TblUsersFilter struct",
+		// Reverse relation on users targets posts: target columns and ctor use
+		// the renamed posts binding.
+		"TblPostsColumns: newTblPostsColumns()",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("expected renamed relation binding %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestBindingNameEmptyFallsBackToDefault(t *testing.T) {
+	// Returning "" for a table defers to the default derivation; a non-empty
+	// return renames just that table.
+	body := string(generateSingle(t, fixtureTables(), Options{
+		PackageName: "blogdb",
+		BindingName: func(table meta.Table) string {
+			if table.Name == "users" {
+				return "Account"
+			}
+			return "" // posts falls back to the default
+		},
+	}))
+	for _, want := range []string{"type AccountTable struct", "var Account = func() AccountTable", "type PostsTable struct"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("expected %q in output:\n%s", want, body)
+		}
 	}
 }
 

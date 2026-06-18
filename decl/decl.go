@@ -71,8 +71,9 @@ type Catalog struct {
 	schemaNames   []string        // distinct schema names in first-seen order
 	createSchemas map[string]bool // schema name -> managed by migrations (CREATE/DROP SCHEMA)
 	tables        []meta.Table
-	tableIndex    map[string]int // schema\x00name -> index into tables, for FK resolution
-	pendingFKs    []pendingFK    // foreign keys awaiting resolution at Build time
+	tableIndex    map[string]int    // schema\x00name -> index into tables, for FK resolution
+	bindingNames  map[string]string // schema\x00name -> binding identifier override (decl.BindingName)
+	pendingFKs    []pendingFK       // foreign keys awaiting resolution at Build time
 	errs          []error
 }
 
@@ -98,7 +99,7 @@ func DefaultSchema(name string) CatalogOption {
 // point of the DSL: var Catalog = decl.NewCatalog(). Options configure
 // catalog-wide defaults such as DefaultSchema.
 func NewCatalog(opts ...CatalogOption) *Catalog {
-	c := &Catalog{tableIndex: map[string]int{}, createSchemas: map[string]bool{}}
+	c := &Catalog{tableIndex: map[string]int{}, createSchemas: map[string]bool{}, bindingNames: map[string]string{}}
 	for _, opt := range opts {
 		opt(c)
 	}
@@ -185,6 +186,12 @@ func (s *Schema) Table(name string, elements ...TableElement) meta.Table {
 			d.schemaNamesAdd(s.name)
 			d.tableIndex[key] = idx
 		}
+		// A binding-name override is a codegen hint, not part of the schema, so it
+		// lives on the catalog (bridged to codegen via BindingNames) rather than on
+		// the returned meta.Table.
+		if b.bindingName != "" {
+			d.bindingNames[key] = b.bindingName
+		}
 	}
 	// Foreign keys reference tables by name, which may not be declared yet, so
 	// queue them for Build to resolve once the whole catalog is known.
@@ -192,6 +199,29 @@ func (s *Schema) Table(name string, elements ...TableElement) meta.Table {
 		d.pendingFKs = append(d.pendingFKs, pendingFK{table: idx, def: fk})
 	}
 	return table
+}
+
+// BindingNames returns a codegen.Options.BindingName hook that maps each table
+// to the identifier declared for it with BindingName, and the empty string for
+// tables without one (so codegen falls back to its default derivation). It
+// returns nil when no table in the catalog declares a BindingName, so callers
+// can assign it unconditionally:
+//
+//	codegen.Generate(md, codegen.Options{
+//		PackageName: "appdb",
+//		BindingName: catalog.BindingNames(),
+//	})
+func (d *Catalog) BindingNames() func(meta.Table) string {
+	if len(d.bindingNames) == 0 {
+		return nil
+	}
+	overrides := make(map[string]string, len(d.bindingNames))
+	for k, v := range d.bindingNames {
+		overrides[k] = v
+	}
+	return func(table meta.Table) string {
+		return overrides[tableKey(table.Schema.Name, table.Name)]
+	}
 }
 
 func (d *Catalog) schemaNamesAdd(name string) {
@@ -209,6 +239,7 @@ type tableBuilder struct {
 	catalog     *Catalog
 	schema      string
 	name        string
+	bindingName string
 	comment     string
 	columns     []*columnDef
 	foreignKeys []fkDef
@@ -463,6 +494,33 @@ func isBlankExpr(expr sql.Expression) bool {
 func TableComment(text string) TableElement {
 	return tableElement(func(b *tableBuilder) {
 		b.comment = text
+	})
+}
+
+// BindingName overrides the base Go identifier the code generator derives for
+// the table's binding. By default the binding name comes from the table name
+// (table "users" -> var Users, type UsersTable, …); set this to choose another,
+// e.g. when the table name maps to an awkward identifier:
+//
+//	var People = Catalog.Table("tbl_person",
+//		decl.BindingName("Person"),
+//		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+//		// ...
+//	)
+//
+// The name backs every binding identifier (the package var, table type, and—in
+// the relation-aware layout—the columns type, its constructor, the relations
+// type, and the filter bundle). It must be a valid, exported Go identifier and
+// distinct across the generated tables. The override is a codegen hint kept on
+// the catalog, not the schema model; wire it into generation with
+// codegen.Options.BindingName: Catalog.BindingNames().
+func BindingName(name string) TableElement {
+	return tableElement(func(b *tableBuilder) {
+		if name == "" {
+			b.fail("BindingName requires a name")
+			return
+		}
+		b.bindingName = name
 	})
 }
 
