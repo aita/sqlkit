@@ -52,7 +52,7 @@ func TestPreloadSplitEndToEnd(t *testing.T) {
 			sqlkit.WithDialect(db.Dialect()),
 			sqlkit.WithAutoChunk(true),
 			sqlkit.WithPreloadBatchSize(8),
-			sqlkit.WithInterceptor(counter))
+			sqlkit.WithHooks(counter.hooks()))
 
 		var loaded []userWithPosts
 		before := counter.queries
@@ -84,7 +84,7 @@ func TestReturningSplitEndToEnd(t *testing.T) {
 		counter := &stmtCounter{}
 		sdb := sqlkit.WrapDB(db.SQL(),
 			sqlkit.WithDialect(db.Dialect()),
-			sqlkit.WithInterceptor(counter))
+			sqlkit.WithHooks(counter.hooks()))
 
 		const n = 30
 		users := make([]userRow, n)
@@ -134,7 +134,7 @@ func TestUowBatchedFlushEndToEnd(t *testing.T) {
 		counter := &stmtCounter{}
 		lim := sqlkit.WrapDB(db.SQL(),
 			sqlkit.WithDialect(db.Dialect()),
-			sqlkit.WithInterceptor(counter))
+			sqlkit.WithHooks(counter.hooks()))
 
 		// Bulk UPDATE: load all, rename each in place, flush as VALUES-join chunks.
 		updBefore := counter.execs

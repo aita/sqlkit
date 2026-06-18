@@ -796,19 +796,19 @@ func TestBatchReadSnapshotIsReadOnlyRepeatableRead(t *testing.T) {
 	}
 }
 
-func TestSplitStatementsPassThroughInterceptors(t *testing.T) {
+func TestSplitStatementsPassThroughHooks(t *testing.T) {
 	fake := idFromArgsFake()
 	var queries, execs int
-	count := sqlkit.Rewrite(func(_ context.Context, stmt sqlkit.Statement) (sqlkit.Statement, error) {
+	count := sqlkit.Hooks{Before: func(ctx context.Context, stmt *sqlkit.Statement) (context.Context, error) {
 		switch stmt.Op {
 		case sqlkit.OpQuery:
 			queries++
 		case sqlkit.OpExec:
 			execs++
 		}
-		return stmt, nil
-	})
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true), sqlkit.WithInterceptor(count))
+		return ctx, nil
+	}}
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true), sqlkit.WithHooks(count))
 
 	ids := []int64{1, 2, 3, 4, 5, 6, 7}
 	var users []User

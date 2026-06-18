@@ -54,9 +54,9 @@ func applyChunkOptions(size int, off bool, opts []ChunkOption) (int, bool) {
 	return c.size, c.off
 }
 
-// statement wraps the compiled SQL as the Statement an interceptor sees for one
-// split chunk. The AST is omitted (the chunk has no standalone builder), so an
-// interceptor that needs to Recompile should rewrite SQL/Args directly.
+// statement wraps the compiled SQL as the Statement a hook sees for one split
+// chunk. The AST is omitted (the chunk has no standalone builder), so a hook
+// that needs to Recompile should rewrite SQL/Args directly.
 func (c compiledStmt) statement(op Op, dialect sql.Dialect) Statement {
 	return Statement{Op: op, SQL: c.sql, Args: c.args, Dialect: dialect}
 }

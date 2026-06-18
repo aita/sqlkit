@@ -30,13 +30,12 @@ type Session struct {
 	base         Executor
 	txOpts       *stdsql.TxOptions
 	dialect      sql.Dialect
-	ics          []Interceptor
 	autoChunk    bool
 	preloadChunk int
 
-	// resultObs are the result observers inherited from the Database (see
-	// WithResultObserver), run over each result scanned through this session.
-	resultObs []ResultObserver
+	// hks are the lifecycle hooks inherited from the Database (see WithHooks),
+	// run around each statement executed through this session.
+	hks []Hooks
 
 	// identities is inherited from the Database (see WithMetadata): a uow.Scope
 	// opened over this session validates its bindings against it automatically.
@@ -252,9 +251,9 @@ func (s *Session) Release(ctx context.Context, name string) error {
 }
 
 // txControl runs a transaction-control statement (a savepoint) directly on the
-// session's transaction, bypassing the interceptor chain. It requires a real
-// transaction: a session whose terminal is not a TxExecutor has none, so it
-// returns errNoTx rather than sending the SQL to a non-transactional executor.
+// session's transaction, bypassing hooks. It requires a real transaction: a
+// session whose terminal is not a TxExecutor has none, so it returns errNoTx
+// rather than sending the SQL to a non-transactional executor.
 func (s *Session) txControl(ctx context.Context, query string) (stdsql.Result, error) {
 	if _, ok := s.base.(TxExecutor); !ok {
 		return nil, errNoTx
@@ -268,7 +267,7 @@ func (s *Session) txControl(ctx context.Context, query string) (stdsql.Result, e
 
 func (s *Session) sqlDialect() sql.Dialect { return s.dialect }
 
-func (s *Session) interceptors() []Interceptor { return s.ics }
+func (s *Session) hooks() []Hooks { return s.hks }
 
 // maxBindParams is the single splitting chokepoint: the dialect's bind-parameter
 // limit when auto-chunk is on for this session, or 0 when it is off.
@@ -286,8 +285,6 @@ func (s *Session) AutoChunkEnabled() bool { return s.autoChunk }
 func (s *Session) preloadChunkSize() int { return s.preloadChunk }
 
 func (s *Session) executor() Executor { return sessionExecutor{s} }
-
-func (s *Session) resultObservers() []ResultObserver { return s.resultObs }
 
 // sessionExecutor is the terminal Executor for a Session: it routes each
 // statement to the session's active executor (its transaction, or the bare
