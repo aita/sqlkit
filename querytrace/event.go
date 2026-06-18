@@ -1,5 +1,5 @@
-// Package querytrace is an experimental, application-level SQL tracing
-// middleware for database/sql. It records the queries a unit of work issues
+// Package querytrace is an application-level SQL tracing middleware for
+// database/sql. It records the queries a unit of work issues
 // together with their application context — the operation, the calling code, the
 // transaction, and how the result rows were consumed — and surfaces problems
 // that database-side statistics cannot see: N+1 patterns, queries in a loop,
@@ -99,6 +99,14 @@ type QueryInfo struct {
 	HasJoin      bool
 	HasLimit     bool
 	HasReturning bool
+	// SelectStar mirrors Shape.SelectStar: the statement is a SELECT projecting
+	// "*". It backs the select_star warning and is false on the fallback path.
+	SelectStar bool
+
+	// MaxInList is the length of the largest IN (...) value list in the
+	// statement's top-level WHERE, or 0 when there is none. It backs the
+	// large_in_list warning and is only set when the SQL parsed.
+	MaxInList int
 
 	// ParamCount is the number of bind arguments.
 	ParamCount int
@@ -117,6 +125,12 @@ type QueryInfo struct {
 	// rather than a keyword guess (false). Checks that depend on WHERE/JOIN
 	// presence consult it to avoid false positives on the fallback path.
 	analyzed bool
+
+	// filterColumns are the bare (unqualified, lower-cased) column names
+	// referenced in the statement's top-level WHERE clause. They drive the
+	// tenant/soft-delete predicate checks and are populated only when the SQL
+	// parsed. Unexported: an analysis detail, not part of the exported surface.
+	filterColumns []string
 }
 
 // TxInfo holds the details of an EventTx.

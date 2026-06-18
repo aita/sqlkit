@@ -13,11 +13,24 @@ type OperationNamer func(*http.Request) string
 
 // handlerConfig holds the middleware options.
 type handlerConfig struct {
-	name OperationNamer
+	name    OperationNamer
+	sampler qt.Sampler
 }
 
 // HandlerOption configures the middleware.
 type HandlerOption func(*handlerConfig)
+
+// WithSampler samples the per-request Traces the middleware creates: a
+// sampled-out request runs under a pass-through Trace that records nothing and is
+// not exported, keeping the per-statement tracing overhead off most of the
+// traffic. Without it every request is observed.
+func WithSampler(s qt.Sampler) HandlerOption {
+	return func(c *handlerConfig) {
+		if s != nil {
+			c.sampler = s
+		}
+	}
+}
 
 // WithOperationNamer overrides how the per-request Trace is named. The default
 // uses the routed pattern (such as "GET /users/{id}"), falling back to the
@@ -56,9 +69,13 @@ func (e *Exporter) Middleware(opts ...HandlerOption) func(http.Handler) http.Han
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+	var newOpts []qt.Option
+	if cfg.sampler != nil {
+		newOpts = append(newOpts, qt.WithSampler(cfg.sampler))
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			trace := qt.New(cfg.name(r))
+			trace := qt.New(cfg.name(r), newOpts...)
 			ctx := qt.WithTrace(r.Context(), trace)
 			r = r.WithContext(ctx)
 
@@ -68,7 +85,11 @@ func (e *Exporter) Middleware(opts ...HandlerOption) func(http.Handler) http.Han
 				if name := cfg.name(r); name != "" {
 					qt.WithOperation(ctx, name)
 				}
-				e.ExportTrace(ctx, trace)
+				// A sampled-out Trace recorded nothing; skip the export so it
+				// produces no empty operation span.
+				if trace.Sampled() {
+					e.ExportTrace(ctx, trace)
+				}
 			}()
 
 			next.ServeHTTP(w, r)

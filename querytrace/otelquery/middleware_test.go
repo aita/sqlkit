@@ -61,6 +61,23 @@ func TestMiddlewareFallsBackToMethod(t *testing.T) {
 	}
 }
 
+func TestMiddlewareSamplerSkipsExport(t *testing.T) {
+	exp, sr := recorder(t)
+
+	// A never-sampling sampler makes each request's trace a pass-through; the
+	// middleware records nothing and exports no span.
+	handler := exp.Middleware(otelquery.WithSampler(qt.NeverSample()))(recordingHandler())
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("handler status = %d, want 200", rec.Code)
+	}
+	if spans := sr.Ended(); len(spans) != 0 {
+		t.Errorf("sampled-out request produced %d spans, want 0: %v", len(spans), spanNames(spans))
+	}
+}
+
 func TestMiddlewareWithOperationNamer(t *testing.T) {
 	exp, sr := recorder(t)
 

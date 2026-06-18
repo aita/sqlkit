@@ -221,6 +221,92 @@ func TestTransactionRecorded(t *testing.T) {
 	}
 }
 
+func TestTransactionLinksStatements(t *testing.T) {
+	db := newDB(t, testConfig(), 1)
+	trace := querytrace.New("CreateOrder")
+	ctx := querytrace.WithTrace(context.Background(), trace)
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE orders SET total = $1 WHERE id = $2", 10, 1); err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	// A statement after the transaction commits must not be linked to it.
+	if _, err := db.ExecContext(ctx, "UPDATE orders SET total = $1 WHERE id = $2", 20, 2); err != nil {
+		t.Fatalf("post-tx exec: %v", err)
+	}
+
+	var txID string
+	for _, ev := range trace.Events() {
+		if ev.Kind == querytrace.EventTx && ev.Tx.Action == querytrace.TxBegin {
+			txID = ev.Tx.TxID
+		}
+	}
+	if txID == "" {
+		t.Fatal("no begin event recorded")
+	}
+
+	var inTx, outTx int
+	for _, ev := range trace.Events() {
+		if ev.Kind != querytrace.EventExec || ev.Query == nil {
+			continue
+		}
+		switch ev.Query.TxID {
+		case txID:
+			inTx++
+		case "":
+			outTx++
+		default:
+			t.Errorf("exec linked to unexpected tx %q", ev.Query.TxID)
+		}
+	}
+	if inTx != 1 {
+		t.Errorf("statements linked to the transaction = %d, want 1", inTx)
+	}
+	if outTx != 1 {
+		t.Errorf("statements outside the transaction = %d, want 1", outTx)
+	}
+}
+
+func TestSamplingPassthrough(t *testing.T) {
+	db := newDB(t, testConfig(), 2)
+	trace := querytrace.New("op", querytrace.WithSampled(false))
+	ctx := querytrace.WithTrace(context.Background(), trace)
+
+	rows, err := db.QueryContext(ctx, "SELECT * FROM users WHERE id = $1", 1)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if got := drainRows(t, rows); got != 2 {
+		t.Fatalf("read %d rows, want 2", got)
+	}
+
+	// A transaction under a sampled-out trace is a pass-through too.
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE users SET name = $1 WHERE id = $2", "x", 1); err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	if n := len(trace.Events()); n != 0 {
+		t.Errorf("sampled-out trace recorded %d events, want 0\n%s", n, querytrace.TextReport(trace))
+	}
+	if len(trace.Warnings()) != 0 {
+		t.Error("sampled-out trace should produce no warnings")
+	}
+}
+
 func TestPreparedStatement(t *testing.T) {
 	db := newDB(t, testConfig(), 2)
 	trace := querytrace.New("op")

@@ -27,7 +27,7 @@ func (t *Trace) deriveWarnings() []Warning {
 // statement at or above the bind-parameter budget. Execution latency and
 // errors are left to tracing. The caller holds t.mu.
 func (t *Trace) derivePerStatement() []Warning {
-	maxParams := t.cfg.Warnings.MaxParams
+	wc := t.cfg.Warnings
 
 	var out []Warning
 	for _, ev := range t.events {
@@ -43,13 +43,85 @@ func (t *Trace) derivePerStatement() []Warning {
 				out = append(out, w)
 			}
 		}
-		if maxParams > 0 && ev.Query != nil && ev.Query.ParamCount >= maxParams {
+		if wc.MaxParams > 0 && ev.Query != nil && ev.Query.ParamCount >= wc.MaxParams {
 			d := fingerprintDetails(ev.Query)
 			d["param_count"] = ev.Query.ParamCount
-			d["budget"] = maxParams
+			d["budget"] = wc.MaxParams
 			out = append(out, Warning{
 				Code:     WarnTooManyParameters,
-				Message:  fmt.Sprintf("statement carries %d bind parameters, at or above the budget of %d", ev.Query.ParamCount, maxParams),
+				Message:  fmt.Sprintf("statement carries %d bind parameters, at or above the budget of %d", ev.Query.ParamCount, wc.MaxParams),
+				Severity: SeverityWarn,
+				EventID:  ev.ID,
+				Caller:   ev.Caller,
+				Details:  d,
+			})
+		}
+		out = append(out, deriveAnalyzerWarnings(ev, wc)...)
+	}
+	return out
+}
+
+// deriveAnalyzerWarnings runs the AST-driven policy checks for one statement: a
+// large IN list, a SELECT *, and the tenant/soft-delete predicate requirements.
+// Each is gated on a configured policy and on analysis having succeeded (the
+// fields it reads are empty on the keyword-fallback path), so a parse failure
+// silently yields no analyzer warnings rather than a false positive.
+func deriveAnalyzerWarnings(ev Event, wc WarningConfig) []Warning {
+	q := ev.Query
+	if q == nil {
+		return nil
+	}
+	var out []Warning
+
+	if wc.MaxInListLen > 0 && q.MaxInList >= wc.MaxInListLen {
+		d := fingerprintDetails(q)
+		d["in_list_len"] = q.MaxInList
+		d["budget"] = wc.MaxInListLen
+		out = append(out, Warning{
+			Code:     WarnLargeInList,
+			Message:  fmt.Sprintf("IN list of %d items is at or above the budget of %d", q.MaxInList, wc.MaxInListLen),
+			Severity: SeverityWarn,
+			EventID:  ev.ID,
+			Caller:   ev.Caller,
+			Details:  d,
+		})
+	}
+
+	if wc.SelectStar && q.SelectStar {
+		out = append(out, Warning{
+			Code:     WarnSelectStar,
+			Message:  "SELECT * projects every column",
+			Severity: SeverityWarn,
+			EventID:  ev.ID,
+			Caller:   ev.Caller,
+			Details:  fingerprintDetails(q),
+		})
+	}
+
+	// The predicate checks only make sense for an analyzed statement that filters
+	// rows of a base table. INSERT carries its tenant value in the row, not a
+	// WHERE, so it is out of scope.
+	if q.analyzed && len(q.Tables) > 0 {
+		if len(wc.RequireTenantColumns) > 0 && q.Operation.filtersRows() &&
+			!containsAny(q.filterColumns, wc.RequireTenantColumns) {
+			d := fingerprintDetails(q)
+			d["required_any_of"] = wc.RequireTenantColumns
+			out = append(out, Warning{
+				Code:     WarnMissingTenantPredicate,
+				Message:  "statement touches a table without a tenant-scoping predicate",
+				Severity: SeverityWarn,
+				EventID:  ev.ID,
+				Caller:   ev.Caller,
+				Details:  d,
+			})
+		}
+		if len(wc.SoftDeleteColumns) > 0 && q.Operation == StmtSelect &&
+			!containsAny(q.filterColumns, wc.SoftDeleteColumns) {
+			d := fingerprintDetails(q)
+			d["required_any_of"] = wc.SoftDeleteColumns
+			out = append(out, Warning{
+				Code:     WarnMissingSoftDeletePredicate,
+				Message:  "SELECT touches a table without a soft-delete predicate",
 				Severity: SeverityWarn,
 				EventID:  ev.ID,
 				Caller:   ev.Caller,
@@ -57,6 +129,7 @@ func (t *Trace) derivePerStatement() []Warning {
 			})
 		}
 	}
+
 	return out
 }
 

@@ -25,9 +25,9 @@ import (
 // cursor so its iteration and close are timed. It is a pass-through when the
 // context carries no Trace, when tracing is disabled, or when run skips
 // (driver.ErrSkip), so database/sql can fall back to the prepare path.
-func instrumentQuery(ctx context.Context, cfg qt.Config, sqlText string, args []stddriver.NamedValue, run func() (stddriver.Rows, error)) (stddriver.Rows, error) {
+func instrumentQuery(ctx context.Context, cfg qt.Config, txID, sqlText string, args []stddriver.NamedValue, run func() (stddriver.Rows, error)) (stddriver.Rows, error) {
 	tr, ok := qt.FromContext(ctx)
-	if !ok || !cfg.Enabled {
+	if !ok || !cfg.Enabled || !tr.Sampled() {
 		return run()
 	}
 	tr.EnsureConfig(cfg)
@@ -47,6 +47,9 @@ func instrumentQuery(ctx context.Context, cfg qt.Config, sqlText string, args []
 		Query:     cfg.Analyze(sqlText, values(args)),
 		Err:       err,
 	}
+	if ev.Query != nil {
+		ev.Query.TxID = txID
+	}
 	if qt.WantCaller(cfg.CaptureCaller, err, dur, cfg.SlowQueryThreshold) {
 		ev.Caller = qt.CaptureCaller()
 	}
@@ -63,9 +66,9 @@ func instrumentQuery(ctx context.Context, cfg qt.Config, sqlText string, args []
 
 // instrumentExec records a write around run. It is a pass-through under the same
 // conditions as instrumentQuery.
-func instrumentExec(ctx context.Context, cfg qt.Config, sqlText string, args []stddriver.NamedValue, run func() (stddriver.Result, error)) (stddriver.Result, error) {
+func instrumentExec(ctx context.Context, cfg qt.Config, txID, sqlText string, args []stddriver.NamedValue, run func() (stddriver.Result, error)) (stddriver.Result, error) {
 	tr, ok := qt.FromContext(ctx)
-	if !ok || !cfg.Enabled {
+	if !ok || !cfg.Enabled || !tr.Sampled() {
 		return run()
 	}
 	tr.EnsureConfig(cfg)
@@ -84,6 +87,9 @@ func instrumentExec(ctx context.Context, cfg qt.Config, sqlText string, args []s
 		Duration:  dur,
 		Query:     cfg.Analyze(sqlText, values(args)),
 		Err:       err,
+	}
+	if ev.Query != nil {
+		ev.Query.TxID = txID
 	}
 	if qt.WantCaller(cfg.CaptureCaller, err, dur, cfg.SlowQueryThreshold) {
 		ev.Caller = qt.CaptureCaller()

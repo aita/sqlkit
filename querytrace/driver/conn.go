@@ -14,6 +14,14 @@ import (
 type conn struct {
 	cfg qt.Config
 	c   stddriver.Conn
+
+	// txID is the identifier of the transaction currently open on this
+	// connection, or "" outside one. database/sql holds a driver connection
+	// exclusively for the life of a transaction and serializes all calls on it,
+	// so a plain field — set by BeginTx, cleared by the wrapped Tx on
+	// commit/rollback, and read when recording a statement — links each statement
+	// to its transaction without a lock.
+	txID string
 }
 
 var (
@@ -33,7 +41,7 @@ func (cn *conn) Prepare(query string) (stddriver.Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &stmt{cfg: cn.cfg, sql: query, s: s}, nil
+	return &stmt{cfg: cn.cfg, txID: cn.txID, sql: query, s: s}, nil
 }
 
 // PrepareContext prepares a statement with a context when the underlying
@@ -44,7 +52,7 @@ func (cn *conn) PrepareContext(ctx context.Context, query string) (stddriver.Stm
 		if err != nil {
 			return nil, err
 		}
-		return &stmt{cfg: cn.cfg, sql: query, s: s}, nil
+		return &stmt{cfg: cn.cfg, txID: cn.txID, sql: query, s: s}, nil
 	}
 	return cn.Prepare(query)
 }
@@ -64,7 +72,7 @@ func (cn *conn) QueryContext(ctx context.Context, query string, args []stddriver
 	if !ok {
 		return nil, stddriver.ErrSkip
 	}
-	return instrumentQuery(ctx, cn.cfg, query, args, func() (stddriver.Rows, error) {
+	return instrumentQuery(ctx, cn.cfg, cn.txID, query, args, func() (stddriver.Rows, error) {
 		return q.QueryContext(ctx, query, args)
 	})
 }
@@ -77,7 +85,7 @@ func (cn *conn) ExecContext(ctx context.Context, query string, args []stddriver.
 	if !ok {
 		return nil, stddriver.ErrSkip
 	}
-	return instrumentExec(ctx, cn.cfg, query, args, func() (stddriver.Result, error) {
+	return instrumentExec(ctx, cn.cfg, cn.txID, query, args, func() (stddriver.Result, error) {
 		return e.ExecContext(ctx, query, args)
 	})
 }
@@ -98,11 +106,12 @@ func (cn *conn) BeginTx(ctx context.Context, opts stddriver.TxOptions) (stddrive
 		return nil, err
 	}
 	tr, ok := qt.FromContext(ctx)
-	if !ok || !cn.cfg.Enabled {
+	if !ok || !cn.cfg.Enabled || !tr.Sampled() {
 		return underlying, nil
 	}
 	tr.EnsureConfig(cn.cfg)
-	return &tx{tr: tr, txID: tr.RecordTxBegin(), tx: underlying}, nil
+	cn.txID = tr.RecordTxBegin()
+	return &tx{tr: tr, cn: cn, txID: cn.txID, tx: underlying}, nil
 }
 
 // Ping forwards to the underlying Pinger, or reports healthy when the underlying
