@@ -1,0 +1,3 @@
+# Rust build artifacts for the sqlparser-rs cgo binding.
+# The static library is produced by `make` / `go generate` (see doc.go).
+rust/target/

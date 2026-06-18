@@ -1,0 +1,17 @@
+[package]
+name = "sqlkit_parserrs"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "sqlkit_parserrs"
+crate-type = ["staticlib"]
+
+[dependencies]
+sqlparser = { version = "0.62.0", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
