@@ -17,7 +17,7 @@ import (
 //	md, _ := catalog.Build()
 //	dbtest.SetupSchema(t, db, md)
 //
-// md is the meta.Metadata a schema catalog produces (sqldef.Catalog.Build).
+// md is the meta.Metadata a schema catalog produces (decl.Catalog.Build).
 func SetupSchema(t *testing.T, db *sqlkit.Database, md meta.Metadata) {
 	t.Helper()
 	ApplySchema(t, db, md)

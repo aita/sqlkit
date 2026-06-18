@@ -6,10 +6,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
-
-	"github.com/alecthomas/kong"
 )
 
 // WithOutput sets where the CLI writes its output (default os.Stdout).
@@ -24,41 +23,29 @@ func (m *Migrator) output() io.Writer {
 	return os.Stdout
 }
 
-// RunCLI parses and dispatches a migration command against the migrator. It is
-// the engine behind "sqlkit migrate <command>" (the sqlkit binary compiles the
-// project's migrations into a small program that calls this), and a program can
-// call it directly to ship its own binary:
-//
-//	m := migrations.Registry.NewMigrator(db)
-//	err := m.RunCLI(context.Background(), os.Args[1:])
-//
-// Commands: up, down, stamp, status, pending, current, heads, history,
-// sql up|down, and new.
-func (m *Migrator) RunCLI(ctx context.Context, args []string) error {
-	var cli migrateCLI
-	parser, err := kong.New(&cli,
-		kong.Name("migrate"),
-		kong.Description("Run and scaffold schema migrations."),
-		kong.Writers(m.output(), m.output()),
-	)
-	if err != nil {
-		return err
-	}
-	kctx, err := parser.Parse(args)
-	if err != nil {
-		return err
-	}
-	return kctx.Run(&cliRunner{m: m, ctx: ctx})
-}
-
-// cliRunner carries the migrator and context to each subcommand's Run method.
-type cliRunner struct {
+// Runner carries the migrator and context to each subcommand's Run method. It
+// is the binding a CLI driver hands to the parsed command — pass it to kong's
+// kctx.Run, or to CLI.Dispatch.
+type Runner struct {
 	m   *Migrator
 	ctx context.Context
 }
 
-// migrateCLI is the kong grammar for RunCLI's commands.
-type migrateCLI struct {
+// Runner returns the binding that CLI commands run against. Hand it to a parsed
+// command, e.g. kong's kctx.Run(m.Runner(ctx)) or CLI.Dispatch(m.Runner(ctx), …).
+func (m *Migrator) Runner(ctx context.Context) *Runner {
+	return &Runner{m: m, ctx: ctx}
+}
+
+// CLI is the command grammar for running and scaffolding migrations. Its struct
+// tags describe the commands to a CLI framework without this package depending
+// on one: build it with NewCLI, hand it to kong (kong.New(migrate.NewCLI())),
+// and run the parsed command against m.Runner(ctx). To ship a migration binary
+// without pulling in kong, use CLI.Dispatch instead.
+//
+// Commands: up, down, stamp, status, pending, current, heads, history,
+// sql up|down, and new.
+type CLI struct {
 	Up      upCmd      `cmd:"" help:"Apply migrations up to a target (default head)."`
 	Down    downCmd    `cmd:"" help:"Roll back migrations to a target (default the most recent)."`
 	Stamp   stampCmd   `cmd:"" help:"Mark a revision applied without running it."`
@@ -71,27 +58,151 @@ type migrateCLI struct {
 	New     newCmd     `cmd:"" help:"Scaffold a new migration file."`
 }
 
+// NewCLI returns a fresh command grammar to hand to a CLI parser. The caller
+// owns the parser (and its dependency): e.g.
+//
+//	cli := migrate.NewCLI()
+//	parser, _ := kong.New(cli, kong.Name("migrate"))
+//	kctx, _ := parser.Parse(os.Args[1:])
+//	err := kctx.Run(m.Runner(ctx))
+func NewCLI() *CLI { return &CLI{} }
+
+// Dispatch parses args and runs the matching command against r, without any
+// third-party CLI dependency. It accepts the same command set as the kong
+// grammar (up, down, stamp, status, pending, current, heads, history,
+// sql up|down, new) and is what a shipped binary or the sqlkit migrate bridge
+// calls so neither needs kong:
+//
+//	err := migrate.NewCLI().Dispatch(m.Runner(ctx), os.Args[1:])
+func (c *CLI) Dispatch(r *Runner, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("migrate: no command; expected one of %s", strings.Join(commandNames, ", "))
+	}
+	cmd, rest := args[0], args[1:]
+	switch cmd {
+	case "up":
+		c.Up.Target = argOr(rest, 0, "head")
+		return c.Up.Run(r)
+	case "down":
+		c.Down.Target = argOr(rest, 0, "-1")
+		return c.Down.Run(r)
+	case "stamp":
+		if len(rest) == 0 {
+			return fmt.Errorf("migrate: stamp needs a revision")
+		}
+		c.Stamp.Revision = rest[0]
+		return c.Stamp.Run(r)
+	case "status":
+		return c.Status.Run(r)
+	case "pending":
+		return c.Pending.Run(r)
+	case "current":
+		return c.Current.Run(r)
+	case "heads":
+		return c.Heads.Run(r)
+	case "history":
+		return c.History.Run(r)
+	case "sql":
+		if len(rest) == 0 || (rest[0] != "up" && rest[0] != "down") {
+			return fmt.Errorf("migrate: sql direction must be up or down")
+		}
+		c.SQL.Direction = rest[0]
+		c.SQL.From = argOr(rest, 1, "")
+		c.SQL.To = argOr(rest, 2, "")
+		return c.SQL.Run(r)
+	case "new":
+		if err := parseNew(&c.New, rest); err != nil {
+			return err
+		}
+		return c.New.Run(r)
+	default:
+		return fmt.Errorf("migrate: unknown command %q; expected one of %s", cmd, strings.Join(commandNames, ", "))
+	}
+}
+
+var commandNames = []string{"up", "down", "stamp", "status", "pending", "current", "heads", "history", "sql", "new"}
+
+// argOr returns args[i] if present, else def.
+func argOr(args []string, i int, def string) string {
+	if i < len(args) {
+		return args[i]
+	}
+	return def
+}
+
+// parseNew fills the new-migration command from "<name> [--dir D] [--package P]
+// [--parent X] [--merge]" — the flags the sqlkit bridge passes through. Both
+// "--flag value" and "--flag=value" forms are accepted.
+func parseNew(c *newCmd, args []string) error {
+	c.Dir, c.Package = "migrations", "migrations"
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case strings.HasPrefix(a, "--"):
+			name, val, hasEq := strings.Cut(a, "=")
+			if name == "--merge" {
+				c.Merge = true
+				if hasEq {
+					b, err := strconv.ParseBool(val)
+					if err != nil {
+						return fmt.Errorf("migrate: invalid --merge value %q", val)
+					}
+					c.Merge = b
+				}
+				continue
+			}
+			if !hasEq {
+				if i+1 >= len(args) {
+					return fmt.Errorf("migrate: %s needs a value", name)
+				}
+				i++
+				val = args[i]
+			}
+			switch name {
+			case "--dir":
+				c.Dir = val
+			case "--package":
+				c.Package = val
+			case "--parent":
+				c.Parent = val
+			default:
+				return fmt.Errorf("migrate: unknown flag %q for new", name)
+			}
+		case strings.HasPrefix(a, "-"):
+			return fmt.Errorf("migrate: unknown flag %q for new", a)
+		case c.Name == "":
+			c.Name = a
+		default:
+			return fmt.Errorf("migrate: unexpected argument %q for new", a)
+		}
+	}
+	if c.Name == "" {
+		return fmt.Errorf("migrate: new needs a migration name")
+	}
+	return nil
+}
+
 type upCmd struct {
 	Target string `arg:"" optional:"" default:"head" help:"head, +N, or a revision id/prefix."`
 }
 
-func (c *upCmd) Run(r *cliRunner) error { return r.m.Upgrade(r.ctx, c.Target) }
+func (c *upCmd) Run(r *Runner) error { return r.m.Upgrade(r.ctx, c.Target) }
 
 type downCmd struct {
 	Target string `arg:"" optional:"" default:"-1" help:"base, -N, or a revision id/prefix."`
 }
 
-func (c *downCmd) Run(r *cliRunner) error { return r.m.Downgrade(r.ctx, c.Target) }
+func (c *downCmd) Run(r *Runner) error { return r.m.Downgrade(r.ctx, c.Target) }
 
 type stampCmd struct {
 	Revision string `arg:"" help:"Revision to mark applied (or head/base)."`
 }
 
-func (c *stampCmd) Run(r *cliRunner) error { return r.m.Stamp(r.ctx, c.Revision) }
+func (c *stampCmd) Run(r *Runner) error { return r.m.Stamp(r.ctx, c.Revision) }
 
 type statusCmd struct{}
 
-func (c *statusCmd) Run(r *cliRunner) error {
+func (c *statusCmd) Run(r *Runner) error {
 	status, err := r.m.Status(r.ctx)
 	if err != nil {
 		return err
@@ -108,7 +219,7 @@ func (c *statusCmd) Run(r *cliRunner) error {
 
 type pendingCmd struct{}
 
-func (c *pendingCmd) Run(r *cliRunner) error {
+func (c *pendingCmd) Run(r *Runner) error {
 	pending, err := r.m.Pending(r.ctx)
 	if err != nil {
 		return err
@@ -121,7 +232,7 @@ func (c *pendingCmd) Run(r *cliRunner) error {
 
 type currentCmd struct{}
 
-func (c *currentCmd) Run(r *cliRunner) error {
+func (c *currentCmd) Run(r *Runner) error {
 	cur, err := r.m.Current(r.ctx)
 	if err != nil {
 		return err
@@ -134,7 +245,7 @@ func (c *currentCmd) Run(r *cliRunner) error {
 
 type headsCmd struct{}
 
-func (c *headsCmd) Run(r *cliRunner) error {
+func (c *headsCmd) Run(r *Runner) error {
 	for _, h := range r.m.Heads() {
 		fmt.Fprintln(r.m.output(), h)
 	}
@@ -143,7 +254,7 @@ func (c *headsCmd) Run(r *cliRunner) error {
 
 type historyCmd struct{}
 
-func (c *historyCmd) Run(r *cliRunner) error {
+func (c *historyCmd) Run(r *Runner) error {
 	events, err := r.m.History(r.ctx)
 	if err != nil {
 		return err
@@ -161,7 +272,7 @@ type sqlCmd struct {
 	To        string `arg:"" optional:"" help:"End revision (defaults: up=head, down=base)."`
 }
 
-func (c *sqlCmd) Run(r *cliRunner) error {
+func (c *sqlCmd) Run(r *Runner) error {
 	var (
 		script string
 		err    error
@@ -189,7 +300,7 @@ type newCmd struct {
 	Merge   bool   `help:"Create a merge migration that joins all current heads."`
 }
 
-func (c *newCmd) Run(r *cliRunner) error {
+func (c *newCmd) Run(r *Runner) error {
 	if r.m.planErr != nil {
 		return r.m.planErr
 	}

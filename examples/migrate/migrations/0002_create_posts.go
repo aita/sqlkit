@@ -1,8 +1,8 @@
 package migrations
 
 import (
+	"github.com/aita/sqlkit/decl"
 	"github.com/aita/sqlkit/migrate"
-	"github.com/aita/sqlkit/sqldef"
 )
 
 var _ = Registry.Add(migrate.Migration{
@@ -11,10 +11,10 @@ var _ = Registry.Add(migrate.Migration{
 	Name:         "create_posts",
 	Up: func(op *migrate.Operator) {
 		op.CreateTable("posts",
-			sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-			sqldef.Column("user_id", sqldef.BigInt),
-			sqldef.Column("title", sqldef.Text),
-			sqldef.Index("user_id"),
+			decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+			decl.Column("user_id", decl.BigInt),
+			decl.Column("title", decl.Text),
+			decl.Index("user_id"),
 		)
 		// Foreign keys reference their target table by name.
 		op.CreateForeignKey("fk_posts_user_id", "posts",

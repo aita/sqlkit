@@ -65,7 +65,7 @@ type TypeMapperConfig struct {
 //  2. Config.ColumnOverrides, by column name (most specific key wins).
 //  3. Config.Overrides, by lowercase SQL type name.
 //  4. A Go type pinned on the column's meta.Type at the schema source (the
-//     sqldef DSL's DataType.Go), so a custom DB type carries its Go type along.
+//     decl DSL's DataType.Go), so a custom DB type carries its Go type along.
 //  5. The built-in PostgreSQL/MySQL/SQLite type tables.
 //
 // Nullability is applied to the resolved type at every level (a nullable column
@@ -112,7 +112,7 @@ func (m DefaultTypeMapper) GoTypeFor(table meta.Table, column meta.Column, diale
 	stdTable, label := tableForDialect(dialect)
 	gt, ok := stdTable[dataType]
 	if !ok {
-		return meta.GoType{}, fmt.Errorf("codegen: unsupported %s type %q (column %q); add a type override via NewDefaultTypeMapper or pin one with sqldef's DataType.Go", label, engine.Name, column.Name)
+		return meta.GoType{}, fmt.Errorf("codegen: unsupported %s type %q (column %q); add a type override via NewDefaultTypeMapper or pin one with decl's DataType.Go", label, engine.Name, column.Name)
 	}
 	return resolvedType(gt, engine, column), nil
 }
@@ -246,7 +246,7 @@ var mysqlTypes = map[string]meta.GoType{
 	"time":       {ImportPath: "time", Name: "time.Time"},
 }
 
-// sqliteTypes maps the engine type names the sqldef registry emits for SQLite
+// sqliteTypes maps the engine type names the decl registry emits for SQLite
 // (plus the common storage-class spellings) to Go types. SQLite's type affinity
 // is loose, so the mapping keys on the declared type name.
 var sqliteTypes = map[string]meta.GoType{

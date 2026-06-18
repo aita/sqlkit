@@ -21,7 +21,7 @@ func TestRenderBridge(t *testing.T) {
 		`usermigrations "example.com/app/migrations"`,
 		`sqlkit.Open("pgx", os.Getenv("SQLKIT_MIGRATE_DSN"))`,
 		`usermigrations.Registry.NewMigrator(`,
-		`m.RunCLI(context.Background(), os.Args[1:])`,
+		`migrate.NewCLI().Dispatch(m.Runner(context.Background()), os.Args[1:])`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("generated program missing %q:\n%s", want, got)

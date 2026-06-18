@@ -6,17 +6,17 @@ import (
 
 	"github.com/aita/sqlkit"
 	"github.com/aita/sqlkit/codegen"
-	"github.com/aita/sqlkit/inspector"
+	"github.com/aita/sqlkit/introspect"
 )
 
-// TestInspectLiveSchema verifies the inspector reads the schema the ddl
+// TestInspectLiveSchema verifies the introspection reads the schema the ddl
 // generator just applied, on both engines, and that codegen can turn the
 // introspected model back into compiling bindings.
 func TestInspectLiveSchema(t *testing.T) {
 	eachEngine(t, func(t *testing.T, eng engine, db *sqlkit.Database) {
 		ctx := context.Background()
 
-		model, err := inspector.Inspect(ctx, db.SQL(), eng.name, testSchema)
+		model, err := introspect.Schema(ctx, db.SQL(), eng.name, testSchema)
 		if err != nil {
 			t.Fatalf("inspect: %v", err)
 		}

@@ -1,5 +1,5 @@
 // Package migrations holds the example's database migrations, each authored with
-// the sqldef DSL. Each migration lives in its own file and registers itself with
+// the decl DSL. Each migration lives in its own file and registers itself with
 // the package-level Registry in an init function, so adding a migration is
 // dropping in a new file — no central list to edit.
 //

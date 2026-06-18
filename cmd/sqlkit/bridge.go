@@ -15,7 +15,7 @@ import (
 // bridgeFlags are shared by the migrate execution subcommands. Because
 // migrations are Go code, the sqlkit binary cannot run them directly; instead it
 // compiles the migrations package into a throwaway program that opens the
-// database and dispatches to migrate.RunCLI, then runs it with `go run`.
+// database and dispatches to migrate.NewCLI().Dispatch, then runs it with `go run`.
 type bridgeFlags struct {
 	Migrations string `help:"Directory (or import path) of the migrations package." default:"./migrations"`
 	DSN        string `help:"Database connection string." env:"DATABASE_URL"`
@@ -32,7 +32,7 @@ var (
 )
 
 // run compiles the migrations package and dispatches the command (args[0]) and
-// its arguments to migrate.RunCLI inside the compiled program.
+// its arguments to migrate.NewCLI().Dispatch inside the compiled program.
 func (f *bridgeFlags) run(args ...string) error {
 	// "new" only scaffolds a file from the migration set; everything else opens
 	// the database.
@@ -200,7 +200,7 @@ func main() {
 	defer db.SQL().Close()
 
 	m := usermigrations.{{.Registry}}.NewMigrator(db, migrate.WithSchema(os.Getenv("SQLKIT_MIGRATE_SCHEMA")))
-	if err := m.RunCLI(context.Background(), os.Args[1:]); err != nil {
+	if err := migrate.NewCLI().Dispatch(m.Runner(context.Background()), os.Args[1:]); err != nil {
 		log.Fatal(err)
 	}
 }

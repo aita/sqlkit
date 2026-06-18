@@ -68,26 +68,14 @@ jobs:
           go build ./...
           go vet ./...
 
-      - name: Build, vet & test sqlparse module
-        working-directory: x/sqlparse
-        run: |
-          test -z "$(gofmt -l .)"
-          go build ./...
-          go vet ./...
-          go test -race ./...
+      # sqlparse and querytrace are packages of the root module now (covered by
+      # the build/vet/test steps above); only their heavy-dependency leaf
+      # modules below stay separate so those deps never reach the root module.
 
       # The postgres frontend uses pg_query_go (cgo), kept in its own module so
-      # that dependency stays out of the root and parent sqlparse modules.
+      # that dependency stays out of the root module that consumers import.
       - name: Build, vet & test sqlparse/postgres module
-        working-directory: x/sqlparse/postgres
-        run: |
-          test -z "$(gofmt -l .)"
-          go build ./...
-          go vet ./...
-          go test -race ./...
-
-      - name: Build, vet & test querytrace module
-        working-directory: x/querytrace
+        working-directory: sqlparse/postgres
         run: |
           test -z "$(gofmt -l .)"
           go build ./...
@@ -95,9 +83,9 @@ jobs:
           go test -race ./...
 
       # The OpenTelemetry exporter is its own module so the otel dependency
-      # stays out of the core querytrace module that consumers import.
-      - name: Build, vet & test querytrace/otel module
-        working-directory: x/querytrace/otel
+      # stays out of the root module that consumers import.
+      - name: Build, vet & test querytrace/otelquery module
+        working-directory: querytrace/otelquery
         run: |
           test -z "$(gofmt -l .)"
           go build ./...

@@ -1,23 +1,23 @@
 package integration
 
 // These tests exercise the autogenerate pipeline end to end against real
-// databases: a source schema read from a live database by inspector.Inspect is
-// diffed against a target sqldef catalog by autogen.Render, the same wiring the
+// databases: a source schema read from a live database by introspect.Schema is
+// diffed against a target decl catalog by autogen.Render, the same wiring the
 // `sqlkit migrate autogenerate --from-db` command uses. The autogen unit tests
 // (migrate/autogen/render_test.go) fabricate both sides as in-memory catalogs and
-// never go through introspection, so the inspector -> Render seam — and the
+// never go through introspection, so the introspection -> Render seam — and the
 // dialect-specific readback quirks it carries — is only covered here.
 //
 // IMPORTANT: a full round-trip (inspect a catalog, then Render the inspected
 // schema against that same catalog and expect Empty) is NOT reliable, because
 // render.go compares raw type names, default text, and index/FK/check names, and
-// the inspector reads several of these back in a normalized form that no longer
+// the introspection reads several of these back in a normalized form that no longer
 // matches the catalog:
 //
 //   - MySQL: Bool -> tinyint; Default(false) -> "0"; Default(now()) ->
 //     "CURRENT_TIMESTAMP"; CHECK `title <> ''` -> "`title` <> _utf8mb4''"; and a
 //     TEXT column reports CHARACTER_MAXIMUM_LENGTH 65535 while the portable
-//     sqldef.Text type carries length 0, so even a plain Text column diffs.
+//     decl.Text type carries length 0, so even a plain Text column diffs.
 //   - Postgres: CHECK `title <> ''` -> "title <> ''::text"; now() default
 //     normalization; unique/secondary index and FK names become engine-generated
 //     and no longer equal the names the catalog's DDL emitted (render matches
@@ -39,10 +39,10 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/inspector"
+	"github.com/aita/sqlkit/decl"
+	"github.com/aita/sqlkit/introspect"
 	"github.com/aita/sqlkit/migrate/autogen"
 	"github.com/aita/sqlkit/sql"
-	"github.com/aita/sqlkit/sqldef"
 )
 
 // TestAutogenerateForwardDiff applies an initial schema to a live database,
@@ -57,27 +57,27 @@ func TestAutogenerateForwardDiff(t *testing.T) {
 		ctx := context.Background()
 
 		// Initial database state: just widgets(id, name).
-		oldCatalog := sqldef.NewCatalog(sqldef.DefaultSchema(testSchema))
+		oldCatalog := decl.NewCatalog(decl.DefaultSchema(testSchema))
 		oldCatalog.Table("widgets",
-			sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-			sqldef.Column("name", sqldef.Text),
+			decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+			decl.Column("name", decl.Text),
 		)
 		applyCatalog(t, db, eng, oldCatalog)
 		t.Cleanup(func() { dropTables(t, db, eng, "gadgets", "widgets") })
 
 		// Desired state: widgets gains a column, and a gadgets table referencing it.
-		newCatalog := sqldef.NewCatalog(sqldef.DefaultSchema(testSchema))
+		newCatalog := decl.NewCatalog(decl.DefaultSchema(testSchema))
 		newCatalog.Table("widgets",
-			sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-			sqldef.Column("name", sqldef.Text),
-			sqldef.Column("sku", sqldef.VarChar(64), sqldef.Nullable()),
+			decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+			decl.Column("name", decl.Text),
+			decl.Column("sku", decl.VarChar(64), decl.Nullable()),
 		)
 		newCatalog.Table("gadgets",
-			sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-			sqldef.Column("widget_id", sqldef.BigInt, sqldef.References("widgets", "id")),
+			decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+			decl.Column("widget_id", decl.BigInt, decl.References("widgets", "id")),
 		)
 
-		source, err := inspector.Inspect(ctx, db.SQL(), eng.name, testSchema)
+		source, err := introspect.Schema(ctx, db.SQL(), eng.name, testSchema)
 		if err != nil {
 			t.Fatalf("inspect source: %v", err)
 		}
@@ -99,7 +99,7 @@ func TestAutogenerateForwardDiff(t *testing.T) {
 
 		for _, want := range []string{
 			`op.CreateTable("gadgets"`,
-			`op.AddColumn("widgets", sqldef.Column("sku"`,
+			`op.AddColumn("widgets", decl.Column("sku"`,
 		} {
 			if !strings.Contains(res.Up, want) {
 				t.Errorf("Up missing %q\n--- Up ---\n%s", want, res.Up)
@@ -133,16 +133,16 @@ func TestAutogenerateRoundTripIdempotent(t *testing.T) {
 	eachEngine(t, func(t *testing.T, eng engine, db *sqlkit.Database) {
 		ctx := context.Background()
 
-		safeCatalog := sqldef.NewCatalog(sqldef.DefaultSchema(testSchema))
+		safeCatalog := decl.NewCatalog(decl.DefaultSchema(testSchema))
 		safeCatalog.Table("accounts",
-			sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-			sqldef.Column("label", sqldef.VarChar(120)),
-			sqldef.Column("note", sqldef.VarChar(255), sqldef.Nullable()),
+			decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+			decl.Column("label", decl.VarChar(120)),
+			decl.Column("note", decl.VarChar(255), decl.Nullable()),
 		)
 		applyCatalog(t, db, eng, safeCatalog)
 		t.Cleanup(func() { dropTables(t, db, eng, "accounts") })
 
-		source, err := inspector.Inspect(ctx, db.SQL(), eng.name, testSchema)
+		source, err := introspect.Schema(ctx, db.SQL(), eng.name, testSchema)
 		if err != nil {
 			t.Fatalf("inspect: %v", err)
 		}
@@ -176,7 +176,7 @@ func dialectFor(t *testing.T, eng engine) sql.Dialect {
 // every existing table (resetSchema) so the inspected source reflects the
 // catalog alone — not the shared testCatalog that eachEngine's setup applied, nor
 // tables another test left behind — then executes the rendered CREATE statements.
-func applyCatalog(t *testing.T, db *sqlkit.Database, eng engine, cat *sqldef.Catalog) {
+func applyCatalog(t *testing.T, db *sqlkit.Database, eng engine, cat *decl.Catalog) {
 	t.Helper()
 	ctx := context.Background()
 	resetSchema(t, db, eng)
@@ -197,13 +197,13 @@ func applyCatalog(t *testing.T, db *sqlkit.Database, eng engine, cat *sqldef.Cat
 
 // resetSchema drops every table currently in testSchema, giving a clean slate
 // regardless of what earlier tests applied. It discovers the tables with the
-// inspector, then drops them on a single connection so the engine's foreign-key
+// introspection, then drops them on a single connection so the engine's foreign-key
 // dependencies do not block the drops: Postgres uses CASCADE, MySQL disables
 // foreign-key checks for the duration (a session setting, hence one connection).
 func resetSchema(t *testing.T, db *sqlkit.Database, eng engine) {
 	t.Helper()
 	ctx := context.Background()
-	model, err := inspector.Inspect(ctx, db.SQL(), eng.name, testSchema)
+	model, err := introspect.Schema(ctx, db.SQL(), eng.name, testSchema)
 	if err != nil {
 		t.Fatalf("inspect for reset: %v", err)
 	}
@@ -255,7 +255,7 @@ func assertValidGo(t *testing.T, body string) {
 import (
 	"github.com/aita/sqlkit/migrate"
 	"github.com/aita/sqlkit/sql"
-	"github.com/aita/sqlkit/sqldef"
+	"github.com/aita/sqlkit/decl"
 )
 
 var _ = func(op *migrate.Operator) {
@@ -264,7 +264,7 @@ var _ = func(op *migrate.Operator) {
 
 var (
 	_ = sql.Raw
-	_ = sqldef.BigInt
+	_ = decl.BigInt
 )
 `, body)
 	if _, err := format.Source([]byte(src)); err != nil {

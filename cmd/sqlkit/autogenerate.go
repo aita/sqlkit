@@ -13,7 +13,7 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/aita/sqlkit/inspector"
+	"github.com/aita/sqlkit/introspect"
 	"github.com/aita/sqlkit/meta"
 	"github.com/aita/sqlkit/migrate"
 	"github.com/aita/sqlkit/migrate/autogen"
@@ -21,15 +21,15 @@ import (
 )
 
 // autogenerateCmd generates a migration by diffing a source schema against the
-// target sqldef catalog (the desired state). The source is selected with
+// target decl catalog (the desired state). The source is selected with
 // --from-db (a live database) or --from-git (the catalog as it stood at a git
 // revision). The Up body migrates the source up to the catalog; the Down body is
 // a best-effort reverse. Because a catalog is Go code, the command compiles it
 // into a throwaway program to read its schema (see shim.go).
 type autogenerateCmd struct {
 	Name    string `arg:"" help:"Human-readable migration name (e.g. \"add tags\")."`
-	Catalog string `help:"Import path or directory of the package that declares the target sqldef catalog." default:"./schema"`
-	Var     string `help:"Name of the *sqldef.Catalog variable." default:"Catalog" name:"var"`
+	Catalog string `help:"Import path or directory of the package that declares the target decl catalog." default:"./schema"`
+	Var     string `help:"Name of the *decl.Catalog variable." default:"Catalog" name:"var"`
 	Dialect string `help:"SQL dialect (postgres or mysql); inferred from --driver for --from-db, else postgres."`
 
 	FromDB  bool   `help:"Use a live database as the source schema (needs --dsn)." name:"from-db"`
@@ -118,7 +118,7 @@ func (c *autogenerateCmd) Run() error {
 		Up:        result.Up,
 		Down:      result.Down,
 		UsesSQL:   result.UsesSQL,
-		UsesDef:   result.UsesSqldef,
+		UsesDecl:  result.UsesDecl,
 	})
 	if err != nil {
 		return err
@@ -153,7 +153,7 @@ func (c *autogenerateCmd) targetSnapshot(importPath, dialect string) (autogen.Sn
 	return decodeSnapshot(out)
 }
 
-// sourceMetadata resolves the source schema: a live database (inspector) or the
+// sourceMetadata resolves the source schema: a live database (introspection) or the
 // catalog at a git revision (a worktree + a self-contained snapshot shim).
 func (c *autogenerateCmd) sourceMetadata(ctx context.Context, importPath, dialect string, d sqlast.Dialect) (meta.Metadata, error) {
 	if c.FromDB {
@@ -165,7 +165,7 @@ func (c *autogenerateCmd) sourceMetadata(ctx context.Context, importPath, dialec
 			return meta.Metadata{}, err
 		}
 		defer db.Close()
-		return inspector.Inspect(ctx, db, dialect, c.Schema)
+		return introspect.Schema(ctx, db, dialect, c.Schema)
 	}
 
 	// --from-git: build the catalog at the given revision in a temporary worktree.
@@ -284,7 +284,7 @@ type migrationData struct {
 	Up        string
 	Down      string
 	UsesSQL   bool
-	UsesDef   bool
+	UsesDecl  bool
 }
 
 type migrationFile struct {
@@ -358,10 +358,10 @@ import (
 	schema {{printf "%q" .ImportPath}}
 	"github.com/aita/sqlkit/migrate/autogen"
 	"github.com/aita/sqlkit/sql"
-	"github.com/aita/sqlkit/sqldef"
+	"github.com/aita/sqlkit/decl"
 )
 
-var _ *sqldef.Catalog = schema.{{.Var}}
+var _ *decl.Catalog = schema.{{.Var}}
 
 func main() {
 	md, err := schema.{{.Var}}.Build()
@@ -413,8 +413,8 @@ import (
 {{- if .UsesSQL}}
 	"github.com/aita/sqlkit/sql"
 {{- end}}
-{{- if .UsesDef}}
-	"github.com/aita/sqlkit/sqldef"
+{{- if .UsesDecl}}
+	"github.com/aita/sqlkit/decl"
 {{- end}}
 )
 

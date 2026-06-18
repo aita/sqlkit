@@ -1,10 +1,10 @@
-// Command sqlkit bootstraps and consumes a sqldef catalog. Its inspect
+// Command sqlkit bootstraps and consumes a decl catalog. Its inspect
 // subcommand introspects a live PostgreSQL or MySQL schema once and emits a Go
-// catalog file built on the sqldef package; from then on you maintain the
+// catalog file built on the decl package; from then on you maintain the
 // schema as code. Its generate and ddl subcommands turn a catalog package back
 // into the typed table bindings and the SQL DDL without hand-writing a
 // generator program: point them at the package that declares the
-// *sqldef.Catalog and they call codegen.Generate / meta.Metadata.CreateSQL
+// *decl.Catalog and they call codegen.Generate / meta.Metadata.CreateSQL
 // for you.
 //
 // Usage:
@@ -16,7 +16,7 @@
 //	sqlkit ddl ./schema --dialect postgres --out schema.sql
 //	sqlkit migrate new "create users" --dir migrations
 //
-// The codegen, meta, and inspector packages are the library entry points behind
+// The codegen, meta, and introspection packages are the library entry points behind
 // this command; import them directly to customize the conversion.
 package main
 
@@ -26,8 +26,8 @@ import "github.com/alecthomas/kong"
 // inspectCmd in inspect.go, generateCmd in generate.go, ddlCmd in ddl.go,
 // migrateCmd in migrate.go.
 type CLI struct {
-	Inspect  inspectCmd       `cmd:"" help:"Introspect a live database and emit a sqldef catalog."`
-	Generate generateCmd      `cmd:"" help:"Generate typed table bindings from a package that declares a sqldef catalog (no gen.go needed)."`
+	Inspect  inspectCmd       `cmd:"" help:"Introspect a live database and emit a decl catalog."`
+	Generate generateCmd      `cmd:"" help:"Generate typed table bindings from a package that declares a decl catalog (no gen.go needed)."`
 	Ddl      ddlCmd           `cmd:"" help:"Render a catalog package's SQL DDL (schema.sql)."`
 	Migrate  migrateCmd       `cmd:"" help:"Scaffold and run schema migrations."`
 	Version  kong.VersionFlag `help:"Print sqlkit version and exit." short:"V"`
@@ -37,7 +37,7 @@ func main() {
 	cli := CLI{}
 	ctx := kong.Parse(&cli,
 		kong.Name("sqlkit"),
-		kong.Description("Bootstrap and maintain a sqldef catalog from a live database."),
+		kong.Description("Bootstrap and maintain a decl catalog from a live database."),
 		kong.UsageOnError(),
 		kong.Vars{"version": "sqlkit dev"},
 	)

@@ -339,8 +339,8 @@ func TestColumnOverrideNullablePointer(t *testing.T) {
 }
 
 // pinnedType is a meta.Type that fixes an engine name and pins a Go type,
-// mirroring what sqldef's DataType.Go produces, to exercise the GoTyped path of
-// DefaultTypeMapper without importing sqldef.
+// mirroring what decl's DataType.Go produces, to exercise the GoTyped path of
+// DefaultTypeMapper without importing decl.
 type pinnedType struct {
 	name   string
 	goType meta.GoType

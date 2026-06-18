@@ -124,8 +124,8 @@ replace github.com/aita/sqlkit => %s
 
 	// Initial committed catalog: widgets(id, name).
 	writeTestFile(t, filepath.Join(dir, "schema", "schema.go"), catalogSource(
-		`sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("name", sqldef.Text),`))
+		`decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("name", decl.Text),`))
 
 	runGit(t, dir, "init")
 	runGit(t, dir, "config", "user.email", "test@example.com")
@@ -139,9 +139,9 @@ replace github.com/aita/sqlkit => %s
 	// Working-tree catalog adds a column; --from-git HEAD diffs the committed
 	// revision (source) against this working tree (target).
 	writeTestFile(t, filepath.Join(dir, "schema", "schema.go"), catalogSource(
-		`sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),
-		sqldef.Column("name", sqldef.Text),
-		sqldef.Column("sku", sqldef.VarChar(64), sqldef.Nullable()),`))
+		`decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("name", decl.Text),
+		decl.Column("sku", decl.VarChar(64), decl.Nullable()),`))
 
 	t.Chdir(dir)
 	// Let the shims resolve the local replace without a pre-populated go.sum.
@@ -172,7 +172,7 @@ replace github.com/aita/sqlkit => %s
 		t.Fatal(err)
 	}
 	body := string(src)
-	if !strings.Contains(body, `op.AddColumn("widgets", sqldef.Column("sku"`) {
+	if !strings.Contains(body, `op.AddColumn("widgets", decl.Column("sku"`) {
 		t.Errorf("generated Up missing AddColumn(sku):\n%s", body)
 	}
 	if !strings.Contains(body, `op.DropColumn("widgets", "sku")`) {
@@ -186,10 +186,10 @@ replace github.com/aita/sqlkit => %s
 func catalogSource(columns string) string {
 	return `package schema
 
-import "github.com/aita/sqlkit/sqldef"
+import "github.com/aita/sqlkit/decl"
 
-var Catalog *sqldef.Catalog = func() *sqldef.Catalog {
-	c := sqldef.NewCatalog(sqldef.DefaultSchema("public"))
+var Catalog *decl.Catalog = func() *decl.Catalog {
+	c := decl.NewCatalog(decl.DefaultSchema("public"))
 	c.Table("widgets",
 ` + columns + `
 	)

@@ -1,6 +1,6 @@
 // Package integration exercises sqlkit end to end against real PostgreSQL and
 // MySQL servers. The same tests run on both engines so the query builder, the
-// scanner, the schema DDL generator, and the inspector are all verified against
+// scanner, the schema DDL generator, and the introspection are all verified against
 // the databases they target.
 //
 // It lives in its own module so the heavy testcontainers dependency tree stays
@@ -47,7 +47,7 @@ import (
 
 // engine describes one database backend the suite runs against.
 type engine struct {
-	name    string         // ddl/inspector dialect name: "postgres" or "mysql"
+	name    string         // ddl/introspection dialect name: "postgres" or "mysql"
 	driver  string         // database/sql driver name passed to sqlkit.Open
 	dialect sqlkit.Dialect // dialect used for identifier quoting in the harness
 	// dsnEnv is the environment variable holding a ready-to-use DSN; when empty

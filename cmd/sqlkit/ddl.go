@@ -12,8 +12,8 @@ import (
 // generate it runs a throwaway program that imports the catalog package (see
 // shim.go), here calling meta.Metadata.CreateSQL (and DropSQL with --drop).
 type ddlCmd struct {
-	Package string `arg:"" help:"Import path or directory of the package that declares the sqldef catalog."`
-	Var     string `help:"Name of the *sqldef.Catalog variable to render." default:"Catalog" name:"var"`
+	Package string `arg:"" help:"Import path or directory of the package that declares the decl catalog."`
+	Var     string `help:"Name of the *decl.Catalog variable to render." default:"Catalog" name:"var"`
 	Dialect string `help:"SQL dialect (postgres or mysql)." default:"postgres"`
 	Out     string `help:"Output SQL file; stdout if empty."`
 	Drop    bool   `help:"Prepend DROP statements that tear the schema down before recreating it."`
@@ -62,12 +62,12 @@ import (
 
 	schema {{printf "%q" .ImportPath}}
 	"github.com/aita/sqlkit/sql"
-	"github.com/aita/sqlkit/sqldef"
+	"github.com/aita/sqlkit/decl"
 )
 
-// Compile-time guarantee that the named variable is a *sqldef.Catalog, so an
+// Compile-time guarantee that the named variable is a *decl.Catalog, so an
 // ill-typed --var fails with a clear error instead of a confusing one.
-var _ *sqldef.Catalog = schema.{{.Var}}
+var _ *decl.Catalog = schema.{{.Var}}
 
 func main() {
 	md, err := schema.{{.Var}}.Build()

@@ -40,15 +40,15 @@ func TestGenerateCatalogMySQL(t *testing.T) {
 	}
 	got := string(file.Content)
 	for _, want := range []string{
-		`var Catalog = sqldef.NewCatalog()`,
+		`var Catalog = decl.NewCatalog()`,
 		`var App = Catalog.Schema("app")`,
 		"var Items = App.Table(\"items\",",
-		`sqldef.Column("id", sqldef.BigInt, sqldef.PrimaryKey(), sqldef.Default()),`,
-		`sqldef.Column("name", sqldef.VarChar(100)),`,
-		`sqldef.Column("price", sqldef.Decimal(10, 2)),`,
-		`sqldef.Column("attrs", sqldef.JSON, sqldef.Nullable()),`,
-		`sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default(sql.Raw("now()"))),`,
-		`sqldef.Column("point", sqldef.Type("geometry")),`,
+		`decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),`,
+		`decl.Column("name", decl.VarChar(100)),`,
+		`decl.Column("price", decl.Decimal(10, 2)),`,
+		`decl.Column("attrs", decl.JSON, decl.Nullable()),`,
+		`decl.Column("created_at", decl.Timestamp, decl.Default(sql.Raw("now()"))),`,
+		`decl.Column("point", decl.Type("geometry")),`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("generated catalog missing %q\n%s", want, got)
@@ -72,8 +72,8 @@ func TestGenerateCatalogArray(t *testing.T) {
 	}
 	got := string(file.Content)
 	for _, want := range []string{
-		`sqldef.Column("tags", sqldef.Array(sqldef.Text)),`,
-		`sqldef.Column("scores", sqldef.Array(sqldef.Int), sqldef.Nullable()),`,
+		`decl.Column("tags", decl.Array(decl.Text)),`,
+		`decl.Column("scores", decl.Array(decl.Int), decl.Nullable()),`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("generated catalog missing %q\n%s", want, got)
@@ -115,8 +115,8 @@ func TestGenerateCatalogForeignKeys(t *testing.T) {
 	got := string(file.Content)
 	for _, want := range []string{
 		`var Public = Catalog.Schema("public")`,
-		`sqldef.ForeignKey([]string{"order_region", "order_number"}, "orders", []string{"region", "number"}),`,
-		`sqldef.References("order_lines", "id")`, // self-reference is an ordinary named reference
+		`decl.ForeignKey([]string{"order_region", "order_number"}, "orders", []string{"region", "number"}),`,
+		`decl.References("order_lines", "id")`, // self-reference is an ordinary named reference
 		`foreign key fk_other_schema references audit.events outside this catalog`,
 	} {
 		if !strings.Contains(got, want) {
@@ -154,11 +154,11 @@ func TestGenerateCatalogIndexesChecksComments(t *testing.T) {
 	}
 	got := string(file.Content)
 	for _, want := range []string{
-		`sqldef.TableComment("Sellable products"),`,
-		`sqldef.Column("sku", sqldef.VarChar(64), sqldef.Unique(), sqldef.Comment("Stock keeping unit")),`,
-		`sqldef.Index("name"),`,
-		`sqldef.UniqueIndex("vendor", "name"),`,
-		`sqldef.Check(sql.Raw("price > 0")),`,
+		`decl.TableComment("Sellable products"),`,
+		`decl.Column("sku", decl.VarChar(64), decl.Unique(), decl.Comment("Stock keeping unit")),`,
+		`decl.Index("name"),`,
+		`decl.UniqueIndex("vendor", "name"),`,
+		`decl.Check(sql.Raw("price > 0")),`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("generated catalog missing %q\n%s", want, got)
@@ -189,9 +189,9 @@ func TestGenerateCatalogSameNameDifferentSchemas(t *testing.T) {
 	}
 	got := string(mustGenerateCatalog(t, tables))
 	for _, want := range []string{
-		"var Users = Public.Table(\"users\",",         // public.users
-		"var UsersTable = Audit.Table(\"users\",",     // audit.users gets a distinct var
-		"sqldef.References(\"public.users\", \"id\")", // audit.users FK targets public.users
+		"var Users = Public.Table(\"users\",",       // public.users
+		"var UsersTable = Audit.Table(\"users\",",   // audit.users gets a distinct var
+		"decl.References(\"public.users\", \"id\")", // audit.users FK targets public.users
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("generated catalog missing %q\n%s", want, got)

@@ -1,8 +1,8 @@
 // Package autogen generates a migration by diffing a source schema against a
-// target schema. The target is the project's sqldef catalog (the desired state);
+// target schema. The target is the project's decl catalog (the desired state);
 // the source is where the database is migrating from — a live database read by
-// the inspector, or the catalog as it stood at an earlier git revision. Render
-// turns the difference into a migration's Up/Down bodies written in the sqldef
+// the introspection, or the catalog as it stood at an earlier git revision. Render
+// turns the difference into a migration's Up/Down bodies written in the decl
 // Operator DSL (op.CreateTable, op.AddColumn, …).
 //
 // Because the target catalog and a git-revision catalog are different compiled

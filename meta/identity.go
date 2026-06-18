@@ -176,7 +176,7 @@ func (f framer) flag(b bool) {
 var ErrTableConflict = errors.New("meta: conflicting tables with the same name but different structure")
 
 // IdentityMap indexes tables by TableKey. It is built from a Metadata — the
-// source of truth assembled from a sqldef catalog — and is the bridge a Unit of
+// source of truth assembled from a decl catalog — and is the bridge a Unit of
 // Work uses to validate table bindings against the catalog: a binding's
 // schema, name, and checksum form a TableKey that must resolve here.
 type IdentityMap struct {
@@ -231,6 +231,6 @@ func (im *IdentityMap) KeyForName(schema, name string) (TableKey, bool) {
 // Len reports how many distinct tables are registered.
 func (im *IdentityMap) Len() int { return len(im.byKey) }
 
-// nameIndexKey matches the schema\x00name convention used by sqldef and the
+// nameIndexKey matches the schema\x00name convention used by decl and the
 // migrate diff engine.
 func nameIndexKey(schema, name string) string { return schema + "\x00" + name }
