@@ -23,17 +23,15 @@ type Database struct {
 	identities *meta.IdentityMap
 	metaErr    error
 
-	ics []Interceptor
+	// hks are the lifecycle hooks (WithHooks) run around each statement, in
+	// registration order, and inherited by sessions.
+	hks []Hooks
 
 	// exec is the terminal Executor a WrapExecutor database runs every statement
 	// through, inherited by its sessions. It is nil for a WrapDB/Open database,
 	// which runs against its database/sql handle instead (dbExecutor here,
 	// sessionExecutor — the session's own transaction — in a Session).
 	exec Executor
-
-	// resultObs are the observers (WithResultObserver) run over each scanned
-	// result, in registration order, and inherited by sessions.
-	resultObs []ResultObserver
 
 	// batchReadSnapshot runs a split SELECT's chunk queries inside one REPEATABLE
 	// READ transaction so they observe a single consistent snapshot, as an
@@ -88,22 +86,13 @@ func WithMetadata(m meta.Metadata) DatabaseOption {
 	}
 }
 
-// WithInterceptor registers interceptors that wrap every statement run through
-// the database (and through sessions it opens). They run in registration order,
-// the first wrapping the rest, around both reads and writes — see Interceptor.
-// Multiple calls accumulate.
-func WithInterceptor(interceptors ...Interceptor) DatabaseOption {
-	return func(d *Database) { d.ics = append(d.ics, interceptors...) }
-}
-
-// WithResultObserver registers observers that inspect the result of every query
-// scanned through the database (and through sessions it opens). Unlike an
-// Interceptor, which wraps execution and cannot read the result without consuming
-// it, a ResultObserver sees the result already materialized into its Go value, so
-// it is the place to examine column values or accumulate statistics — see
-// ResultObserver. Observers run in registration order; multiple calls accumulate.
-func WithResultObserver(observers ...ResultObserver) DatabaseOption {
-	return func(d *Database) { d.resultObs = append(d.resultObs, observers...) }
+// WithHooks registers lifecycle hooks run around every statement executed
+// through the database (and through sessions it opens): a Before hook just
+// before a statement reaches the database, and an AfterQuery/AfterExec hook once
+// its result is produced — see Hooks. Hooks run in registration order; multiple
+// calls accumulate.
+func WithHooks(hooks ...Hooks) DatabaseOption {
+	return func(d *Database) { d.hks = append(d.hks, hooks...) }
 }
 
 // dbExecutor is the default terminal Executor: it runs compiled statements
@@ -213,8 +202,8 @@ func WrapDB(db *stdsql.DB, opts ...DatabaseOption) *Database {
 // WrapExecutor creates a database that runs every statement through exec instead
 // of a database/sql handle — the counterpart to WrapDB for a custom terminal
 // (statement router, in-memory or remote backend, test double). exec is the
-// innermost handler of the interceptor chain, and sessions opened from the
-// database inherit it.
+// terminal that runs each statement after its Before hooks, and sessions opened
+// from the database inherit it.
 //
 // Sessions opened from the database are transactional when exec also implements
 // TxExecutor: their statements run in a transaction it begins, and Commit,
@@ -354,7 +343,7 @@ func (d *Database) NewSession(opts ...SessionOption) *Session {
 	if options.autoChunk != nil {
 		autoChunk = *options.autoChunk
 	}
-	return &Session{base: d.executor(), txOpts: options.tx, dialect: d.dialect, identities: d.identities, ics: d.ics, autoChunk: autoChunk, preloadChunk: d.preloadChunk, resultObs: d.resultObs}
+	return &Session{base: d.executor(), txOpts: options.tx, dialect: d.dialect, identities: d.identities, hks: d.hks, autoChunk: autoChunk, preloadChunk: d.preloadChunk}
 }
 
 // WithSession runs fn inside a session and commits when fn returns nil; on
@@ -430,7 +419,7 @@ func (d *Database) Exec(ctx context.Context, query sql.Query) (stdsql.Result, er
 
 func (d *Database) sqlDialect() sql.Dialect { return d.dialect }
 
-func (d *Database) interceptors() []Interceptor { return d.ics }
+func (d *Database) hooks() []Hooks { return d.hks }
 
 // maxBindParams is the single splitting chokepoint: the dialect's bind-parameter
 // limit when auto-chunk is on, or 0 when it is off (suppressing every automatic
@@ -454,5 +443,3 @@ func (d *Database) executor() Executor {
 	}
 	return dbExecutor{d.db}
 }
-
-func (d *Database) resultObservers() []ResultObserver { return d.resultObs }

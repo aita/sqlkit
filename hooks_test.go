@@ -21,16 +21,16 @@ func usersResult() testutil.Result {
 	}
 }
 
-// TestRewriteAppliesToReadAndWrite verifies that a Rewrite interceptor's edits
-// to Statement.SQL reach the driver for both queries and execs.
-func TestRewriteAppliesToReadAndWrite(t *testing.T) {
+// TestBeforeAppliesToReadAndWrite verifies that a Before hook's edits to
+// Statement.SQL reach the driver for both queries and execs.
+func TestBeforeAppliesToReadAndWrite(t *testing.T) {
 	fake := &testutil.Fake{QueryFunc: func(string, []any) (testutil.Result, error) { return usersResult(), nil }}
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithInterceptor(
-		sqlkit.Rewrite(func(_ context.Context, stmt sqlkit.Statement) (sqlkit.Statement, error) {
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithHooks(sqlkit.Hooks{
+		Before: func(ctx context.Context, stmt *sqlkit.Statement) (context.Context, error) {
 			stmt.SQL = "/* tagged */ " + stmt.SQL
-			return stmt, nil
-		}),
-	))
+			return ctx, nil
+		},
+	}))
 	ctx := context.Background()
 
 	var users []User
@@ -49,18 +49,18 @@ func TestRewriteAppliesToReadAndWrite(t *testing.T) {
 	}
 }
 
-// TestInterceptorOrder verifies interceptors run in registration order, the
-// first wrapping the rest.
-func TestInterceptorOrder(t *testing.T) {
+// TestHooksOrder verifies hooks run in registration order, threading the context
+// each Before returns into the next.
+func TestHooksOrder(t *testing.T) {
 	fake := &testutil.Fake{}
 	var order []string
-	record := func(name string) sqlkit.Interceptor {
-		return sqlkit.Rewrite(func(_ context.Context, stmt sqlkit.Statement) (sqlkit.Statement, error) {
+	record := func(name string) sqlkit.Hooks {
+		return sqlkit.Hooks{Before: func(ctx context.Context, stmt *sqlkit.Statement) (context.Context, error) {
 			order = append(order, name)
-			return stmt, nil
-		})
+			return ctx, nil
+		}}
 	}
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithInterceptor(record("a"), record("b")))
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithHooks(record("a"), record("b")))
 
 	if _, err := db.Delete(Users).Where(Users.ID.Eq(1)).Exec(context.Background()); err != nil {
 		t.Fatalf("Exec() error = %v", err)
@@ -70,78 +70,71 @@ func TestInterceptorOrder(t *testing.T) {
 	}
 }
 
-// wrapInterceptor records whether it ran before and after next, on the exec path.
-type wrapInterceptor struct {
-	sqlkit.NoopInterceptor
-	before, after bool
-}
-
-func (w *wrapInterceptor) InterceptExec(ctx context.Context, stmt sqlkit.Statement, next sqlkit.ExecHandler) (stdsql.Result, error) {
-	w.before = true
-	res, err := next(ctx, stmt)
-	w.after = true
-	return res, err
-}
-
-// TestInterceptorWrapsExecution verifies an interceptor observes execution on
-// both sides of next.
-func TestInterceptorWrapsExecution(t *testing.T) {
+// TestHooksBracketExecution verifies a Before/AfterExec pair brackets a write:
+// Before runs first, AfterExec runs after the result is produced, and the
+// context Before returns flows through to AfterExec.
+func TestHooksBracketExecution(t *testing.T) {
 	fake := &testutil.Fake{}
-	w := &wrapInterceptor{}
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithInterceptor(w))
+	type ctxKey struct{}
+	var before, after bool
+	var sawCtxValue bool
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithHooks(sqlkit.Hooks{
+		Before: func(ctx context.Context, stmt *sqlkit.Statement) (context.Context, error) {
+			before = true
+			return context.WithValue(ctx, ctxKey{}, "v"), nil
+		},
+		AfterExec: func(ctx context.Context, stmt sqlkit.Statement, res stdsql.Result, err error) error {
+			after = true
+			sawCtxValue = ctx.Value(ctxKey{}) == "v"
+			return err
+		},
+	}))
 
 	if _, err := db.Insert(Users).Values(User{ID: 1, Email: "a@example.com"}).Exec(context.Background()); err != nil {
 		t.Fatalf("Exec() error = %v", err)
 	}
-	if !w.before || !w.after {
-		t.Fatalf("before=%v after=%v, want both true", w.before, w.after)
+	if !before || !after {
+		t.Fatalf("before=%v after=%v, want both true", before, after)
+	}
+	if !sawCtxValue {
+		t.Fatal("AfterExec did not see the context value Before set")
 	}
 	if len(fake.Execs()) != 1 {
 		t.Fatalf("execs = %d, want 1", len(fake.Execs()))
 	}
 }
 
-// stubResult is a canned sql.Result for short-circuiting interceptors.
-type stubResult struct{}
-
-func (stubResult) LastInsertId() (int64, error) { return 0, nil }
-
-func (stubResult) RowsAffected() (int64, error) { return 1, nil }
-
-// shortCircuit returns a canned result without calling next.
-type shortCircuit struct{ sqlkit.NoopInterceptor }
-
-func (shortCircuit) InterceptExec(context.Context, sqlkit.Statement, sqlkit.ExecHandler) (stdsql.Result, error) {
-	return stubResult{}, nil
-}
-
-// TestInterceptorShortCircuits verifies an interceptor that does not call next
-// keeps the statement from reaching the driver.
-func TestInterceptorShortCircuits(t *testing.T) {
+// TestAfterExecSeesResult verifies AfterExec receives the sql.Result the write
+// produced.
+func TestAfterExecSeesResult(t *testing.T) {
 	fake := &testutil.Fake{}
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithInterceptor(shortCircuit{}))
+	var rows int64 = -1
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithHooks(sqlkit.Hooks{
+		AfterExec: func(_ context.Context, _ sqlkit.Statement, res stdsql.Result, err error) error {
+			if err == nil && res != nil {
+				rows, _ = res.RowsAffected()
+			}
+			return err
+		},
+	}))
 
-	res, err := db.Insert(Users).Values(User{ID: 1, Email: "a@example.com"}).Exec(context.Background())
-	if err != nil {
+	if _, err := db.Delete(Users).Where(Users.ID.Eq(7)).Exec(context.Background()); err != nil {
 		t.Fatalf("Exec() error = %v", err)
 	}
-	if n, _ := res.RowsAffected(); n != 1 {
-		t.Fatalf("RowsAffected = %d, want 1", n)
-	}
-	if len(fake.Execs()) != 0 {
-		t.Fatalf("execs = %d, want 0 (short-circuited)", len(fake.Execs()))
+	if rows < 0 {
+		t.Fatalf("AfterExec did not observe a result (RowsAffected = %d)", rows)
 	}
 }
 
-// TestInterceptorErrorAborts verifies an interceptor error stops execution.
-func TestInterceptorErrorAborts(t *testing.T) {
+// TestBeforeErrorAborts verifies a Before hook error stops execution.
+func TestBeforeErrorAborts(t *testing.T) {
 	fake := &testutil.Fake{}
 	sentinel := errors.New("blocked")
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithInterceptor(
-		sqlkit.Rewrite(func(context.Context, sqlkit.Statement) (sqlkit.Statement, error) {
-			return sqlkit.Statement{}, sentinel
-		}),
-	))
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithHooks(sqlkit.Hooks{
+		Before: func(ctx context.Context, _ *sqlkit.Statement) (context.Context, error) {
+			return ctx, sentinel
+		},
+	}))
 
 	_, err := db.Insert(Users).Values(User{ID: 1, Email: "a@example.com"}).Exec(context.Background())
 	if !errors.Is(err, sentinel) {
@@ -152,30 +145,47 @@ func TestInterceptorErrorAborts(t *testing.T) {
 	}
 }
 
-// captureInterceptor records the last Statement seen on each path.
-type captureInterceptor struct {
-	sqlkit.NoopInterceptor
+// TestAfterQueryErrorFailsCall verifies an AfterQuery hook can fail an otherwise
+// successful read by returning an error.
+func TestAfterQueryErrorFailsCall(t *testing.T) {
+	fake := &testutil.Fake{QueryFunc: func(string, []any) (testutil.Result, error) { return usersResult(), nil }}
+	sentinel := errors.New("rejected")
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithHooks(sqlkit.Hooks{
+		AfterQuery: func(context.Context, sqlkit.Statement, any, error) error { return sentinel },
+	}))
+
+	var users []User
+	err := db.Select().From(Users).All(context.Background()).Scan(&users)
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("Scan() error = %v, want %v", err, sentinel)
+	}
+}
+
+// captureHook records, via a Before hook, the last Statement seen on each path.
+type captureHook struct {
 	query, exec *sqlkit.Statement
 }
 
-func (c *captureInterceptor) InterceptQuery(ctx context.Context, stmt sqlkit.Statement, next sqlkit.QueryHandler) (*stdsql.Rows, error) {
-	s := stmt
-	c.query = &s
-	return next(ctx, stmt)
+func (c *captureHook) hooks() sqlkit.Hooks {
+	return sqlkit.Hooks{
+		Before: func(ctx context.Context, stmt *sqlkit.Statement) (context.Context, error) {
+			s := *stmt
+			if stmt.Op == sqlkit.OpQuery {
+				c.query = &s
+			} else {
+				c.exec = &s
+			}
+			return ctx, nil
+		},
+	}
 }
 
-func (c *captureInterceptor) InterceptExec(ctx context.Context, stmt sqlkit.Statement, next sqlkit.ExecHandler) (stdsql.Result, error) {
-	s := stmt
-	c.exec = &s
-	return next(ctx, stmt)
-}
-
-// TestStatementCarriesOpAndDSL verifies Op and the SQL DSL the interceptor sees:
-// non-nil Query for builder statements, nil for a RawSQL string.
+// TestStatementCarriesOpAndDSL verifies Op and the SQL DSL a hook sees: non-nil
+// Query for builder statements, nil for a RawSQL string.
 func TestStatementCarriesOpAndDSL(t *testing.T) {
 	fake := &testutil.Fake{QueryFunc: func(string, []any) (testutil.Result, error) { return usersResult(), nil }}
-	cap := &captureInterceptor{}
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithInterceptor(cap))
+	cap := &captureHook{}
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithHooks(cap.hooks()))
 	ctx := context.Background()
 
 	var users []User
@@ -205,16 +215,16 @@ func TestStatementCarriesOpAndDSL(t *testing.T) {
 	}
 }
 
-// TestInterceptorPropagatesToSession verifies a database's interceptors apply to
-// statements run through a session it opens.
-func TestInterceptorPropagatesToSession(t *testing.T) {
+// TestHooksPropagateToSession verifies a database's hooks apply to statements
+// run through a session it opens.
+func TestHooksPropagateToSession(t *testing.T) {
 	fake := &testutil.Fake{}
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithInterceptor(
-		sqlkit.Rewrite(func(_ context.Context, stmt sqlkit.Statement) (sqlkit.Statement, error) {
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithHooks(sqlkit.Hooks{
+		Before: func(ctx context.Context, stmt *sqlkit.Statement) (context.Context, error) {
 			stmt.SQL = "/* sess */ " + stmt.SQL
-			return stmt, nil
-		}),
-	))
+			return ctx, nil
+		},
+	}))
 	ctx := context.Background()
 	session := db.NewSession()
 	defer session.Close()
@@ -227,12 +237,12 @@ func TestInterceptorPropagatesToSession(t *testing.T) {
 	}
 }
 
-// TestSavepointBypassesInterceptors verifies transaction-control statements are
-// not seen by interceptors.
-func TestSavepointBypassesInterceptors(t *testing.T) {
+// TestSavepointBypassesHooks verifies transaction-control statements are not
+// seen by hooks.
+func TestSavepointBypassesHooks(t *testing.T) {
 	fake := &testutil.Fake{}
-	cap := &captureInterceptor{}
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithInterceptor(cap))
+	cap := &captureHook{}
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithHooks(cap.hooks()))
 	ctx := context.Background()
 	session := db.NewSession()
 	defer session.Close()
@@ -241,7 +251,7 @@ func TestSavepointBypassesInterceptors(t *testing.T) {
 		t.Fatalf("Savepoint() error = %v", err)
 	}
 	if cap.exec != nil {
-		t.Fatalf("interceptor saw a savepoint statement: %q", cap.exec.SQL)
+		t.Fatalf("hook saw a savepoint statement: %q", cap.exec.SQL)
 	}
 }
 
@@ -284,20 +294,16 @@ func TestStatementRecompileNoQuery(t *testing.T) {
 	}
 }
 
-// passthrough embeds NoopInterceptor without overriding either method, so both
-// InterceptQuery and InterceptExec take the pass-through path to next.
-type passthrough struct{ sqlkit.NoopInterceptor }
-
-// TestNoopInterceptorPassThrough covers NoopInterceptor's InterceptQuery and
-// InterceptExec: registered as an interceptor, neither method alters the
-// statement, so the read and write reach the executor unchanged.
-func TestNoopInterceptorPassThrough(t *testing.T) {
+// TestEmptyHooksPassThrough covers a zero Hooks value (all fields nil)
+// registered as a hook: neither the read nor the write is altered, and both
+// reach the executor unchanged.
+func TestEmptyHooksPassThrough(t *testing.T) {
 	fake := &testutil.Fake{
 		QueryFunc: func(string, []any) (testutil.Result, error) {
 			return testutil.Result{Columns: []string{"id", "email", "name"}}, nil
 		},
 	}
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithInterceptor(passthrough{}))
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithHooks(sqlkit.Hooks{}))
 	ctx := context.Background()
 
 	var users []User

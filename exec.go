@@ -46,11 +46,10 @@ type Querier interface {
 }
 
 // Executor runs a single compiled Statement against the database. It is the
-// terminal of the interceptor chain — its Query and Exec methods have the same
-// shapes as QueryHandler and ExecHandler — so a custom Executor slots in as the
-// innermost handler, beneath any registered interceptors. Supply one with
-// WrapExecutor to route, instrument, or fake statement execution; the default
-// runs against the wrapped database/sql handle (or a Session's transaction).
+// terminal that runs a statement after its Before hooks have shaped it. Supply
+// one with WrapExecutor to route, instrument, or fake statement execution; the
+// default runs against the wrapped database/sql handle (or a Session's
+// transaction).
 type Executor interface {
 	// Query runs a read statement and returns its rows.
 	Query(ctx context.Context, stmt Statement) (*stdsql.Rows, error)
@@ -83,14 +82,16 @@ type TxExecutor interface {
 }
 
 // executorBinding is the execution context a query chain is bound to: the
-// dialect it compiles for, the interceptors and bind-parameter limit that shape
+// dialect it compiles for, the hooks and bind-parameter limit that shape
 // execution, and the terminal Executor that runs the compiled statement. Both
 // *Database and *Session implement it, and the typed builders (SelectQuery,
 // InsertQuery, ...) and Rows depend only on it — not on Querier's building
 // methods.
 type executorBinding interface {
 	sqlDialect() sql.Dialect
-	interceptors() []Interceptor
+	// hooks returns the lifecycle hooks run around each statement, registered
+	// with WithHooks and inherited by sessions.
+	hooks() []Hooks
 	// maxBindParams is the bind-parameter limit driving automatic splitting, or 0
 	// when auto-chunk is off (WithAutoChunk) so a single <= 0 check disables every
 	// automatic split. Explicit chunking (AutoChunk, InBatches) does
@@ -99,9 +100,6 @@ type executorBinding interface {
 	// executor returns the terminal that runs compiled statements: the
 	// connection-backed default, or a WrapExecutor database's custom one.
 	executor() Executor
-	// resultObservers returns the observers run over each scanned result,
-	// registered with WithResultObserver.
-	resultObservers() []ResultObserver
 }
 
 // ErrNoRows is returned when a single-row Scan finds no row.
@@ -174,7 +172,7 @@ func newRows(ctx context.Context, ex executorBinding, query sql.Query) Rows {
 	return Rows{ctx: ctx, ex: ex, query: query, sqlText: sqlText, args: args, err: err}
 }
 
-// statement builds the read Statement an interceptor sees for this Rows.
+// statement builds the read Statement a hook sees for this Rows.
 func (r Rows) statement() Statement {
 	return Statement{
 		Op:      OpQuery,
@@ -192,7 +190,7 @@ func ErrRows(err error) Rows { return Rows{err: err} }
 
 func newRawRows(ctx context.Context, ex executorBinding, query any, args []any) Rows {
 	sqlText, sqlArgs, err := resolveQuery(ex.sqlDialect(), query, args)
-	// Carry the AST for interceptors when one was supplied; a raw string has none.
+	// Carry the AST for hooks when one was supplied; a raw string has none.
 	ast, _ := query.(sql.Query)
 	return Rows{ctx: ctx, ex: ex, query: ast, sqlText: sqlText, args: sqlArgs, err: err}
 }
@@ -211,21 +209,20 @@ func (r Rows) Scan(dest any) error {
 	if len(r.batches) > 0 {
 		return r.scanBatched(dest)
 	}
-	rows, err := runQuery(r.ctx, r.ex, r.statement())
+	stmt := r.statement()
+	ctx, rows, err := runQuery(r.ctx, r.ex, stmt)
 	if err != nil {
-		return err
+		return afterQuery(ctx, r.ex.hooks(), stmt, dest, err)
 	}
-	if err := func() error {
+	scanErr := func() error {
 		defer rows.Close()
 		if r.exactlyOne {
 			return scanExactlyOne(rows, dest)
 		}
 		return scanInto(rows, dest)
-	}(); err != nil {
+	}()
+	if err := afterQuery(ctx, r.ex.hooks(), stmt, dest, scanErr); err != nil {
 		return err
-	}
-	if obs := r.ex.resultObservers(); len(obs) > 0 {
-		observeResult(r.ctx, obs, r.statement(), dest)
 	}
 	// Eager-load any registered relations onto the just-scanned destination.
 	if len(r.preloads) > 0 {
@@ -250,24 +247,31 @@ func (r Rows) scanBatched(dest any) (err error) {
 	sliceType := dv.Elem().Type()
 	dialect := ex.sqlDialect()
 	acc := reflect.MakeSlice(sliceType, 0, 0)
-	for _, batch := range r.batches {
-		rows, runErr := runQuery(r.ctx, ex, Statement{Op: OpQuery, SQL: batch.sql, Args: batch.args, Dialect: dialect})
-		if runErr != nil {
-			return runErr
+	// Before hooks run per chunk (one per statement actually sent), but the
+	// AfterQuery hook runs once over the whole union below — a split query's
+	// result is conceptually one result.
+	scanErr := func() error {
+		for _, batch := range r.batches {
+			_, rows, runErr := runQuery(r.ctx, ex, Statement{Op: OpQuery, SQL: batch.sql, Args: batch.args, Dialect: dialect})
+			if runErr != nil {
+				return runErr
+			}
+			tmp := reflect.New(sliceType)
+			if err := func() error {
+				defer rows.Close()
+				return scanInto(rows, tmp.Interface())
+			}(); err != nil {
+				return err
+			}
+			acc = reflect.AppendSlice(acc, tmp.Elem())
 		}
-		tmp := reflect.New(sliceType)
-		if scanErr := func() error {
-			defer rows.Close()
-			return scanInto(rows, tmp.Interface())
-		}(); scanErr != nil {
-			return scanErr
-		}
-		acc = reflect.AppendSlice(acc, tmp.Elem())
+		return nil
+	}()
+	if scanErr == nil {
+		dv.Elem().Set(acc)
 	}
-	dv.Elem().Set(acc)
-	// A split query's result is the union of its chunks; observe it once, whole.
-	if obs := ex.resultObservers(); len(obs) > 0 {
-		observeResult(r.ctx, obs, Statement{Op: OpQuery, Dialect: dialect}, dest)
+	if err := afterQuery(r.ctx, ex.hooks(), Statement{Op: OpQuery, Dialect: dialect}, dest, scanErr); err != nil {
+		return err
 	}
 	if len(r.preloads) > 0 {
 		return applyPreloads(r.ctx, ex, dest, r.preloads)

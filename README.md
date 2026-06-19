@@ -927,28 +927,39 @@ SQLite, so a schema declared once can render DDL for all three.
 
 ---
 
-## Interceptors
+## Hooks
 
-Interceptors wrap statement execution, gRPC-style: each receives the `Statement`
-about to run and the `next` handler, and decides whether — and with what — to
-call it. That covers observing, timing, rewriting SQL, short-circuiting, and
-retrying. Register them with `WithInterceptor`; they apply to every read and
-write run through the database and any session it opens.
+`Hooks` observe — and may rewrite — statements around execution. A `Before` hook
+runs just before a statement reaches the database; an `AfterQuery`/`AfterExec`
+hook runs once its result is produced. Register them with `WithHooks`; they apply
+to every read and write run through the database and any session it opens, and
+nil fields are skipped so a hook fills in only the points it needs.
 
-The common case — rewriting SQL or args — needs no `next` plumbing; `Rewrite`
-adapts a statement transform:
+`Before` is symmetric across reads and writes (`stmt.Op` distinguishes them) and
+is where you rewrite SQL or args:
 
 ```go
-db, _ := sqlkit.Open("pgx", dsn, sqlkit.WithInterceptor(
-    sqlkit.Rewrite(func(ctx context.Context, stmt sqlkit.Statement) (sqlkit.Statement, error) {
+db, _ := sqlkit.Open("pgx", dsn, sqlkit.WithHooks(sqlkit.Hooks{
+    Before: func(ctx context.Context, stmt *sqlkit.Statement) (context.Context, error) {
         stmt.SQL = "/* tenant=" + tenantOf(ctx) + " */ " + stmt.SQL
-        return stmt, nil
-    }),
-))
+        return ctx, nil
+    },
+}))
 ```
 
-For the full middleware shape (observing results, timing, retries), implement
-`Interceptor` directly and embed `NoopInterceptor` for the side you don't need.
+The `After` hooks split because the result type differs: `AfterQuery` receives a
+read's result already materialized into the caller's destination — a real Go
+value you can inspect or transform, unlike the opaque `*sql.Rows` cursor the
+execution path works with — while `AfterExec` receives a write's `sql.Result`.
+Both run on failure too (with a non-nil error), so a `Before`/`After` pair brackets
+execution cleanly for tracing or metrics, threading a span through the context
+`Before` returns.
+
+Hooks deliberately offer no retry or short-circuit: statement-level retry is
+unsafe across a transaction boundary — a failed statement may have aborted the
+surrounding transaction, so the whole unit of work must replay — and belongs
+outside the database, around the unit of work. For per-value transformation,
+implement `database/sql.Scanner` on the column type instead.
 
 ---
 

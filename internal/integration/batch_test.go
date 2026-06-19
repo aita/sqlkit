@@ -2,7 +2,6 @@ package integration
 
 import (
 	"context"
-	stdsql "database/sql"
 	"fmt"
 	"testing"
 
@@ -13,26 +12,29 @@ import (
 // These tests drive the auto-chunking feature end to end against the real
 // engines: queries with a small per-query AutoChunk(ChunkSize) must split bulk
 // INSERTs and large IN lists into several statements yet produce the same result
-// as an unsplit run. A counting interceptor confirms the split actually happened
-// (more than one statement reached the database), and the row counts confirm it
-// stayed correct.
+// as an unsplit run. A counting hook confirms the split actually happened (more
+// than one statement reached the database), and the row counts confirm it stayed
+// correct.
 
 // stmtCounter counts the query and exec statements that reach the database,
-// including each split chunk (interceptors wrap every statement actually sent).
+// including each split chunk (a Before hook runs for every statement actually
+// sent).
 type stmtCounter struct {
-	sqlkit.NoopInterceptor
 	queries int
 	execs   int
 }
 
-func (c *stmtCounter) InterceptQuery(ctx context.Context, stmt sqlkit.Statement, next sqlkit.QueryHandler) (*stdsql.Rows, error) {
-	c.queries++
-	return next(ctx, stmt)
-}
-
-func (c *stmtCounter) InterceptExec(ctx context.Context, stmt sqlkit.Statement, next sqlkit.ExecHandler) (stdsql.Result, error) {
-	c.execs++
-	return next(ctx, stmt)
+// hooks returns a Before hook that tallies each statement by Op.
+func (c *stmtCounter) hooks() sqlkit.Hooks {
+	return sqlkit.Hooks{Before: func(ctx context.Context, stmt *sqlkit.Statement) (context.Context, error) {
+		switch stmt.Op {
+		case sqlkit.OpQuery:
+			c.queries++
+		case sqlkit.OpExec:
+			c.execs++
+		}
+		return ctx, nil
+	}}
 }
 
 func TestBindParamSplittingEndToEnd(t *testing.T) {
@@ -46,7 +48,7 @@ func TestBindParamSplittingEndToEnd(t *testing.T) {
 		sdb := sqlkit.WrapDB(db.SQL(),
 			sqlkit.WithDialect(db.Dialect()),
 			sqlkit.WithAutoChunk(true),
-			sqlkit.WithInterceptor(counter))
+			sqlkit.WithHooks(counter.hooks()))
 
 		const n = 50
 		users := make([]userRow, n)

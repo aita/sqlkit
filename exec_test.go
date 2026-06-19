@@ -53,23 +53,25 @@ func TestWrapExecutorRoutesStatements(t *testing.T) {
 	}
 }
 
-// TestWrapExecutorRunsBeneathInterceptors verifies the WrapExecutor terminal is
-// the innermost handler: interceptors wrap around it, so it sees their edits.
-func TestWrapExecutorRunsBeneathInterceptors(t *testing.T) {
+// TestWrapExecutorRunsBeneathHooks verifies the WrapExecutor terminal runs after
+// the Before hooks: it sees their edits to the statement.
+func TestWrapExecutorRunsBeneathHooks(t *testing.T) {
 	fake := &testutil.Fake{}
 	rec := &recordingExecutor{db: fake.DB()}
 	db := sqlkit.WrapExecutor(rec,
-		sqlkit.WithInterceptor(sqlkit.Rewrite(func(_ context.Context, stmt sqlkit.Statement) (sqlkit.Statement, error) {
-			stmt.SQL = "/* tagged */ " + stmt.SQL
-			return stmt, nil
-		})),
+		sqlkit.WithHooks(sqlkit.Hooks{
+			Before: func(ctx context.Context, stmt *sqlkit.Statement) (context.Context, error) {
+				stmt.SQL = "/* tagged */ " + stmt.SQL
+				return ctx, nil
+			},
+		}),
 	)
 
 	if _, err := db.Delete(Users).Where(Users.ID.Eq(1)).Exec(context.Background()); err != nil {
 		t.Fatalf("Exec() error = %v", err)
 	}
 	if len(rec.execs) != 1 || !strings.HasPrefix(rec.execs[0].SQL, "/* tagged */ DELETE") {
-		t.Fatalf("terminal executor exec SQL = %+v, want interceptor-rewritten prefix", rec.execs)
+		t.Fatalf("terminal executor exec SQL = %+v, want hook-rewritten prefix", rec.execs)
 	}
 }
 

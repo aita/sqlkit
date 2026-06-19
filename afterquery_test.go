@@ -9,16 +9,24 @@ import (
 	"github.com/aita/sqlkit/internal/testutil"
 )
 
-// captureObserver records every result it observes, as the destination given to
-// Scan.
-type captureObserver struct {
+// captureResults records, via an AfterQuery hook, every successful result it
+// sees as the destination given to Scan.
+type captureResults struct {
 	stmts []sqlkit.Statement
 	dests []any
 }
 
-func (c *captureObserver) ObserveResult(_ context.Context, stmt sqlkit.Statement, dest any) {
-	c.stmts = append(c.stmts, stmt)
-	c.dests = append(c.dests, dest)
+func (c *captureResults) hooks() sqlkit.Hooks {
+	return sqlkit.Hooks{
+		AfterQuery: func(_ context.Context, stmt sqlkit.Statement, dest any, err error) error {
+			if err != nil {
+				return err
+			}
+			c.stmts = append(c.stmts, stmt)
+			c.dests = append(c.dests, dest)
+			return nil
+		},
+	}
 }
 
 // twoUsersResult is a canned two-row result for the Users fixture.
@@ -32,12 +40,12 @@ func twoUsersResult() testutil.Result {
 	}
 }
 
-// TestResultObserverSeesScannedSlice verifies an observer receives the whole
+// TestAfterQuerySeesScannedSlice verifies AfterQuery receives the whole
 // materialized slice once, with the statement that produced it.
-func TestResultObserverSeesScannedSlice(t *testing.T) {
+func TestAfterQuerySeesScannedSlice(t *testing.T) {
 	fake := &testutil.Fake{QueryFunc: func(string, []any) (testutil.Result, error) { return twoUsersResult(), nil }}
-	obs := &captureObserver{}
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithResultObserver(obs))
+	obs := &captureResults{}
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithHooks(obs.hooks()))
 
 	var users []User
 	if err := db.Select().From(Users).All(context.Background()).Scan(&users); err != nil {
@@ -55,12 +63,12 @@ func TestResultObserverSeesScannedSlice(t *testing.T) {
 	}
 }
 
-// TestResultObserverSingleRow verifies a single-row destination yields one
+// TestAfterQuerySingleRow verifies a single-row destination yields one
 // observation carrying that struct.
-func TestResultObserverSingleRow(t *testing.T) {
+func TestAfterQuerySingleRow(t *testing.T) {
 	fake := &testutil.Fake{QueryFunc: func(string, []any) (testutil.Result, error) { return usersResult(), nil }}
-	obs := &captureObserver{}
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithResultObserver(obs))
+	obs := &captureResults{}
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithHooks(obs.hooks()))
 
 	var user User
 	if err := db.Select().From(Users).Where(Users.ID.Eq(7)).One(context.Background()).Scan(&user); err != nil {
@@ -74,12 +82,12 @@ func TestResultObserverSingleRow(t *testing.T) {
 	}
 }
 
-// TestResultObserverInheritedBySession verifies a session runs the database's
-// observers over results scanned through its transaction.
-func TestResultObserverInheritedBySession(t *testing.T) {
+// TestAfterQueryInheritedBySession verifies a session runs the database's
+// AfterQuery hook over results scanned through its transaction.
+func TestAfterQueryInheritedBySession(t *testing.T) {
 	fake := &testutil.Fake{QueryFunc: func(string, []any) (testutil.Result, error) { return usersResult(), nil }}
-	obs := &captureObserver{}
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithResultObserver(obs))
+	obs := &captureResults{}
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithHooks(obs.hooks()))
 	session := db.NewSession()
 	defer session.Close()
 
@@ -88,21 +96,21 @@ func TestResultObserverInheritedBySession(t *testing.T) {
 		t.Fatalf("Scan() error = %v", err)
 	}
 	if len(obs.dests) != 1 {
-		t.Fatalf("session observed %d results, want the database's observer to fire once", len(obs.dests))
+		t.Fatalf("session observed %d results, want the database's hook to fire once", len(obs.dests))
 	}
 }
 
-// TestResultObserverNotRunForWrites verifies observers are a read-side hook: a
-// write that returns no rows produces no observations.
-func TestResultObserverNotRunForWrites(t *testing.T) {
+// TestAfterQueryNotRunForWrites verifies AfterQuery is a read-side hook: a write
+// fires AfterExec, never AfterQuery.
+func TestAfterQueryNotRunForWrites(t *testing.T) {
 	fake := &testutil.Fake{}
-	obs := &captureObserver{}
-	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithResultObserver(obs))
+	obs := &captureResults{}
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithHooks(obs.hooks()))
 
 	if _, err := db.Delete(Users).Where(Users.ID.Eq(7)).Exec(context.Background()); err != nil {
 		t.Fatalf("Exec() error = %v", err)
 	}
 	if len(obs.dests) != 0 {
-		t.Fatalf("observed %d results for a write, want 0", len(obs.dests))
+		t.Fatalf("AfterQuery observed %d results for a write, want 0", len(obs.dests))
 	}
 }
