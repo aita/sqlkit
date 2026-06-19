@@ -3,6 +3,7 @@ package sql
 // SubscriptExpression is an array subscript or slice applied to an operand, e.g.
 // a[1], a[1:3], or a chain a[1][2]. Each SubscriptIndex is one [...] step.
 type SubscriptExpression struct {
+	posField
 	Operand Expression
 	Indices []SubscriptIndex
 }
@@ -33,6 +34,7 @@ func Slice(operand Expression, lower, upper Expression) SubscriptExpression {
 // FieldExpression selects a field of a composite-typed operand, rendered
 // parenthesized as (operand).field.
 type FieldExpression struct {
+	posField
 	Operand Expression
 	Field   string
 }
@@ -47,6 +49,7 @@ func Field(operand Expression, field string) FieldExpression {
 
 // CollateExpression applies a collation to an operand (operand COLLATE "name").
 type CollateExpression struct {
+	posField
 	Operand   Expression
 	Collation string
 }

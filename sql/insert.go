@@ -5,6 +5,7 @@ package sql
 // Conflict holds an optional upsert action and Returning an optional RETURNING.
 // Build one with InsertInto; read its exported fields directly to introspect.
 type InsertStmt struct {
+	posField
 	Table     Table
 	Columns   []string
 	Rows      [][]Expression
@@ -190,6 +191,7 @@ func (b InsertBuilder) buildStmt() Query { return b.s }
 
 // UpdateStmt is the immutable AST for an UPDATE statement.
 type UpdateStmt struct {
+	posField
 	With      []CTE
 	Table     Table
 	Sets      []Assignment
@@ -292,6 +294,7 @@ func (b UpdateBuilder) buildStmt() Query { return b.s }
 
 // DeleteStmt is the immutable AST for a DELETE statement.
 type DeleteStmt struct {
+	posField
 	With      []CTE
 	Table     Table
 	Using     []Source

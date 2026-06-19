@@ -26,7 +26,10 @@ func (RawExpression) SQLSelection()  {}
 func Raw(fragment string) RawExpression { return RawExpression(fragment) }
 
 // ColumnExpression references a column name.
-type ColumnExpression struct{ Name string }
+type ColumnExpression struct {
+	posField
+	Name string
+}
 
 func (ColumnExpression) SQLExpression() {}
 func (ColumnExpression) SQLSelection()  {}
@@ -42,7 +45,10 @@ func Col(name string) ColumnExpression { return ColumnExpression{Name: name} }
 // reference the qualifier is quoted but the "*" is emitted raw, so it never
 // becomes "users"."*". It is only a Selection, not an Expression: a "*" stands
 // alone in the select list and is not a value operand.
-type StarSelection struct{ Qualifier string }
+type StarSelection struct {
+	posField
+	Qualifier string
+}
 
 func (StarSelection) SQLSelection() {}
 
@@ -56,7 +62,10 @@ func Star() StarSelection { return StarSelection{} }
 func StarOf(qualifier string) StarSelection { return StarSelection{Qualifier: qualifier} }
 
 // ValueExpression binds a value as a SQL argument.
-type ValueExpression struct{ Value any }
+type ValueExpression struct {
+	posField
+	Value any
+}
 
 func (ValueExpression) SQLExpression() {}
 
@@ -68,6 +77,7 @@ func Int(value int) ValueExpression { return Val(value) }
 
 // BinaryExpression combines two expressions with an operator.
 type BinaryExpression struct {
+	posField
 	Left     Expression
 	Operator string
 	Right    Expression
@@ -125,6 +135,7 @@ func binary(left any, operator string, right any) BinaryExpression {
 // arithmetic negation -x or unary plus +x. It renders as the operator
 // immediately followed by the parenthesized operand, e.g. (-"x").
 type UnaryExpression struct {
+	posField
 	Operator string
 	Operand  Expression
 }
@@ -150,7 +161,10 @@ func Pos(operand any) UnaryExpression { return Unary("+", operand) }
 // such as (a, b). It backs row-wise comparisons ((a, b) = (c, d)) and row-wise
 // membership ((a, b) IN ((1, 2), (3, 4))), where it can stand on either side of
 // the operator and as each IN item.
-type RowExpression struct{ Elements []Expression }
+type RowExpression struct {
+	posField
+	Elements []Expression
+}
 
 func (RowExpression) SQLExpression() {}
 
@@ -172,6 +186,7 @@ func Row(elements ...any) RowExpression {
 // null-safe equality operator <=> (a <=> b for IS NOT DISTINCT FROM, NOT (a <=>
 // b) for IS DISTINCT FROM).
 type DistinctPredicate struct {
+	posField
 	Left   Expression
 	Right  Expression
 	Negate bool // true selects IS NOT DISTINCT FROM
@@ -195,6 +210,7 @@ func IsNotDistinctFrom(left, right any) DistinctPredicate {
 // || operator on PostgreSQL, and CONCAT(...) on MySQL, whose || means logical
 // OR instead.
 type ConcatExpression struct {
+	posField
 	Operands []Expression
 }
 
@@ -215,6 +231,7 @@ func Concat(operands ...any) ConcatExpression {
 // ILIKE on PostgreSQL, and the portable LOWER(left) LIKE LOWER(pattern) on
 // engines without an ILIKE operator (MySQL).
 type ILikeExpression struct {
+	posField
 	Left    Expression
 	Pattern Expression
 }
@@ -234,6 +251,7 @@ func ILike(left, pattern any) ILikeExpression {
 // at compile time. CaseInsensitive selects a case-insensitive match where the
 // dialect can express one inline (it errors on dialects that cannot).
 type RegexpExpression struct {
+	posField
 	Left            Expression
 	Pattern         Expression
 	Negate          bool
@@ -277,6 +295,7 @@ func NotIRegexp(left, pattern any) RegexpExpression {
 // not — so it renders through a SimilarToMatcher and a dialect without that
 // capability rejects it at compile time.
 type SimilarToExpression struct {
+	posField
 	Left    Expression
 	Pattern Expression
 	Negate  bool
@@ -299,6 +318,7 @@ func NotSimilarTo(left, pattern any) SimilarToExpression {
 
 // BetweenExpression tests whether an operand falls within an inclusive range.
 type BetweenExpression struct {
+	posField
 	Operand Expression
 	Low     Expression
 	High    Expression
@@ -322,6 +342,7 @@ func NotBetween(operand, low, high any) BetweenExpression {
 
 // LogicalExpression combines predicates with AND or OR.
 type LogicalExpression struct {
+	posField
 	Operator string
 	Operands []Expression
 }
@@ -342,7 +363,10 @@ func logical(operator string, operands []Expression) Expression {
 }
 
 // NotExpression negates a predicate.
-type NotExpression struct{ Operand Expression }
+type NotExpression struct {
+	posField
+	Operand Expression
+}
 
 func (NotExpression) SQLExpression() {}
 
@@ -352,6 +376,7 @@ func Not(operand Expression) NotExpression { return NotExpression{Operand: opera
 // InExpression tests membership in a list of expressions or, when Subquery is
 // set, in the rows a subquery returns.
 type InExpression struct {
+	posField
 	Left     Expression
 	Items    []Expression
 	Subquery Query
@@ -391,6 +416,7 @@ func NotInQuery(left any, subquery Query) InExpression {
 
 // ExistsExpression tests whether a subquery returns any rows.
 type ExistsExpression struct {
+	posField
 	Query  Query
 	Negate bool
 }
@@ -409,7 +435,10 @@ func NotExists(query Query) ExistsExpression { return ExistsExpression{Query: qu
 // at most one row; it may be correlated, referencing columns of the enclosing
 // query. It renders as the parenthesized subquery and shares the outer
 // statement's bind placeholder numbering.
-type ScalarSubqueryExpression struct{ Query Query }
+type ScalarSubqueryExpression struct {
+	posField
+	Query Query
+}
 
 func (ScalarSubqueryExpression) SQLExpression() {}
 func (ScalarSubqueryExpression) SQLSelection()  {}
@@ -425,7 +454,10 @@ func ScalarSubquery(query Query) ScalarSubqueryExpression {
 // PostgreSQL has a first-class array type, MySQL and SQLite do not — so it
 // renders through an ArrayDialect and a dialect without that capability rejects
 // it at compile time.
-type ArrayExpression struct{ Elements []Expression }
+type ArrayExpression struct {
+	posField
+	Elements []Expression
+}
 
 func (ArrayExpression) SQLExpression() {}
 func (ArrayExpression) SQLSelection()  {}
@@ -448,6 +480,7 @@ func Array(elements ...any) ArrayExpression {
 // (...)" that binds the whole list as one parameter, and "x <> ALL($1)" of "x
 // NOT IN (...)". Arrays are non-portable, so it is gated by ArrayDialect.
 type QuantifiedArrayExpression struct {
+	posField
 	Left       Expression
 	Operator   string // comparison operator, e.g. "=", ">", "<>"
 	Quantifier string // "ANY" or "ALL"
@@ -473,6 +506,7 @@ func AllArray(left any, operator string, array Expression) QuantifiedArrayExpres
 // quantifier — ANY (a synonym for SOME) or ALL — as in "x > ALL (subquery)". It
 // generalizes IN/NOT IN, which are "= ANY"/"<> ALL", to the ordering operators.
 type QuantifiedExpression struct {
+	posField
 	Left       Expression
 	Operator   string // comparison operator, e.g. "=", ">", "<>"
 	Quantifier string // "ANY" or "ALL"
@@ -498,7 +532,10 @@ func All(left any, operator string, query Query) QuantifiedExpression {
 // ExcludedExpression refers, inside an upsert's DO UPDATE assignments, to the
 // value the conflicting INSERT proposed for a column. It renders per dialect:
 // PostgreSQL's excluded.<col> and MySQL's VALUES(<col>).
-type ExcludedExpression struct{ Column string }
+type ExcludedExpression struct {
+	posField
+	Column string
+}
 
 func (ExcludedExpression) SQLExpression() {}
 
@@ -508,6 +545,7 @@ func Excluded(column string) ExcludedExpression { return ExcludedExpression{Colu
 
 // NullPredicate tests an expression for IS NULL / IS NOT NULL.
 type NullPredicate struct {
+	posField
 	Operand Expression
 	Negate  bool
 }
@@ -524,6 +562,7 @@ func IsNotNull(operand any) NullPredicate {
 
 // AliasedSelection attaches an AS alias to a SELECT-list item.
 type AliasedSelection struct {
+	posField
 	Selection Selection
 	Alias     string
 }
@@ -596,6 +635,7 @@ type WhenClause struct {
 // operand WHEN value THEN result [...] [ELSE result] END — whose When arms hold
 // values compared for equality against the operand.
 type CaseExpression struct {
+	posField
 	Operand   Expression
 	Whens     []WhenClause
 	ElseValue Expression
@@ -637,6 +677,7 @@ func If(condition, then, els any) CaseExpression {
 // "fn OVER name" when it adds no clauses of its own, or "fn OVER (name ...)"
 // when it extends that base window with further ORDER BY / frame clauses.
 type WindowExpression struct {
+	posField
 	Fn           Expression
 	Name         string
 	Partitions   []Expression

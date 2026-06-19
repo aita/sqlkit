@@ -10,6 +10,7 @@ import (
 // ORDER BY / LIMIT / OFFSET apply to the combined result. Build one with a
 // SelectBuilder/CompoundBuilder set-operation method.
 type CompoundStmt struct {
+	posField
 	Left      Query
 	Operator  string
 	Right     Query

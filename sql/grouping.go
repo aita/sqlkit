@@ -3,6 +3,7 @@ package sql
 // GroupingExpression is a ROLLUP or CUBE grouping element in a GROUP BY clause,
 // e.g. ROLLUP (a, b). Kind is "ROLLUP" or "CUBE".
 type GroupingExpression struct {
+	posField
 	Kind     string
 	Elements []Expression
 }
@@ -22,6 +23,7 @@ func Cube(elements ...Expression) GroupingExpression {
 // GroupingSetsExpression is a GROUPING SETS (...) grouping element. Each set is a
 // list of expressions; an empty (nil) set renders as ().
 type GroupingSetsExpression struct {
+	posField
 	Sets [][]Expression
 }
 
