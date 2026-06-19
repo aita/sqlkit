@@ -228,6 +228,16 @@ func Char(n int) DataType {
 	return DataType{kind: "char", length: n}
 }
 
+// EnumType declares a column whose type is the named enum (PostgreSQL CREATE TYPE
+// ... AS ENUM). The name must match an Enum declared on the catalog (bare, or
+// "schema.enum" when qualified); the DDL renders the column with that type and
+// the code generator maps it to the generated Go enum type (enum "mood" -> type
+// Mood). Enum types are PostgreSQL-only, so a column of this type is unavailable
+// on other dialects.
+func EnumType(name string) DataType {
+	return DataType{names: map[string]string{"postgres": name}}
+}
+
 // Decimal is an exact numeric with the given precision and scale.
 func Decimal(precision, scale int) DataType {
 	return DataType{kind: "decimal", precision: precision, scale: scale}
