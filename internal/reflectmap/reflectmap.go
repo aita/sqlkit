@@ -9,8 +9,6 @@ import (
 	"reflect"
 	"strings"
 	"time"
-
-	"github.com/aita/sqlkit/internal/names"
 )
 
 var (
@@ -97,7 +95,7 @@ func collectFields(t reflect.Type, prefix []int, out map[string]Field) {
 			continue
 		}
 		register(out, strings.ToLower(field.Name), f)
-		register(out, names.SnakeCase(field.Name), f)
+		register(out, SnakeCase(field.Name), f)
 	}
 }
 

@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/aita/sqlkit/internal/names"
+	"github.com/aita/sqlkit/internal/reflectmap"
 	"github.com/aita/sqlkit/meta"
 )
 
@@ -145,7 +145,7 @@ func buildRelations(tables []meta.Table, bindingName func(meta.Table) string) ma
 // would collide with the table's own name (which would make the self-join
 // ambiguous).
 func selfAlias(field, tableName string) string {
-	alias := names.SnakeCase(field)
+	alias := reflectmap.SnakeCase(field)
 	if alias == tableName {
 		alias += "_ref"
 	}

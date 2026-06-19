@@ -1,5 +1,4 @@
-// Package names converts between Go and SQL identifier conventions.
-package names
+package reflectmap
 
 import (
 	"strings"
