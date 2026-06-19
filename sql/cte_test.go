@@ -1,9 +1,8 @@
-package sql_test
+package sql
 
 import (
+	"reflect"
 	"testing"
-
-	. "github.com/aita/sqlkit/sql"
 )
 
 func TestSelectWithCTE(t *testing.T) {
@@ -101,5 +100,22 @@ func TestWithEmptyCTENameFails(t *testing.T) {
 	q := Select(Col("id")).From(cte).WithCTE(cte)
 	if _, _, err := q.ToSQL(PostgreSQLDialect{}); err == nil {
 		t.Fatal("empty CTE name compiled, want error")
+	}
+}
+
+func TestCTEAccessors(t *testing.T) {
+	users := Table{Name: "users"}
+	cte := Select(Col("id")).From(users).CTE("active", Columns("id"))
+	if cte.Name() != "active" {
+		t.Errorf("Name() = %q, want active", cte.Name())
+	}
+	if cte.Body() == nil {
+		t.Error("Body() = nil, want the wrapped query")
+	}
+	if got := cte.OutputColumns(); !reflect.DeepEqual(got, []string{"id"}) {
+		t.Errorf("OutputColumns() = %v, want [id]", got)
+	}
+	if cte.IsRecursive() {
+		t.Error("IsRecursive() = true, want false")
 	}
 }

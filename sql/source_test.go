@@ -1,11 +1,22 @@
-package sql_test
+package sql
 
 import (
-	"database/sql"
+	stdsql "database/sql"
 	"testing"
-
-	. "github.com/aita/sqlkit/sql"
 )
+
+func TestLateralJoin(t *testing.T) {
+	recent := Select(Col("p.id")).From(SourceAlias(Table{Name: "posts"}, "p")).
+		Where(Eq(Col("p.user_id"), Col("u.id"))).Limit(1)
+
+	q := Select(Col("u.id"), Col("r.id")).
+		From(SourceAlias(Table{Name: "users"}, "u")).
+		Join(Lateral(Alias(recent, "r")), Raw("true"))
+
+	assertSQL(t, q,
+		`SELECT "u"."id", "r"."id" FROM "users" AS "u" JOIN LATERAL (SELECT "p"."id" FROM "posts" AS "p" WHERE ("p"."user_id" = "u"."id") LIMIT 1) AS "r" ON true`,
+		nil)
+}
 
 // bulkUpdate builds UPDATE users SET name = v.c0 FROM a two-row VALUES source.
 func bulkUpdate() UpdateBuilder {
@@ -48,7 +59,7 @@ func TestValuesSourceRejectsMismatchedColumns(t *testing.T) {
 // bigint key column is not inferred as text on PostgreSQL.
 func TestValuesSourceCastsDriverValuer(t *testing.T) {
 	rows := [][]Expression{
-		{Val(sql.NullInt64{Int64: 1, Valid: true}), Val(sql.NullString{String: "a", Valid: true})},
+		{Val(stdsql.NullInt64{Int64: 1, Valid: true}), Val(stdsql.NullString{String: "a", Valid: true})},
 		{Val(int64(2)), Val("b")},
 	}
 	q := Update(users).

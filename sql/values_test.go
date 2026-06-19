@@ -1,10 +1,8 @@
-package sql_test
+package sql
 
 import (
 	"strings"
 	"testing"
-
-	. "github.com/aita/sqlkit/sql"
 )
 
 func TestValuesQuery(t *testing.T) {

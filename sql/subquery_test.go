@@ -1,10 +1,6 @@
-package sql_test
+package sql
 
-import (
-	"testing"
-
-	. "github.com/aita/sqlkit/sql"
-)
+import "testing"
 
 func TestSubqueryAsFromSource(t *testing.T) {
 	sub := Select(Col("users.id")).

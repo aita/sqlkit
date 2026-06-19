@@ -2,6 +2,47 @@ package sql
 
 import "testing"
 
+func TestMergeStmt(t *testing.T) {
+	p := MergeInto(Table{Name: "accounts"}).As("t").
+		Using(SourceAlias(Table{Name: "staging"}, "s")).
+		On(Eq(Col("t.id"), Col("s.id"))).
+		When(WhenMatched().ThenUpdate(Set("balance", Col("s.balance")))).
+		When(WhenNotMatched().ThenInsert([]string{"id"}, Col("s.id"))).
+		Stmt()
+
+	if p.Target.Name != "accounts" || p.TargetAlias != "t" {
+		t.Errorf("Target/alias = %q/%q, want accounts/t", p.Target.Name, p.TargetAlias)
+	}
+	if p.Using == nil || p.On == nil {
+		t.Fatal("Using/On missing from MergeStmt")
+	}
+	if len(p.When) != 2 {
+		t.Fatalf("When = %d clauses, want 2", len(p.When))
+	}
+	if p.When[0].Match != "MATCHED" || p.When[0].Action != "UPDATE" || len(p.When[0].Sets) != 1 {
+		t.Errorf("When[0] = %+v, want MATCHED UPDATE with one assignment", p.When[0])
+	}
+	if p.When[1].Match != "NOT MATCHED" || p.When[1].Action != "INSERT" ||
+		len(p.When[1].InsertColumns) != 1 || len(p.When[1].InsertValues) != 1 {
+		t.Errorf("When[1] = %+v, want NOT MATCHED INSERT with one column/value", p.When[1])
+	}
+}
+
+// Walk descends into a MERGE's USING subquery.
+func TestMergeWalk(t *testing.T) {
+	using := Select(Col("id"), Col("balance")).From(Table{Name: "staging"})
+	q := MergeInto(Table{Name: "accounts"}).
+		Using(Alias(using, "s")).
+		On(Eq(Col("accounts.id"), Col("s.id"))).
+		When(WhenMatched().ThenDelete())
+
+	var visited int
+	Walk(q, func(Query) bool { visited++; return true })
+	if visited != 2 {
+		t.Errorf("Walk over MERGE visited %d queries, want 2 (merge + USING subquery)", visited)
+	}
+}
+
 func TestMergeCompile(t *testing.T) {
 	q := MergeInto(Table{Name: "accounts"}).As("t").
 		Using(SourceAlias(Table{Name: "staging"}, "s")).

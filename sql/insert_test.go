@@ -1,11 +1,57 @@
-package sql_test
+package sql
 
 import (
 	"strings"
 	"testing"
-
-	. "github.com/aita/sqlkit/sql"
 )
+
+func TestOnConflictExpressionCompile(t *testing.T) {
+	q := InsertInto(Table{Name: "users"}).Columns("email").Values("a@x").
+		OnConflictExpr(Func("lower", Col("email"))).
+		DoUpdate(Set("seen", Col("now()")))
+	got, args, err := q.ToSQL(PostgreSQLDialect{})
+	if err != nil {
+		t.Fatalf("ToSQL() error = %v", err)
+	}
+	want := `INSERT INTO "users" ("email") VALUES ($1) ON CONFLICT ((lower("email"))) DO UPDATE SET "seen" = "now()"`
+	if got != want {
+		t.Fatalf("ToSQL() =\n  %q\nwant\n  %q", got, want)
+	}
+	if len(args) != 1 || args[0] != "a@x" {
+		t.Fatalf("args = %#v, want [a@x]", args)
+	}
+}
+
+// Each conflict-target setter replaces any earlier target, so the last one wins
+// (the fluent API cannot express a mixed column/expression target).
+func TestOnConflictTargetLastWins(t *testing.T) {
+	q := InsertInto(Table{Name: "t"}).Columns("a").Values(1).
+		OnConflict("a").OnConflictExpr(Col("b")).DoNothing()
+	got, _, err := q.ToSQL(PostgreSQLDialect{})
+	if err != nil {
+		t.Fatalf("ToSQL() error = %v", err)
+	}
+	want := `INSERT INTO "t" ("a") VALUES ($1) ON CONFLICT (("b")) DO NOTHING`
+	if got != want {
+		t.Fatalf("ToSQL() = %q, want %q", got, want)
+	}
+}
+
+func TestUpdateFromAndDeleteUsing(t *testing.T) {
+	upd := Update(Table{Name: "users"}).
+		Set(Set("name", Col("o.name"))).
+		From(SourceAlias(Table{Name: "orgs"}, "o")).
+		Where(Eq(Col("users.org_id"), Col("o.id")))
+	assertSQL(t, upd,
+		`UPDATE "users" SET "name" = "o"."name" FROM "orgs" AS "o" WHERE ("users"."org_id" = "o"."id")`, nil)
+
+	del := DeleteFrom(Table{Name: "users"}).
+		Using(SourceAlias(Table{Name: "orgs"}, "o")).
+		Where(And(Eq(Col("users.org_id"), Col("o.id")), Eq(Col("o.active"), Val(false))))
+	assertSQL(t, del,
+		`DELETE FROM "users" USING "orgs" AS "o" WHERE (("users"."org_id" = "o"."id") AND ("o"."active" = $1))`,
+		[]any{false})
+}
 
 func TestInsertFromSelectSQL(t *testing.T) {
 	source := Select(Col("email"), Col("name")).
@@ -154,4 +200,143 @@ func TestInsertOnConflictWhereIgnoredOnDoNothing(t *testing.T) {
 	assertSQL(t, query,
 		`INSERT INTO "public"."users" ("email") VALUES ($1) ON CONFLICT ("email") DO NOTHING`,
 		[]any{"a@example.com"})
+}
+
+func TestInsertQueryToSQL(t *testing.T) {
+	query := InsertInto(users).
+		Columns("email", "name").
+		Values("a@example.com", "Alice").
+		Values("b@example.com", "Bob").
+		Returning(Col("id"))
+
+	assertSQL(t, query,
+		`INSERT INTO "public"."users" ("email", "name") VALUES ($1, $2), ($3, $4) RETURNING "id"`,
+		[]any{"a@example.com", "Alice", "b@example.com", "Bob"})
+}
+
+func TestUpdateQueryToSQL(t *testing.T) {
+	query := Update(users).
+		Set(Set("email", "new@example.com"), Set("name", "New")).
+		Where(Eq(Col("id"), Int(7)))
+
+	assertSQL(t, query,
+		`UPDATE "public"."users" SET "email" = $1, "name" = $2 WHERE ("id" = $3)`,
+		[]any{"new@example.com", "New", 7})
+}
+
+func TestDeleteQueryToSQL(t *testing.T) {
+	query := DeleteFrom(users).Where(Eq(Col("id"), Int(7)))
+
+	assertSQL(t, query, `DELETE FROM "public"."users" WHERE ("id" = $1)`, []any{7})
+}
+
+// joinOn correlates users.org_id with orgs.id.
+func joinOn() Expression {
+	return Eq(Col("public.users.org_id"), Col("orgs.id"))
+}
+
+func TestUpdateFromPostgres(t *testing.T) {
+	query := Update(users).
+		Set(Set("name", Val("x"))).
+		From(orgs).
+		Where(joinOn())
+	assertSQL(t, query,
+		`UPDATE "public"."users" SET "name" = $1 FROM "orgs" WHERE ("public"."users"."org_id" = "orgs"."id")`,
+		[]any{"x"})
+}
+
+func TestUpdateJoinPostgresFoldsOnIntoWhere(t *testing.T) {
+	query := Update(users).
+		Set(Set("name", Val("x"))).
+		Join(orgs, joinOn()).
+		Where(Eq(Col("orgs.active"), Val(true)))
+	assertSQL(t, query,
+		`UPDATE "public"."users" SET "name" = $1 FROM "orgs" WHERE (("orgs"."active" = $2) AND ("public"."users"."org_id" = "orgs"."id"))`,
+		[]any{"x", true})
+}
+
+func TestUpdateJoinMySQLInline(t *testing.T) {
+	query := Update(users).
+		Set(Set("name", Val("x"))).
+		Join(orgs, joinOn()).
+		Where(Eq(Col("orgs.active"), Val(true)))
+	assertMySQL(t, query,
+		"UPDATE `public`.`users` JOIN `orgs` ON (`public`.`users`.`org_id` = `orgs`.`id`) SET `name` = ? WHERE (`orgs`.`active` = ?)",
+		[]any{"x", true})
+}
+
+func TestDeleteUsingPostgres(t *testing.T) {
+	query := DeleteFrom(users).
+		Using(orgs).
+		Where(joinOn())
+	assertSQL(t, query,
+		`DELETE FROM "public"."users" USING "orgs" WHERE ("public"."users"."org_id" = "orgs"."id")`,
+		nil)
+}
+
+func TestDeleteJoinPostgresFoldsOnIntoWhere(t *testing.T) {
+	query := DeleteFrom(users).
+		Join(orgs, joinOn()).
+		Where(Eq(Col("orgs.active"), Val(false)))
+	assertSQL(t, query,
+		`DELETE FROM "public"."users" USING "orgs" WHERE (("orgs"."active" = $1) AND ("public"."users"."org_id" = "orgs"."id"))`,
+		[]any{false})
+}
+
+func TestDeleteJoinMySQLInline(t *testing.T) {
+	query := DeleteFrom(users).
+		Join(orgs, joinOn()).
+		Where(Eq(Col("orgs.active"), Val(false)))
+	assertMySQL(t, query,
+		"DELETE `public`.`users` FROM `public`.`users` JOIN `orgs` ON (`public`.`users`.`org_id` = `orgs`.`id`) WHERE (`orgs`.`active` = ?)",
+		[]any{false})
+}
+
+// A plain single-table UPDATE/DELETE is unchanged by the join support.
+func TestUpdateDeleteWithoutJoinUnchanged(t *testing.T) {
+	assertSQL(t, Update(users).Set(Set("name", Val("x"))).Where(Eq(Col("id"), Val(1))),
+		`UPDATE "public"."users" SET "name" = $1 WHERE ("id" = $2)`,
+		[]any{"x", 1})
+	assertSQL(t, DeleteFrom(users).Where(Eq(Col("id"), Val(1))),
+		`DELETE FROM "public"."users" WHERE ("id" = $1)`,
+		[]any{1})
+}
+
+// PostgreSQL's FROM/USING form folds join ON into WHERE, which is only correct
+// for inner joins; a LEFT JOIN must be rejected rather than silently collapsed
+// to an inner join. MySQL's inline form renders it natively, so it is accepted.
+func TestUpdateLeftJoinRejectedOnPostgres(t *testing.T) {
+	query := Update(users).
+		Set(Set("name", Val("x"))).
+		LeftJoin(orgs, joinOn())
+	if _, _, err := query.ToSQL(PostgreSQLDialect{}); err == nil {
+		t.Fatal("ToSQL(postgres) error = nil, want LEFT JOIN rejection")
+	}
+	assertMySQL(t, query,
+		"UPDATE `public`.`users` LEFT JOIN `orgs` ON (`public`.`users`.`org_id` = `orgs`.`id`) SET `name` = ?",
+		[]any{"x"})
+}
+
+func TestDeleteLeftJoinRejectedOnPostgres(t *testing.T) {
+	query := DeleteFrom(users).LeftJoin(orgs, joinOn())
+	if _, _, err := query.ToSQL(PostgreSQLDialect{}); err == nil {
+		t.Fatal("ToSQL(postgres) error = nil, want LEFT JOIN rejection")
+	}
+	assertMySQL(t, query,
+		"DELETE `public`.`users` FROM `public`.`users` LEFT JOIN `orgs` ON (`public`.`users`.`org_id` = `orgs`.`id`)",
+		nil)
+}
+
+func TestInsertStmtConflict(t *testing.T) {
+	users := Table{Name: "users"}
+	c := InsertInto(users).Columns("id").Values(1).
+		OnConflict("id").DoUpdate(Set("id", Val(2))).
+		Stmt()
+
+	if c.Table.Name != "users" {
+		t.Errorf("Table = %q, want users", c.Table.Name)
+	}
+	if c.Conflict == nil || !c.Conflict.DoUpdate || len(c.Conflict.Sets) != 1 {
+		t.Errorf("Conflict = %+v, want a DO UPDATE with one assignment", c.Conflict)
+	}
 }

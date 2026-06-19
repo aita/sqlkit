@@ -2,7 +2,7 @@ package sql
 
 import "testing"
 
-func TestMaterializedViewAndAlterTypeCompile(t *testing.T) {
+func TestMaterializedViewCompile(t *testing.T) {
 	cases := []struct {
 		stmt Statement
 		want string
@@ -11,8 +11,6 @@ func TestMaterializedViewAndAlterTypeCompile(t *testing.T) {
 			"CREATE MATERIALIZED VIEW \"m\" AS\nSELECT \"id\" FROM \"t\";"},
 		{DropMaterializedView(Table{Name: "m"}).IfExists(), `DROP MATERIALIZED VIEW IF EXISTS "m";`},
 		{RefreshMaterializedView(Table{Name: "m"}).WithNoData(), `REFRESH MATERIALIZED VIEW "m" WITH NO DATA;`},
-		{AlterTypeAddValue("mood", "great").Before("happy"), `ALTER TYPE "mood" ADD VALUE 'great' BEFORE 'happy';`},
-		{AlterTypeRenameValue("mood", "ok", "fine"), `ALTER TYPE "mood" RENAME VALUE 'ok' TO 'fine';`},
 	}
 	for _, tc := range cases {
 		got, _, err := tc.stmt.ToSQL(PostgreSQLDialect{})
