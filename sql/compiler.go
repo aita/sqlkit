@@ -998,28 +998,28 @@ func (c *Compiler) CompileSelect(q SelectStmt) (string, []any, error) {
 }
 
 // CompileInsert compiles an INSERT statement.
-func (c *Compiler) CompileInsert(q InsertQuery) (string, []any, error) {
-	if q.table.Name == "" {
+func (c *Compiler) CompileInsert(q InsertStmt) (string, []any, error) {
+	if q.Table.Name == "" {
 		return "", nil, fmt.Errorf("sqlkit/sql: INSERT requires a table")
 	}
-	if q.selectSrc != nil && len(q.rows) > 0 {
+	if q.Select != nil && len(q.Rows) > 0 {
 		return "", nil, fmt.Errorf("sqlkit/sql: INSERT cannot have both VALUES and a SELECT source")
 	}
-	if q.selectSrc == nil {
-		if len(q.columns) == 0 {
+	if q.Select == nil {
+		if len(q.Columns) == 0 {
 			return "", nil, fmt.Errorf("sqlkit/sql: INSERT requires columns")
 		}
-		if len(q.rows) == 0 {
+		if len(q.Rows) == 0 {
 			return "", nil, fmt.Errorf("sqlkit/sql: INSERT requires at least one row of values or a SELECT source")
 		}
 	}
 	var sb strings.Builder
 	var args []any
 	sb.WriteString("INSERT INTO ")
-	sb.WriteString(c.Dialect.QuoteIdent(q.table.QualifiedName()))
-	if len(q.columns) > 0 {
+	sb.WriteString(c.Dialect.QuoteIdent(q.Table.QualifiedName()))
+	if len(q.Columns) > 0 {
 		sb.WriteString(" (")
-		for i, column := range q.columns {
+		for i, column := range q.Columns {
 			if i > 0 {
 				sb.WriteString(", ")
 			}
@@ -1027,26 +1027,26 @@ func (c *Compiler) CompileInsert(q InsertQuery) (string, []any, error) {
 		}
 		sb.WriteString(")")
 	}
-	if q.selectSrc != nil {
-		selectSQL, selectArgs, err := c.compileSubquery(q.selectSrc)
+	if q.Select != nil {
+		selectSQL, selectArgs, err := c.compileSubquery(q.Select)
 		if err != nil {
 			return "", nil, err
 		}
 		sb.WriteString(" ")
 		sb.WriteString(selectSQL)
 		args = append(args, selectArgs...)
-		if err := c.writeUpsert(&sb, &args, q.conflict); err != nil {
+		if err := c.writeUpsert(&sb, &args, q.Conflict); err != nil {
 			return "", nil, err
 		}
-		if err := c.writeReturning(&sb, &args, q.returning); err != nil {
+		if err := c.writeReturning(&sb, &args, q.Returning); err != nil {
 			return "", nil, err
 		}
 		return sb.String(), args, nil
 	}
 	sb.WriteString(" VALUES ")
-	for i, row := range q.rows {
-		if len(row) != len(q.columns) {
-			return "", nil, fmt.Errorf("sqlkit/sql: INSERT row %d has %d values for %d columns", i, len(row), len(q.columns))
+	for i, row := range q.Rows {
+		if len(row) != len(q.Columns) {
+			return "", nil, fmt.Errorf("sqlkit/sql: INSERT row %d has %d values for %d columns", i, len(row), len(q.Columns))
 		}
 		if i > 0 {
 			sb.WriteString(", ")
@@ -1065,10 +1065,10 @@ func (c *Compiler) CompileInsert(q InsertQuery) (string, []any, error) {
 		}
 		sb.WriteString(")")
 	}
-	if err := c.writeUpsert(&sb, &args, q.conflict); err != nil {
+	if err := c.writeUpsert(&sb, &args, q.Conflict); err != nil {
 		return "", nil, err
 	}
-	if err := c.writeReturning(&sb, &args, q.returning); err != nil {
+	if err := c.writeReturning(&sb, &args, q.Returning); err != nil {
 		return "", nil, err
 	}
 	return sb.String(), args, nil
@@ -1077,7 +1077,7 @@ func (c *Compiler) CompileInsert(q InsertQuery) (string, []any, error) {
 // writeUpsert appends the dialect's conflict clause (ON CONFLICT / ON DUPLICATE
 // KEY UPDATE) to an INSERT. Assignment and WHERE placeholders are numbered after
 // the VALUES/SELECT they follow, matching their textual position.
-func (c *Compiler) writeUpsert(sb *strings.Builder, args *[]any, conflict *conflictClause) error {
+func (c *Compiler) writeUpsert(sb *strings.Builder, args *[]any, conflict *ConflictClause) error {
 	if conflict == nil {
 		return nil
 	}
@@ -1085,28 +1085,28 @@ func (c *Compiler) writeUpsert(sb *strings.Builder, args *[]any, conflict *confl
 	if !ok {
 		return fmt.Errorf("sqlkit/sql: dialect %s does not support upsert", c.Dialect.Name())
 	}
-	if conflict.doUpdate && len(conflict.sets) == 0 {
+	if conflict.DoUpdate && len(conflict.Sets) == 0 {
 		return fmt.Errorf("sqlkit/sql: ON CONFLICT DO UPDATE requires at least one assignment")
 	}
 	targets := 0
-	if len(conflict.target) > 0 {
+	if len(conflict.Target) > 0 {
 		targets++
 	}
-	if len(conflict.targetExprs) > 0 {
+	if len(conflict.TargetExprs) > 0 {
 		targets++
 	}
-	if conflict.targetConstraint != "" {
+	if conflict.TargetConstraint != "" {
 		targets++
 	}
 	if targets > 1 {
 		return fmt.Errorf("sqlkit/sql: ON CONFLICT can target only columns, expressions, or a named constraint")
 	}
 	var target []string
-	if len(conflict.targetExprs) > 0 {
+	if len(conflict.TargetExprs) > 0 {
 		// An expression conflict target renders parenthesized, e.g.
 		// ON CONFLICT ((lower(email))). Its placeholders precede the DO UPDATE
 		// assignments, so compile it first.
-		for _, expr := range conflict.targetExprs {
+		for _, expr := range conflict.TargetExprs {
 			exprSQL, exprArgs, err := c.CompileExpression(expr)
 			if err != nil {
 				return err
@@ -1115,17 +1115,17 @@ func (c *Compiler) writeUpsert(sb *strings.Builder, args *[]any, conflict *confl
 			*args = append(*args, exprArgs...)
 		}
 	} else {
-		target = make([]string, len(conflict.target))
-		for i, col := range conflict.target {
+		target = make([]string, len(conflict.Target))
+		for i, col := range conflict.Target {
 			target[i] = c.Dialect.QuoteName(col)
 		}
 	}
 	targetConstraint := ""
-	if conflict.targetConstraint != "" {
-		targetConstraint = c.Dialect.QuoteName(conflict.targetConstraint)
+	if conflict.TargetConstraint != "" {
+		targetConstraint = c.Dialect.QuoteName(conflict.TargetConstraint)
 	}
-	assignments := make([]string, 0, len(conflict.sets))
-	for _, assignment := range conflict.sets {
+	assignments := make([]string, 0, len(conflict.Sets))
+	for _, assignment := range conflict.Sets {
 		lhsSQL, lhsArgs, err := c.assignmentLHS(assignment)
 		if err != nil {
 			return err
@@ -1141,8 +1141,8 @@ func (c *Compiler) writeUpsert(sb *strings.Builder, args *[]any, conflict *confl
 	// Only DO UPDATE carries a WHERE; on DO NOTHING the predicate is dropped, so
 	// it must not contribute bind values either (which would desync the args).
 	var whereSQL string
-	if conflict.doUpdate && conflict.where != nil {
-		w, whereArgs, err := c.CompileExpression(conflict.where)
+	if conflict.DoUpdate && conflict.Where != nil {
+		w, whereArgs, err := c.CompileExpression(conflict.Where)
 		if err != nil {
 			return err
 		}
@@ -1152,7 +1152,7 @@ func (c *Compiler) writeUpsert(sb *strings.Builder, args *[]any, conflict *confl
 	clause, err := renderer.Upsert(UpsertClause{
 		Target:           target,
 		TargetConstraint: targetConstraint,
-		DoUpdate:         conflict.doUpdate,
+		DoUpdate:         conflict.DoUpdate,
 		Assignments:      assignments,
 		WhereSQL:         whereSQL,
 	})
@@ -1190,27 +1190,27 @@ func (c *Compiler) writeCommaSources(sb *strings.Builder, args *[]any, sources [
 // renders inline after the target on MySQL (UPDATE t JOIN j ON ... SET ...) and
 // as a trailing FROM list on PostgreSQL (UPDATE t SET ... FROM j WHERE ...),
 // where join ON predicates fold into the WHERE since FROM has no ON.
-func (c *Compiler) CompileUpdate(q UpdateQuery) (string, []any, error) {
-	if q.table.Name == "" {
+func (c *Compiler) CompileUpdate(q UpdateStmt) (string, []any, error) {
+	if q.Table.Name == "" {
 		return "", nil, fmt.Errorf("sqlkit/sql: UPDATE requires a table")
 	}
-	if len(q.sets) == 0 {
+	if len(q.Sets) == 0 {
 		return "", nil, fmt.Errorf("sqlkit/sql: UPDATE requires at least one assignment")
 	}
 	inline := c.usesInlineJoins()
 	var sb strings.Builder
 	var args []any
-	withSQL, withArgs, err := c.compileWith(q.with)
+	withSQL, withArgs, err := c.compileWith(q.With)
 	if err != nil {
 		return "", nil, err
 	}
 	sb.WriteString(withSQL)
 	args = append(args, withArgs...)
 	sb.WriteString("UPDATE ")
-	sb.WriteString(c.Dialect.QuoteIdent(q.table.QualifiedName()))
+	sb.WriteString(c.Dialect.QuoteIdent(q.Table.QualifiedName()))
 
 	if inline {
-		for _, source := range q.from {
+		for _, source := range q.From {
 			sb.WriteString(", ")
 			sourceSQL, sourceArgs, err := c.CompileSource(source)
 			if err != nil {
@@ -1219,7 +1219,7 @@ func (c *Compiler) CompileUpdate(q UpdateQuery) (string, []any, error) {
 			sb.WriteString(sourceSQL)
 			args = append(args, sourceArgs...)
 		}
-		for _, join := range q.joins {
+		for _, join := range q.Joins {
 			joinSQL, joinArgs, err := c.CompileJoin(join)
 			if err != nil {
 				return "", nil, err
@@ -1231,7 +1231,7 @@ func (c *Compiler) CompileUpdate(q UpdateQuery) (string, []any, error) {
 	}
 
 	sb.WriteString(" SET ")
-	for i, assignment := range q.sets {
+	for i, assignment := range q.Sets {
 		if i > 0 {
 			sb.WriteString(", ")
 		}
@@ -1252,18 +1252,18 @@ func (c *Compiler) CompileUpdate(q UpdateQuery) (string, []any, error) {
 		args = append(args, valueArgs...)
 	}
 
-	where := q.where
+	where := q.Where
 	if !inline {
-		if err := rejectOuterJoins(q.joins); err != nil {
+		if err := rejectOuterJoins(q.Joins); err != nil {
 			return "", nil, err
 		}
-		if sources := joinSources(q.from, q.joins); len(sources) > 0 {
+		if sources := joinSources(q.From, q.Joins); len(sources) > 0 {
 			sb.WriteString(" FROM ")
 			if err := c.writeCommaSources(&sb, &args, sources); err != nil {
 				return "", nil, err
 			}
 		}
-		where = foldJoinOns(where, q.joins)
+		where = foldJoinOns(where, q.Joins)
 	}
 	if where != nil {
 		whereSQL, whereArgs, err := c.CompileExpression(where)
@@ -1274,7 +1274,7 @@ func (c *Compiler) CompileUpdate(q UpdateQuery) (string, []any, error) {
 		sb.WriteString(whereSQL)
 		args = append(args, whereArgs...)
 	}
-	if err := c.writeReturning(&sb, &args, q.returning); err != nil {
+	if err := c.writeReturning(&sb, &args, q.Returning); err != nil {
 		return "", nil, err
 	}
 	return sb.String(), args, nil
@@ -1283,28 +1283,28 @@ func (c *Compiler) CompileUpdate(q UpdateQuery) (string, []any, error) {
 // CompileDelete compiles a DELETE statement. A multi-table DELETE (Using/Join)
 // renders as MySQL's DELETE t FROM t JOIN j ON ... and as PostgreSQL's
 // DELETE FROM t USING j WHERE ..., where join ON predicates fold into the WHERE.
-func (c *Compiler) CompileDelete(q DeleteQuery) (string, []any, error) {
-	if q.table.Name == "" {
+func (c *Compiler) CompileDelete(q DeleteStmt) (string, []any, error) {
+	if q.Table.Name == "" {
 		return "", nil, fmt.Errorf("sqlkit/sql: DELETE requires a table")
 	}
 	inline := c.usesInlineJoins()
-	hasSources := len(q.using) > 0 || len(q.joins) > 0
+	hasSources := len(q.Using) > 0 || len(q.Joins) > 0
 	var sb strings.Builder
 	var args []any
-	withSQL, withArgs, err := c.compileWith(q.with)
+	withSQL, withArgs, err := c.compileWith(q.With)
 	if err != nil {
 		return "", nil, err
 	}
 	sb.WriteString(withSQL)
 	args = append(args, withArgs...)
-	target := c.Dialect.QuoteIdent(q.table.QualifiedName())
+	target := c.Dialect.QuoteIdent(q.Table.QualifiedName())
 
 	if inline && hasSources {
 		sb.WriteString("DELETE ")
 		sb.WriteString(target)
 		sb.WriteString(" FROM ")
 		sb.WriteString(target)
-		for _, source := range q.using {
+		for _, source := range q.Using {
 			sb.WriteString(", ")
 			sourceSQL, sourceArgs, err := c.CompileSource(source)
 			if err != nil {
@@ -1313,7 +1313,7 @@ func (c *Compiler) CompileDelete(q DeleteQuery) (string, []any, error) {
 			sb.WriteString(sourceSQL)
 			args = append(args, sourceArgs...)
 		}
-		for _, join := range q.joins {
+		for _, join := range q.Joins {
 			joinSQL, joinArgs, err := c.CompileJoin(join)
 			if err != nil {
 				return "", nil, err
@@ -1323,22 +1323,22 @@ func (c *Compiler) CompileDelete(q DeleteQuery) (string, []any, error) {
 			args = append(args, joinArgs...)
 		}
 	} else {
-		if err := rejectOuterJoins(q.joins); err != nil {
+		if err := rejectOuterJoins(q.Joins); err != nil {
 			return "", nil, err
 		}
 		sb.WriteString("DELETE FROM ")
 		sb.WriteString(target)
 		if hasSources {
 			sb.WriteString(" USING ")
-			if err := c.writeCommaSources(&sb, &args, joinSources(q.using, q.joins)); err != nil {
+			if err := c.writeCommaSources(&sb, &args, joinSources(q.Using, q.Joins)); err != nil {
 				return "", nil, err
 			}
 		}
 	}
 
-	where := q.where
+	where := q.Where
 	if !inline {
-		where = foldJoinOns(where, q.joins)
+		where = foldJoinOns(where, q.Joins)
 	}
 	if where != nil {
 		whereSQL, whereArgs, err := c.CompileExpression(where)
@@ -1349,7 +1349,7 @@ func (c *Compiler) CompileDelete(q DeleteQuery) (string, []any, error) {
 		sb.WriteString(whereSQL)
 		args = append(args, whereArgs...)
 	}
-	if err := c.writeReturning(&sb, &args, q.returning); err != nil {
+	if err := c.writeReturning(&sb, &args, q.Returning); err != nil {
 		return "", nil, err
 	}
 	return sb.String(), args, nil

@@ -14,20 +14,8 @@ package sql
 // Walk/Decompose); they need no Parts snapshot. The Parts accessors below remain
 // for the statement types whose builders still keep unexported fields.
 
-// InsertParts is a read-only snapshot of every clause of an InsertQuery.
-// Exactly one of Rows or Select carries the inserted data. It is returned by
-// InsertQuery.Parts.
-type InsertParts struct {
-	Table     Table
-	Columns   []string
-	Rows      [][]Expression
-	Select    Query
-	Conflict  *ConflictClause
-	Returning []Selection
-}
-
-// ConflictClause is a read-only snapshot of an INSERT upsert action
-// (ON CONFLICT / ON DUPLICATE KEY). At most one of Target, TargetExprs, or
+// ConflictClause is the INSERT upsert action (ON CONFLICT / ON DUPLICATE KEY)
+// carried by InsertStmt.Conflict. At most one of Target, TargetExprs, or
 // TargetConstraint is set. DoUpdate distinguishes DO UPDATE (with Sets and an
 // optional Where) from DO NOTHING.
 type ConflictClause struct {
@@ -37,76 +25,6 @@ type ConflictClause struct {
 	DoUpdate         bool
 	Sets             []Assignment
 	Where            Expression
-}
-
-// Parts returns a read-only snapshot of q's clauses.
-func (q InsertQuery) Parts() InsertParts {
-	c := InsertParts{
-		Table:     q.table,
-		Columns:   cloneSlice(q.columns),
-		Rows:      cloneRows(q.rows),
-		Select:    q.selectSrc,
-		Returning: cloneSlice(q.returning),
-	}
-	if q.conflict != nil {
-		c.Conflict = &ConflictClause{
-			Target:           cloneSlice(q.conflict.target),
-			TargetExprs:      cloneSlice(q.conflict.targetExprs),
-			TargetConstraint: q.conflict.targetConstraint,
-			DoUpdate:         q.conflict.doUpdate,
-			Sets:             cloneSlice(q.conflict.sets),
-			Where:            q.conflict.where,
-		}
-	}
-	return c
-}
-
-// UpdateParts is a read-only snapshot of every clause of an UpdateQuery.
-// It is returned by UpdateQuery.Parts.
-type UpdateParts struct {
-	With      []CTE
-	Table     Table
-	Sets      []Assignment
-	From      []Source
-	Joins     []JoinClause
-	Where     Expression
-	Returning []Selection
-}
-
-// Parts returns a read-only snapshot of q's clauses.
-func (q UpdateQuery) Parts() UpdateParts {
-	return UpdateParts{
-		With:      cloneSlice(q.with),
-		Table:     q.table,
-		Sets:      cloneSlice(q.sets),
-		From:      cloneSlice(q.from),
-		Joins:     cloneSlice(q.joins),
-		Where:     q.where,
-		Returning: cloneSlice(q.returning),
-	}
-}
-
-// DeleteParts is a read-only snapshot of every clause of a DeleteQuery.
-// It is returned by DeleteQuery.Parts.
-type DeleteParts struct {
-	With      []CTE
-	Table     Table
-	Using     []Source
-	Joins     []JoinClause
-	Where     Expression
-	Returning []Selection
-}
-
-// Parts returns a read-only snapshot of q's clauses.
-func (q DeleteQuery) Parts() DeleteParts {
-	return DeleteParts{
-		With:      cloneSlice(q.with),
-		Table:     q.table,
-		Using:     cloneSlice(q.using),
-		Joins:     cloneSlice(q.joins),
-		Where:     q.where,
-		Returning: cloneSlice(q.returning),
-	}
 }
 
 // MergeParts is a read-only snapshot of every clause of a MergeQuery.

@@ -90,12 +90,12 @@ func TestSelectStmtFields(t *testing.T) {
 	}
 }
 
-func TestInsertPartsConflict(t *testing.T) {
+func TestInsertStmtConflict(t *testing.T) {
 	users := sql.Table{Name: "users"}
-	q := sql.InsertInto(users).Columns("id").Values(1).
-		OnConflict("id").DoUpdate(sql.Set("id", sql.Val(2)))
+	c := sql.InsertInto(users).Columns("id").Values(1).
+		OnConflict("id").DoUpdate(sql.Set("id", sql.Val(2))).
+		Stmt()
 
-	c := q.Parts()
 	if c.Table.Name != "users" {
 		t.Errorf("Table = %q, want users", c.Table.Name)
 	}

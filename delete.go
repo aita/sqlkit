@@ -12,7 +12,7 @@ type DeleteQuery struct {
 	ex           executorBinding
 	base         Table // the target table, kept so Filter can resolve its columns
 	def          sql.TableDef
-	query        sql.DeleteQuery
+	query        sql.DeleteBuilder
 	returning    []sql.Selection
 	hasReturning bool
 	err          error // deferred build error (e.g. from Filter), surfaced at the terminal
@@ -104,7 +104,7 @@ func (q DeleteQuery) Where(predicates ...Predicate) DeleteQuery {
 
 // finalQuery folds any deferred IN back into the query, for ToSQL and RETURNING
 // (every use other than Exec's splitting path).
-func (q DeleteQuery) finalQuery() sql.DeleteQuery {
+func (q DeleteQuery) finalQuery() sql.DeleteBuilder {
 	if q.batch == nil {
 		return q.query
 	}

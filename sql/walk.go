@@ -260,54 +260,54 @@ func queryChildren(q Query, onCTEName func(string), onName func(string), onQuery
 			onQuery(v.Right)
 		}
 		orderTerms(v.OrderBy)
-	case InsertQuery:
-		onName(v.table.QualifiedName())
-		if v.selectSrc != nil {
-			onQuery(v.selectSrc)
+	case InsertStmt:
+		onName(v.Table.QualifiedName())
+		if v.Select != nil {
+			onQuery(v.Select)
 		}
-		for _, row := range v.rows {
+		for _, row := range v.Rows {
 			for _, e := range row {
 				expr(e)
 			}
 		}
-		if v.conflict != nil {
-			for _, a := range v.conflict.sets {
+		if v.Conflict != nil {
+			for _, a := range v.Conflict.Sets {
 				expr(a.Value)
 			}
-			expr(v.conflict.where)
+			expr(v.Conflict.Where)
 		}
-		for _, s := range v.returning {
+		for _, s := range v.Returning {
 			sel(s)
 		}
-	case UpdateQuery:
-		ctes(v.with)
-		onName(v.table.QualifiedName())
-		for _, s := range v.from {
+	case UpdateStmt:
+		ctes(v.With)
+		onName(v.Table.QualifiedName())
+		for _, s := range v.From {
 			src(s)
 		}
-		for _, j := range v.joins {
+		for _, j := range v.Joins {
 			src(j.Source)
 			expr(j.On)
 		}
-		for _, a := range v.sets {
+		for _, a := range v.Sets {
 			expr(a.Value)
 		}
-		expr(v.where)
-		for _, s := range v.returning {
+		expr(v.Where)
+		for _, s := range v.Returning {
 			sel(s)
 		}
-	case DeleteQuery:
-		ctes(v.with)
-		onName(v.table.QualifiedName())
-		for _, s := range v.using {
+	case DeleteStmt:
+		ctes(v.With)
+		onName(v.Table.QualifiedName())
+		for _, s := range v.Using {
 			src(s)
 		}
-		for _, j := range v.joins {
+		for _, j := range v.Joins {
 			src(j.Source)
 			expr(j.On)
 		}
-		expr(v.where)
-		for _, s := range v.returning {
+		expr(v.Where)
+		for _, s := range v.Returning {
 			sel(s)
 		}
 	case MergeQuery:

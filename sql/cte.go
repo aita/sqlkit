@@ -70,15 +70,3 @@ func (b SelectBuilder) WithCTE(ctes ...CTE) SelectBuilder {
 	b.s.With = append(append([]CTE(nil), b.s.With...), ctes...)
 	return b
 }
-
-// WithCTE prepends common table expressions to the UPDATE.
-func (q UpdateQuery) WithCTE(ctes ...CTE) UpdateQuery {
-	q.with = append(q.with, ctes...)
-	return q
-}
-
-// WithCTE prepends common table expressions to the DELETE.
-func (q DeleteQuery) WithCTE(ctes ...CTE) DeleteQuery {
-	q.with = append(q.with, ctes...)
-	return q
-}

@@ -17,7 +17,7 @@ type UpdateQuery struct {
 	ex           executorBinding
 	base         Table // the target table, kept so Filter can resolve its columns
 	def          sql.TableDef
-	query        sql.UpdateQuery
+	query        sql.UpdateBuilder
 	returning    []sql.Selection
 	hasReturning bool
 	err          error
@@ -262,7 +262,7 @@ func (q UpdateQuery) Where(predicates ...Predicate) UpdateQuery {
 
 // finalQuery folds any deferred IN back into the query, for ToSQL and RETURNING
 // (every use other than Exec's splitting path).
-func (q UpdateQuery) finalQuery() sql.UpdateQuery {
+func (q UpdateQuery) finalQuery() sql.UpdateBuilder {
 	if q.batch == nil {
 		return q.query
 	}

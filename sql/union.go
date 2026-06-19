@@ -201,6 +201,12 @@ func astOf(q Query) Query {
 		return b.s
 	case CompoundBuilder:
 		return b.s
+	case InsertBuilder:
+		return b.s
+	case UpdateBuilder:
+		return b.s
+	case DeleteBuilder:
+		return b.s
 	default:
 		return q
 	}

@@ -209,7 +209,7 @@ func (q InsertQuery) ToSQL(dialect sql.Dialect) (string, []any, error) {
 }
 
 // applyConflict copies this query's upsert configuration onto the sql builder.
-func (q InsertQuery) applyConflict(insert sql.InsertQuery) sql.InsertQuery {
+func (q InsertQuery) applyConflict(insert sql.InsertBuilder) sql.InsertBuilder {
 	c := q.conflict
 	switch {
 	case c.targetConstraint != "":
@@ -237,10 +237,10 @@ func (q InsertQuery) returningSelections() []sql.Selection {
 	return q.def.Selections()
 }
 
-func (q InsertQuery) build() (sql.InsertQuery, error) {
+func (q InsertQuery) build() (sql.InsertBuilder, error) {
 	if q.selectSrc != nil {
 		if len(q.rows) > 0 {
-			return sql.InsertQuery{}, fmt.Errorf("sqlkit: INSERT cannot have both Values and FromSelect")
+			return sql.InsertBuilder{}, fmt.Errorf("sqlkit: INSERT cannot have both Values and FromSelect")
 		}
 		insert := sql.InsertInto(q.def.Table)
 		if len(q.columns) > 0 {
@@ -249,14 +249,14 @@ func (q InsertQuery) build() (sql.InsertQuery, error) {
 		return insert.FromSelect(q.selectSrc), nil
 	}
 	if len(q.columns) > 0 {
-		return sql.InsertQuery{}, fmt.Errorf("sqlkit: Columns applies to FromSelect; Values maps struct fields to columns by name")
+		return sql.InsertBuilder{}, fmt.Errorf("sqlkit: Columns applies to FromSelect; Values maps struct fields to columns by name")
 	}
 	if len(q.rows) == 0 {
-		return sql.InsertQuery{}, fmt.Errorf("sqlkit: INSERT requires Values or FromSelect")
+		return sql.InsertBuilder{}, fmt.Errorf("sqlkit: INSERT requires Values or FromSelect")
 	}
 	names, valueRows, err := q.mapRows()
 	if err != nil {
-		return sql.InsertQuery{}, err
+		return sql.InsertBuilder{}, err
 	}
 	// Delegate to the sql layer with a definition narrowed to the mapped
 	// columns, so the defaulted-and-zero omission applies to them.

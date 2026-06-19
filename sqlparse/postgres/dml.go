@@ -79,7 +79,7 @@ func convertInsert(s *pg.InsertStmt) (sql.Query, error) {
 	return q, nil
 }
 
-func applyOnConflict(q sql.InsertQuery, oc *pg.OnConflictClause) (sql.InsertQuery, error) {
+func applyOnConflict(q sql.InsertBuilder, oc *pg.OnConflictClause) (sql.InsertBuilder, error) {
 	if infer := oc.GetInfer(); infer != nil {
 		if name := infer.GetConname(); name != "" {
 			q = q.OnConflictConstraint(name)
@@ -117,7 +117,7 @@ func applyOnConflict(q sql.InsertQuery, oc *pg.OnConflictClause) (sql.InsertQuer
 // OnConflict (columns) when every element is a plain column, otherwise
 // OnConflictExpr (plain columns become column references). Elements with an
 // opclass, collation, or ordering are not modeled and report Unsupported.
-func applyInferTarget(q sql.InsertQuery, elems []*pg.Node) (sql.InsertQuery, error) {
+func applyInferTarget(q sql.InsertBuilder, elems []*pg.Node) (sql.InsertBuilder, error) {
 	allColumns := true
 	for _, elem := range elems {
 		ie := elem.GetIndexElem()

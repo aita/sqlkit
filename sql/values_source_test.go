@@ -8,7 +8,7 @@ import (
 )
 
 // bulkUpdate builds UPDATE users SET name = v.c0 FROM a two-row VALUES source.
-func bulkUpdate() UpdateQuery {
+func bulkUpdate() UpdateBuilder {
 	rows := [][]Expression{
 		{Val(int64(1)), Val("a")},
 		{Val(int64(2)), Val("b")},

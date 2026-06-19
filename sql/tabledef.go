@@ -39,10 +39,10 @@ func (d TableDef) SelectRows() SelectBuilder {
 // InsertRows creates an INSERT for rows of values given in Columns order.
 // Columns with a database-side default are omitted when their value is the
 // zero value in every row, letting the database fill them in.
-func (d TableDef) InsertRows(rows [][]any) (InsertQuery, error) {
+func (d TableDef) InsertRows(rows [][]any) (InsertBuilder, error) {
 	include, err := d.insertMask(rows)
 	if err != nil {
-		return InsertQuery{}, err
+		return InsertBuilder{}, err
 	}
 	var names []string
 	for i, name := range d.Columns {
