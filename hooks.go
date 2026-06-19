@@ -3,78 +3,7 @@ package sqlkit
 import (
 	"context"
 	stdsql "database/sql"
-	"errors"
-
-	"github.com/aita/sqlkit/sql"
 )
-
-// errNoStatementQuery is returned by Statement.Recompile when there is no AST
-// to recompile (e.g. a raw-string statement).
-var errNoStatementQuery = errors.New("sqlkit: statement has no Query to recompile")
-
-// Op is the kind of statement a hook sees: a row-returning read or a
-// result-returning write.
-type Op int
-
-const (
-	// OpQuery is a read that yields rows (SELECT, a RETURNING read, RawSQL).
-	OpQuery Op = iota
-	// OpExec is a write that yields a sql.Result (INSERT, UPDATE, DELETE, and
-	// the DDL statements run through Exec).
-	OpExec
-)
-
-// String renders the Op for logs and errors.
-func (o Op) String() string {
-	switch o {
-	case OpQuery:
-		return "query"
-	case OpExec:
-		return "exec"
-	default:
-		return "unknown"
-	}
-}
-
-// Statement is the query a hook inspects and may rewrite before it runs.
-//
-// SQL and Args are the source of truth for execution: the executor runs exactly
-// what they hold, so a Before hook that rewrites them changes what reaches the
-// database. Query carries the SQL DSL (the sql.Query AST) the statement was
-// compiled from, for hooks that want to branch on its structure — the target
-// table, the kind of statement, and so on. It is nil when there is no AST, as
-// with a RawSQL string. To rewrite at the AST level, build a new query, assign
-// it to Query, and call Recompile to refresh SQL and Args from it.
-type Statement struct {
-	// Op is OpQuery for reads and OpExec for writes.
-	Op Op
-	// Query is the SQL DSL the statement was compiled from, or nil for a
-	// raw-string statement (RawSQL with a string).
-	Query sql.Query
-	// SQL is the compiled SQL text that will run.
-	SQL string
-	// Args are the bind arguments that will run.
-	Args []any
-	// Dialect is the dialect SQL was compiled for; Recompile uses it.
-	Dialect sql.Dialect
-}
-
-// Recompile recompiles Query for the statement's Dialect and replaces SQL and
-// Args with the result. It is the AST-level rewrite path: set Query to a new
-// builder result, then call Recompile. It returns an error if Query is nil or
-// compilation fails.
-func (s *Statement) Recompile() error {
-	if s.Query == nil {
-		return errNoStatementQuery
-	}
-	sqlText, args, err := s.Query.ToSQL(s.Dialect)
-	if err != nil {
-		return err
-	}
-	s.SQL = sqlText
-	s.Args = args
-	return nil
-}
 
 // Hooks observes — and may rewrite — statements around execution. It is the
 // lifecycle counterpart to a value-level database/sql.Scanner: a Before hook

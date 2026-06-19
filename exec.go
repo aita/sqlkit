@@ -100,6 +100,10 @@ type executorBinding interface {
 	// executor returns the terminal that runs compiled statements: the
 	// connection-backed default, or a WrapExecutor database's custom one.
 	executor() Executor
+	// routeHint returns the advisory backend alias stamped onto statements built
+	// through this binding (set by a per-statement WithRoute via routedBinding),
+	// or "" for the plain *Database/*Session bindings.
+	routeHint() string
 }
 
 // ErrNoRows is returned when a single-row Scan finds no row.
@@ -136,6 +140,11 @@ type Rows struct {
 	sqlText string
 	args    []any
 	err     error
+	// preloadEx is the binding the eager-loaded relations run through. It equals
+	// ex (so a per-statement WithRoute propagates to Preload follow-ups) unless
+	// WithRoute(..., NoPropagate) detached it, in which case it is the base
+	// (unrouted) binding so the follow-ups route independently.
+	preloadEx executorBinding
 	// exactlyOne makes Scan require a single-row result: ErrNoRows when
 	// empty, ErrTooManyRows when a second row exists. Set by One.
 	exactlyOne bool
@@ -165,21 +174,22 @@ func newRows(ctx context.Context, ex executorBinding, query sql.Query) Rows {
 			return Rows{err: err}
 		}
 		if split {
-			return Rows{ctx: ctx, ex: ex, batches: stmts, batchWrite: write}
+			return Rows{ctx: ctx, ex: ex, preloadEx: ex, batches: stmts, batchWrite: write}
 		}
 	}
 	sqlText, args, err := query.ToSQL(ex.sqlDialect())
-	return Rows{ctx: ctx, ex: ex, query: query, sqlText: sqlText, args: args, err: err}
+	return Rows{ctx: ctx, ex: ex, preloadEx: ex, query: query, sqlText: sqlText, args: args, err: err}
 }
 
 // statement builds the read Statement a hook sees for this Rows.
 func (r Rows) statement() Statement {
 	return Statement{
-		Op:      OpQuery,
-		Query:   r.query,
-		SQL:     r.sqlText,
-		Args:    r.args,
-		Dialect: r.ex.sqlDialect(),
+		Op:        OpQuery,
+		Query:     r.query,
+		SQL:       r.sqlText,
+		Args:      r.args,
+		Dialect:   r.ex.sqlDialect(),
+		RouteHint: r.ex.routeHint(),
 	}
 }
 
@@ -192,7 +202,7 @@ func newRawRows(ctx context.Context, ex executorBinding, query any, args []any) 
 	sqlText, sqlArgs, err := resolveQuery(ex.sqlDialect(), query, args)
 	// Carry the AST for hooks when one was supplied; a raw string has none.
 	ast, _ := query.(sql.Query)
-	return Rows{ctx: ctx, ex: ex, query: ast, sqlText: sqlText, args: sqlArgs, err: err}
+	return Rows{ctx: ctx, ex: ex, preloadEx: ex, query: ast, sqlText: sqlText, args: sqlArgs, err: err}
 }
 
 // Scan runs the query and copies the result into dest. Columns are matched
@@ -224,11 +234,23 @@ func (r Rows) Scan(dest any) error {
 	if err := afterQuery(ctx, r.ex.hooks(), stmt, dest, scanErr); err != nil {
 		return err
 	}
-	// Eager-load any registered relations onto the just-scanned destination.
+	// Eager-load any registered relations onto the just-scanned destination,
+	// through the preload binding (which carries a propagating WithRoute hint, or
+	// the base binding when NoPropagate detached it).
 	if len(r.preloads) > 0 {
-		return applyPreloads(r.ctx, r.ex, dest, r.preloads)
+		return applyPreloads(r.ctx, r.preloadBinding(), dest, r.preloads)
 	}
 	return nil
+}
+
+// preloadBinding is the binding eager-loaded relations run through: preloadEx
+// when set, else ex. It keeps preloads working for Rows built before preloadEx
+// existed and for the err path.
+func (r Rows) preloadBinding() executorBinding {
+	if r.preloadEx != nil {
+		return r.preloadEx
+	}
+	return r.ex
 }
 
 // scanBatched runs the split statements in turn and concatenates their rows
@@ -252,7 +274,7 @@ func (r Rows) scanBatched(dest any) (err error) {
 	// result is conceptually one result.
 	scanErr := func() error {
 		for _, batch := range r.batches {
-			_, rows, runErr := runQuery(r.ctx, ex, Statement{Op: OpQuery, SQL: batch.sql, Args: batch.args, Dialect: dialect})
+			_, rows, runErr := runQuery(r.ctx, ex, Statement{Op: OpQuery, SQL: batch.sql, Args: batch.args, Dialect: dialect, RouteHint: ex.routeHint()})
 			if runErr != nil {
 				return runErr
 			}
@@ -394,10 +416,11 @@ func runExec(ctx context.Context, ex executorBinding, query sql.Query) (stdsql.R
 		return nil, err
 	}
 	return runExecStmt(ctx, ex, Statement{
-		Op:      OpExec,
-		Query:   query,
-		SQL:     sqlText,
-		Args:    args,
-		Dialect: ex.sqlDialect(),
+		Op:        OpExec,
+		Query:     query,
+		SQL:       sqlText,
+		Args:      args,
+		Dialect:   ex.sqlDialect(),
+		RouteHint: ex.routeHint(),
 	})
 }

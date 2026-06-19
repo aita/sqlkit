@@ -349,13 +349,14 @@ func intersect(names, allowed []string) []string {
 // every batch and LastInsertId reports the final batch. Split statements run
 // atomically — in one transaction through a Database, joining the session's
 // transaction through a Session.
-func (q InsertQuery) Exec(ctx context.Context) (stdsql.Result, error) {
+func (q InsertQuery) Exec(ctx context.Context, opts ...ExecOption) (stdsql.Result, error) {
 	if q.ex == nil {
 		return nil, errNoExecutor
 	}
+	ex, _ := applyExecOptions(q.ex, opts)
 	// runExec consults splitStatements; a split runs the chunks atomically and
 	// merges the result, otherwise the statement runs as one.
-	return runExec(ctx, q.ex, q)
+	return runExec(ctx, ex, q)
 }
 
 // effectiveBatchSize combines the explicit BatchSize with the executor's

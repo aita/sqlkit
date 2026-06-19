@@ -26,6 +26,7 @@ func (q ReturningQuery) ToSQL(dialect sql.Dialect) (string, []any, error) {
 // builder's splitStatements) into several chunks — each carrying the RETURNING
 // clause — run atomically as writes, and their rows are concatenated, mirroring the
 // split SELECT read path.
-func (q ReturningQuery) All(ctx context.Context) Rows {
-	return newRows(ctx, q.ex, q.query)
+func (q ReturningQuery) All(ctx context.Context, opts ...ExecOption) Rows {
+	ex, _ := applyExecOptions(q.ex, opts)
+	return newRows(ctx, ex, q.query)
 }

@@ -93,9 +93,10 @@ func (q MergeQuery) ToSQL(dialect sql.Dialect) (string, []any, error) {
 }
 
 // Exec runs the MERGE statement and returns the database/sql result.
-func (q MergeQuery) Exec(ctx context.Context) (stdsql.Result, error) {
+func (q MergeQuery) Exec(ctx context.Context, opts ...ExecOption) (stdsql.Result, error) {
 	if q.ex == nil {
 		return nil, errNoExecutor
 	}
-	return runExec(ctx, q.ex, q.query)
+	ex, _ := applyExecOptions(q.ex, opts)
+	return runExec(ctx, ex, q.query)
 }
