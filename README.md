@@ -144,6 +144,7 @@ type Account struct {
     Settings  map[string]any `sqlkit:"settings,json"`     // ↔ JSON/JSONB column
     Version   int64          `sqlkit:"version,version"`   // optimistic lock
     CreatedAt time.Time      `sqlkit:"created_at,readonly"` // DB-generated; never written
+    UpdatedAt time.Time      `sqlkit:"updated_at,touch"`    // set to CURRENT_TIMESTAMP on write
 }
 ```
 
@@ -160,6 +161,12 @@ type Account struct {
   is bumped (`version = version + 1`) and the row is guarded on the field's
   current value, so `Exec` returns `ErrVersionConflict` when another writer
   advanced it first — the tag-driven equivalent of `CheckVersion`.
+- **`touch`** — an app-maintained timestamp: the column is set to
+  `CURRENT_TIMESTAMP` (inlined, no bind value) on every `Insert().Values` and on
+  an implicit `Update().SetStruct`, regardless of the field's value, so an
+  `updated_at` stays current without a database trigger or a manual assignment.
+  Naming the column explicitly in `SetStruct(row, T.Col)` writes the struct's
+  value instead.
 
 ### Predicates and filters
 

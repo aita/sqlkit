@@ -424,3 +424,58 @@ func TestInsertValuesPassesValuerFields(t *testing.T) {
 	}
 	_ = args
 }
+
+func TestInsertSkipsReadonlyAndMarshalsJSON(t *testing.T) {
+	item := Item{ID: 1, SKU: "abc", Meta: map[string]any{"k": "v"}, Rev: 3, Created: 99}
+
+	// The read-only "created" column is omitted; "meta" is present.
+	assertToSQL(t, sqlkit.Insert(Items).Values(item),
+		`INSERT INTO "public"."items" ("id", "sku", "meta", "rev") VALUES ($1, $2, $3, $4)`,
+		nil)
+
+	// At execution the JSON column reaches the driver as its JSON encoding.
+	fake := &testutil.Fake{}
+	db := sqlkit.WrapDB(fake.DB())
+	if _, err := db.Insert(Items).Values(item).Exec(context.Background()); err != nil {
+		t.Fatalf("Exec() error = %v", err)
+	}
+	args := fake.Execs()[0].Args
+	if len(args) != 4 {
+		t.Fatalf("driver args = %#v, want 4 (created excluded)", args)
+	}
+	meta, ok := args[2].([]byte)
+	if !ok || string(meta) != `{"k":"v"}` {
+		t.Fatalf("meta arg = %#v, want JSON bytes", args[2])
+	}
+}
+
+func TestInsertJSONNilWritesNull(t *testing.T) {
+	// A nil map encodes as SQL NULL rather than the JSON literal null.
+	fake := &testutil.Fake{}
+	db := sqlkit.WrapDB(fake.DB())
+	if _, err := db.Insert(Items).Values(Item{ID: 1, SKU: "x"}).Exec(context.Background()); err != nil {
+		t.Fatalf("Exec() error = %v", err)
+	}
+	if got := fake.Execs()[0].Args[2]; got != nil {
+		t.Fatalf("meta arg = %#v, want nil (SQL NULL)", got)
+	}
+}
+
+func TestInsertTouchSetsCurrentTimestamp(t *testing.T) {
+	// The touch column is written as CURRENT_TIMESTAMP — no bind placeholder —
+	// regardless of the struct's (zero) value.
+	assertToSQL(t, sqlkit.Insert(Events).Values(Event{ID: 1, Name: "open"}),
+		`INSERT INTO "public"."events" ("id", "name", "updated_at") VALUES ($1, $2, CURRENT_TIMESTAMP)`,
+		nil)
+
+	// At execution only id and name reach the driver as bind args; the touch
+	// column is inlined, so it contributes no argument.
+	fake := &testutil.Fake{}
+	db := sqlkit.WrapDB(fake.DB())
+	if _, err := db.Insert(Events).Values(Event{ID: 1, Name: "open"}).Exec(context.Background()); err != nil {
+		t.Fatalf("Exec() error = %v", err)
+	}
+	if args := fake.Execs()[0].Args; len(args) != 2 {
+		t.Fatalf("driver args = %#v, want 2 (updated_at inlined)", args)
+	}
+}

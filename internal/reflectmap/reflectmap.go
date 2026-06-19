@@ -48,6 +48,10 @@ type Field struct {
 	// Version marks the optimistic-locking version column — the `version`
 	// option; SetStruct bumps it and guards the UPDATE with its current value.
 	Version bool
+	// Touch marks an app-maintained timestamp column — the `touch` option; the
+	// field is set to CURRENT_TIMESTAMP on every INSERT and implicit SetStruct
+	// UPDATE rather than copied from the struct.
+	Touch bool
 }
 
 // Fields maps lowercased column names to the field that maps to each. Fields
@@ -89,7 +93,7 @@ func collectFields(t reflect.Type, prefix []int, out map[string]Field) {
 		if field.PkgPath != "" {
 			continue
 		}
-		f := Field{Path: path, ReadOnly: opts.readOnly, JSON: opts.json, Version: opts.version}
+		f := Field{Path: path, ReadOnly: opts.readOnly, JSON: opts.json, Version: opts.version, Touch: opts.touch}
 		if name != "" {
 			register(out, strings.ToLower(name), f)
 			continue
@@ -112,6 +116,7 @@ type tagOptions struct {
 	readOnly bool
 	json     bool
 	version  bool
+	touch    bool
 }
 
 // parseTag reads a field's `sqlkit` tag into a column name and its write
@@ -138,6 +143,8 @@ func parseTag(field reflect.StructField) (name string, opts tagOptions, skip boo
 			opts.json = true
 		case "version":
 			opts.version = true
+		case "touch":
+			opts.touch = true
 		}
 	}
 	return name, opts, false

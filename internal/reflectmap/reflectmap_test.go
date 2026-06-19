@@ -43,6 +43,7 @@ func TestFieldsParsesTagOptions(t *testing.T) {
 		Raw     []byte         `sqlkit:"raw,jsonb"`
 		Rev     int64          `sqlkit:",version"`
 		Created int64          `sqlkit:"created,readonly"`
+		Touched int64          `sqlkit:"touched,touch"`
 		Skip    string         `sqlkit:"-"`
 		Loud    string         `sqlkit:"-,readonly"` // "-,opt" falls back to the field name
 	}
@@ -61,7 +62,10 @@ func TestFieldsParsesTagOptions(t *testing.T) {
 	if f := fields["created"]; !f.ReadOnly {
 		t.Errorf("created.ReadOnly = false, want true")
 	}
-	if f := fields["id"]; f.JSON || f.Version || f.ReadOnly {
+	if f := fields["touched"]; !f.Touch {
+		t.Errorf("touched.Touch = false, want true")
+	}
+	if f := fields["id"]; f.JSON || f.Version || f.ReadOnly || f.Touch {
 		t.Errorf("id has unexpected options: %+v", f)
 	}
 	if _, ok := fields["skip"]; ok {
