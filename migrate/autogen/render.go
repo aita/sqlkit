@@ -191,6 +191,8 @@ func (r *renderer) plan(from, to meta.Metadata) (string, error) {
 		}
 	}
 
+	objs := r.objectOps(from, to)
+
 	// Renames run first: a renamed table must exist under its new name before
 	// the drops, alters, and re-adds that diffTable emitted against that name.
 	var out []string
@@ -199,12 +201,135 @@ func (r *renderer) plan(from, to meta.Metadata) (string, error) {
 	out = append(out, dropFKs...)
 	out = append(out, dropIndexes...)
 	out = append(out, dropTables...)
+	out = append(out, objs.dropSequences...)
+	out = append(out, objs.dropEnums...)
+	out = append(out, objs.dropExtensions...)
+	out = append(out, objs.createExtensions...)
+	out = append(out, objs.createEnums...)
+	out = append(out, objs.createSequences...)
 	out = append(out, createTables...)
 	out = append(out, alters...)
 	out = append(out, createIndexes...)
 	out = append(out, addFKs...)
 	out = append(out, comments...)
 	return strings.Join(out, "\n"), nil
+}
+
+// objectOps renders the op.* calls that reconcile the non-table objects
+// (extensions, enums, sequences) between from and to. Names are rendered bare,
+// since the Operator qualifies them with the migration's schema.
+func (r *renderer) objectOps(from, to meta.Metadata) renderedObjects {
+	var o renderedObjects
+
+	oldExt := map[string]meta.Extension{}
+	for _, e := range from.Extensions {
+		oldExt[e.Name] = e
+	}
+	newExt := map[string]meta.Extension{}
+	for _, e := range to.Extensions {
+		newExt[e.Name] = e
+	}
+	for _, e := range from.Extensions {
+		if n, ok := newExt[e.Name]; !ok || n != e {
+			o.dropExtensions = append(o.dropExtensions, fmt.Sprintf("op.DropExtension(%q)", e.Name))
+		}
+	}
+	for _, e := range to.Extensions {
+		if old, ok := oldExt[e.Name]; !ok || old != e {
+			o.createExtensions = append(o.createExtensions, r.extensionCreate(e))
+		}
+	}
+
+	oldEnum := map[string]meta.Enum{}
+	for _, e := range from.Enums {
+		oldEnum[e.QualifiedName()] = e
+	}
+	newEnum := map[string]meta.Enum{}
+	for _, e := range to.Enums {
+		newEnum[e.QualifiedName()] = e
+	}
+	for _, e := range from.Enums {
+		if n, ok := newEnum[e.QualifiedName()]; !ok || !e.Equal(n) {
+			o.dropEnums = append(o.dropEnums, fmt.Sprintf("op.DropEnum(%q)", e.Name))
+		}
+	}
+	for _, e := range to.Enums {
+		if old, ok := oldEnum[e.QualifiedName()]; !ok || !old.Equal(e) {
+			o.createEnums = append(o.createEnums, fmt.Sprintf("op.CreateEnum(%q, %s)", e.Name, quotedList(e.Values)))
+		}
+	}
+
+	oldSeq := map[string]meta.Sequence{}
+	for _, s := range from.Sequences {
+		oldSeq[s.QualifiedName()] = s
+	}
+	newSeq := map[string]meta.Sequence{}
+	for _, s := range to.Sequences {
+		newSeq[s.QualifiedName()] = s
+	}
+	for _, s := range from.Sequences {
+		if n, ok := newSeq[s.QualifiedName()]; !ok || !s.Equal(n) {
+			o.dropSequences = append(o.dropSequences, fmt.Sprintf("op.DropSequence(%q)", s.Name))
+		}
+	}
+	for _, s := range to.Sequences {
+		if old, ok := oldSeq[s.QualifiedName()]; !ok || !old.Equal(s) {
+			o.createSequences = append(o.createSequences, r.sequenceCreate(s))
+		}
+	}
+	return o
+}
+
+// renderedObjects holds the rendered op.* calls for each object kind.
+type renderedObjects struct {
+	createExtensions []string
+	createEnums      []string
+	createSequences  []string
+	dropExtensions   []string
+	dropEnums        []string
+	dropSequences    []string
+}
+
+func (r *renderer) extensionCreate(e meta.Extension) string {
+	if e.Schema == "" {
+		return fmt.Sprintf("op.CreateExtension(%q)", e.Name)
+	}
+	r.usesSQL = true
+	return fmt.Sprintf("op.CreateExtension(%q, func(s sql.CreateExtensionStmt) sql.CreateExtensionStmt {\nreturn s.Schema(%q)\n})", e.Name, e.Schema)
+}
+
+func (r *renderer) sequenceCreate(s meta.Sequence) string {
+	var chain strings.Builder
+	if s.Increment != nil {
+		fmt.Fprintf(&chain, ".Increment(%d)", *s.Increment)
+	}
+	if s.MinValue != nil {
+		fmt.Fprintf(&chain, ".MinValue(%d)", *s.MinValue)
+	}
+	if s.MaxValue != nil {
+		fmt.Fprintf(&chain, ".MaxValue(%d)", *s.MaxValue)
+	}
+	if s.Start != nil {
+		fmt.Fprintf(&chain, ".Start(%d)", *s.Start)
+	}
+	if s.Cache != nil {
+		fmt.Fprintf(&chain, ".Cache(%d)", *s.Cache)
+	}
+	if s.Cycle != nil {
+		if *s.Cycle {
+			chain.WriteString(".Cycle()")
+		} else {
+			chain.WriteString(".NoCycle()")
+		}
+	}
+	if s.OwnedBy != "" {
+		fmt.Fprintf(&chain, ".OwnedBy(%q)", s.OwnedBy)
+	}
+	if chain.Len() == 0 {
+		return fmt.Sprintf("op.CreateSequence(%q)", s.Name)
+	}
+	r.usesSQL = true
+	return fmt.Sprintf("op.CreateSequence(%q, func(s sql.CreateSequenceStmt) sql.CreateSequenceStmt {\nreturn s%s\n})", s.Name, chain.String())
 }
 
 // diffTable appends the operations that turn oldT into newT to the buckets.

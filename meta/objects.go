@@ -107,6 +107,44 @@ func (s Sequence) DropStatement() sql.DropSequenceStmt {
 	return sql.DropSequence(s.QualifiedName()).IfExists()
 }
 
+// Equal reports whether two enum types are identical (schema, name, and ordered
+// labels), used by the diff engine to decide whether a type must be recreated.
+func (e Enum) Equal(o Enum) bool {
+	if e.Schema != o.Schema || e.Name != o.Name || len(e.Values) != len(o.Values) {
+		return false
+	}
+	for i := range e.Values {
+		if e.Values[i] != o.Values[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// Equal reports whether two sequences are identical (schema, name, and every
+// option), used by the diff engine to decide whether a sequence must be recreated.
+func (s Sequence) Equal(o Sequence) bool {
+	return s.Schema == o.Schema && s.Name == o.Name &&
+		eqInt64Ptr(s.Increment, o.Increment) && eqInt64Ptr(s.Start, o.Start) &&
+		eqInt64Ptr(s.MinValue, o.MinValue) && eqInt64Ptr(s.MaxValue, o.MaxValue) &&
+		eqInt64Ptr(s.Cache, o.Cache) && eqBoolPtr(s.Cycle, o.Cycle) &&
+		s.OwnedBy == o.OwnedBy
+}
+
+func eqInt64Ptr(a, b *int64) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func eqBoolPtr(a, b *bool) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
 // qualify joins a schema and name into "schema.name", or just "name" for the
 // unnamed default schema.
 func qualify(schema, name string) string {
