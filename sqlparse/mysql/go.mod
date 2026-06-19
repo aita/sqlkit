@@ -7,6 +7,7 @@ go 1.25.0
 
 require (
 	github.com/aita/sqlkit v0.0.0
+	github.com/google/go-cmp v0.7.0
 	github.com/pingcap/tidb/pkg/parser v0.0.0-20260612105733-b1d4142f99a6
 )
 

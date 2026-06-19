@@ -10,11 +10,30 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/opcode"
 )
 
-// convertExpr turns a TiDB expression node into a sqlkit/sql expression.
+// convertExpr turns a TiDB expression node into a sqlkit/sql expression, recording
+// the node's byte offset in the source SQL so a caller can map the result back to
+// its place in the original text.
 func convertExpr(node ast.ExprNode) (sql.Expression, error) {
 	if node == nil {
 		return nil, sqlparse.Unsupported("nil expression")
 	}
+	// Parentheses carry no expression of their own: unwrap and keep the inner
+	// node's position rather than the opening paren's.
+	if p, ok := node.(*ast.ParenthesesExpr); ok {
+		// sqlkit parenthesizes compound expressions itself; let it decide where
+		// parentheses are needed.
+		return convertExpr(p.Expr)
+	}
+	expr, err := convertExprNode(node)
+	if err != nil {
+		return nil, err
+	}
+	return positioned(expr, node), nil
+}
+
+// convertExprNode dispatches a non-nil, non-parenthesized expression node to its
+// converter. convertExpr wraps it to attach the source position.
+func convertExprNode(node ast.ExprNode) (sql.Expression, error) {
 	switch e := node.(type) {
 	case *ast.ColumnNameExpr:
 		return sql.Col(columnRefName(e.Name)), nil
@@ -25,10 +44,6 @@ func convertExpr(node ast.ExprNode) (sql.Expression, error) {
 		return sql.Raw("?"), nil
 	case ast.ValueExpr:
 		return convertValue(e)
-	case *ast.ParenthesesExpr:
-		// sqlkit parenthesizes compound expressions itself; unwrap and let it
-		// decide where parentheses are needed.
-		return convertExpr(e.Expr)
 	case *ast.BinaryOperationExpr:
 		return convertBinaryOp(e)
 	case *ast.UnaryOperationExpr:

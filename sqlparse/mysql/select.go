@@ -351,7 +351,9 @@ func convertFieldList(list *ast.FieldList) ([]sql.Selection, error) {
 // SELECT-list / aggregate target (a Selection).
 func convertSelectionExpr(node ast.ExprNode) (sql.Selection, error) {
 	if col, ok := node.(*ast.ColumnNameExpr); ok {
-		return sql.Col(columnRefName(col.Name)), nil
+		c := sql.Col(columnRefName(col.Name))
+		c.NodePos = offsetOf(col)
+		return c, nil
 	}
 	// A bare literal (SELECT 1, SELECT 'x') is not a sqlkit Selection as a bound
 	// value, so render it as a raw constant — faithful and common in

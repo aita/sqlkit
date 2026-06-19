@@ -44,7 +44,14 @@ func (Parser) Parse(text string) ([]sql.Query, error) {
 		return nil, err
 	}
 	queries := make([]sql.Query, 0, len(stmts))
+	// The TiDB parser does not record a usable offset on statement nodes, but each
+	// statement's Text() is the verbatim source slice and the statements partition
+	// the source contiguously, so the running sum of preceding statement lengths is
+	// the current statement's byte offset.
+	offset := 0
 	for _, stmt := range stmts {
+		stmtOffset := offset
+		offset += len(stmt.Text())
 		query, err := convertStmt(stmt)
 		if err != nil {
 			// A construct the converters recognize but cannot model as typed nodes
@@ -63,7 +70,7 @@ func (Parser) Parse(text string) ([]sql.Query, error) {
 			}
 			return nil, err
 		}
-		queries = append(queries, query)
+		queries = append(queries, sql.SetPos(query, stmtOffset+1))
 	}
 	return queries, nil
 }
