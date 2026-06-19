@@ -71,6 +71,10 @@ context ── carries ──▶ Trace ── records ──▶ Event(s) ──�
   and a programmable `database/sql` double (`NewDB`).
 - **`LogExporter`** — a summary exporter to `log/slog`, built into this package
   (`querytrace.NewLogExporter`); it needs only the standard library.
+- **`Metrics`** — the numeric aggregate of a `Trace` (statement counts by kind,
+  unique fingerprints, transactions, total durations, warnings by code), emitted
+  through the two-method `MetricsRecorder` you implement over your backend. Built
+  into this package; it needs only the standard library (see below).
 - **otelquery/** — an exporter to OpenTelemetry: one operation-level span per
   trace with a child DB span per statement. It is a separate module so the core
   stays dependency-free.
@@ -193,6 +197,73 @@ mock.ExpectQuery(
 This answers any `SELECT` from `users` filtered by `id = 42`, whatever columns it
 selects. A plain bind value (`sql.Expr(...)`) is left unconstrained, so only the
 parts you spell out with `Arg`/`ArgMatch` are checked.
+
+### Emitting metrics
+
+`Trace.Metrics()` reduces a finished trace to a `Metrics` value — statement
+counts (total, writes, and per kind), unique fingerprints, transactions, the
+total query and row-iteration durations, and warning counts by code and
+severity. Inspect it directly, or push it to your metrics backend by
+implementing the two-method `MetricsRecorder` and calling `Trace.RecordMetrics`
+(the one-call form of `trace.Metrics().Emit(rec)`). The core package depends on
+nothing but the standard library, so it pulls in no instrumentation library —
+you adapt `Counter`/`Duration` to Prometheus, OpenTelemetry metrics, statsd, or
+your own counters.
+
+```go
+// A MetricsRecorder over a Prometheus CounterVec/HistogramVec, for example.
+type promRecorder struct{ /* counter *prometheus.CounterVec; hist *prometheus.HistogramVec */ }
+
+func (r promRecorder) Counter(name string, v int64, labels ...querytrace.Label) {
+    // counter.With(toLabels(labels)).Add(float64(v))
+}
+func (r promRecorder) Duration(name string, d time.Duration, labels ...querytrace.Label) {
+    // hist.With(toLabels(labels)).Observe(d.Seconds())
+}
+
+trace := querytrace.New("GET /users/:id")
+defer trace.RecordMetrics(promRecorder{ /* ... */ })
+ctx := querytrace.WithTrace(r.Context(), trace)
+// ... run the request's queries through the wrapped driver ...
+```
+
+Metrics are emitted under stable names (the `Metric*` constants:
+`querytrace.statements` with a `kind` label, `querytrace.unique_fingerprints`,
+`querytrace.transactions`, `querytrace.warnings` with a `code` label,
+`querytrace.query_duration`, `querytrace.rows_iteration_duration`), each tagged
+with the trace's `operation` when set.
+
+For OpenTelemetry metrics specifically, the `otelquery` module ships a ready
+adapter so you do not write the `MetricsRecorder` yourself: `otelquery.ExportMetrics`
+records a trace's metrics on a `metric.Meter` (counters as `Int64Counter` adds,
+durations as `Float64Histogram` observations in seconds), the metrics counterpart
+of `Exporter.ExportTrace`. It lives in the separate module, so the core stays
+dependency-free.
+
+```go
+import "github.com/aita/sqlkit/querytrace/otelquery"
+
+trace := querytrace.New("GET /users/:id")
+defer otelquery.ExportMetrics(ctx, meterProvider.Meter("querytrace"), trace)
+// ... run the request's queries ...
+```
+
+(For finer control, `otelquery.NewMeterRecorder(ctx, meter)` returns a
+`querytrace.MetricsRecorder` you can pass to `trace.RecordMetrics`.)
+
+For a zero-dependency option, `querytrace.NewExpvarRecorder` publishes the same
+metrics to an `expvar.Map`, exposed on the standard `/debug/vars` endpoint with
+nothing but the standard library. Labels are folded into the variable name
+(`querytrace.statements{kind=select,operation=GET /users}`); counters accumulate
+as integers and durations as a running total in seconds (expvar has no
+histogram). Publish one map and reuse the recorder across traces:
+
+```go
+var dbMetrics = querytrace.NewExpvarRecorder(expvar.NewMap("querytrace"))
+
+// ... per request, after the work is done:
+dbMetrics.Record(trace) // or trace.RecordMetrics(dbMetrics)
+```
 
 ### Exporting to OpenTelemetry
 
