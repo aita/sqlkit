@@ -459,9 +459,9 @@ func TestBuildErrors(t *testing.T) {
 		want    string
 	}{
 		{
-			name:    "no tables",
+			name:    "no objects",
 			catalog: func() *decl.Catalog { return decl.NewCatalog() },
-			want:    "declares no tables",
+			want:    "declares no objects",
 		},
 		{
 			name: "no columns",
