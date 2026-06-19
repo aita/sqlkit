@@ -289,6 +289,9 @@ type NullSafeEqualityDialect interface {
 	IsDistinctFrom(left, right string, negate bool) string
 }
 
+// FullTextSearcher (the optional full-text-search capability) and the
+// MatchExpression it renders live in fulltext.go.
+
 // DialectByName returns the Dialect for a name: "postgres"/"postgresql" (or
 // empty, the default), "mysql", or "standard"/"ansi"/"sql" (the SQL standard /
 // ANSI text target). It errors on an unknown name.

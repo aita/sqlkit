@@ -438,3 +438,18 @@ func SimilarTo(expr TypedExpr[string], pattern string) Predicate {
 func NotSimilarTo(expr TypedExpr[string], pattern string) Predicate {
 	return newPredicate(sql.NotSimilarTo(expr, sql.Val(pattern)))
 }
+
+// Match creates a portable full-text search predicate over one or more string
+// columns, interpreting query as natural-language text. It renders as
+// PostgreSQL's to_tsvector(...) @@ plainto_tsquery(...) and MySQL's
+// MATCH(...) AGAINST(... IN NATURAL LANGUAGE MODE) — on MySQL the columns must
+// be covered by a FULLTEXT index — and is rejected on SQLite and the standard
+// target. For boolean-mode queries or a PostgreSQL text-search configuration,
+// drop to the sql package: Cond(sql.Match(cols...).Against(q).Boolean()).
+func Match(query string, columns ...TypedExpr[string]) Predicate {
+	exprs := make([]sql.Expression, len(columns))
+	for i, c := range columns {
+		exprs[i] = c
+	}
+	return newPredicate(sql.Match(exprs...).Against(query))
+}

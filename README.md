@@ -175,6 +175,14 @@ limit). String columns add the free helpers
 `sqlkit.Exists` / `NotExists` wrap a subquery, and `sqlkit.And` / `Or` / `Not`
 combine predicates.
 
+`sqlkit.Match(query, cols...)` is a **portable full-text search** predicate: it
+renders as PostgreSQL's `to_tsvector(...) @@ plainto_tsquery(...)` and MySQL's
+`MATCH(...) AGAINST(... IN NATURAL LANGUAGE MODE)` — on MySQL the columns must
+be covered by a `FULLTEXT` index — and is rejected on the standard target. For a
+boolean-mode query (PostgreSQL `websearch_to_tsquery`, MySQL
+`IN BOOLEAN MODE`) or a PostgreSQL text-search configuration, drop to the `sql`
+package: `sqlkit.Cond(sql.Match(cols...).Against(q).Boolean().WithConfig("english"))`.
+
 ```go
 err = db.Select().From(appdb.Users).
     Where(
