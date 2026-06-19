@@ -26,11 +26,13 @@ import (
 // takes when it crosses the shim→command process boundary. Both ends are Go, so
 // the snapshot is encoded with encoding/gob.
 type Snapshot struct {
-	Dialect    string
-	Tables     []SnapshotTable
-	Extensions []SnapshotExtension
-	Enums      []SnapshotEnum
-	Sequences  []SnapshotSequence
+	Dialect           string
+	Tables            []SnapshotTable
+	Extensions        []SnapshotExtension
+	Enums             []SnapshotEnum
+	Sequences         []SnapshotSequence
+	MaterializedViews []SnapshotMaterializedView
+	Grants            []SnapshotGrant
 }
 
 // SnapshotExtension is one database extension.
@@ -58,6 +60,25 @@ type SnapshotSequence struct {
 	Cache     *int64
 	Cycle     *bool
 	OwnedBy   string
+}
+
+// SnapshotMaterializedView is one materialized view; Body is the rendered SELECT
+// text (the view binds no values).
+type SnapshotMaterializedView struct {
+	Schema     string
+	Name       string
+	Body       string
+	Columns    []string
+	WithNoData bool
+}
+
+// SnapshotGrant is one privilege grant.
+type SnapshotGrant struct {
+	Privileges      []string
+	ObjectType      string
+	Objects         []string
+	Grantees        []string
+	WithGrantOption bool
 }
 
 // Encode writes the snapshot to w as gob — the shim end of the boundary.
@@ -201,6 +222,21 @@ func Resolve(md meta.Metadata, d sql.Dialect) (Snapshot, error) {
 			MaxValue: s.MaxValue, Cache: s.Cache, Cycle: s.Cycle, OwnedBy: s.OwnedBy,
 		})
 	}
+	for _, v := range md.MaterializedViews {
+		body, _, err := v.Query.ToSQL(d)
+		if err != nil {
+			return Snapshot{}, fmt.Errorf("autogen: materialized view %q body: %w", v.Name, err)
+		}
+		snap.MaterializedViews = append(snap.MaterializedViews, SnapshotMaterializedView{
+			Schema: v.Schema, Name: v.Name, Body: body, Columns: v.Columns, WithNoData: v.WithNoData,
+		})
+	}
+	for _, g := range md.Grants {
+		snap.Grants = append(snap.Grants, SnapshotGrant{
+			Privileges: g.Privileges, ObjectType: g.ObjectType, Objects: g.Objects,
+			Grantees: g.Grantees, WithGrantOption: g.WithGrantOption,
+		})
+	}
 	return snap, nil
 }
 
@@ -255,6 +291,17 @@ func (s Snapshot) Metadata() meta.Metadata {
 			Schema: sq.Schema, Name: sq.Name,
 			Increment: sq.Increment, Start: sq.Start, MinValue: sq.MinValue,
 			MaxValue: sq.MaxValue, Cache: sq.Cache, Cycle: sq.Cycle, OwnedBy: sq.OwnedBy,
+		})
+	}
+	for _, v := range s.MaterializedViews {
+		md.MaterializedViews = append(md.MaterializedViews, meta.MaterializedView{
+			Schema: v.Schema, Name: v.Name, Query: sql.RawSQL(v.Body), Columns: v.Columns, WithNoData: v.WithNoData,
+		})
+	}
+	for _, g := range s.Grants {
+		md.Grants = append(md.Grants, meta.Grant{
+			Privileges: g.Privileges, ObjectType: g.ObjectType, Objects: g.Objects,
+			Grantees: g.Grantees, WithGrantOption: g.WithGrantOption,
 		})
 	}
 	return md

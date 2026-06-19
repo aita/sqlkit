@@ -77,6 +77,8 @@ type Catalog struct {
 	extensions    []meta.Extension
 	enums         []meta.Enum
 	sequences     []meta.Sequence
+	matviews      []meta.MaterializedView
+	grants        []meta.Grant
 	objectNames   map[string]bool // schema\x00kind\x00name -> declared, for duplicate detection
 	errs          []error
 }

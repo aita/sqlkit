@@ -145,6 +145,97 @@ func eqBoolPtr(a, b *bool) bool {
 	return *a == *b
 }
 
+// MaterializedView is a materialized view (PostgreSQL CREATE MATERIALIZED VIEW).
+// Query is the view body — a sql.Query that compiles to plain SQL with no bind
+// values. Columns, when set, names the view's columns explicitly; WithNoData
+// creates it unpopulated.
+type MaterializedView struct {
+	Schema     string
+	Name       string
+	Query      sql.Query
+	Columns    []string
+	WithNoData bool
+}
+
+// sqlTable returns the sql-package table reference for the view.
+func (v MaterializedView) sqlTable() sql.Table { return sql.Table{Schema: v.Schema, Name: v.Name} }
+
+// QualifiedName returns the view name with an optional schema prefix.
+func (v MaterializedView) QualifiedName() string { return qualify(v.Schema, v.Name) }
+
+// CreateStatement builds the CREATE MATERIALIZED VIEW DDL node.
+func (v MaterializedView) CreateStatement() sql.CreateMaterializedViewStmt {
+	s := sql.CreateMaterializedView(v.sqlTable(), v.Query)
+	if len(v.Columns) > 0 {
+		s = s.Columns(v.Columns...)
+	}
+	if v.WithNoData {
+		s = s.WithNoData()
+	}
+	return s
+}
+
+// DropStatement builds the DROP MATERIALIZED VIEW IF EXISTS DDL node.
+func (v MaterializedView) DropStatement() sql.DropMaterializedViewStmt {
+	return sql.DropMaterializedView(v.sqlTable()).IfExists()
+}
+
+// Grant is a privilege grant (GRANT ... ON ... TO ...). An empty Privileges list
+// means ALL PRIVILEGES; an empty ObjectType defaults to TABLE. CreateSQL emits
+// the GRANT and DropSQL the matching REVOKE.
+type Grant struct {
+	Privileges      []string
+	ObjectType      string
+	Objects         []string
+	Grantees        []string
+	WithGrantOption bool
+}
+
+// CreateStatement builds the GRANT DDL node.
+func (g Grant) CreateStatement() sql.GrantStmt {
+	s := sql.Grant(g.Privileges...)
+	if g.ObjectType != "" {
+		s = s.OnType(g.ObjectType, g.Objects...)
+	} else {
+		s = s.On(g.Objects...)
+	}
+	s = s.To(g.Grantees...)
+	if g.WithGrantOption {
+		s = s.WithGrantOption()
+	}
+	return s
+}
+
+// DropStatement builds the REVOKE DDL node that undoes the grant.
+func (g Grant) DropStatement() sql.RevokeStmt {
+	s := sql.Revoke(g.Privileges...)
+	if g.ObjectType != "" {
+		s = s.OnType(g.ObjectType, g.Objects...)
+	} else {
+		s = s.On(g.Objects...)
+	}
+	return s.From(g.Grantees...)
+}
+
+// Equal reports whether two grants are identical.
+func (g Grant) Equal(o Grant) bool {
+	return g.ObjectType == o.ObjectType && g.WithGrantOption == o.WithGrantOption &&
+		stringSliceEqual(g.Privileges, o.Privileges) && stringSliceEqual(g.Objects, o.Objects) &&
+		stringSliceEqual(g.Grantees, o.Grantees)
+}
+
+func stringSliceEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // qualify joins a schema and name into "schema.name", or just "name" for the
 // unnamed default schema.
 func qualify(schema, name string) string {
