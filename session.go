@@ -177,6 +177,13 @@ func (s *Session) Delete(table Table) DeleteQuery {
 	return q
 }
 
+// Merge starts a MERGE bound to this session's transaction.
+func (s *Session) Merge(target Table) MergeQuery {
+	q := Merge(target)
+	q.ex = s
+	return q
+}
+
 // RawSQL prepares a hand-written SQL string (with args) or a built sql.Query
 // for execution in this session's transaction; materialize it with Scan.
 func (s *Session) RawSQL(ctx context.Context, query any, args ...any) Rows {

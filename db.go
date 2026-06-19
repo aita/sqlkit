@@ -328,6 +328,14 @@ func (d *Database) Delete(table Table) DeleteQuery {
 	return q
 }
 
+// Merge starts a MERGE builder for a target table, mirroring Select. Set the
+// source with Using, the join with On, and the actions with When.
+func (d *Database) Merge(target Table) MergeQuery {
+	q := Merge(target)
+	q.ex = d
+	return q
+}
+
 // RawSQL prepares a hand-written SQL string (with args) or a built sql.Query
 // for execution against this database; materialize it with Scan.
 func (d *Database) RawSQL(ctx context.Context, query any, args ...any) Rows {
