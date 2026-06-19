@@ -4,7 +4,6 @@ import (
 	"context"
 	stdsql "database/sql"
 	"fmt"
-	"log/slog"
 	"sync"
 
 	"github.com/aita/sqlkit/meta"
@@ -45,12 +44,10 @@ type Session struct {
 	// route is the session-level WithRoute hint: the backend the whole session is
 	// routed to at Begin. pinnedAlias is the alias the routing terminal actually
 	// chose once the transaction began, and routed records that the base is a
-	// *Routing so pinnedAlias is meaningful. logger reports routing anomalies
-	// (a redundant per-statement WithRoute inside the pinned session).
+	// *Routing so pinnedAlias is meaningful.
 	route       string
 	pinnedAlias string
 	routed      bool
-	logger      *slog.Logger
 
 	mu     sync.Mutex
 	tx     Tx
@@ -100,22 +97,15 @@ func (s *Session) activeExecutor(ctx context.Context) (Executor, error) {
 // checkRouteHint enforces the rule that a transaction lives on one backend: a
 // per-statement WithRoute hint inside a pinned session must match the backend the
 // session is on. A different alias is ErrRouteConflict (a distributed-transaction
-// request the router will not fake); a matching alias runs but is redundant, so it
-// is logged as a warning. A session not backed by a routing terminal (s.routed
-// false) ignores hints entirely.
+// request the router will not fake); a matching alias is redundant but harmless
+// and runs. A session not backed by a routing terminal (s.routed false) ignores
+// hints entirely.
 func (s *Session) checkRouteHint(stmt Statement) error {
-	if stmt.RouteHint == "" || !s.routed {
+	if stmt.RouteHint == "" || !s.routed || stmt.RouteHint == s.pinnedAlias {
 		return nil
 	}
-	if stmt.RouteHint != s.pinnedAlias {
-		return fmt.Errorf("%w: statement hints %q but the session is pinned to %q",
-			ErrRouteConflict, stmt.RouteHint, s.pinnedAlias)
-	}
-	if s.logger != nil {
-		s.logger.Warn("sqlkit: redundant WithRoute inside a pinned session",
-			"hint", stmt.RouteHint, "pinned", s.pinnedAlias)
-	}
-	return nil
+	return fmt.Errorf("%w: statement hints %q but the session is pinned to %q",
+		ErrRouteConflict, stmt.RouteHint, s.pinnedAlias)
 }
 
 // Commit commits the transaction. If no transaction was begun (no statement

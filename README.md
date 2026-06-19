@@ -1002,10 +1002,9 @@ db.NewSession(sqlkit.WithTxOptions(sqlkit.TxOptions{ReadOnly: true})) // -> repl
 
 A per-statement `WithRoute` inside a pinned session that names a *different*
 backend is `ErrRouteConflict` (a distributed transaction the router will not
-fake); one that matches the pin runs but is reported as a redundant-route warning
-through `slog.Default()`. The router itself emits no logs — a `Router` is your own
-code, so log routing decisions there if you want them, and observe execution
-through `Hooks`.
+fake); one that matches the pin is redundant but harmless and runs. The router
+itself emits no logs — a `Router` is your own code, so log routing decisions
+there if you want them, and observe execution through `Hooks`.
 
 Routing is in-process and decides per statement from the plain `Statement`
 value, so it never depends on the query builder internals. A single statement

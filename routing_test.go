@@ -1,11 +1,9 @@
 package sqlkit_test
 
 import (
-	"bytes"
 	"context"
 	"database/sql/driver"
 	"errors"
-	"log/slog"
 	"strings"
 	"testing"
 
@@ -327,14 +325,9 @@ func TestSessionRouteConflictErrors(t *testing.T) {
 	}
 }
 
-// A per-statement WithRoute matching the session's pin is harmless but redundant,
-// so it runs and is logged as a warning through slog.Default().
-func TestSessionRedundantRouteWarns(t *testing.T) {
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
-	defer slog.SetDefault(prev)
-
+// A per-statement WithRoute matching the session's pin is redundant but harmless:
+// it runs without error on the pinned backend.
+func TestSessionRedundantRouteAllowed(t *testing.T) {
 	db, _, replica := routedDB(t)
 	ctx := context.Background()
 
@@ -346,10 +339,7 @@ func TestSessionRedundantRouteWarns(t *testing.T) {
 		t.Fatalf("WithSession error = %v", err)
 	}
 	if len(replica.Queries()) != 1 {
-		t.Fatalf("statement should still run on replica, queries = %d", len(replica.Queries()))
-	}
-	if !strings.Contains(buf.String(), "redundant WithRoute") {
-		t.Fatalf("expected a redundant-route warning, log = %q", buf.String())
+		t.Fatalf("statement should run on replica, queries = %d", len(replica.Queries()))
 	}
 }
 

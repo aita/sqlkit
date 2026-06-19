@@ -4,7 +4,6 @@ import (
 	"context"
 	stdsql "database/sql"
 	"errors"
-	"log/slog"
 
 	"github.com/aita/sqlkit/meta"
 	"github.com/aita/sqlkit/sql"
@@ -344,7 +343,7 @@ func (d *Database) NewSession(opts ...SessionOption) *Session {
 	if options.autoChunk != nil {
 		autoChunk = *options.autoChunk
 	}
-	return &Session{base: d.executor(), txOpts: options.tx, dialect: d.dialect, identities: d.identities, hks: d.hks, autoChunk: autoChunk, preloadChunk: d.preloadChunk, route: options.route, logger: d.sessionLogger()}
+	return &Session{base: d.executor(), txOpts: options.tx, dialect: d.dialect, identities: d.identities, hks: d.hks, autoChunk: autoChunk, preloadChunk: d.preloadChunk, route: options.route}
 }
 
 // WithSession runs fn inside a session and commits when fn returns nil; on
@@ -438,10 +437,6 @@ func (d *Database) hooks() []Hooks { return d.hks }
 // routeHint is empty for a Database: a per-statement WithRoute hint is carried by
 // a routedBinding wrapping it, not by the Database itself.
 func (d *Database) routeHint() string { return "" }
-
-// sessionLogger is the logger a session warns through (a redundant WithRoute
-// inside a pinned session). It is slog.Default(), independent of the router.
-func (d *Database) sessionLogger() *slog.Logger { return slog.Default() }
 
 // maxBindParams is the single splitting chokepoint: the dialect's bind-parameter
 // limit when auto-chunk is on, or 0 when it is off (suppressing every automatic
