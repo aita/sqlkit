@@ -459,13 +459,23 @@ func (q SelectQuery) ToSQL(dialect sql.Dialect) (string, []any, error) {
 // split is skipped, running a single statement, when the query also carries
 // ORDER BY, GROUP BY, DISTINCT, HAVING, or LIMIT/OFFSET, whose semantics
 // concatenation cannot preserve.
-func (q SelectQuery) All(ctx context.Context) Rows {
+func (q SelectQuery) All(ctx context.Context, opts ...ExecOption) Rows {
 	if q.err != nil {
 		return ErrRows(q.err)
 	}
 	// Pass the builder (not finalQuery) so newRows can consult splitStatements; the
 	// non-split path compiles SelectQuery.ToSQL, which folds the IN identically.
-	return q.withPreloads(newRows(ctx, q.ex, q))
+	return q.rows(ctx, q, opts)
+}
+
+// rows builds a Rows for a SELECT terminal: it resolves any WithRoute options
+// into the execution binding and the Preload binding, runs the query through the
+// former, and attaches the registered preloads to run through the latter.
+func (q SelectQuery) rows(ctx context.Context, query sql.Query, opts []ExecOption) Rows {
+	ex, preloadEx := applyExecOptions(q.ex, opts)
+	rows := newRows(ctx, ex, query)
+	rows.preloadEx = preloadEx
+	return q.withPreloads(rows)
 }
 
 // splitStatements implements splitter: it splits a deferred lone column IN across
@@ -499,23 +509,25 @@ func (q SelectQuery) withPreloads(rows Rows) Rows {
 // First is All limited to the first row: LIMIT 1 is pushed into the query,
 // and Scan into a struct or scalar yields that row, or ErrNoRows when the
 // result is empty.
-func (q SelectQuery) First(ctx context.Context) Rows {
+func (q SelectQuery) First(ctx context.Context, opts ...ExecOption) Rows {
 	if q.err != nil {
 		return ErrRows(q.err)
 	}
-	return q.withPreloads(newRows(ctx, q.ex, q.finalQuery().Limit(1)))
+	return q.rows(ctx, q.finalQuery().Limit(1), opts)
 }
 
 // One is All restricted to exactly one row: Scan yields the row when the
 // result has exactly one, ErrNoRows when it is empty, and ErrTooManyRows
 // when there are more. LIMIT 2 is pushed into the query, so detecting the
 // excess row never reads past the second.
-func (q SelectQuery) One(ctx context.Context) Rows {
+func (q SelectQuery) One(ctx context.Context, opts ...ExecOption) Rows {
 	if q.err != nil {
 		return ErrRows(q.err)
 	}
-	rows := newRows(ctx, q.ex, q.finalQuery().Limit(2))
+	ex, preloadEx := applyExecOptions(q.ex, opts)
+	rows := newRows(ctx, ex, q.finalQuery().Limit(2))
 	rows.exactlyOne = true
+	rows.preloadEx = preloadEx
 	return q.withPreloads(rows)
 }
 
@@ -524,22 +536,23 @@ func (q SelectQuery) One(ctx context.Context) Rows {
 // fetches without spelling out the clauses:
 //
 //	db.Select().From(Users).OrderBy(Users.ID.Asc()).Page(ctx, 20, 40).Scan(&users)
-func (q SelectQuery) Page(ctx context.Context, limit, offset int) Rows {
+func (q SelectQuery) Page(ctx context.Context, limit, offset int, opts ...ExecOption) Rows {
 	if q.err != nil {
 		return ErrRows(q.err)
 	}
-	return q.withPreloads(newRows(ctx, q.ex, q.finalQuery().Limit(limit).Offset(offset)))
+	return q.rows(ctx, q.finalQuery().Limit(limit).Offset(offset), opts)
 }
 
 // Count runs SELECT COUNT(*) over this query (as a subquery, so joins,
 // grouping, and predicates apply) and returns the number of matching rows.
-func (q SelectQuery) Count(ctx context.Context) (int64, error) {
+func (q SelectQuery) Count(ctx context.Context, opts ...ExecOption) (int64, error) {
 	if q.err != nil {
 		return 0, q.err
 	}
+	ex, _ := applyExecOptions(q.ex, opts)
 	count := sql.Select(sql.CountAll()).From(sql.Alias(q.finalQuery(), "q"))
 	var n int64
-	err := newRows(ctx, q.ex, count).Scan(&n)
+	err := newRows(ctx, ex, count).Scan(&n)
 	return n, err
 }
 

@@ -57,8 +57,8 @@ func applyChunkOptions(size int, off bool, opts []ChunkOption) (int, bool) {
 // statement wraps the compiled SQL as the Statement a hook sees for one split
 // chunk. The AST is omitted (the chunk has no standalone builder), so a hook
 // that needs to Recompile should rewrite SQL/Args directly.
-func (c compiledStmt) statement(op Op, dialect sql.Dialect) Statement {
-	return Statement{Op: op, SQL: c.sql, Args: c.args, Dialect: dialect}
+func (c compiledStmt) statement(op Op, dialect sql.Dialect, hint string) Statement {
+	return Statement{Op: op, SQL: c.sql, Args: c.args, Dialect: dialect, RouteHint: hint}
 }
 
 // batchResult aggregates the per-batch results of a split statement: it sums
@@ -105,7 +105,7 @@ func execStatements(ctx context.Context, ex executorBinding, stmts []compiledStm
 		return nil, errNoExecutor
 	}
 	if len(stmts) == 1 {
-		return runExecStmt(ctx, ex, stmts[0].statement(OpExec, ex.sqlDialect()))
+		return runExecStmt(ctx, ex, stmts[0].statement(OpExec, ex.sqlDialect(), ex.routeHint()))
 	}
 	if db, ok := ex.(*Database); ok {
 		var out stdsql.Result
@@ -125,8 +125,9 @@ func execStatements(ctx context.Context, ex executorBinding, stmts []compiledStm
 func execOn(ctx context.Context, ex executorBinding, stmts []compiledStmt) (stdsql.Result, error) {
 	result := &batchResult{}
 	dialect := ex.sqlDialect()
+	hint := ex.routeHint()
 	for _, st := range stmts {
-		res, err := runExecStmt(ctx, ex, st.statement(OpExec, dialect))
+		res, err := runExecStmt(ctx, ex, st.statement(OpExec, dialect, hint))
 		if err != nil {
 			return nil, err
 		}

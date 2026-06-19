@@ -4,6 +4,7 @@ import (
 	"context"
 	stdsql "database/sql"
 	"errors"
+	"log/slog"
 
 	"github.com/aita/sqlkit/meta"
 	"github.com/aita/sqlkit/sql"
@@ -337,13 +338,13 @@ func (d *Database) RawSQL(ctx context.Context, query any, args ...any) Rows {
 func (d *Database) NewSession(opts ...SessionOption) *Session {
 	options := sessionOptions{}
 	for _, opt := range opts {
-		opt(&options)
+		opt.applySession(&options)
 	}
 	autoChunk := d.autoChunk
 	if options.autoChunk != nil {
 		autoChunk = *options.autoChunk
 	}
-	return &Session{base: d.executor(), txOpts: options.tx, dialect: d.dialect, identities: d.identities, hks: d.hks, autoChunk: autoChunk, preloadChunk: d.preloadChunk}
+	return &Session{base: d.executor(), txOpts: options.tx, dialect: d.dialect, identities: d.identities, hks: d.hks, autoChunk: autoChunk, preloadChunk: d.preloadChunk, route: options.route, logger: d.sessionLogger()}
 }
 
 // WithSession runs fn inside a session and commits when fn returns nil; on
@@ -374,17 +375,30 @@ func (d *Database) WithSession(fn func(s *Session) error, opts ...SessionOption)
 	return session.Commit()
 }
 
-// SessionOption configures a new session.
-type SessionOption func(*sessionOptions)
+// SessionOption configures a new session. WithTxOptions, WithSessionAutoChunk,
+// and WithRoute return one.
+type SessionOption interface{ applySession(*sessionOptions) }
 
 type sessionOptions struct {
 	tx        *stdsql.TxOptions
 	autoChunk *bool
+	route     string
 }
+
+type txOption struct{ tx *stdsql.TxOptions }
+
+func (o txOption) applySession(s *sessionOptions) { s.tx = o.tx }
 
 // WithTxOptions sets transaction options for the session.
 func WithTxOptions(options TxOptions) SessionOption {
-	return func(o *sessionOptions) { o.tx = options.ToSQL() }
+	return txOption{tx: options.ToSQL()}
+}
+
+type autoChunkOption struct{ enabled bool }
+
+func (o autoChunkOption) applySession(s *sessionOptions) {
+	enabled := o.enabled
+	s.autoChunk = &enabled
 }
 
 // WithSessionAutoChunk overrides, for this session, whether automatic
@@ -392,7 +406,7 @@ func WithTxOptions(options TxOptions) SessionOption {
 // database's WithAutoChunk setting; pass true or false to force it on or off for
 // statements run through the session (and uow scopes opened over it).
 func WithSessionAutoChunk(enabled bool) SessionOption {
-	return func(o *sessionOptions) { o.autoChunk = &enabled }
+	return autoChunkOption{enabled: enabled}
 }
 
 // Exec compiles and runs a statement outside a session (auto-commit). It
@@ -420,6 +434,14 @@ func (d *Database) Exec(ctx context.Context, query sql.Query) (stdsql.Result, er
 func (d *Database) sqlDialect() sql.Dialect { return d.dialect }
 
 func (d *Database) hooks() []Hooks { return d.hks }
+
+// routeHint is empty for a Database: a per-statement WithRoute hint is carried by
+// a routedBinding wrapping it, not by the Database itself.
+func (d *Database) routeHint() string { return "" }
+
+// sessionLogger is the logger a session warns through (a redundant WithRoute
+// inside a pinned session). It is slog.Default(), independent of the router.
+func (d *Database) sessionLogger() *slog.Logger { return slog.Default() }
 
 // maxBindParams is the single splitting chokepoint: the dialect's bind-parameter
 // limit when auto-chunk is on, or 0 when it is off (suppressing every automatic

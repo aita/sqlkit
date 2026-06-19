@@ -144,36 +144,41 @@ func (q UnionQuery) ToSQL(dialect sql.Dialect) (string, []any, error) {
 
 // All prepares the set operation for execution against the executor the
 // chain was built from.
-func (q UnionQuery) All(ctx context.Context) Rows {
-	return newRows(ctx, q.ex, q.query)
+func (q UnionQuery) All(ctx context.Context, opts ...ExecOption) Rows {
+	ex, _ := applyExecOptions(q.ex, opts)
+	return newRows(ctx, ex, q.query)
 }
 
 // First is All limited to the first row of the combined result; see
 // SelectQuery.First.
-func (q UnionQuery) First(ctx context.Context) Rows {
-	return newRows(ctx, q.ex, q.query.Limit(1))
+func (q UnionQuery) First(ctx context.Context, opts ...ExecOption) Rows {
+	ex, _ := applyExecOptions(q.ex, opts)
+	return newRows(ctx, ex, q.query.Limit(1))
 }
 
 // One is All restricted to exactly one row of the combined result; see
 // SelectQuery.One.
-func (q UnionQuery) One(ctx context.Context) Rows {
-	rows := newRows(ctx, q.ex, q.query.Limit(2))
+func (q UnionQuery) One(ctx context.Context, opts ...ExecOption) Rows {
+	ex, _ := applyExecOptions(q.ex, opts)
+	rows := newRows(ctx, ex, q.query.Limit(2))
 	rows.exactlyOne = true
 	return rows
 }
 
 // Page is All over a LIMIT/OFFSET window of the combined result; see
 // SelectQuery.Page.
-func (q UnionQuery) Page(ctx context.Context, limit, offset int) Rows {
-	return newRows(ctx, q.ex, q.query.Limit(limit).Offset(offset))
+func (q UnionQuery) Page(ctx context.Context, limit, offset int, opts ...ExecOption) Rows {
+	ex, _ := applyExecOptions(q.ex, opts)
+	return newRows(ctx, ex, q.query.Limit(limit).Offset(offset))
 }
 
 // Count runs SELECT COUNT(*) over the combined result (wrapped as a subquery,
 // so the set operation applies) and returns the number of rows; see
 // SelectQuery.Count.
-func (q UnionQuery) Count(ctx context.Context) (int64, error) {
+func (q UnionQuery) Count(ctx context.Context, opts ...ExecOption) (int64, error) {
+	ex, _ := applyExecOptions(q.ex, opts)
 	count := sql.Select(sql.CountAll()).From(sql.Alias(q.query, "q"))
 	var n int64
-	err := newRows(ctx, q.ex, count).Scan(&n)
+	err := newRows(ctx, ex, count).Scan(&n)
 	return n, err
 }

@@ -29,7 +29,7 @@ type Query = sql.Query
 //	err := q.All(ctx).Scan(&users)
 type Scannable interface {
 	Query
-	All(ctx context.Context) Rows
+	All(ctx context.Context, opts ...ExecOption) Rows
 }
 
 // Selectable is a SELECT-shaped query — a SELECT or a set operation — that also
@@ -49,10 +49,10 @@ type Scannable interface {
 // its own.
 type Selectable interface {
 	Scannable
-	First(ctx context.Context) Rows
-	One(ctx context.Context) Rows
-	Page(ctx context.Context, limit, offset int) Rows
-	Count(ctx context.Context) (int64, error)
+	First(ctx context.Context, opts ...ExecOption) Rows
+	One(ctx context.Context, opts ...ExecOption) Rows
+	Page(ctx context.Context, limit, offset int, opts ...ExecOption) Rows
+	Count(ctx context.Context, opts ...ExecOption) (int64, error)
 }
 
 // Execable is a statement run for its effect rather than its rows — an INSERT,
@@ -68,7 +68,7 @@ type Selectable interface {
 //	_, err := stmt.Exec(ctx)
 type Execable interface {
 	Query
-	Exec(ctx context.Context) (stdsql.Result, error)
+	Exec(ctx context.Context, opts ...ExecOption) (stdsql.Result, error)
 }
 
 // unwrapQuery returns the underlying sql.Query for the typed builders so a

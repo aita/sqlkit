@@ -4,6 +4,7 @@ import (
 	"context"
 	stdsql "database/sql"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/aita/sqlkit/meta"
@@ -41,6 +42,16 @@ type Session struct {
 	// opened over this session validates its bindings against it automatically.
 	identities *meta.IdentityMap
 
+	// route is the session-level WithRoute hint: the backend the whole session is
+	// routed to at Begin. pinnedAlias is the alias the routing terminal actually
+	// chose once the transaction began, and routed records that the base is a
+	// *Routing so pinnedAlias is meaningful. logger reports routing anomalies
+	// (a redundant per-statement WithRoute inside the pinned session).
+	route       string
+	pinnedAlias string
+	routed      bool
+	logger      *slog.Logger
+
 	mu     sync.Mutex
 	tx     Tx
 	closed bool
@@ -59,6 +70,21 @@ func (s *Session) activeExecutor(ctx context.Context) (Executor, error) {
 	if s.tx != nil {
 		return s.tx, nil
 	}
+	// A routing terminal chooses the session's single backend once, here, from
+	// the session-level route hint and its read-only intent, and reports the
+	// alias so the session can pin to it and detect conflicting per-statement
+	// hints.
+	if rb, ok := s.base.(routedBeginner); ok {
+		readOnly := s.txOpts != nil && s.txOpts.ReadOnly
+		tx, alias, err := rb.beginRouted(ctx, s.txOpts, s.route, readOnly)
+		if err != nil {
+			return nil, err
+		}
+		s.tx = tx
+		s.pinnedAlias = alias
+		s.routed = true
+		return tx, nil
+	}
 	beginner, ok := s.base.(TxExecutor)
 	if !ok {
 		return s.base, nil
@@ -69,6 +95,27 @@ func (s *Session) activeExecutor(ctx context.Context) (Executor, error) {
 	}
 	s.tx = tx
 	return tx, nil
+}
+
+// checkRouteHint enforces the rule that a transaction lives on one backend: a
+// per-statement WithRoute hint inside a pinned session must match the backend the
+// session is on. A different alias is ErrRouteConflict (a distributed-transaction
+// request the router will not fake); a matching alias runs but is redundant, so it
+// is logged as a warning. A session not backed by a routing terminal (s.routed
+// false) ignores hints entirely.
+func (s *Session) checkRouteHint(stmt Statement) error {
+	if stmt.RouteHint == "" || !s.routed {
+		return nil
+	}
+	if stmt.RouteHint != s.pinnedAlias {
+		return fmt.Errorf("%w: statement hints %q but the session is pinned to %q",
+			ErrRouteConflict, stmt.RouteHint, s.pinnedAlias)
+	}
+	if s.logger != nil {
+		s.logger.Warn("sqlkit: redundant WithRoute inside a pinned session",
+			"hint", stmt.RouteHint, "pinned", s.pinnedAlias)
+	}
+	return nil
 }
 
 // Commit commits the transaction. If no transaction was begun (no statement
@@ -269,6 +316,11 @@ func (s *Session) sqlDialect() sql.Dialect { return s.dialect }
 
 func (s *Session) hooks() []Hooks { return s.hks }
 
+// routeHint is empty for a Session: per-statement WithRoute inside a session is
+// validated against the pinned backend (see checkRouteHint), not stamped onto the
+// statement, because a transaction cannot be rerouted.
+func (s *Session) routeHint() string { return "" }
+
 // maxBindParams is the single splitting chokepoint: the dialect's bind-parameter
 // limit when auto-chunk is on for this session, or 0 when it is off.
 func (s *Session) maxBindParams() int {
@@ -296,12 +348,18 @@ func (e sessionExecutor) Query(ctx context.Context, stmt Statement) (*stdsql.Row
 	if err != nil {
 		return nil, err
 	}
+	if err := e.s.checkRouteHint(stmt); err != nil {
+		return nil, err
+	}
 	return ex.Query(ctx, stmt)
 }
 
 func (e sessionExecutor) Exec(ctx context.Context, stmt Statement) (stdsql.Result, error) {
 	ex, err := e.s.activeExecutor(ctx)
 	if err != nil {
+		return nil, err
+	}
+	if err := e.s.checkRouteHint(stmt); err != nil {
 		return nil, err
 	}
 	return ex.Exec(ctx, stmt)
