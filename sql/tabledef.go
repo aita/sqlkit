@@ -32,7 +32,7 @@ func (d TableDef) Selections() []Selection {
 }
 
 // SelectRows creates a SELECT of all columns from the table.
-func (d TableDef) SelectRows() SelectQuery {
+func (d TableDef) SelectRows() SelectBuilder {
 	return Select(d.Selections()...).From(d.Table)
 }
 

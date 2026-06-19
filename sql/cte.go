@@ -38,14 +38,14 @@ func Columns(names ...string) CTEOption {
 }
 
 // CTE wraps this SELECT as a common table expression named name.
-func (q SelectQuery) CTE(name string, opts ...CTEOption) CTE {
-	return newCTE(name, q, opts)
+func (b SelectBuilder) CTE(name string, opts ...CTEOption) CTE {
+	return newCTE(name, b.s, opts)
 }
 
 // CTE wraps this set-operation query as a common table expression. Use it for
 // recursive CTEs, whose body is a UNION of the base and recursive terms.
-func (q CompoundQuery) CTE(name string, opts ...CTEOption) CTE {
-	return newCTE(name, q, opts)
+func (b CompoundBuilder) CTE(name string, opts ...CTEOption) CTE {
+	return newCTE(name, b.s, opts)
 }
 
 func newCTE(name string, query Query, opts []CTEOption) CTE {
@@ -66,9 +66,9 @@ func (c CTE) SQLSource() SourceExpression { return SourceExpression{Name: c.name
 
 // WithCTE prepends common table expressions to the SELECT, in the given order.
 // Repeated calls append. List a CTE before any CTE whose body references it.
-func (q SelectQuery) WithCTE(ctes ...CTE) SelectQuery {
-	q.with = append(q.with, ctes...)
-	return q
+func (b SelectBuilder) WithCTE(ctes ...CTE) SelectBuilder {
+	b.s.With = append(append([]CTE(nil), b.s.With...), ctes...)
+	return b
 }
 
 // WithCTE prepends common table expressions to the UPDATE.

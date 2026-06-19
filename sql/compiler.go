@@ -834,23 +834,23 @@ func (c *Compiler) compileWith(ctes []CTE) (string, []any, error) {
 }
 
 // CompileSelect compiles a SELECT statement.
-func (c *Compiler) CompileSelect(q SelectQuery) (string, []any, error) {
+func (c *Compiler) CompileSelect(q SelectStmt) (string, []any, error) {
 	var sb strings.Builder
 	var args []any
-	withSQL, withArgs, err := c.compileWith(q.with)
+	withSQL, withArgs, err := c.compileWith(q.With)
 	if err != nil {
 		return "", nil, err
 	}
 	sb.WriteString(withSQL)
 	args = append(args, withArgs...)
 	sb.WriteString("SELECT ")
-	if len(q.distinctOn) > 0 {
+	if len(q.DistinctOn) > 0 {
 		d, ok := c.Dialect.(DistinctOnDialect)
 		if !ok || !d.SupportsDistinctOn() {
 			return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support DISTINCT ON", c.Dialect.Name())
 		}
 		sb.WriteString("DISTINCT ON (")
-		for i, expr := range q.distinctOn {
+		for i, expr := range q.DistinctOn {
 			if i > 0 {
 				sb.WriteString(", ")
 			}
@@ -862,13 +862,13 @@ func (c *Compiler) CompileSelect(q SelectQuery) (string, []any, error) {
 			args = append(args, exprArgs...)
 		}
 		sb.WriteString(") ")
-	} else if q.distinct {
+	} else if q.Distinct {
 		sb.WriteString("DISTINCT ")
 	}
-	if len(q.columns) == 0 {
+	if len(q.Columns) == 0 {
 		sb.WriteString("*")
 	} else {
-		for i, column := range q.columns {
+		for i, column := range q.Columns {
 			if i > 0 {
 				sb.WriteString(", ")
 			}
@@ -882,12 +882,12 @@ func (c *Compiler) CompileSelect(q SelectQuery) (string, []any, error) {
 	}
 	// A source-less SELECT (e.g. SELECT now()) is legal as long as there is
 	// an explicit select list and nothing that needs a FROM clause.
-	if q.from == nil {
-		if len(q.columns) == 0 || len(q.joins) > 0 {
+	if q.From == nil {
+		if len(q.Columns) == 0 || len(q.Joins) > 0 {
 			return "", nil, fmt.Errorf("sqlkit/sql: missing source")
 		}
 	} else {
-		fromSQL, fromArgs, err := c.CompileSource(q.from)
+		fromSQL, fromArgs, err := c.CompileSource(q.From)
 		if err != nil {
 			return "", nil, err
 		}
@@ -895,7 +895,7 @@ func (c *Compiler) CompileSelect(q SelectQuery) (string, []any, error) {
 		sb.WriteString(fromSQL)
 		args = append(args, fromArgs...)
 	}
-	for _, join := range q.joins {
+	for _, join := range q.Joins {
 		joinSQL, joinArgs, err := c.CompileJoin(join)
 		if err != nil {
 			return "", nil, err
@@ -904,8 +904,8 @@ func (c *Compiler) CompileSelect(q SelectQuery) (string, []any, error) {
 		sb.WriteString(joinSQL)
 		args = append(args, joinArgs...)
 	}
-	if q.where != nil {
-		whereSQL, whereArgs, err := c.CompileExpression(q.where)
+	if q.Where != nil {
+		whereSQL, whereArgs, err := c.CompileExpression(q.Where)
 		if err != nil {
 			return "", nil, err
 		}
@@ -913,9 +913,9 @@ func (c *Compiler) CompileSelect(q SelectQuery) (string, []any, error) {
 		sb.WriteString(whereSQL)
 		args = append(args, whereArgs...)
 	}
-	if len(q.groupBy) > 0 {
+	if len(q.GroupBy) > 0 {
 		sb.WriteString(" GROUP BY ")
-		for i, expr := range q.groupBy {
+		for i, expr := range q.GroupBy {
 			if i > 0 {
 				sb.WriteString(", ")
 			}
@@ -927,8 +927,8 @@ func (c *Compiler) CompileSelect(q SelectQuery) (string, []any, error) {
 			args = append(args, exprArgs...)
 		}
 	}
-	if q.having != nil {
-		havingSQL, havingArgs, err := c.CompileExpression(q.having)
+	if q.Having != nil {
+		havingSQL, havingArgs, err := c.CompileExpression(q.Having)
 		if err != nil {
 			return "", nil, err
 		}
@@ -936,9 +936,9 @@ func (c *Compiler) CompileSelect(q SelectQuery) (string, []any, error) {
 		sb.WriteString(havingSQL)
 		args = append(args, havingArgs...)
 	}
-	if len(q.windows) > 0 {
+	if len(q.Windows) > 0 {
 		sb.WriteString(" WINDOW ")
-		for i, w := range q.windows {
+		for i, w := range q.Windows {
 			if i > 0 {
 				sb.WriteString(", ")
 			}
@@ -956,9 +956,9 @@ func (c *Compiler) CompileSelect(q SelectQuery) (string, []any, error) {
 			args = append(args, bodyArgs...)
 		}
 	}
-	if len(q.orderBy) > 0 {
+	if len(q.OrderBy) > 0 {
 		sb.WriteString(" ORDER BY ")
-		for i, term := range q.orderBy {
+		for i, term := range q.OrderBy {
 			if i > 0 {
 				sb.WriteString(", ")
 			}
@@ -971,24 +971,24 @@ func (c *Compiler) CompileSelect(q SelectQuery) (string, []any, error) {
 			args = append(args, termArgs...)
 		}
 	}
-	if q.hasLimit {
+	if q.HasLimit {
 		sb.WriteString(" LIMIT ")
-		sb.WriteString(strconv.Itoa(q.limit))
+		sb.WriteString(strconv.Itoa(q.Limit))
 	}
-	if q.hasOffset {
+	if q.HasOffset {
 		sb.WriteString(" OFFSET ")
-		sb.WriteString(strconv.Itoa(q.offset))
+		sb.WriteString(strconv.Itoa(q.Offset))
 	}
-	if q.lock != nil {
+	if q.Lock != nil {
 		locker, ok := c.Dialect.(RowLocker)
 		if !ok {
 			return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support row-locking clauses", c.Dialect.Name())
 		}
-		of := make([]string, len(q.lock.of))
-		for i, table := range q.lock.of {
+		of := make([]string, len(q.Lock.of))
+		for i, table := range q.Lock.of {
 			of[i] = c.Dialect.QuoteIdent(table)
 		}
-		frag, err := locker.LockClause(q.lock.strength, strings.Join(of, ", "), q.lock.wait)
+		frag, err := locker.LockClause(q.Lock.strength, strings.Join(of, ", "), q.Lock.wait)
 		if err != nil {
 			return "", nil, err
 		}

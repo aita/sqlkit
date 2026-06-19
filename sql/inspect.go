@@ -9,92 +9,10 @@ package sql
 // AST without the package exposing — and freezing as API — its internal field
 // layout, and without letting callers mutate a built query.
 
-// SelectParts is a read-only snapshot of every clause of a SelectQuery.
-// A nil Limit/Offset means the clause is absent. It is returned by
-// SelectQuery.Parts.
-type SelectParts struct {
-	With       []CTE
-	Distinct   bool
-	DistinctOn []Expression
-	Columns    []Selection
-	From       Source
-	Joins      []JoinClause
-	Where      Expression
-	GroupBy    []Expression
-	Having     Expression
-	Windows    []NamedWindow
-	OrderBy    []OrderTerm
-	Limit      *int
-	Offset     *int
-	Lock       *LockClause
-}
-
-// LockClause is a read-only snapshot of a SELECT row-locking clause (FOR UPDATE
-// / FOR SHARE ...), with its optional OF table list and wait mode.
-type LockClause struct {
-	Strength string   // e.g. "UPDATE", "SHARE", "NO KEY UPDATE", "KEY SHARE"
-	Of       []string // tables named in OF, if any
-	Wait     string   // "", "NOWAIT", or "SKIP LOCKED"
-}
-
-// Parts returns a read-only snapshot of q's clauses.
-func (q SelectQuery) Parts() SelectParts {
-	c := SelectParts{
-		With:       cloneSlice(q.with),
-		Distinct:   q.distinct,
-		DistinctOn: cloneSlice(q.distinctOn),
-		Columns:    cloneSlice(q.columns),
-		From:       q.from,
-		Joins:      cloneSlice(q.joins),
-		Where:      q.where,
-		GroupBy:    cloneSlice(q.groupBy),
-		Having:     q.having,
-		Windows:    cloneSlice(q.windows),
-		OrderBy:    cloneSlice(q.orderBy),
-	}
-	if q.hasLimit {
-		limit := q.limit
-		c.Limit = &limit
-	}
-	if q.hasOffset {
-		offset := q.offset
-		c.Offset = &offset
-	}
-	if q.lock != nil {
-		c.Lock = &LockClause{Strength: q.lock.strength, Of: cloneSlice(q.lock.of), Wait: q.lock.wait}
-	}
-	return c
-}
-
-// CompoundParts is a read-only snapshot of a CompoundQuery (a set operation
-// such as UNION/INTERSECT/EXCEPT). It is returned by CompoundQuery.Parts.
-type CompoundParts struct {
-	Left     Query
-	Operator string // e.g. "UNION", "UNION ALL", "INTERSECT", "EXCEPT"
-	Right    Query
-	OrderBy  []OrderTerm
-	Limit    *int
-	Offset   *int
-}
-
-// Parts returns a read-only snapshot of q's parts.
-func (q CompoundQuery) Parts() CompoundParts {
-	c := CompoundParts{
-		Left:     q.left,
-		Operator: q.operator,
-		Right:    q.right,
-		OrderBy:  cloneSlice(q.orderBy),
-	}
-	if q.hasLimit {
-		limit := q.limit
-		c.Limit = &limit
-	}
-	if q.hasOffset {
-		offset := q.offset
-		c.Offset = &offset
-	}
-	return c
-}
+// SELECT and set-operation statements expose their structure as the public
+// fields of SelectStmt and CompoundStmt directly (read them, or traverse with
+// Walk/Decompose); they need no Parts snapshot. The Parts accessors below remain
+// for the statement types whose builders still keep unexported fields.
 
 // InsertParts is a read-only snapshot of every clause of an InsertQuery.
 // Exactly one of Rows or Select carries the inserted data. It is returned by

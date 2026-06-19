@@ -226,40 +226,40 @@ func queryChildren(q Query, onCTEName func(string), onName func(string), onQuery
 		}
 	}
 
-	switch v := q.(type) {
-	case SelectQuery:
-		ctes(v.with)
-		src(v.from)
-		for _, j := range v.joins {
+	switch v := astOf(q).(type) {
+	case SelectStmt:
+		ctes(v.With)
+		src(v.From)
+		for _, j := range v.Joins {
 			src(j.Source)
 			expr(j.On)
 		}
-		for _, s := range v.columns {
+		for _, s := range v.Columns {
 			sel(s)
 		}
-		expr(v.where)
-		expr(v.having)
-		for _, e := range v.groupBy {
+		expr(v.Where)
+		expr(v.Having)
+		for _, e := range v.GroupBy {
 			expr(e)
 		}
-		for _, e := range v.distinctOn {
+		for _, e := range v.DistinctOn {
 			expr(e)
 		}
-		orderTerms(v.orderBy)
-		for _, w := range v.windows {
+		orderTerms(v.OrderBy)
+		for _, w := range v.Windows {
 			for _, e := range w.Partitions {
 				expr(e)
 			}
 			orderTerms(w.OrderByTerms)
 		}
-	case CompoundQuery:
-		if v.left != nil {
-			onQuery(v.left)
+	case CompoundStmt:
+		if v.Left != nil {
+			onQuery(v.Left)
 		}
-		if v.right != nil {
-			onQuery(v.right)
+		if v.Right != nil {
+			onQuery(v.Right)
 		}
-		orderTerms(v.orderBy)
+		orderTerms(v.OrderBy)
 	case InsertQuery:
 		onName(v.table.QualifiedName())
 		if v.selectSrc != nil {

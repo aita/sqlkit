@@ -15,13 +15,13 @@ type DerivedTable struct {
 }
 
 // As wraps this SELECT as an aliased subquery (derived table) named alias.
-func (q SelectQuery) As(alias string) DerivedTable {
-	return DerivedTable{alias: alias, query: q}
+func (b SelectBuilder) As(alias string) DerivedTable {
+	return DerivedTable{alias: alias, query: b.s}
 }
 
 // As wraps this set-operation query as an aliased subquery named alias.
-func (q CompoundQuery) As(alias string) DerivedTable {
-	return DerivedTable{alias: alias, query: q}
+func (b CompoundBuilder) As(alias string) DerivedTable {
+	return DerivedTable{alias: alias, query: b.s}
 }
 
 // Alias returns the derived table's alias.

@@ -7,15 +7,15 @@ import (
 )
 
 // setOperand is satisfied by the query types that can start a set operation
-// (SelectQuery and CompoundQuery), letting convertCompound chain operators
+// (SelectBuilder and CompoundBuilder), letting convertCompound chain operators
 // without caring which concrete type it holds.
 type setOperand interface {
-	Union(sql.Query) sql.CompoundQuery
-	UnionAll(sql.Query) sql.CompoundQuery
-	Intersect(sql.Query) sql.CompoundQuery
-	IntersectAll(sql.Query) sql.CompoundQuery
-	Except(sql.Query) sql.CompoundQuery
-	ExceptAll(sql.Query) sql.CompoundQuery
+	Union(sql.Query) sql.CompoundBuilder
+	UnionAll(sql.Query) sql.CompoundBuilder
+	Intersect(sql.Query) sql.CompoundBuilder
+	IntersectAll(sql.Query) sql.CompoundBuilder
+	Except(sql.Query) sql.CompoundBuilder
+	ExceptAll(sql.Query) sql.CompoundBuilder
 }
 
 // cteMaker is satisfied by the query types that can become a CTE body.
@@ -156,7 +156,7 @@ func convertSelect(s *pg.SelectStmt) (sql.Query, error) {
 
 // applyLocking maps SELECT row-locking clauses (FOR UPDATE / FOR SHARE / FOR NO
 // KEY UPDATE / FOR KEY SHARE, with OF / SKIP LOCKED / NOWAIT).
-func applyLocking(q sql.SelectQuery, locks []*pg.Node) (sql.SelectQuery, error) {
+func applyLocking(q sql.SelectBuilder, locks []*pg.Node) (sql.SelectBuilder, error) {
 	for _, node := range locks {
 		lc := node.GetLockingClause()
 		if lc == nil {
@@ -198,7 +198,7 @@ func lockedRelNames(rels []*pg.Node) []string {
 	return names
 }
 
-func applyJoin(q sql.SelectQuery, j joinSpec) sql.SelectQuery {
+func applyJoin(q sql.SelectBuilder, j joinSpec) sql.SelectBuilder {
 	if j.natural {
 		if j.kind == "LEFT JOIN" {
 			return q.NaturalLeftJoin(j.source)
@@ -239,7 +239,7 @@ func convertCompound(s *pg.SelectStmt) (sql.Query, error) {
 		return nil, sqlparse.Unsupportedf("set-operation operand %T", left)
 	}
 
-	var compound sql.CompoundQuery
+	var compound sql.CompoundBuilder
 	switch s.GetOp() {
 	case pg.SetOperation_SETOP_UNION:
 		if s.GetAll() {

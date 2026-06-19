@@ -60,17 +60,19 @@ func TestWalk(t *testing.T) {
 	})
 }
 
-func TestSelectParts(t *testing.T) {
+func TestSelectStmtFields(t *testing.T) {
 	users := sql.Table{Name: "users"}
 	orders := sql.Table{Name: "orders"}
 
-	q := sql.Select(sql.Col("id")).
+	// Build with the fluent builder, then read the pure AST directly — the
+	// statement's exported fields are the public, zero-copy introspection seam.
+	c := sql.Select(sql.Col("id")).
 		From(users).
 		Join(orders, sql.Eq(sql.Col("users.id"), sql.Col("orders.user_id"))).
 		Where(sql.Eq(sql.Col("id"), sql.Val(1))).
-		Limit(10)
+		Limit(10).
+		Stmt()
 
-	c := q.Parts()
 	if c.From == nil || c.From.SQLSource().Name != "users" {
 		t.Errorf("From = %v, want users", c.From)
 	}
@@ -80,18 +82,11 @@ func TestSelectParts(t *testing.T) {
 	if c.Where == nil {
 		t.Error("Where = nil, want non-nil")
 	}
-	if c.Limit == nil || *c.Limit != 10 {
-		t.Errorf("Limit = %v, want 10", c.Limit)
+	if !c.HasLimit || c.Limit != 10 {
+		t.Errorf("Limit = %d (has=%v), want 10", c.Limit, c.HasLimit)
 	}
-	if c.Offset != nil {
-		t.Errorf("Offset = %v, want nil", c.Offset)
-	}
-
-	// The snapshot is defensive: mutating the returned slice must not affect the
-	// query or a later snapshot.
-	c.Joins[0] = sql.JoinClause{}
-	if again := q.Parts(); again.Joins[0].Source == nil {
-		t.Error("Parts returned a slice aliased to the query's own; want a copy")
+	if c.HasOffset {
+		t.Errorf("HasOffset = true, want false")
 	}
 }
 

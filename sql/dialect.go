@@ -258,7 +258,7 @@ type ArrayDialect interface {
 }
 
 // RowLocker is an optional capability a Dialect implements to render a SELECT
-// row-locking clause (SelectQuery.ForUpdate / ForShare / …). PostgreSQL and
+// row-locking clause (SelectBuilder.ForUpdate / ForShare / …). PostgreSQL and
 // MySQL (8.0+) support it; SQLite and the standard target do not, and reject it
 // at compile time. The compiler detects it with a type assertion, so it is not a
 // breaking change to Dialect. strength is "UPDATE", "SHARE", "NO KEY UPDATE", or
@@ -270,7 +270,7 @@ type RowLocker interface {
 }
 
 // DistinctOnDialect is an optional capability a Dialect implements to report
-// support for SELECT DISTINCT ON (exprs) (SelectQuery.DistinctOn), a PostgreSQL
+// support for SELECT DISTINCT ON (exprs) (SelectBuilder.DistinctOn), a PostgreSQL
 // extension with no portable equivalent. The compiler detects it with a type
 // assertion, so it is not a breaking change to Dialect; a dialect that does not
 // implement it (or returns false) rejects DISTINCT ON at compile time.

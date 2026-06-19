@@ -27,7 +27,7 @@ type SelectQuery struct {
 	hasCols    bool
 	base       Table         // the From table, when the source is one; powers Filter/Get
 	preloads   []preloadSpec // relations eager-loaded at Scan after the base rows
-	query      sql.SelectQuery
+	query      sql.SelectBuilder
 	err        error // deferred build error (e.g. from Filter), surfaced at the terminal
 	// batch holds a lone column IN back from q.query so All can split its
 	// value list across statements when the bind-parameter limit would be
@@ -103,7 +103,7 @@ func (q SelectQuery) AutoChunk(opts ...ChunkOption) SelectQuery {
 
 // finalQuery folds any deferred IN back into the query, for every use other than
 // All's splitting path (ToSQL, subqueries, single-row and counting reads).
-func (q SelectQuery) finalQuery() sql.SelectQuery {
+func (q SelectQuery) finalQuery() sql.SelectBuilder {
 	if q.batch == nil {
 		return q.query
 	}
