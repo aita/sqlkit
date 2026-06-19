@@ -367,9 +367,9 @@ func (r *renderer) matviewCreate(v meta.MaterializedView) string {
 	body, _, _ := v.Query.ToSQL(r.dialect)
 	var opts strings.Builder
 	if len(v.Columns) > 0 {
-		fmt.Fprintf(&opts, ", func(s sql.CreateMaterializedViewStmt) sql.CreateMaterializedViewStmt {\nreturn s.Columns(%s)\n}", quotedList(v.Columns))
+		fmt.Fprintf(&opts, ", func(s sql.CreateMaterializedViewBuilder) sql.CreateMaterializedViewBuilder {\nreturn s.Columns(%s)\n}", quotedList(v.Columns))
 	} else if v.WithNoData {
-		opts.WriteString(", func(s sql.CreateMaterializedViewStmt) sql.CreateMaterializedViewStmt {\nreturn s.WithNoData()\n}")
+		opts.WriteString(", func(s sql.CreateMaterializedViewBuilder) sql.CreateMaterializedViewBuilder {\nreturn s.WithNoData()\n}")
 	}
 	return fmt.Sprintf("op.CreateMaterializedView(%q, sql.RawSQL(%q)%s)", v.Name, body, opts.String())
 }
@@ -410,7 +410,7 @@ func (r *renderer) extensionCreate(e meta.Extension) string {
 		return fmt.Sprintf("op.CreateExtension(%q)", e.Name)
 	}
 	r.usesSQL = true
-	return fmt.Sprintf("op.CreateExtension(%q, func(s sql.CreateExtensionStmt) sql.CreateExtensionStmt {\nreturn s.Schema(%q)\n})", e.Name, e.Schema)
+	return fmt.Sprintf("op.CreateExtension(%q, func(s sql.CreateExtensionBuilder) sql.CreateExtensionBuilder {\nreturn s.Schema(%q)\n})", e.Name, e.Schema)
 }
 
 func (r *renderer) sequenceCreate(s meta.Sequence) string {
@@ -444,7 +444,7 @@ func (r *renderer) sequenceCreate(s meta.Sequence) string {
 		return fmt.Sprintf("op.CreateSequence(%q)", s.Name)
 	}
 	r.usesSQL = true
-	return fmt.Sprintf("op.CreateSequence(%q, func(s sql.CreateSequenceStmt) sql.CreateSequenceStmt {\nreturn s%s\n})", s.Name, chain.String())
+	return fmt.Sprintf("op.CreateSequence(%q, func(s sql.CreateSequenceBuilder) sql.CreateSequenceBuilder {\nreturn s%s\n})", s.Name, chain.String())
 }
 
 // diffTable appends the operations that turn oldT into newT to the buckets.

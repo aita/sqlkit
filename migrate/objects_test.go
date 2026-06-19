@@ -12,7 +12,7 @@ func TestOperatorSchemaObjects(t *testing.T) {
 	op := newOperator(context.Background(), cap, "public")
 
 	op.CreateSchema("audit")
-	op.CreateSequence("order_no", func(s sql.CreateSequenceStmt) sql.CreateSequenceStmt {
+	op.CreateSequence("order_no", func(s sql.CreateSequenceBuilder) sql.CreateSequenceBuilder {
 		return s.Start(1000).Increment(1)
 	})
 	op.CreateEnum("mood", "happy", "sad")
@@ -47,7 +47,7 @@ func TestOperatorMaterializedViewAndGrant(t *testing.T) {
 	op := newOperator(context.Background(), cap, "public")
 
 	body := sql.Select(sql.Raw("1 AS n"))
-	op.CreateMaterializedView("nums", body, func(s sql.CreateMaterializedViewStmt) sql.CreateMaterializedViewStmt {
+	op.CreateMaterializedView("nums", body, func(s sql.CreateMaterializedViewBuilder) sql.CreateMaterializedViewBuilder {
 		return s.WithNoData()
 	})
 	op.RefreshMaterializedView("nums")

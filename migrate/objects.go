@@ -40,7 +40,7 @@ func (o *Operator) DropSchema(name string) {
 //	op.CreateSequence("order_no", func(s sql.CreateSequenceStmt) sql.CreateSequenceStmt {
 //		return s.Start(1000).Increment(1)
 //	})
-func (o *Operator) CreateSequence(name string, configure ...func(sql.CreateSequenceStmt) sql.CreateSequenceStmt) {
+func (o *Operator) CreateSequence(name string, configure ...func(sql.CreateSequenceBuilder) sql.CreateSequenceBuilder) {
 	s := sql.CreateSequence(o.table(name))
 	for _, c := range configure {
 		s = c(s)
@@ -83,7 +83,7 @@ func (o *Operator) RenameEnumValue(name, oldValue, newValue string) {
 //	op.CreateExtension("pg_trgm", func(s sql.CreateExtensionStmt) sql.CreateExtensionStmt {
 //		return s.Schema("public")
 //	})
-func (o *Operator) CreateExtension(name string, configure ...func(sql.CreateExtensionStmt) sql.CreateExtensionStmt) {
+func (o *Operator) CreateExtension(name string, configure ...func(sql.CreateExtensionBuilder) sql.CreateExtensionBuilder) {
 	s := sql.CreateExtension(name).IfNotExists()
 	for _, c := range configure {
 		s = c(s)
@@ -100,7 +100,7 @@ func (o *Operator) DropExtension(name string) {
 // migration's schema, defined by query (a SELECT built with the sql package; it
 // binds no values, so inline literals with sql.Raw). Pass configure callbacks for
 // WithNoData, explicit Columns, or IfNotExists.
-func (o *Operator) CreateMaterializedView(name string, query sql.Query, configure ...func(sql.CreateMaterializedViewStmt) sql.CreateMaterializedViewStmt) {
+func (o *Operator) CreateMaterializedView(name string, query sql.Query, configure ...func(sql.CreateMaterializedViewBuilder) sql.CreateMaterializedViewBuilder) {
 	s := sql.CreateMaterializedView(o.table(name), query)
 	for _, c := range configure {
 		s = c(s)
@@ -115,7 +115,7 @@ func (o *Operator) DropMaterializedView(name string) {
 
 // RefreshMaterializedView refreshes a materialized view's contents. Pass a
 // configure callback for Concurrently or WithNoData.
-func (o *Operator) RefreshMaterializedView(name string, configure ...func(sql.RefreshMaterializedViewStmt) sql.RefreshMaterializedViewStmt) {
+func (o *Operator) RefreshMaterializedView(name string, configure ...func(sql.RefreshMaterializedViewBuilder) sql.RefreshMaterializedViewBuilder) {
 	s := sql.RefreshMaterializedView(o.table(name))
 	for _, c := range configure {
 		s = c(s)
@@ -129,7 +129,7 @@ func (o *Operator) RefreshMaterializedView(name string, configure ...func(sql.Re
 //	op.CreateFunction("bump", func(s sql.CreateFunctionStmt) sql.CreateFunctionStmt {
 //		return s.OrReplace().Returns("trigger").Language("plpgsql").Body("BEGIN ... END;")
 //	})
-func (o *Operator) CreateFunction(name string, configure ...func(sql.CreateFunctionStmt) sql.CreateFunctionStmt) {
+func (o *Operator) CreateFunction(name string, configure ...func(sql.CreateFunctionBuilder) sql.CreateFunctionBuilder) {
 	s := sql.CreateFunction(o.qualified(name))
 	for _, c := range configure {
 		s = c(s)
@@ -139,7 +139,7 @@ func (o *Operator) CreateFunction(name string, configure ...func(sql.CreateFunct
 
 // DropFunction drops a function if it exists. For an overloaded function pass its
 // argument types through a configure callback (s.ArgTypes("int", "text")).
-func (o *Operator) DropFunction(name string, configure ...func(sql.DropFunctionStmt) sql.DropFunctionStmt) {
+func (o *Operator) DropFunction(name string, configure ...func(sql.DropFunctionBuilder) sql.DropFunctionBuilder) {
 	s := sql.DropFunction(o.qualified(name)).IfExists()
 	for _, c := range configure {
 		s = c(s)
@@ -151,7 +151,7 @@ func (o *Operator) DropFunction(name string, configure ...func(sql.DropFunctionS
 // of Execute for privileges:
 //
 //	op.Grant(sql.Grant("SELECT").On("public.users").To("readonly"))
-func (o *Operator) Grant(grant sql.GrantStmt) { o.emit(grant) }
+func (o *Operator) Grant(grant sql.Statement) { o.emit(grant) }
 
 // Revoke runs a REVOKE statement built with sql.Revoke.
-func (o *Operator) Revoke(revoke sql.RevokeStmt) { o.emit(revoke) }
+func (o *Operator) Revoke(revoke sql.Statement) { o.emit(revoke) }

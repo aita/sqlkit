@@ -47,23 +47,23 @@ func TestMergeWalk(t *testing.T) {
 	}
 }
 
-func TestNewStatementParts(t *testing.T) {
-	g := sql.Grant("SELECT", "INSERT").On("employees").To("analyst").WithGrantOption().Parts()
+func TestNewStatementStmt(t *testing.T) {
+	g := sql.Grant("SELECT", "INSERT").On("employees").To("analyst").WithGrantOption().Stmt()
 	if len(g.Privileges) != 2 || len(g.Objects) != 1 || len(g.Grantees) != 1 || !g.WithGrantOption {
-		t.Errorf("GrantParts = %+v", g)
+		t.Errorf("GrantStmt = %+v", g)
 	}
-	r := sql.RenameColumn(sql.Table{Name: "users"}, "email", "addr").Parts()
+	r := sql.RenameColumn(sql.Table{Name: "users"}, "email", "addr")
 	if r.Table.Name != "users" || r.OldName != "email" || r.NewName != "addr" {
-		t.Errorf("RenameColumnParts = %+v", r)
+		t.Errorf("RenameColumnStmt = %+v", r)
 	}
-	seq := sql.CreateSequence(sql.Table{Name: "s"}).Start(5).NoMaxValue().Cycle().Parts()
+	seq := sql.CreateSequence(sql.Table{Name: "s"}).Start(5).NoMaxValue().Cycle().Stmt()
 	if seq.Start == nil || *seq.Start != 5 {
-		t.Errorf("CreateSequenceParts.Start = %v, want 5", seq.Start)
+		t.Errorf("CreateSequenceStmt.Start = %v, want 5", seq.Start)
 	}
 	if !seq.NoMaxValue || seq.Cycle == nil || !*seq.Cycle {
-		t.Errorf("CreateSequenceParts = %+v, want NoMaxValue and Cycle=true", seq)
+		t.Errorf("CreateSequenceStmt = %+v, want NoMaxValue and Cycle=true", seq)
 	}
-	if e := sql.CreateEnum("mood", "sad", "ok").Parts(); e.Name != "mood" || len(e.Values) != 2 {
-		t.Errorf("CreateEnumParts = %+v", e)
+	if e := sql.CreateEnum("mood", "sad", "ok"); e.Name != "mood" || len(e.Values) != 2 {
+		t.Errorf("CreateEnumStmt = %+v", e)
 	}
 }

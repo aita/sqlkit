@@ -6,60 +6,23 @@ import (
 	"strings"
 )
 
-// CreateSequenceStmt builds a CREATE SEQUENCE statement (PostgreSQL). It is a
-// DDL Statement. Unset options are omitted, taking the engine default.
+// CreateSequenceStmt is the AST for a CREATE SEQUENCE statement (PostgreSQL). It
+// is a DDL Statement. A nil numeric pointer means the option is absent (the
+// engine default); Cycle is nil when neither CYCLE nor NO CYCLE was set. OwnedBy
+// is "", "NONE", or "table.column".
 type CreateSequenceStmt struct {
-	sequence    Table
-	ifNotExists bool
-	increment   *int64
-	minValue    *int64
-	noMinValue  bool
-	maxValue    *int64
-	noMaxValue  bool
-	start       *int64
-	cache       *int64
-	hasCycle    bool
-	cycle       bool
-	ownedBy     string // "" unset, "NONE", or "table.column"
+	Sequence    Table
+	IfNotExists bool
+	Increment   *int64
+	MinValue    *int64
+	NoMinValue  bool
+	MaxValue    *int64
+	NoMaxValue  bool
+	Start       *int64
+	Cache       *int64
+	Cycle       *bool
+	OwnedBy     string
 }
-
-// CreateSequence starts a CREATE SEQUENCE builder for a sequence.
-func CreateSequence(sequence Table) CreateSequenceStmt {
-	return CreateSequenceStmt{sequence: sequence}
-}
-
-// IfNotExists adds IF NOT EXISTS.
-func (s CreateSequenceStmt) IfNotExists() CreateSequenceStmt { s.ifNotExists = true; return s }
-
-// Increment sets INCREMENT BY.
-func (s CreateSequenceStmt) Increment(n int64) CreateSequenceStmt { s.increment = &n; return s }
-
-// Start sets START WITH.
-func (s CreateSequenceStmt) Start(n int64) CreateSequenceStmt { s.start = &n; return s }
-
-// Cache sets CACHE.
-func (s CreateSequenceStmt) Cache(n int64) CreateSequenceStmt { s.cache = &n; return s }
-
-// MinValue sets MINVALUE.
-func (s CreateSequenceStmt) MinValue(n int64) CreateSequenceStmt { s.minValue = &n; return s }
-
-// NoMinValue sets NO MINVALUE.
-func (s CreateSequenceStmt) NoMinValue() CreateSequenceStmt { s.noMinValue = true; return s }
-
-// MaxValue sets MAXVALUE.
-func (s CreateSequenceStmt) MaxValue(n int64) CreateSequenceStmt { s.maxValue = &n; return s }
-
-// NoMaxValue sets NO MAXVALUE.
-func (s CreateSequenceStmt) NoMaxValue() CreateSequenceStmt { s.noMaxValue = true; return s }
-
-// Cycle sets CYCLE.
-func (s CreateSequenceStmt) Cycle() CreateSequenceStmt { s.hasCycle, s.cycle = true, true; return s }
-
-// NoCycle sets NO CYCLE.
-func (s CreateSequenceStmt) NoCycle() CreateSequenceStmt { s.hasCycle, s.cycle = true, false; return s }
-
-// OwnedBy sets OWNED BY a "table.column", or "NONE" to detach the sequence.
-func (s CreateSequenceStmt) OwnedBy(column string) CreateSequenceStmt { s.ownedBy = column; return s }
 
 // ToSQL compiles the CREATE SEQUENCE statement.
 func (s CreateSequenceStmt) ToSQL(d Dialect) (string, []any, error) {
@@ -67,48 +30,48 @@ func (s CreateSequenceStmt) ToSQL(d Dialect) (string, []any, error) {
 	return out, nil, err
 }
 func (s CreateSequenceStmt) compileDDL(c *Compiler) (string, error) {
-	if s.sequence.Name == "" {
+	if s.Sequence.Name == "" {
 		return "", fmt.Errorf("sqlkit/sql: CREATE SEQUENCE requires a name")
 	}
 	var sb strings.Builder
 	sb.WriteString("CREATE SEQUENCE ")
-	if s.ifNotExists {
+	if s.IfNotExists {
 		sb.WriteString("IF NOT EXISTS ")
 	}
-	sb.WriteString(c.qualify(s.sequence))
-	if s.increment != nil {
-		sb.WriteString(" INCREMENT BY " + strconv.FormatInt(*s.increment, 10))
+	sb.WriteString(c.qualify(s.Sequence))
+	if s.Increment != nil {
+		sb.WriteString(" INCREMENT BY " + strconv.FormatInt(*s.Increment, 10))
 	}
 	switch {
-	case s.noMinValue:
+	case s.NoMinValue:
 		sb.WriteString(" NO MINVALUE")
-	case s.minValue != nil:
-		sb.WriteString(" MINVALUE " + strconv.FormatInt(*s.minValue, 10))
+	case s.MinValue != nil:
+		sb.WriteString(" MINVALUE " + strconv.FormatInt(*s.MinValue, 10))
 	}
 	switch {
-	case s.noMaxValue:
+	case s.NoMaxValue:
 		sb.WriteString(" NO MAXVALUE")
-	case s.maxValue != nil:
-		sb.WriteString(" MAXVALUE " + strconv.FormatInt(*s.maxValue, 10))
+	case s.MaxValue != nil:
+		sb.WriteString(" MAXVALUE " + strconv.FormatInt(*s.MaxValue, 10))
 	}
-	if s.start != nil {
-		sb.WriteString(" START WITH " + strconv.FormatInt(*s.start, 10))
+	if s.Start != nil {
+		sb.WriteString(" START WITH " + strconv.FormatInt(*s.Start, 10))
 	}
-	if s.cache != nil {
-		sb.WriteString(" CACHE " + strconv.FormatInt(*s.cache, 10))
+	if s.Cache != nil {
+		sb.WriteString(" CACHE " + strconv.FormatInt(*s.Cache, 10))
 	}
-	if s.hasCycle {
-		if s.cycle {
+	if s.Cycle != nil {
+		if *s.Cycle {
 			sb.WriteString(" CYCLE")
 		} else {
 			sb.WriteString(" NO CYCLE")
 		}
 	}
-	if s.ownedBy != "" {
-		if s.ownedBy == "NONE" {
+	if s.OwnedBy != "" {
+		if s.OwnedBy == "NONE" {
 			sb.WriteString(" OWNED BY NONE")
 		} else {
-			sb.WriteString(" OWNED BY " + c.Dialect.QuoteIdent(s.ownedBy))
+			sb.WriteString(" OWNED BY " + c.Dialect.QuoteIdent(s.OwnedBy))
 		}
 	}
 	sb.WriteString(";")
@@ -116,24 +79,72 @@ func (s CreateSequenceStmt) compileDDL(c *Compiler) (string, error) {
 }
 func (CreateSequenceStmt) ddlStatement() {}
 
-// DropSequenceStmt builds a DROP SEQUENCE statement.
+// CreateSequenceBuilder is the fluent constructor for a CreateSequenceStmt.
+type CreateSequenceBuilder struct{ s CreateSequenceStmt }
+
+// CreateSequence starts a CREATE SEQUENCE builder for a sequence.
+func CreateSequence(sequence Table) CreateSequenceBuilder {
+	return CreateSequenceBuilder{s: CreateSequenceStmt{Sequence: sequence}}
+}
+
+// Stmt returns the built CREATE SEQUENCE statement.
+func (b CreateSequenceBuilder) Stmt() CreateSequenceStmt { return b.s }
+
+// IfNotExists adds IF NOT EXISTS.
+func (b CreateSequenceBuilder) IfNotExists() CreateSequenceBuilder { b.s.IfNotExists = true; return b }
+
+// Increment sets INCREMENT BY.
+func (b CreateSequenceBuilder) Increment(n int64) CreateSequenceBuilder { b.s.Increment = &n; return b }
+
+// Start sets START WITH.
+func (b CreateSequenceBuilder) Start(n int64) CreateSequenceBuilder { b.s.Start = &n; return b }
+
+// Cache sets CACHE.
+func (b CreateSequenceBuilder) Cache(n int64) CreateSequenceBuilder { b.s.Cache = &n; return b }
+
+// MinValue sets MINVALUE.
+func (b CreateSequenceBuilder) MinValue(n int64) CreateSequenceBuilder { b.s.MinValue = &n; return b }
+
+// NoMinValue sets NO MINVALUE.
+func (b CreateSequenceBuilder) NoMinValue() CreateSequenceBuilder { b.s.NoMinValue = true; return b }
+
+// MaxValue sets MAXVALUE.
+func (b CreateSequenceBuilder) MaxValue(n int64) CreateSequenceBuilder { b.s.MaxValue = &n; return b }
+
+// NoMaxValue sets NO MAXVALUE.
+func (b CreateSequenceBuilder) NoMaxValue() CreateSequenceBuilder { b.s.NoMaxValue = true; return b }
+
+// Cycle sets CYCLE.
+func (b CreateSequenceBuilder) Cycle() CreateSequenceBuilder {
+	cycle := true
+	b.s.Cycle = &cycle
+	return b
+}
+
+// NoCycle sets NO CYCLE.
+func (b CreateSequenceBuilder) NoCycle() CreateSequenceBuilder {
+	cycle := false
+	b.s.Cycle = &cycle
+	return b
+}
+
+// OwnedBy sets OWNED BY a "table.column", or "NONE" to detach the sequence.
+func (b CreateSequenceBuilder) OwnedBy(column string) CreateSequenceBuilder {
+	b.s.OwnedBy = column
+	return b
+}
+
+// ToSQL compiles the building CREATE SEQUENCE statement.
+func (b CreateSequenceBuilder) ToSQL(d Dialect) (string, []any, error) { return b.s.ToSQL(d) }
+func (b CreateSequenceBuilder) buildStmt() Query                       { return b.s }
+func (CreateSequenceBuilder) ddlStatement()                            {}
+
+// DropSequenceStmt is the AST for a DROP SEQUENCE statement.
 type DropSequenceStmt struct {
-	names    []string
-	ifExists bool
-	cascade  bool
+	Names    []string
+	IfExists bool
+	Cascade  bool
 }
-
-// DropSequence starts a DROP SEQUENCE builder for one or more (possibly
-// schema-qualified) sequence names.
-func DropSequence(names ...string) DropSequenceStmt {
-	return DropSequenceStmt{names: names}
-}
-
-// IfExists adds IF EXISTS.
-func (s DropSequenceStmt) IfExists() DropSequenceStmt { s.ifExists = true; return s }
-
-// Cascade adds CASCADE.
-func (s DropSequenceStmt) Cascade() DropSequenceStmt { s.cascade = true; return s }
 
 // ToSQL compiles the DROP SEQUENCE statement.
 func (s DropSequenceStmt) ToSQL(d Dialect) (string, []any, error) {
@@ -141,24 +152,47 @@ func (s DropSequenceStmt) ToSQL(d Dialect) (string, []any, error) {
 	return out, nil, err
 }
 func (s DropSequenceStmt) compileDDL(c *Compiler) (string, error) {
-	if len(s.names) == 0 {
+	if len(s.Names) == 0 {
 		return "", fmt.Errorf("sqlkit/sql: DROP SEQUENCE requires a name")
 	}
 	var sb strings.Builder
 	sb.WriteString("DROP SEQUENCE ")
-	if s.ifExists {
+	if s.IfExists {
 		sb.WriteString("IF EXISTS ")
 	}
-	for i, name := range s.names {
+	for i, name := range s.Names {
 		if i > 0 {
 			sb.WriteString(", ")
 		}
 		sb.WriteString(c.Dialect.QuoteIdent(name))
 	}
-	if s.cascade {
+	if s.Cascade {
 		sb.WriteString(" CASCADE")
 	}
 	sb.WriteString(";")
 	return sb.String(), nil
 }
 func (DropSequenceStmt) ddlStatement() {}
+
+// DropSequenceBuilder is the fluent constructor for a DropSequenceStmt.
+type DropSequenceBuilder struct{ s DropSequenceStmt }
+
+// DropSequence starts a DROP SEQUENCE builder for one or more (possibly
+// schema-qualified) sequence names.
+func DropSequence(names ...string) DropSequenceBuilder {
+	return DropSequenceBuilder{s: DropSequenceStmt{Names: names}}
+}
+
+// Stmt returns the built DROP SEQUENCE statement.
+func (b DropSequenceBuilder) Stmt() DropSequenceStmt { return b.s }
+
+// IfExists adds IF EXISTS.
+func (b DropSequenceBuilder) IfExists() DropSequenceBuilder { b.s.IfExists = true; return b }
+
+// Cascade adds CASCADE.
+func (b DropSequenceBuilder) Cascade() DropSequenceBuilder { b.s.Cascade = true; return b }
+
+// ToSQL compiles the building DROP SEQUENCE statement.
+func (b DropSequenceBuilder) ToSQL(d Dialect) (string, []any, error) { return b.s.ToSQL(d) }
+func (b DropSequenceBuilder) buildStmt() Query                       { return b.s }
+func (DropSequenceBuilder) ddlStatement()                            {}

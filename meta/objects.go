@@ -23,12 +23,12 @@ func (e Extension) CreateStatement() sql.CreateExtensionStmt {
 	if e.Schema != "" {
 		s = s.Schema(e.Schema)
 	}
-	return s
+	return s.Stmt()
 }
 
 // DropStatement builds the DROP EXTENSION IF EXISTS DDL node.
 func (e Extension) DropStatement() sql.DropExtensionStmt {
-	return sql.DropExtension(e.Name).IfExists()
+	return sql.DropExtension(e.Name).IfExists().Stmt()
 }
 
 // Enum is an enumerated type (PostgreSQL CREATE TYPE ... AS ENUM). Values are the
@@ -49,7 +49,7 @@ func (e Enum) CreateStatement() sql.CreateEnumStmt {
 
 // DropStatement builds the DROP TYPE IF EXISTS DDL node.
 func (e Enum) DropStatement() sql.DropTypeStmt {
-	return sql.DropType(e.QualifiedName()).IfExists()
+	return sql.DropType(e.QualifiedName()).IfExists().Stmt()
 }
 
 // Sequence is a database sequence (PostgreSQL CREATE SEQUENCE). The numeric
@@ -99,12 +99,12 @@ func (s Sequence) CreateStatement() sql.CreateSequenceStmt {
 	if s.OwnedBy != "" {
 		st = st.OwnedBy(s.OwnedBy)
 	}
-	return st
+	return st.Stmt()
 }
 
 // DropStatement builds the DROP SEQUENCE IF EXISTS DDL node.
 func (s Sequence) DropStatement() sql.DropSequenceStmt {
-	return sql.DropSequence(s.QualifiedName()).IfExists()
+	return sql.DropSequence(s.QualifiedName()).IfExists().Stmt()
 }
 
 // Equal reports whether two enum types are identical (schema, name, and ordered
@@ -172,12 +172,12 @@ func (v MaterializedView) CreateStatement() sql.CreateMaterializedViewStmt {
 	if v.WithNoData {
 		s = s.WithNoData()
 	}
-	return s
+	return s.Stmt()
 }
 
 // DropStatement builds the DROP MATERIALIZED VIEW IF EXISTS DDL node.
 func (v MaterializedView) DropStatement() sql.DropMaterializedViewStmt {
-	return sql.DropMaterializedView(v.sqlTable()).IfExists()
+	return sql.DropMaterializedView(v.sqlTable()).IfExists().Stmt()
 }
 
 // Grant is a privilege grant (GRANT ... ON ... TO ...). An empty Privileges list
@@ -203,7 +203,7 @@ func (g Grant) CreateStatement() sql.GrantStmt {
 	if g.WithGrantOption {
 		s = s.WithGrantOption()
 	}
-	return s
+	return s.Stmt()
 }
 
 // DropStatement builds the REVOKE DDL node that undoes the grant.
@@ -214,7 +214,7 @@ func (g Grant) DropStatement() sql.RevokeStmt {
 	} else {
 		s = s.On(g.Objects...)
 	}
-	return s.From(g.Grantees...)
+	return s.From(g.Grantees...).Stmt()
 }
 
 // Equal reports whether two grants are identical.

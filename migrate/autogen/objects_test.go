@@ -22,7 +22,7 @@ func TestRenderObjects(t *testing.T) {
 	for _, want := range []string{
 		`op.CreateExtension("pg_trgm")`,
 		`op.CreateEnum("mood", "happy", "sad")`,
-		`op.CreateSequence("order_no", func(s sql.CreateSequenceStmt) sql.CreateSequenceStmt {`,
+		`op.CreateSequence("order_no", func(s sql.CreateSequenceBuilder) sql.CreateSequenceBuilder {`,
 		`.Increment(1).Start(1000)`,
 	} {
 		if !strings.Contains(res.Up, want) {

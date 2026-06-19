@@ -2,16 +2,16 @@ package sql
 
 import "fmt"
 
-// RenameTableStmt builds an ALTER TABLE ... RENAME TO statement. It is a DDL
-// Statement.
+// RenameTableStmt is the AST for an ALTER TABLE ... RENAME TO statement. It has
+// no options, so it is constructed directly with RenameTable.
 type RenameTableStmt struct {
-	table   Table
-	newName string
+	Table   Table
+	NewName string
 }
 
-// RenameTable starts a builder that renames a table to newName.
+// RenameTable builds a statement that renames a table to newName.
 func RenameTable(table Table, newName string) RenameTableStmt {
-	return RenameTableStmt{table: table, newName: newName}
+	return RenameTableStmt{Table: table, NewName: newName}
 }
 
 // ToSQL compiles the rename-table statement.
@@ -20,23 +20,24 @@ func (s RenameTableStmt) ToSQL(d Dialect) (string, []any, error) {
 	return out, nil, err
 }
 func (s RenameTableStmt) compileDDL(c *Compiler) (string, error) {
-	if s.table.Name == "" || s.newName == "" {
+	if s.Table.Name == "" || s.NewName == "" {
 		return "", fmt.Errorf("sqlkit/sql: RENAME TABLE requires a table and a new name")
 	}
-	return "ALTER TABLE " + c.qualify(s.table) + " RENAME TO " + c.Dialect.QuoteName(s.newName) + ";", nil
+	return "ALTER TABLE " + c.qualify(s.Table) + " RENAME TO " + c.Dialect.QuoteName(s.NewName) + ";", nil
 }
 func (RenameTableStmt) ddlStatement() {}
 
-// RenameColumnStmt builds an ALTER TABLE ... RENAME COLUMN ... TO statement.
+// RenameColumnStmt is the AST for an ALTER TABLE ... RENAME COLUMN ... TO
+// statement. It has no options, so it is constructed directly.
 type RenameColumnStmt struct {
-	table   Table
-	oldName string
-	newName string
+	Table   Table
+	OldName string
+	NewName string
 }
 
-// RenameColumn starts a builder that renames a column of a table.
+// RenameColumn builds a statement that renames a column of a table.
 func RenameColumn(table Table, oldName, newName string) RenameColumnStmt {
-	return RenameColumnStmt{table: table, oldName: oldName, newName: newName}
+	return RenameColumnStmt{Table: table, OldName: oldName, NewName: newName}
 }
 
 // ToSQL compiles the rename-column statement.
@@ -45,10 +46,10 @@ func (s RenameColumnStmt) ToSQL(d Dialect) (string, []any, error) {
 	return out, nil, err
 }
 func (s RenameColumnStmt) compileDDL(c *Compiler) (string, error) {
-	if s.table.Name == "" || s.oldName == "" || s.newName == "" {
+	if s.Table.Name == "" || s.OldName == "" || s.NewName == "" {
 		return "", fmt.Errorf("sqlkit/sql: RENAME COLUMN requires a table, an old name, and a new name")
 	}
-	return "ALTER TABLE " + c.qualify(s.table) + " RENAME COLUMN " +
-		c.Dialect.QuoteName(s.oldName) + " TO " + c.Dialect.QuoteName(s.newName) + ";", nil
+	return "ALTER TABLE " + c.qualify(s.Table) + " RENAME COLUMN " +
+		c.Dialect.QuoteName(s.OldName) + " TO " + c.Dialect.QuoteName(s.NewName) + ";", nil
 }
 func (RenameColumnStmt) ddlStatement() {}
