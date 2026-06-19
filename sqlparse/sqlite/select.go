@@ -9,57 +9,78 @@ import (
 	rsql "github.com/rqlite/sql"
 )
 
-// convertSelect converts a single SELECT statement into a sql.SelectStmt,
-// building the AST as a struct literal (the parser-facing construction path the
-// sql package documents).
+// setOperand is satisfied by the query builders that can start a set operation
+// (SelectBuilder and CompoundBuilder), letting convertCompound chain operators
+// without caring which concrete builder it holds.
+type setOperand interface {
+	Union(sql.Query) sql.CompoundBuilder
+	UnionAll(sql.Query) sql.CompoundBuilder
+	Intersect(sql.Query) sql.CompoundBuilder
+	IntersectAll(sql.Query) sql.CompoundBuilder
+	Except(sql.Query) sql.CompoundBuilder
+	ExceptAll(sql.Query) sql.CompoundBuilder
+}
+
+// cteMaker is satisfied by the query builders that can become a CTE body.
+type cteMaker interface {
+	CTE(string, ...sql.CTEOption) sql.CTE
+}
+
+// convertSelect converts a SELECT statement, dispatching to convertCompound for
+// set operations (UNION/INTERSECT/EXCEPT). Construction goes through the fluent
+// SelectBuilder rather than a struct literal so a converted query can also serve
+// as a CTE body or a set-operation operand.
 func convertSelect(s *rsql.SelectStatement) (sql.Query, error) {
 	if s == nil {
 		return nil, sqlparse.Unsupported("nil SELECT")
 	}
-	// Set operations carry their right operand in Compound and apply the trailing
-	// ORDER BY / LIMIT to the combined result; that is left to a later pass.
-	if s.Compound != nil || s.Union.IsValid() || s.Intersect.IsValid() || s.Except.IsValid() {
-		return nil, sqlparse.Unsupported("compound SELECT (UNION/INTERSECT/EXCEPT)")
+	if s.Compound != nil {
+		return convertCompound(s)
 	}
-	// VALUES (...), ... as a standalone statement is a distinct shape handled
-	// elsewhere; reject it here so it round-trips rather than parsing as columns.
 	if len(s.ValueLists) > 0 {
 		return nil, sqlparse.Unsupported("VALUES statement")
 	}
-	if s.WithClause != nil {
-		return nil, sqlparse.Unsupported("WITH clause")
-	}
-	if len(s.Windows) > 0 {
-		return nil, sqlparse.Unsupported("WINDOW clause")
-	}
 
-	var stmt sql.SelectStmt
-
-	columns, err := convertColumns(s.Columns)
+	b, err := buildSelectCore(s)
 	if err != nil {
 		return nil, err
 	}
-	stmt.Columns = columns
+	return applySelectTail(b, s)
+}
+
+// buildSelectCore builds everything in a SELECT except the trailing ORDER BY /
+// LIMIT / OFFSET, which a set operation applies to the combined result rather
+// than to its first operand.
+func buildSelectCore(s *rsql.SelectStatement) (sql.SelectBuilder, error) {
+	columns, err := convertColumns(s.Columns)
+	if err != nil {
+		return sql.SelectBuilder{}, err
+	}
+	b := sql.Select(columns...)
 
 	if s.Distinct.IsValid() {
-		stmt.Distinct = true
+		b = b.Distinct()
 	}
 
 	if s.Source != nil {
 		base, joins, err := convertSource(s.Source)
 		if err != nil {
-			return nil, err
+			return sql.SelectBuilder{}, err
 		}
-		stmt.From = base
-		stmt.Joins = joins
+		if base != nil {
+			b = b.From(base)
+		}
+		for _, j := range joins {
+			b = applyJoin(b, j)
+		}
 	}
 
 	if s.WhereExpr != nil {
 		where, err := convertExpr(s.WhereExpr)
 		if err != nil {
-			return nil, err
+			return sql.SelectBuilder{}, err
 		}
-		stmt.Where = where
+		b = b.Where(where)
 	}
 
 	if len(s.GroupByExprs) > 0 {
@@ -67,47 +88,207 @@ func convertSelect(s *rsql.SelectStatement) (sql.Query, error) {
 		for _, g := range s.GroupByExprs {
 			expr, err := convertExpr(g)
 			if err != nil {
-				return nil, err
+				return sql.SelectBuilder{}, err
 			}
 			group = append(group, expr)
 		}
-		stmt.GroupBy = group
+		b = b.GroupBy(group...)
 	}
 
 	if s.HavingExpr != nil {
 		having, err := convertExpr(s.HavingExpr)
 		if err != nil {
-			return nil, err
+			return sql.SelectBuilder{}, err
 		}
-		stmt.Having = having
+		b = b.Having(having)
 	}
 
+	if len(s.Windows) > 0 {
+		windows, err := convertNamedWindows(s.Windows)
+		if err != nil {
+			return sql.SelectBuilder{}, err
+		}
+		b = b.Window(windows...)
+	}
+
+	if s.WithClause != nil {
+		ctes, err := convertWith(s.WithClause)
+		if err != nil {
+			return sql.SelectBuilder{}, err
+		}
+		b = b.WithCTE(ctes...)
+	}
+
+	return b, nil
+}
+
+// applySelectTail applies ORDER BY / LIMIT / OFFSET to a single SELECT.
+func applySelectTail(b sql.SelectBuilder, s *rsql.SelectStatement) (sql.Query, error) {
 	if len(s.OrderingTerms) > 0 {
 		terms, err := convertOrderingTerms(s.OrderingTerms)
 		if err != nil {
 			return nil, err
 		}
-		stmt.OrderBy = terms
+		b = b.OrderBy(terms...)
 	}
-
 	if s.LimitExpr != nil {
 		n, err := intLiteral(s.LimitExpr, "LIMIT")
 		if err != nil {
 			return nil, err
 		}
-		stmt.Limit = n
-		stmt.HasLimit = true
+		b = b.Limit(n)
 	}
 	if s.OffsetExpr != nil {
 		n, err := intLiteral(s.OffsetExpr, "OFFSET")
 		if err != nil {
 			return nil, err
 		}
-		stmt.Offset = n
-		stmt.HasOffset = true
+		b = b.Offset(n)
+	}
+	return b, nil
+}
+
+// convertCompound converts a set operation. rqlite nests the chain on the first
+// operand: the outer statement holds the first SELECT plus the operator and a
+// Compound pointing at the rest, while a trailing ORDER BY / LIMIT on the outer
+// applies to the whole result. The chain is folded left so A UNION B UNION C
+// builds as ((A) UNION B) UNION C.
+func convertCompound(s *rsql.SelectStatement) (sql.Query, error) {
+	first, err := buildSelectCore(s)
+	if err != nil {
+		return nil, err
 	}
 
-	return stmt, nil
+	var result sql.Query = first
+	node := s
+	for node.Compound != nil {
+		right, err := convertCompoundOperand(node.Compound)
+		if err != nil {
+			return nil, err
+		}
+		operand, ok := result.(setOperand)
+		if !ok {
+			return nil, sqlparse.Unsupportedf("set-operation operand %T", result)
+		}
+		result, err = applySetOp(operand, node, right)
+		if err != nil {
+			return nil, err
+		}
+		node = node.Compound
+	}
+
+	// The trailing ORDER BY / LIMIT / OFFSET sits on the outermost statement and
+	// applies to the combined result.
+	if cb, ok := result.(sql.CompoundBuilder); ok {
+		cb, err = applyCompoundTail(cb, s)
+		if err != nil {
+			return nil, err
+		}
+		return cb, nil
+	}
+	return result, nil
+}
+
+// convertCompoundOperand builds one operand of a set operation: a plain SELECT
+// without its own compound/ORDER BY/LIMIT, which belong to the chain.
+func convertCompoundOperand(s *rsql.SelectStatement) (sql.Query, error) {
+	b, err := buildSelectCore(s)
+	if err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+func applySetOp(left setOperand, node *rsql.SelectStatement, right sql.Query) (sql.Query, error) {
+	switch {
+	case node.Union.IsValid():
+		if node.UnionAll.IsValid() {
+			return left.UnionAll(right), nil
+		}
+		return left.Union(right), nil
+	case node.Intersect.IsValid():
+		return left.Intersect(right), nil
+	case node.Except.IsValid():
+		return left.Except(right), nil
+	default:
+		return nil, sqlparse.Unsupported("unknown set operation")
+	}
+}
+
+func applyCompoundTail(b sql.CompoundBuilder, s *rsql.SelectStatement) (sql.CompoundBuilder, error) {
+	if len(s.OrderingTerms) > 0 {
+		terms, err := convertOrderingTerms(s.OrderingTerms)
+		if err != nil {
+			return b, err
+		}
+		b = b.OrderBy(terms...)
+	}
+	if s.LimitExpr != nil {
+		n, err := intLiteral(s.LimitExpr, "LIMIT")
+		if err != nil {
+			return b, err
+		}
+		b = b.Limit(n)
+	}
+	if s.OffsetExpr != nil {
+		n, err := intLiteral(s.OffsetExpr, "OFFSET")
+		if err != nil {
+			return b, err
+		}
+		b = b.Offset(n)
+	}
+	return b, nil
+}
+
+// convertWith converts a WITH clause into CTEs. A recursive WITH marks every CTE
+// recursive, matching how the sql package emits WITH RECURSIVE for the block.
+func convertWith(wc *rsql.WithClause) ([]sql.CTE, error) {
+	ctes := make([]sql.CTE, 0, len(wc.CTEs))
+	for _, cte := range wc.CTEs {
+		body, err := convertSelect(cte.Select)
+		if err != nil {
+			return nil, err
+		}
+		maker, ok := body.(cteMaker)
+		if !ok {
+			return nil, sqlparse.Unsupportedf("CTE body %T", body)
+		}
+		var opts []sql.CTEOption
+		if len(cte.Columns) > 0 {
+			names := make([]string, 0, len(cte.Columns))
+			for _, col := range cte.Columns {
+				names = append(names, col.Name)
+			}
+			opts = append(opts, sql.Columns(names...))
+		}
+		if wc.Recursive.IsValid() {
+			opts = append(opts, sql.Recursive())
+		}
+		ctes = append(ctes, maker.CTE(cte.TableName.Name, opts...))
+	}
+	return ctes, nil
+}
+
+// applyJoin adds a flattened join to a SELECT builder.
+func applyJoin(b sql.SelectBuilder, j sql.JoinClause) sql.SelectBuilder {
+	switch {
+	case j.Natural && j.Kind == "LEFT JOIN":
+		return b.NaturalLeftJoin(j.Source)
+	case j.Natural:
+		return b.NaturalJoin(j.Source)
+	case j.Using != nil && j.Kind == "LEFT JOIN":
+		return b.LeftJoinUsing(j.Source, j.Using...)
+	case j.Using != nil:
+		return b.JoinUsing(j.Source, j.Using...)
+	}
+	switch j.Kind {
+	case "LEFT JOIN":
+		return b.LeftJoin(j.Source, j.On)
+	case "CROSS JOIN":
+		return b.CrossJoin(j.Source)
+	default:
+		return b.Join(j.Source, j.On)
+	}
 }
 
 // convertColumns converts the SELECT result-column list.

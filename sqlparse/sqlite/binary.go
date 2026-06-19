@@ -141,8 +141,21 @@ func convertIn(e *rsql.BinaryExpr) (sql.Expression, error) {
 	}
 	list, ok := e.Y.(*rsql.ExprList)
 	if !ok {
-		// IN (SELECT ...) and table/table-function forms are not modeled yet.
+		// The table / table-function forms of IN are not modeled.
 		return nil, sqlparse.Unsupportedf("IN operand %T", e.Y)
+	}
+	// IN (SELECT ...): rqlite carries the subquery as a single SelectExpr element.
+	if len(list.Exprs) == 1 {
+		if sub, ok := list.Exprs[0].(rsql.SelectExpr); ok {
+			query, err := convertSelect(sub.SelectStatement)
+			if err != nil {
+				return nil, err
+			}
+			if e.Op == rsql.NOTIN {
+				return sql.NotInQuery(left, query), nil
+			}
+			return sql.InQuery(left, query), nil
+		}
 	}
 	items := make([]any, 0, len(list.Exprs))
 	for _, item := range list.Exprs {

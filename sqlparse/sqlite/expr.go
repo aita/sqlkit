@@ -48,8 +48,17 @@ func convertExpr(node rsql.Expr) (sql.Expression, error) {
 		return sql.IsNotNull(operand), nil
 	case *rsql.Exists:
 		return convertExists(e)
+	case rsql.SelectExpr:
+		// A parenthesized SELECT used as a value: a scalar subquery.
+		query, err := convertSelect(e.SelectStatement)
+		if err != nil {
+			return nil, err
+		}
+		return sql.ScalarSubquery(query), nil
 	case *rsql.Call:
 		return convertCall(e)
+	case *rsql.CaseExpr:
+		return convertCase(e)
 	default:
 		return nil, sqlparse.Unsupportedf("expression node %T", node)
 	}
@@ -107,7 +116,58 @@ func convertExists(e *rsql.Exists) (sql.Expression, error) {
 	return sql.Exists(query), nil
 }
 
+// convertCase converts a CASE expression in either form: a searched CASE (no
+// operand, boolean WHEN conditions) or a simple CASE (operand compared for
+// equality against each WHEN value).
+func convertCase(c *rsql.CaseExpr) (sql.Expression, error) {
+	expr := sql.Case()
+	if c.Operand != nil {
+		operand, err := convertExpr(c.Operand)
+		if err != nil {
+			return nil, err
+		}
+		expr = sql.CaseOf(operand)
+	}
+	for _, block := range c.Blocks {
+		cond, err := convertExpr(block.Condition)
+		if err != nil {
+			return nil, err
+		}
+		body, err := convertExpr(block.Body)
+		if err != nil {
+			return nil, err
+		}
+		expr = expr.When(cond, body)
+	}
+	if c.ElseExpr != nil {
+		els, err := convertExpr(c.ElseExpr)
+		if err != nil {
+			return nil, err
+		}
+		expr = expr.Else(els)
+	}
+	return expr, nil
+}
+
 func convertCall(c *rsql.Call) (sql.Expression, error) {
+	// FILTER (WHERE ...) on an aggregate is not modeled.
+	if c.Filter != nil {
+		return nil, sqlparse.Unsupported("FILTER clause")
+	}
+
+	fn, err := convertCallFunc(c)
+	if err != nil {
+		return nil, err
+	}
+	if c.Over != nil {
+		return convertOver(fn, c.Over)
+	}
+	return fn, nil
+}
+
+// convertCallFunc converts the function/aggregate part of a call, without any
+// OVER clause.
+func convertCallFunc(c *rsql.Call) (sql.Expression, error) {
 	name := c.Name.Name
 
 	if strings.EqualFold(name, "count") {

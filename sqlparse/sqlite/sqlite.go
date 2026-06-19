@@ -72,6 +72,18 @@ func convertStmt(stmt rsql.Statement) (sql.Query, error) {
 	switch s := stmt.(type) {
 	case *rsql.SelectStatement:
 		return convertSelect(s)
+	case *rsql.InsertStatement:
+		return convertInsert(s)
+	case *rsql.UpdateStatement:
+		return convertUpdate(s)
+	case *rsql.DeleteStatement:
+		return convertDelete(s)
+	case *rsql.CreateTableStatement:
+		return convertCreateTable(s)
+	case *rsql.CreateIndexStatement:
+		return convertCreateIndex(s)
+	case *rsql.DropTableStatement:
+		return convertDropTable(s)
 	default:
 		return nil, sqlparse.Unsupportedf("statement %T", stmt)
 	}
