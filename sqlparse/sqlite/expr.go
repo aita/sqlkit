@@ -13,17 +13,17 @@ import (
 func convertExpr(node rsql.Expr) (sql.Expression, error) {
 	switch e := node.(type) {
 	case *rsql.Ident:
-		return sql.Col(e.Name), nil
+		return colAt(e.Name, e.NamePos), nil
 	case *rsql.QualifiedRef:
 		return convertQualifiedRef(e)
 	case *rsql.StringLit:
-		return sql.Val(e.Value), nil
+		return valAt(e.Value, e.ValuePos), nil
 	case *rsql.NumberLit:
 		return convertNumberLit(e)
 	case *rsql.NullLit:
-		return sql.Val(nil), nil
+		return valAt(nil, e.Pos), nil
 	case *rsql.BoolLit:
-		return sql.Val(e.Value), nil
+		return valAt(e.Value, e.ValuePos), nil
 	case *rsql.BindExpr:
 		// A bind placeholder (?, ?N, :name, @name, $name). sqlkit numbers its own
 		// placeholders from bound values, so pass the SQLite spelling through
@@ -34,31 +34,51 @@ func convertExpr(node rsql.Expr) (sql.Expression, error) {
 		// grouping node can be unwrapped.
 		return convertExpr(e.X)
 	case *rsql.UnaryExpr:
-		return convertUnary(e)
+		expr, err := convertUnary(e)
+		if err != nil {
+			return nil, err
+		}
+		return positioned(expr, e.OpPos), nil
 	case *rsql.BinaryExpr:
-		return convertBinary(e)
+		expr, err := convertBinary(e)
+		if err != nil {
+			return nil, err
+		}
+		return positioned(expr, e.OpPos), nil
 	case *rsql.Null:
 		operand, err := convertExpr(e.X)
 		if err != nil {
 			return nil, err
 		}
 		if e.Op == rsql.ISNULL {
-			return sql.IsNull(operand), nil
+			return positioned(sql.IsNull(operand), e.OpPos), nil
 		}
-		return sql.IsNotNull(operand), nil
+		return positioned(sql.IsNotNull(operand), e.OpPos), nil
 	case *rsql.Exists:
-		return convertExists(e)
+		expr, err := convertExists(e)
+		if err != nil {
+			return nil, err
+		}
+		return positioned(expr, e.Exists), nil
 	case rsql.SelectExpr:
 		// A parenthesized SELECT used as a value: a scalar subquery.
 		query, err := convertSelect(e.SelectStatement)
 		if err != nil {
 			return nil, err
 		}
-		return sql.ScalarSubquery(query), nil
+		return positioned(sql.ScalarSubquery(query), e.Select), nil
 	case *rsql.Call:
-		return convertCall(e)
+		expr, err := convertCall(e)
+		if err != nil {
+			return nil, err
+		}
+		return positioned(expr, e.Name.NamePos), nil
 	case *rsql.CaseExpr:
-		return convertCase(e)
+		expr, err := convertCase(e)
+		if err != nil {
+			return nil, err
+		}
+		return positioned(expr, e.Case), nil
 	default:
 		return nil, sqlparse.Unsupportedf("expression node %T", node)
 	}
@@ -69,11 +89,13 @@ func convertQualifiedRef(ref *rsql.QualifiedRef) (sql.Expression, error) {
 		return nil, sqlparse.Unsupported("'*' outside the select list")
 	}
 	parts := make([]string, 0, 3)
+	pos := ref.Table.NamePos
 	if ref.Schema != nil {
 		parts = append(parts, ref.Schema.Name)
+		pos = ref.Schema.NamePos
 	}
 	parts = append(parts, ref.Table.Name, ref.Column.Name)
-	return sql.Col(strings.Join(parts, ".")), nil
+	return colAt(strings.Join(parts, "."), pos), nil
 }
 
 func convertNumberLit(lit *rsql.NumberLit) (sql.Expression, error) {
@@ -81,7 +103,7 @@ func convertNumberLit(lit *rsql.NumberLit) (sql.Expression, error) {
 	// too wide for a Go float) is emitted verbatim to stay exact — matching how
 	// the postgres frontend handles numeric literals.
 	if n, err := strconv.Atoi(lit.Value); err == nil {
-		return sql.Val(n), nil
+		return valAt(n, lit.ValuePos), nil
 	}
 	return sql.Raw(lit.Value), nil
 }

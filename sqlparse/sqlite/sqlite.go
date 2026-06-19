@@ -54,7 +54,8 @@ func (Parser) Parse(text string) ([]sql.Query, error) {
 			}
 			return nil, err
 		}
-		queries = append(queries, query)
+		// Record where the statement began in the source on its top-level node.
+		queries = append(queries, sql.SetPos(query, offsetOf(stmtPos(stmt))))
 	}
 	return queries, nil
 }

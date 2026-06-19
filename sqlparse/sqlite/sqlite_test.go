@@ -327,6 +327,55 @@ func TestParseDDL(t *testing.T) {
 	}
 }
 
+// TestSourcePositions checks that the parser records each node's byte offset in
+// the source SQL.
+func TestSourcePositions(t *testing.T) {
+	//             0         1         2         3
+	//             0123456789012345678901234567890123
+	const in = `SELECT id FROM users WHERE id = 1`
+	q, err := sqlite.ParseOne(in)
+	if err != nil {
+		t.Fatalf("ParseOne: %v", err)
+	}
+	stmt := q.(sql.SelectBuilder).Stmt()
+
+	if got := stmt.Pos(); got != 0 {
+		t.Errorf("statement Pos() = %d, want 0", got)
+	}
+	if got := stmt.Columns[0].(sql.ColumnExpression).Pos(); got != 7 {
+		t.Errorf("column id Pos() = %d, want 7", got)
+	}
+	where := stmt.Where.(sql.BinaryExpression)
+	if got := where.Pos(); got != 30 {
+		t.Errorf("WHERE '=' Pos() = %d, want 30", got)
+	}
+	if got := where.Left.(sql.ColumnExpression).Pos(); got != 27 {
+		t.Errorf("WHERE id Pos() = %d, want 27", got)
+	}
+	if got := where.Right.(sql.ValueExpression).Pos(); got != 32 {
+		t.Errorf("WHERE literal Pos() = %d, want 32", got)
+	}
+}
+
+// TestPositionsDoNotAffectSQL confirms the compiler ignores positions: a parsed
+// query and the same query built fresh compile identically.
+func TestPositionsDoNotAffectSQL(t *testing.T) {
+	got, args := compile(t, `SELECT id FROM users WHERE id = 1`)
+	want, _, err := sql.Select(sql.Col("id")).
+		From(sql.Table{Name: "users"}).
+		Where(sql.Eq(sql.Col("id"), 1)).
+		ToSQL(sql.SQLiteDialect{})
+	if err != nil {
+		t.Fatalf("builder ToSQL: %v", err)
+	}
+	if got != want {
+		t.Errorf("parsed %q\nbuilt  %q", got, want)
+	}
+	if len(args) != 1 {
+		t.Errorf("args = %v, want one", args)
+	}
+}
+
 func TestParseMultipleStatements(t *testing.T) {
 	queries, err := sqlite.Parse(`SELECT 1; SELECT 2`)
 	if err != nil {
