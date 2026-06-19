@@ -27,20 +27,8 @@ type ConflictClause struct {
 	Where            Expression
 }
 
-// MergeParts is a read-only snapshot of every clause of a MergeQuery.
-// It is returned by MergeQuery.Parts.
-type MergeParts struct {
-	With        []CTE
-	Target      Table
-	TargetAlias string
-	Using       Source
-	On          Expression
-	When        []MergeWhenClause
-	Returning   []Selection
-}
-
-// MergeWhenClause is a read-only snapshot of one MERGE WHEN clause. Match is
-// "MATCHED", "NOT MATCHED", or "NOT MATCHED BY SOURCE"; Action is "UPDATE",
+// MergeWhenClause is one MERGE WHEN clause as carried by MergeStmt.When. Match
+// is "MATCHED", "NOT MATCHED", or "NOT MATCHED BY SOURCE"; Action is "UPDATE",
 // "DELETE", "INSERT", "DO NOTHING", or "" when none was set. Sets applies to
 // UPDATE; InsertColumns/InsertValues (or InsertDefault) to INSERT.
 type MergeWhenClause struct {
@@ -53,25 +41,7 @@ type MergeWhenClause struct {
 	InsertDefault bool
 }
 
-// Parts returns a read-only snapshot of q's clauses.
-func (q MergeQuery) Parts() MergeParts {
-	c := MergeParts{
-		With:        cloneSlice(q.with),
-		Target:      q.target,
-		TargetAlias: q.targetAlias,
-		Using:       q.using,
-		On:          q.on,
-		Returning:   cloneSlice(q.returning),
-	}
-	if len(q.whens) > 0 {
-		c.When = make([]MergeWhenClause, len(q.whens))
-		for i, w := range q.whens {
-			c.When[i] = mergeWhenView(w)
-		}
-	}
-	return c
-}
-
+// mergeWhenView converts a MergeWhen builder into its MergeWhenClause AST value.
 func mergeWhenView(w MergeWhen) MergeWhenClause {
 	match := map[mergeMatch]string{
 		mergeMatched:            "MATCHED",

@@ -6,19 +6,19 @@ import (
 	"github.com/aita/sqlkit/sql"
 )
 
-func TestMergeParts(t *testing.T) {
-	q := sql.MergeInto(sql.Table{Name: "accounts"}).As("t").
+func TestMergeStmt(t *testing.T) {
+	p := sql.MergeInto(sql.Table{Name: "accounts"}).As("t").
 		Using(sql.SourceAlias(sql.Table{Name: "staging"}, "s")).
 		On(sql.Eq(sql.Col("t.id"), sql.Col("s.id"))).
 		When(sql.WhenMatched().ThenUpdate(sql.Set("balance", sql.Col("s.balance")))).
-		When(sql.WhenNotMatched().ThenInsert([]string{"id"}, sql.Col("s.id")))
+		When(sql.WhenNotMatched().ThenInsert([]string{"id"}, sql.Col("s.id"))).
+		Stmt()
 
-	p := q.Parts()
 	if p.Target.Name != "accounts" || p.TargetAlias != "t" {
 		t.Errorf("Target/alias = %q/%q, want accounts/t", p.Target.Name, p.TargetAlias)
 	}
 	if p.Using == nil || p.On == nil {
-		t.Fatal("Using/On missing from MergeParts")
+		t.Fatal("Using/On missing from MergeStmt")
 	}
 	if len(p.When) != 2 {
 		t.Fatalf("When = %d clauses, want 2", len(p.When))

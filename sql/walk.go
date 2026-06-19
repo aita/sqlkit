@@ -310,21 +310,21 @@ func queryChildren(q Query, onCTEName func(string), onName func(string), onQuery
 		for _, s := range v.Returning {
 			sel(s)
 		}
-	case MergeQuery:
-		ctes(v.with)
-		onName(v.target.QualifiedName())
-		src(v.using)
-		expr(v.on)
-		for _, w := range v.whens {
-			expr(w.condition)
-			for _, a := range w.sets {
+	case MergeStmt:
+		ctes(v.With)
+		onName(v.Target.QualifiedName())
+		src(v.Using)
+		expr(v.On)
+		for _, w := range v.When {
+			expr(w.Condition)
+			for _, a := range w.Sets {
 				expr(a.Value)
 			}
-			for _, e := range w.insertValues {
+			for _, e := range w.InsertValues {
 				expr(e)
 			}
 		}
-		for _, s := range v.returning {
+		for _, s := range v.Returning {
 			sel(s)
 		}
 	default:

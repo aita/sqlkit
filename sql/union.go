@@ -207,6 +207,8 @@ func astOf(q Query) Query {
 		return b.s
 	case DeleteBuilder:
 		return b.s
+	case MergeBuilder:
+		return b.s
 	default:
 		return q
 	}

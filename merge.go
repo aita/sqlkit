@@ -22,7 +22,7 @@ import (
 // MERGE is PostgreSQL/standard-SQL only; other dialects error at compile time.
 type MergeQuery struct {
 	ex    executorBinding
-	query sql.MergeQuery
+	query sql.MergeBuilder
 }
 
 // MergeWhen is one WHEN clause of a MERGE — a match kind, an optional AND
