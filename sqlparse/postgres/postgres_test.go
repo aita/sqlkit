@@ -2,6 +2,7 @@ package postgres_test
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/aita/sqlkit/sql"
@@ -13,7 +14,8 @@ import (
 // ignore source positions: the parser records a byte offset (NodePos) on every
 // node it builds, while the builder-constructed want carries NoPos, so a
 // structural test must look past them. NodePos is a plain int, so it is ignored
-// by field name rather than by type. Positions have their own test (pos_test.go).
+// by field name rather than by type. Positions have their own tests (the
+// TestParse*Positions tests in expr_test.go and this file).
 var astCmpOpts = cmp.Options{
 	cmp.Exporter(func(reflect.Type) bool { return true }),
 	cmp.FilterPath(func(p cmp.Path) bool {
@@ -122,5 +124,44 @@ func TestParseOneRejectsMultiple(t *testing.T) {
 func TestParseSyntaxError(t *testing.T) {
 	if _, err := postgres.Parse("SELECT FROM WHERE"); err == nil {
 		t.Fatal("Parse() of invalid SQL succeeded, want error")
+	}
+}
+
+// TestParseStatementAtZero pins that a top-level statement starting at byte 0
+// reports offset 0, not NoPos: positions store offset+1, so 0 is a real position.
+func TestParseStatementAtZero(t *testing.T) {
+	q, err := postgres.ParseOne("SELECT name FROM users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sql.Unwrap(q).(sql.Node).Pos(); got != 0 {
+		t.Errorf("statement at byte 0: Pos() = %d, want 0", got)
+	}
+}
+
+// TestParseStatementPosition checks the parser records a statement's offset from
+// the RawStmt wrapper, using the second statement of two.
+func TestParseStatementPosition(t *testing.T) {
+	src := "SELECT 1; SELECT name FROM users"
+	qs, err := postgres.Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(qs) != 2 {
+		t.Fatalf("parsed %d statements, want 2", len(qs))
+	}
+	second := sql.Unwrap(qs[1])
+	n, ok := second.(sql.Node)
+	if !ok {
+		t.Fatalf("statement %T does not satisfy Node", second)
+	}
+	// pg_query's stmt_location is the offset just past the previous statement's
+	// terminator, so it may include leading whitespace before the second SELECT.
+	got := n.Pos()
+	if got == sql.NoPos {
+		t.Fatal("second statement carries no position")
+	}
+	if !strings.HasPrefix(strings.TrimSpace(src[got:]), "SELECT name") {
+		t.Errorf("statement offset %d does not reach the second SELECT: %q", got, src[got:])
 	}
 }

@@ -1,9 +1,11 @@
 package postgres_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/aita/sqlkit/sql"
+	"github.com/aita/sqlkit/sqlparse/postgres"
 )
 
 // sel builds SELECT id FROM t WHERE <where> for the common expression case.
@@ -265,4 +267,76 @@ func TestExprSimilarTo(t *testing.T) {
 		selWhere(sql.And(sql.SimilarTo(sql.Col("name"), "a%"), sql.NotSimilarTo(sql.Col("x"), "b%"))),
 		`SELECT "id" FROM "t" WHERE (("name" SIMILAR TO $1) AND ("x" NOT SIMILAR TO $2))`,
 		"a%", "b%")
+}
+
+// TestParsePositions checks the parser records each column reference and string
+// literal's byte offset into the source, so a caller can map a node back to its
+// place in the original SQL.
+func TestParsePositions(t *testing.T) {
+	src := "SELECT id FROM users WHERE name = 'taro'"
+	q, err := postgres.ParseOne(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel, ok := sql.Unwrap(q).(sql.SelectStmt)
+	if !ok {
+		t.Fatalf("not a SELECT: %T", sql.Unwrap(q))
+	}
+	bin, ok := sel.Where.(sql.BinaryExpression)
+	if !ok {
+		t.Fatalf("WHERE is not a comparison: %T", sel.Where)
+	}
+	if bin.Pos() == sql.NoPos {
+		t.Error("comparison node carries no position")
+	}
+	col, ok := bin.Left.(sql.ColumnExpression)
+	if !ok {
+		t.Fatalf("left operand is not a column: %T", bin.Left)
+	}
+	val, ok := bin.Right.(sql.ValueExpression)
+	if !ok {
+		t.Fatalf("right operand is not a value: %T", bin.Right)
+	}
+
+	if got, want := col.Pos(), strings.Index(src, "name"); got != want {
+		t.Errorf("column offset = %d, want %d", got, want)
+	} else if src[got:got+len("name")] != "name" {
+		t.Errorf("column offset %d does not point at \"name\"", got)
+	}
+	if got, want := val.Pos(), strings.Index(src, "'taro'"); got != want {
+		t.Errorf("literal offset = %d, want %d", got, want)
+	} else if !strings.HasPrefix(src[got:], "'taro'") {
+		t.Errorf("literal offset %d does not point at \"'taro'\"", got)
+	}
+}
+
+// TestParseCompositePositions checks the parser records positions on composite
+// expression nodes too, not only the leaves: the WHERE's AND and each of its
+// operands (an IN list and a LIKE comparison) report a position.
+func TestParseCompositePositions(t *testing.T) {
+	src := "SELECT id FROM users WHERE id IN (1, 2) AND name LIKE 'a%'"
+	q, err := postgres.ParseOne(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := sql.Unwrap(q).(sql.SelectStmt)
+	and, ok := sel.Where.(sql.LogicalExpression)
+	if !ok {
+		t.Fatalf("WHERE is not an AND: %T", sel.Where)
+	}
+	if and.Pos() == sql.NoPos {
+		t.Error("AND node carries no position")
+	}
+	if len(and.Operands) != 2 {
+		t.Fatalf("AND has %d operands, want 2", len(and.Operands))
+	}
+	for _, op := range and.Operands {
+		n, ok := op.(sql.Node)
+		if !ok {
+			t.Fatalf("operand %T does not satisfy Node", op)
+		}
+		if n.Pos() == sql.NoPos {
+			t.Errorf("operand %T carries no position", op)
+		}
+	}
 }
