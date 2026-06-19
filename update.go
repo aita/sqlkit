@@ -307,16 +307,17 @@ func (q UpdateQuery) returningSelections() []sql.Selection {
 // across several statements run atomically (one transaction through a Database,
 // the session's transaction through a Session); the returned result then sums
 // their RowsAffected.
-func (q UpdateQuery) Exec(ctx context.Context) (stdsql.Result, error) {
+func (q UpdateQuery) Exec(ctx context.Context, opts ...ExecOption) (stdsql.Result, error) {
 	if q.err != nil {
 		return nil, q.err
 	}
 	if q.ex == nil {
 		return nil, errNoExecutor
 	}
+	ex, _ := applyExecOptions(q.ex, opts)
 	// runExec consults splitStatements; a split runs the chunks atomically and
 	// sums their RowsAffected, otherwise the statement runs as one.
-	res, err := runExec(ctx, q.ex, q)
+	res, err := runExec(ctx, ex, q)
 	if err != nil || !q.versionGuard {
 		return res, err
 	}
