@@ -16,7 +16,7 @@ func Walk(q Query, visit func(q Query) bool) {
 	if q == nil || !visit(q) {
 		return
 	}
-	queryChildren(q, func(string) {}, func(child Query) { Walk(child, visit) })
+	queryChildren(q, func(string) {}, func(string) {}, func(child Query) { Walk(child, visit) })
 }
 
 // WalkSubqueries calls visit for every subquery embedded in e and its
@@ -185,13 +185,45 @@ func deref(q Query) Query {
 	}
 }
 
-// queryChildren reports the immediate structural children of q: each base-table
-// name it references directly through a FROM/JOIN/target source (onName), and
-// each query nested one level inside it — subquery sources, set-operation arms,
-// CTE bodies, and the subqueries embedded in its expressions (onQuery). It does
-// not recurse into those nested queries; callers drive the recursion (see Walk).
-// CTE bodies are reported first so a derived ordering follows source order.
-func queryChildren(q Query, onName func(string), onQuery func(Query)) {
+// Decompose reports q's immediate structural pieces for read-only analysis,
+// without copying a snapshot of its clauses:
+//
+//   - onCTEName: each CTE name q declares in its own WITH clause, the scope a
+//     FROM/JOIN reference resolves against (a name in scope denotes that CTE, not
+//     a base table).
+//   - onName: each base-table (or CTE-reference) name q references directly
+//     through a FROM/JOIN/target source.
+//   - onChild: each query nested one level inside q — CTE bodies, subquery
+//     sources, set-operation arms, and the subqueries embedded in its
+//     expressions.
+//
+// It does not recurse into nested queries; callers drive the recursion (see
+// Walk). Any callback may be nil. It is the public, zero-copy structural seam
+// analysis tools build on instead of the clause-copying Parts accessors.
+func Decompose(q Query, onCTEName func(string), onName func(string), onChild func(Query)) {
+	queryChildren(q, orNoopString(onCTEName), orNoopString(onName), orNoopQuery(onChild))
+}
+
+func orNoopString(f func(string)) func(string) {
+	if f == nil {
+		return func(string) {}
+	}
+	return f
+}
+
+func orNoopQuery(f func(Query)) func(Query) {
+	if f == nil {
+		return func(Query) {}
+	}
+	return f
+}
+
+// queryChildren is the in-package engine behind Decompose and Walk: it reports
+// the CTE names q declares (onCTEName), the base-table names it references
+// directly (onName), and the queries nested one level inside it (onQuery),
+// reading q's unexported fields directly so nothing is copied. CTE bodies are
+// reported first so a derived ordering follows source order.
+func queryChildren(q Query, onCTEName func(string), onName func(string), onQuery func(Query)) {
 	src := func(s Source) {
 		if s == nil {
 			return
@@ -206,6 +238,7 @@ func queryChildren(q Query, onName func(string), onQuery func(Query)) {
 	sel := func(s Selection) { WalkSelectionSubqueries(s, onQuery) }
 	ctes := func(cs []CTE) {
 		for _, c := range cs {
+			onCTEName(c.name)
 			if c.query != nil {
 				onQuery(c.query)
 			}
