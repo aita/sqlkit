@@ -264,9 +264,10 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 	}
 
 	generator := GeneratorID()
+	enumGo := enumGoTypes(md.Enums)
 	models := make([]*tableModel, 0, len(tables))
 	for _, table := range tables {
-		tm, err := buildTable(table, dialect, mapper, bindingName)
+		tm, err := buildTable(table, dialect, mapper, bindingName, enumGo)
 		if err != nil {
 			return nil, err
 		}
@@ -305,7 +306,7 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 // buildTable builds the binding model for a single table. bindingName derives
 // the binding's base identifier, off which every binding type and var name is
 // formed.
-func buildTable(table meta.Table, dialect string, mapper TypeMapper, bindingName func(meta.Table) string) (*tableModel, error) {
+func buildTable(table meta.Table, dialect string, mapper TypeMapper, bindingName func(meta.Table) string, enumGo map[string]meta.GoType) (*tableModel, error) {
 	varName := bindingName(table)
 	tm := &tableModel{
 		TypeName:    varName + "Table",
@@ -321,7 +322,7 @@ func buildTable(table meta.Table, dialect string, mapper TypeMapper, bindingName
 		RelsType:    varName + "Rels",
 	}
 	for _, column := range table.Columns {
-		goType, err := mapper.GoTypeFor(table, column, dialect)
+		goType, err := columnGoType(table, column, dialect, mapper, enumGo)
 		if err != nil {
 			return nil, fmt.Errorf("codegen: table %s: %w", table.Name, err)
 		}

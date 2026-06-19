@@ -41,6 +41,38 @@ func TestGenerateEnums(t *testing.T) {
 	}
 }
 
+func TestGenerateEnumColumn(t *testing.T) {
+	// A column whose DB type names an enum maps to the generated Go enum type;
+	// a nullable one becomes a pointer. meta.Of("postgres","mood") stands in for
+	// a decl.EnumType("mood") column (both resolve to engine name "mood").
+	md := meta.Metadata{
+		Enums: []meta.Enum{{Name: "mood", Values: []string{"happy", "sad"}}},
+		Tables: []meta.Table{{
+			Name: "users",
+			Columns: []meta.Column{
+				{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true},
+				{Name: "mood", Type: meta.Of("postgres", "mood", 0, 0, 0)},
+				{Name: "backup_mood", Type: meta.Of("postgres", "mood", 0, 0, 0), Nullable: true},
+			},
+		}},
+	}
+	files, err := Generate(md, Options{PackageName: "appdb"})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	var tables string
+	for _, f := range files {
+		if f.Name == "tables.go" {
+			tables = string(f.Content)
+		}
+	}
+	for _, want := range []string{"Column[Mood]", "Column[*Mood]"} {
+		if !strings.Contains(tables, want) {
+			t.Fatalf("tables.go missing %q in:\n%s", want, tables)
+		}
+	}
+}
+
 func TestGenerateEnumsOnly(t *testing.T) {
 	md := meta.Metadata{
 		Enums: []meta.Enum{{Name: "status", Values: []string{"on", "off"}}},
