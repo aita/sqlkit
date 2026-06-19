@@ -161,30 +161,6 @@ func walkOrderTerms(terms []OrderTerm, visit func(Query)) {
 	}
 }
 
-// deref converts a pointer to a query node into its value form so the type
-// switches that follow need only handle value types. A non-pointer query, or one
-// of an unknown type, passes through unchanged.
-func deref(q Query) Query {
-	switch p := q.(type) {
-	case *SelectQuery:
-		return *p
-	case *CompoundQuery:
-		return *p
-	case *InsertQuery:
-		return *p
-	case *UpdateQuery:
-		return *p
-	case *DeleteQuery:
-		return *p
-	case *MergeQuery:
-		return *p
-	case *ValuesQuery:
-		return *p
-	default:
-		return q
-	}
-}
-
 // Decompose reports q's immediate structural pieces for read-only analysis,
 // without copying a snapshot of its clauses:
 //
@@ -250,7 +226,7 @@ func queryChildren(q Query, onCTEName func(string), onName func(string), onQuery
 		}
 	}
 
-	switch v := deref(q).(type) {
+	switch v := q.(type) {
 	case SelectQuery:
 		ctes(v.with)
 		src(v.from)
