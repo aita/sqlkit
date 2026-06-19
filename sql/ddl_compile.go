@@ -82,6 +82,21 @@ func (c *Compiler) CompileCreateTable(s CreateTableStmt) (string, error) {
 	for _, fk := range s.ForeignKeys {
 		defs = append(defs, c.foreignKeyDef(fk))
 	}
+	if len(s.Indexes) > 0 {
+		if c.Dialect.Name() != "mysql" {
+			return "", fmt.Errorf("sqlkit/sql: inline table indexes are supported only on the mysql dialect; use CreateIndex")
+		}
+		for _, idx := range s.Indexes {
+			if len(idx.Columns) == 0 {
+				return "", fmt.Errorf("sqlkit/sql: table index requires at least one column")
+			}
+			clause := "KEY "
+			if idx.Name != "" {
+				clause += c.Dialect.QuoteName(idx.Name) + " "
+			}
+			defs = append(defs, clause+"("+c.quoteAll(idx.Columns)+")")
+		}
+	}
 
 	var sb strings.Builder
 	sb.WriteString("CREATE ")
@@ -156,6 +171,9 @@ func (c *Compiler) compileColumnDef(col ColumnDef) (string, error) {
 			return "", err
 		}
 		core = typeClause
+		if col.Collate != "" {
+			core += " COLLATE " + col.Collate
+		}
 		switch {
 		case col.Generated != nil:
 			expr, err := CompileStatic(c.Dialect, col.Generated.Expression)
@@ -185,6 +203,16 @@ func (c *Compiler) compileColumnDef(col ColumnDef) (string, error) {
 				return "", err
 			}
 			core += " DEFAULT " + expr
+		}
+		if col.OnUpdate != nil {
+			if c.Dialect.Name() != "mysql" {
+				return "", fmt.Errorf("sqlkit/sql: column ON UPDATE is supported only on the mysql dialect")
+			}
+			expr, err := CompileStatic(c.Dialect, col.OnUpdate)
+			if err != nil {
+				return "", err
+			}
+			core += " ON UPDATE " + expr
 		}
 	}
 

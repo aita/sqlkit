@@ -82,6 +82,16 @@ jobs:
           go vet ./...
           go test -race ./...
 
+      # The mysql frontend uses the TiDB parser, kept in its own module so its
+      # dependency tree stays out of the root module that consumers import.
+      - name: Build, vet & test sqlparse/mysql module
+        working-directory: sqlparse/mysql
+        run: |
+          test -z "$(gofmt -l .)"
+          go build ./...
+          go vet ./...
+          go test -race ./...
+
       # The OpenTelemetry exporter is its own module so the otel dependency
       # stays out of the root module that consumers import.
       - name: Build, vet & test querytrace/otelquery module

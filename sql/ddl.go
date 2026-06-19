@@ -120,6 +120,12 @@ type ColumnDef struct {
 	References    *ColumnReference
 	Generated     *GeneratedColumn
 	Identity      IdentityKind
+	// Collate is an optional column collation rendered as COLLATE <name> after
+	// the type (empty for none).
+	Collate string
+	// OnUpdate is an optional MySQL ON UPDATE clause (e.g. CURRENT_TIMESTAMP) for
+	// timestamp/datetime columns; it must bind no values. MySQL only.
+	OnUpdate Expression
 }
 
 // ColumnReference is a column-level foreign key: REFERENCES <schema.table>
@@ -279,9 +285,18 @@ type CreateTableStmt struct {
 	Checks      []TableCheck
 	Uniques     []TableUnique
 	ForeignKeys []ForeignKeyConstraint
+	Indexes     []TableIndex
 	Comment     string
 	IfNotExists bool
 	Temporary   bool
+}
+
+// TableIndex is a non-unique secondary index declared inline in a CREATE TABLE
+// statement (MySQL's KEY/INDEX). Name is optional. Inline indexes are a MySQL
+// feature; other dialects declare indexes with a separate CREATE INDEX.
+type TableIndex struct {
+	Name    string
+	Columns []string
 }
 
 // ToSQL compiles the CREATE TABLE statement.
@@ -333,6 +348,14 @@ func (b CreateTableBuilder) Unique(name string, columns ...string) CreateTableBu
 // ForeignKey appends a table-level FOREIGN KEY constraint.
 func (b CreateTableBuilder) ForeignKey(fk ForeignKeyConstraint) CreateTableBuilder {
 	b.s.ForeignKeys = append(append([]ForeignKeyConstraint(nil), b.s.ForeignKeys...), fk)
+	return b
+}
+
+// Index appends an inline non-unique secondary index (MySQL KEY/INDEX). name is
+// optional. Inline indexes render only on MySQL; other dialects reject them in
+// favor of a separate CreateIndex statement.
+func (b CreateTableBuilder) Index(name string, columns ...string) CreateTableBuilder {
+	b.s.Indexes = append(append([]TableIndex(nil), b.s.Indexes...), TableIndex{Name: name, Columns: columns})
 	return b
 }
 

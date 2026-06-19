@@ -11,6 +11,9 @@ type InsertStmt struct {
 	Select    Query
 	Conflict  *ConflictClause
 	Returning []Selection
+	// Replace marks a MySQL REPLACE INTO (delete-then-insert) rather than a plain
+	// INSERT.
+	Replace bool
 }
 
 // ToSQL compiles the INSERT statement.
@@ -43,6 +46,13 @@ type InsertBuilder struct{ s InsertStmt }
 // InsertInto creates an INSERT query builder for a table.
 func InsertInto(table Table) InsertBuilder {
 	return InsertBuilder{s: InsertStmt{Table: table}}
+}
+
+// ReplaceInto creates a REPLACE query builder for a table — MySQL's
+// delete-then-insert upsert. It shares InsertBuilder's Columns/Values/FromSelect
+// methods but rejects ON CONFLICT and RETURNING, and compiles only on MySQL.
+func ReplaceInto(table Table) InsertBuilder {
+	return InsertBuilder{s: InsertStmt{Table: table, Replace: true}}
 }
 
 // Stmt returns the built INSERT statement — the pure AST value.
@@ -186,6 +196,9 @@ type UpdateStmt struct {
 	From      []Source
 	Joins     []JoinClause
 	Where     Expression
+	OrderBy   []OrderTerm
+	Limit     int
+	HasLimit  bool
 	Returning []Selection
 }
 
@@ -245,6 +258,20 @@ func (b UpdateBuilder) Where(expr Expression) UpdateBuilder {
 }
 
 // WithCTE prepends common table expressions to the UPDATE.
+// OrderBy adds ORDER BY terms that bound which rows an UPDATE touches
+// (UPDATE ... ORDER BY ... LIMIT). MySQL only; other dialects reject it.
+func (b UpdateBuilder) OrderBy(terms ...OrderTerm) UpdateBuilder {
+	b.s.OrderBy = append(append([]OrderTerm(nil), b.s.OrderBy...), terms...)
+	return b
+}
+
+// Limit caps the number of rows an UPDATE touches (UPDATE ... LIMIT n). MySQL
+// only; other dialects reject it.
+func (b UpdateBuilder) Limit(n int) UpdateBuilder {
+	b.s.Limit, b.s.HasLimit = n, true
+	return b
+}
+
 func (b UpdateBuilder) WithCTE(ctes ...CTE) UpdateBuilder {
 	b.s.With = append(append([]CTE(nil), b.s.With...), ctes...)
 	return b
@@ -270,6 +297,9 @@ type DeleteStmt struct {
 	Using     []Source
 	Joins     []JoinClause
 	Where     Expression
+	OrderBy   []OrderTerm
+	Limit     int
+	HasLimit  bool
 	Returning []Selection
 }
 
@@ -323,6 +353,20 @@ func (b DeleteBuilder) Where(expr Expression) DeleteBuilder {
 }
 
 // WithCTE prepends common table expressions to the DELETE.
+// OrderBy adds ORDER BY terms that bound which rows a DELETE removes
+// (DELETE ... ORDER BY ... LIMIT). MySQL only; other dialects reject it.
+func (b DeleteBuilder) OrderBy(terms ...OrderTerm) DeleteBuilder {
+	b.s.OrderBy = append(append([]OrderTerm(nil), b.s.OrderBy...), terms...)
+	return b
+}
+
+// Limit caps the number of rows a DELETE removes (DELETE ... LIMIT n). MySQL
+// only; other dialects reject it.
+func (b DeleteBuilder) Limit(n int) DeleteBuilder {
+	b.s.Limit, b.s.HasLimit = n, true
+	return b
+}
+
 func (b DeleteBuilder) WithCTE(ctes ...CTE) DeleteBuilder {
 	b.s.With = append(append([]CTE(nil), b.s.With...), ctes...)
 	return b

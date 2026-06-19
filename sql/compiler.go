@@ -1013,9 +1013,24 @@ func (c *Compiler) CompileInsert(q InsertStmt) (string, []any, error) {
 			return "", nil, fmt.Errorf("sqlkit/sql: INSERT requires at least one row of values or a SELECT source")
 		}
 	}
+	if q.Replace {
+		if c.Dialect.Name() != "mysql" {
+			return "", nil, fmt.Errorf("sqlkit/sql: REPLACE INTO is supported only on the mysql dialect")
+		}
+		if q.Conflict != nil {
+			return "", nil, fmt.Errorf("sqlkit/sql: REPLACE INTO does not take an ON CONFLICT clause")
+		}
+		if len(q.Returning) > 0 {
+			return "", nil, fmt.Errorf("sqlkit/sql: REPLACE INTO does not support RETURNING")
+		}
+	}
 	var sb strings.Builder
 	var args []any
-	sb.WriteString("INSERT INTO ")
+	if q.Replace {
+		sb.WriteString("REPLACE INTO ")
+	} else {
+		sb.WriteString("INSERT INTO ")
+	}
 	sb.WriteString(c.Dialect.QuoteIdent(q.Table.QualifiedName()))
 	if len(q.Columns) > 0 {
 		sb.WriteString(" (")
@@ -1274,6 +1289,9 @@ func (c *Compiler) CompileUpdate(q UpdateStmt) (string, []any, error) {
 		sb.WriteString(whereSQL)
 		args = append(args, whereArgs...)
 	}
+	if err := c.writeRowLimit(&sb, &args, q.OrderBy, q.HasLimit, q.Limit); err != nil {
+		return "", nil, err
+	}
 	if err := c.writeReturning(&sb, &args, q.Returning); err != nil {
 		return "", nil, err
 	}
@@ -1348,6 +1366,9 @@ func (c *Compiler) CompileDelete(q DeleteStmt) (string, []any, error) {
 		sb.WriteString(" WHERE ")
 		sb.WriteString(whereSQL)
 		args = append(args, whereArgs...)
+	}
+	if err := c.writeRowLimit(&sb, &args, q.OrderBy, q.HasLimit, q.Limit); err != nil {
+		return "", nil, err
 	}
 	if err := c.writeReturning(&sb, &args, q.Returning); err != nil {
 		return "", nil, err
@@ -1552,4 +1573,45 @@ func writeOrderModifiers(sb *strings.Builder, term OrderTerm) {
 		sb.WriteString(" NULLS ")
 		sb.WriteString(term.Nulls)
 	}
+}
+
+// writeOrderBy renders an " ORDER BY ..." clause, writing nothing when empty.
+func (c *Compiler) writeOrderBy(sb *strings.Builder, args *[]any, terms []OrderTerm) error {
+	if len(terms) == 0 {
+		return nil
+	}
+	sb.WriteString(" ORDER BY ")
+	for i, term := range terms {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		termSQL, termArgs, err := c.CompileExpression(term.Expr)
+		if err != nil {
+			return err
+		}
+		sb.WriteString(termSQL)
+		writeOrderModifiers(sb, term)
+		*args = append(*args, termArgs...)
+	}
+	return nil
+}
+
+// writeRowLimit renders the "ORDER BY ... LIMIT n" tail of an UPDATE or DELETE,
+// which bounds the affected rows. Only MySQL accepts it on data-modifying
+// statements; other dialects reject it rather than emit invalid SQL.
+func (c *Compiler) writeRowLimit(sb *strings.Builder, args *[]any, orderBy []OrderTerm, hasLimit bool, limit int) error {
+	if len(orderBy) == 0 && !hasLimit {
+		return nil
+	}
+	if c.Dialect.Name() != "mysql" {
+		return fmt.Errorf("sqlkit/sql: ORDER BY / LIMIT on UPDATE/DELETE is supported only on the mysql dialect")
+	}
+	if err := c.writeOrderBy(sb, args, orderBy); err != nil {
+		return err
+	}
+	if hasLimit {
+		sb.WriteString(" LIMIT ")
+		sb.WriteString(strconv.Itoa(limit))
+	}
+	return nil
 }
