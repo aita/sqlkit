@@ -10,8 +10,10 @@
 //
 // A concrete frontend lives in its own subpackage and module so its parser
 // dependency stays isolated, for example
-// github.com/aita/sqlkit/sqlparse/postgres, which is backed by pg_query_go.
-// Additional dialects (MySQL, ...) can be added the same way.
+// github.com/aita/sqlkit/sqlparse/postgres, which is backed by pg_query_go, and
+// github.com/aita/sqlkit/sqlparse/sqlite, a pure-Go frontend backed by
+// github.com/rqlite/sql. Additional dialects (MySQL, ...) can be added the same
+// way.
 //
 // Frontends are used directly, not through a global registry: import the one
 // you need and construct its parser.

@@ -86,6 +86,17 @@ jobs:
           go vet ./...
           go test -race ./...
 
+      # The sqlite frontend uses the rqlite/sql parser, kept in its own module so
+      # that dependency stays out of the root module that consumers import. It is
+      # pure Go (cgo-free), unlike the postgres frontend.
+      - name: Build, vet & test sqlparse/sqlite module
+        working-directory: sqlparse/sqlite
+        run: |
+          test -z "$(gofmt -l .)"
+          go build ./...
+          go vet ./...
+          go test -race ./...
+
       # The OpenTelemetry exporter is its own module so the otel dependency
       # stays out of the root module that consumers import.
       - name: Build, vet & test querytrace/otelquery module
