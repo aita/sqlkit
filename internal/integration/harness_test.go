@@ -41,8 +41,8 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/dbtest"
 	"github.com/aita/sqlkit/meta"
+	"github.com/aita/sqlkit/sqltest"
 )
 
 // engine describes one database backend the suite runs against.
@@ -214,7 +214,7 @@ func image(envVar, fallback string) string {
 }
 
 // applySchema recreates the shared schema (testCatalog) for the engine,
-// delegating to dbtest.ApplySchema: it drops the tables in reverse declaration
+// delegating to sqltest.ApplySchema: it drops the tables in reverse declaration
 // order (children before parents, so foreign keys never block the drop) and
 // executes the CREATE SQL the meta model renders for the database's dialect.
 // Running it per subtest gives each test a clean database. eng is unused now
@@ -225,7 +225,7 @@ func applySchema(t *testing.T, db *sqlkit.Database, eng engine) {
 	if err != nil {
 		t.Fatalf("build catalog: %v", err)
 	}
-	dbtest.ApplySchema(t, db, md)
+	sqltest.ApplySchema(t, db, md)
 }
 
 func qualifiedName(t meta.Table) string {

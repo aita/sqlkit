@@ -6,11 +6,11 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/internal/testutil"
 )
 
 func TestDeleteExecThroughDatabase(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 
 	if _, err := db.Delete(Users).Where(Users.ID.Eq(1)).Exec(context.Background()); err != nil {

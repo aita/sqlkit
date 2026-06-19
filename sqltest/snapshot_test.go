@@ -1,26 +1,26 @@
-package dbtest_test
+package sqltest_test
 
 import (
 	"strings"
 	"testing"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/dbtest"
-	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/internal/testutil"
+	"github.com/aita/sqlkit/sqltest"
 )
 
 func TestSnapshotRestore(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := wrap(fake, sqlkit.PostgreSQLDialect{})
 	session := db.NewSession()
 	defer session.Close()
 
 	// Seed once, then snapshot.
-	dbtest.Insert(t, session, newUsers(), userRow{Email: "alice@example.com"})
-	restore := dbtest.Snapshot(t, session)
+	sqltest.InsertRows(t, session, newUsers(), userRow{Email: "alice@example.com"})
+	restore := sqltest.Snapshot(t, session)
 
 	// A case mutates and then restores twice.
-	dbtest.Insert(t, session, newUsers(), userRow{Email: "bob@example.com"})
+	sqltest.InsertRows(t, session, newUsers(), userRow{Email: "bob@example.com"})
 	restore(t)
 	restore(t)
 
@@ -43,12 +43,12 @@ func TestSnapshotRestore(t *testing.T) {
 }
 
 func TestFixtureLoadSnapshot(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := wrap(fake, sqlkit.PostgreSQLDialect{})
 	session := db.NewSession()
 	defer session.Close()
 
-	restore := dbtest.NewFixture("blog").
+	restore := sqltest.NewFixture("blog").
 		Add(newUsers(), userRow{Email: "alice@example.com"}).
 		LoadSnapshot(t, session)
 

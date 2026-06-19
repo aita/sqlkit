@@ -1,4 +1,4 @@
-package querytest
+package sqltest
 
 import (
 	"bytes"
@@ -123,14 +123,14 @@ func Lenient() Option {
 // any statement no stub answered — fails the test without a manual Verify call.
 // Pass Lenient to allow unmatched statements.
 //
-//	db, mock := querytest.NewDB(t)
-//	mock.ExpectQuery(querytest.Contains("FROM users")).
-//		Return(querytest.NewRows("id", "name").AddRow(1, "alice"))
+//	db, mock := sqltest.NewDB(t)
+//	mock.ExpectQuery(sqltest.Contains("FROM users")).
+//		Return(sqltest.NewRows("id", "name").AddRow(1, "alice"))
 //
 //	trace := querytrace.New("LoadUser")
 //	ctx := querytrace.WithTrace(context.Background(), trace)
 //	// ... use db under ctx ...
-//	querytest.Expect(t, trace).Query(querytest.Select(), querytest.Table("users")).Times(1)
+//	sqltest.Expect(t, trace).Query(sqltest.Select(), sqltest.Table("users")).Times(1)
 func NewDB(t testing.TB, opts ...Option) (*sql.DB, *Mock) {
 	t.Helper()
 	c := config{cfg: querytrace.NewConfig(querytrace.WithVerboseCapture()), strict: true}
@@ -194,11 +194,11 @@ func (m *Mock) resolve(expect any) (Matcher, []argCheck) {
 	case sqlpkg.Query:
 		text, args, err := e.ToSQL(m.dialect)
 		if err != nil {
-			panic(fmt.Sprintf("querytest: cannot compile expected query: %v", err))
+			panic(fmt.Sprintf("sqltest: cannot compile expected query: %v", err))
 		}
 		return newQueryMatcher(text), argChecksFrom(args)
 	default:
-		panic(fmt.Sprintf("querytest: Expect takes a Matcher, string, or sql.Query, got %T", expect))
+		panic(fmt.Sprintf("sqltest: Expect takes a Matcher, string, or sql.Query, got %T", expect))
 	}
 }
 
@@ -310,18 +310,18 @@ func (m queryMatcher) String() string          { return "query " + m.desc }
 
 // AnyTable is a From source that matches any table in a sql.Query expectation:
 //
-//	mock.ExpectQuery(sql.Select(sql.Col("id")).From(querytest.AnyTable()))
+//	mock.ExpectQuery(sql.Select(sql.Col("id")).From(sqltest.AnyTable()))
 func AnyTable() sqlpkg.Source { return sqlpkg.Tbl(sentinel()) }
 
 // AnyColumn is a Select selection that matches any column or expression:
 //
-//	mock.ExpectQuery(sql.Select(querytest.AnyColumn()).From(sql.Tbl("users")))
+//	mock.ExpectQuery(sql.Select(sqltest.AnyColumn()).From(sql.Tbl("users")))
 func AnyColumn() sqlpkg.Selection { return sqlpkg.Raw(sentinel()) }
 
 // AnyExpr is an expression that matches any expression, for Where and other
 // clauses:
 //
-//	...Where(querytest.AnyExpr())
+//	...Where(sqltest.AnyExpr())
 func AnyExpr() sqlpkg.Expression { return sqlpkg.Raw(sentinel()) }
 
 var sentinelCounter atomic.Uint64
@@ -336,7 +336,7 @@ func sentinel() string { return fmt.Sprintf("\x00qtwild%d\x00", sentinelCounter.
 
 // ArgMatcher decides whether the bind argument at a placeholder position
 // matches. Place one in a sql.Query expectation with Arg, AnyArg, or ArgMatch —
-// for example Where(Eq(Col("id"), querytest.Arg(5))) — and the mock checks the
+// for example Where(Eq(Col("id"), sqltest.Arg(5))) — and the mock checks the
 // executed statement's argument there. Placeholders without an ArgMatcher (plain
 // values) are left unconstrained, so a query matches any value unless you say
 // otherwise.
@@ -397,12 +397,12 @@ func (m *Mock) Verify(t testing.TB) {
 	m.verified = true
 	for _, s := range append(append([]*Stub(nil), m.queryStubs...), m.execStubs...) {
 		if s.matched < s.minTimes {
-			t.Errorf("querytest: stub [%s] matched %d statements, want at least %d", s.matcher, s.matched, s.minTimes)
+			t.Errorf("sqltest: stub [%s] matched %d statements, want at least %d", s.matcher, s.matched, s.minTimes)
 		}
 	}
 	if m.strict {
 		for _, u := range m.unmatched {
-			t.Errorf("querytest: unexpected %s with no matching stub: %s", u.kind, u.sql)
+			t.Errorf("sqltest: unexpected %s with no matching stub: %s", u.kind, u.sql)
 		}
 	}
 }
@@ -593,7 +593,7 @@ func (c *mockConnector) Driver() stddriver.Driver { return mockDriver{} }
 type mockDriver struct{}
 
 func (mockDriver) Open(string) (stddriver.Conn, error) {
-	return nil, errors.New("querytest: open the mock with NewDB, not a DSN")
+	return nil, errors.New("sqltest: open the mock with NewDB, not a DSN")
 }
 
 type mockConn struct{ mock *Mock }

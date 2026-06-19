@@ -1,4 +1,4 @@
-package dbtest
+package sqltest
 
 import (
 	"context"
@@ -15,9 +15,9 @@ import (
 //
 //	session := db.NewSession()
 //	defer session.Close()
-//	dbtest.SetupSchema(t, db, md)
+//	sqltest.SetupSchema(t, db, md)
 //	blog.Load(t, session)            // seed once
-//	restore := dbtest.Snapshot(t, session)
+//	restore := sqltest.Snapshot(t, session)
 //
 //	t.Run("case1", func(t *testing.T) {
 //		defer restore(t)         // undo case1's writes
@@ -38,12 +38,12 @@ func Snapshot(t *testing.T, s *sqlkit.Session) (restore func(t *testing.T)) {
 	t.Helper()
 	name, err := s.Savepoint(context.Background())
 	if err != nil {
-		t.Fatalf("dbtest: snapshot: %v", err)
+		t.Fatalf("sqltest: snapshot: %v", err)
 	}
 	return func(t *testing.T) {
 		t.Helper()
 		if err := s.RollbackTo(context.Background(), name); err != nil {
-			t.Fatalf("dbtest: restore snapshot: %v", err)
+			t.Fatalf("sqltest: restore snapshot: %v", err)
 		}
 	}
 }

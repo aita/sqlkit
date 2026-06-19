@@ -1,14 +1,14 @@
-package dbtest_test
+package sqltest_test
 
 import (
 	"strings"
 	"testing"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/dbtest"
 	"github.com/aita/sqlkit/decl"
-	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/internal/testutil"
 	"github.com/aita/sqlkit/meta"
+	"github.com/aita/sqlkit/sqltest"
 )
 
 // schemaModel builds a two-table catalog (users, then posts) as meta.Metadata.
@@ -37,10 +37,10 @@ func schemaModel(t *testing.T) meta.Metadata {
 }
 
 func TestApplySchema(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := wrap(fake, sqlkit.PostgreSQLDialect{})
 
-	dbtest.ApplySchema(t, db, schemaModel(t))
+	sqltest.ApplySchema(t, db, schemaModel(t))
 
 	stmts := fake.Statements()
 	// Drops come first, children before parents (posts before users), then the
@@ -69,13 +69,13 @@ func TestApplySchema(t *testing.T) {
 }
 
 func TestSetupSchemaTearsDown(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := wrap(fake, sqlkit.PostgreSQLDialect{})
 	md := schemaModel(t)
 
 	var afterApply int
 	t.Run("inner", func(t *testing.T) {
-		dbtest.SetupSchema(t, db, md)
+		sqltest.SetupSchema(t, db, md)
 		// At this point only the apply (drops + creates) has run; the cleanup
 		// drop is registered but not yet executed.
 		afterApply = len(fake.Statements())

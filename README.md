@@ -34,8 +34,9 @@ err := db.Select().From(appdb.Users).
   (Alembic-style).
 - **[Auto splitting](#auto-splitting)** — bulk inserts and large `IN` lists
   split themselves to stay within the database's bind-parameter limit.
-- **[Test utility](#test-utility)** — the `dbtest` package cuts the boilerplate
-  of seeding fixtures and managing schema in tests.
+- **[Test utility](#test-utility)** — the `sqltest` package cuts the boilerplate
+  of seeding fixtures and managing schema in tests, and spies on the queries your
+  code issues.
 - **[Standalone builder](#standalone-builder)** — every chain also compiles to
   SQL text + args with `ToSQL(dialect)`, ready for pgx, sqlx, or `database/sql`.
 - **[Multiple databases](#multiple-databases)** — the same query builder,
@@ -832,17 +833,17 @@ full value list into a single statement.
 
 ## Test utility
 
-The `dbtest` package cuts the boilerplate of seeding fixtures and managing the
-schema in tests, leaving the connection (and any test container) to the caller.
-Every helper takes `*testing.T` and fails the test with `t.Fatalf` on error, so
-setup code stays linear. It pulls in no database driver or test-container
-dependencies.
+The `sqltest` package is sqlkit's toolkit for testing SQL code. It cuts the
+boilerplate of seeding fixtures and managing the schema, leaving the connection
+(and any test container) to the caller. Every helper takes `*testing.T` and
+fails the test with `t.Fatalf` on error, so setup code stays linear. It pulls in
+no database driver or test-container dependencies.
 
-Four groups of helpers:
+Four groups of seeding helpers:
 
-- **Data insertion** — `Insert`, `InsertID`, and `InsertReturning`. `InsertID`
-  smooths over the cross-dialect wrinkle of reading back a generated key
-  (`RETURNING` on PostgreSQL, `Result.LastInsertId` on MySQL).
+- **Data insertion** — `InsertRows`, `InsertID`, and `InsertReturning`.
+  `InsertID` smooths over the cross-dialect wrinkle of reading back a generated
+  key (`RETURNING` on PostgreSQL, `Result.LastInsertId` on MySQL).
 - **Fixtures** — `NewFixture` builds a named, ordered set of rows across tables;
   `Load` seeds them.
 - **Schema lifecycle** — `SetupSchema` (apply now, drop on `t.Cleanup`), the
@@ -858,10 +859,10 @@ func TestUsers(t *testing.T) {
     if err != nil {
         t.Fatal(err)
     }
-    dbtest.SetupSchema(t, db, md)
+    sqltest.SetupSchema(t, db, md)
 
-    id := dbtest.InsertID(t, db, appdb.Users, UserDTO{Email: "a@example.com"})
-    dbtest.Insert(t, db, appdb.Posts, PostDTO{UserID: id, Title: "hello"})
+    id := sqltest.InsertID(t, db, appdb.Users, UserDTO{Email: "a@example.com"})
+    sqltest.InsertRows(t, db, appdb.Posts, PostDTO{UserID: id, Title: "hello"})
 
     // ... exercise the code under test against the seeded data.
 }
@@ -869,6 +870,12 @@ func TestUsers(t *testing.T) {
 
 Foreign-key ordering is the caller's responsibility: insert parent rows before
 the children that reference them.
+
+The same package also turns a `querytrace.Trace` into a **query spy** —
+`sqltest.Expect(t, trace)` asserts on a query budget, no writes, no N+1, or a
+specific statement running an exact number of times — and provides
+`sqltest.NewDB`, a programmable mock `*sql.DB` for unit tests that should not
+touch a real database. See [querytrace](querytrace/) for the tracing side.
 
 ---
 

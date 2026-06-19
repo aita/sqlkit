@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/internal/testutil"
 )
 
 func TestReturningIsExplicit(t *testing.T) {
@@ -30,9 +30,9 @@ func TestReturningIsExplicit(t *testing.T) {
 }
 
 func TestReturningSpecificColumnsScan(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(string, []any) (sqltest.Result, error) {
-			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(7)}}}, nil
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(7)}}}, nil
 		},
 	}
 	db := sqlkit.WrapDB(fake.DB())

@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/internal/testutil"
 )
 
 // recordingExecutor is a terminal Executor that records every statement it runs
@@ -32,7 +32,7 @@ func (r *recordingExecutor) Exec(ctx context.Context, stmt sqlkit.Statement) (st
 // TestWrapExecutorRoutesStatements verifies a WrapExecutor terminal receives both
 // reads and writes in place of a database/sql handle.
 func TestWrapExecutorRoutesStatements(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: func(string, []any) (sqltest.Result, error) { return usersResult(), nil }}
+	fake := &testutil.Fake{QueryFunc: func(string, []any) (testutil.Result, error) { return usersResult(), nil }}
 	rec := &recordingExecutor{db: fake.DB()}
 	db := sqlkit.WrapExecutor(rec)
 	ctx := context.Background()
@@ -56,7 +56,7 @@ func TestWrapExecutorRoutesStatements(t *testing.T) {
 // TestWrapExecutorRunsBeneathInterceptors verifies the WrapExecutor terminal is
 // the innermost handler: interceptors wrap around it, so it sees their edits.
 func TestWrapExecutorRunsBeneathInterceptors(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	rec := &recordingExecutor{db: fake.DB()}
 	db := sqlkit.WrapExecutor(rec,
 		sqlkit.WithInterceptor(sqlkit.Rewrite(func(_ context.Context, stmt sqlkit.Statement) (sqlkit.Statement, error) {
@@ -76,7 +76,7 @@ func TestWrapExecutorRunsBeneathInterceptors(t *testing.T) {
 // TestWrapExecutorAppliesToSession verifies a session opened from a WrapExecutor
 // database inherits its terminal executor.
 func TestWrapExecutorAppliesToSession(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	rec := &recordingExecutor{db: fake.DB()}
 	db := sqlkit.WrapExecutor(rec)
 	ctx := context.Background()
@@ -94,7 +94,7 @@ func TestWrapExecutorAppliesToSession(t *testing.T) {
 // TestSessionRunsInItsTransaction verifies a session of a WrapDB database runs
 // statements through its own transaction — nothing bypasses it to the *sql.DB.
 func TestSessionRunsInItsTransaction(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 	session := db.NewSession()
 	defer session.Close()
@@ -111,7 +111,7 @@ func TestSessionRunsInItsTransaction(t *testing.T) {
 // plain Executor (no TxExecutor) rejects savepoints instead of running SAVEPOINT
 // SQL outside any transaction.
 func TestWrapExecutorSavepointWithoutTx(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	rec := &recordingExecutor{db: fake.DB()} // implements only Executor
 	db := sqlkit.WrapExecutor(rec)
 	session := db.NewSession()
@@ -173,7 +173,7 @@ func (t *stubTx) Rollback() error { t.e.rollbacks++; return t.tx.Rollback() }
 // TestWrapExecutorTxCommit verifies a WithSession over a TxExecutor terminal runs
 // its statements in the terminal's own transaction and commits through it.
 func TestWrapExecutorTxCommit(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	term := &txExecutorStub{db: fake.DB()}
 	db := sqlkit.WrapExecutor(term)
 
@@ -192,7 +192,7 @@ func TestWrapExecutorTxCommit(t *testing.T) {
 // TestWrapExecutorTxRollback verifies a WithSession that fails rolls back through
 // the TxExecutor terminal's own transaction.
 func TestWrapExecutorTxRollback(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	term := &txExecutorStub{db: fake.DB()}
 	db := sqlkit.WrapExecutor(term)
 	sentinel := errors.New("boom")
@@ -214,7 +214,7 @@ func TestWrapExecutorTxRollback(t *testing.T) {
 // TestWrapExecutorTxSavepoint verifies a savepoint runs through the TxExecutor
 // terminal's own transaction.
 func TestWrapExecutorTxSavepoint(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	term := &txExecutorStub{db: fake.DB()}
 	db := sqlkit.WrapExecutor(term)
 	session := db.NewSession()

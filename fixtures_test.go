@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/internal/testutil"
 	"github.com/aita/sqlkit/sql"
 )
 
@@ -27,10 +27,10 @@ func assertToSQL(t *testing.T, query sql.Query, wantSQL string, wantArgs []any) 
 	}
 }
 
-func usersFake() *sqltest.Fake {
-	return &sqltest.Fake{
-		QueryFunc: func(sqlText string, args []any) (sqltest.Result, error) {
-			return sqltest.Result{
+func usersFake() *testutil.Fake {
+	return &testutil.Fake{
+		QueryFunc: func(sqlText string, args []any) (testutil.Result, error) {
+			return testutil.Result{
 				Columns: []string{"id", "email", "name"},
 				Rows: [][]driver.Value{
 					{int64(1), "a@example.com", "Alice"},
@@ -104,7 +104,7 @@ func (t PostsTable) Relations() []sqlkit.Relation { return []sqlkit.Relation{Pos
 
 func contains(s, sub string) bool { return strings.Contains(s, sub) }
 
-func newDB() *sqlkit.Database { return sqlkit.WrapDB((&sqltest.Fake{}).DB()) }
+func newDB() *sqlkit.Database { return sqlkit.WrapDB((&testutil.Fake{}).DB()) }
 
 func assertSelectSQL(t *testing.T, q sqlkit.SelectQuery, wantSQL string, wantArgs []any) {
 	t.Helper()
@@ -174,15 +174,15 @@ type preUser2 struct {
 }
 
 // postsAndUsersFake serves the posts base query and the users preload follow-up.
-func postsAndUsersFake() *sqltest.Fake {
-	return &sqltest.Fake{
-		QueryFunc: func(s string, _ []any) (sqltest.Result, error) {
+func postsAndUsersFake() *testutil.Fake {
+	return &testutil.Fake{
+		QueryFunc: func(s string, _ []any) (testutil.Result, error) {
 			if contains(s, `"public"."users"`) {
-				return sqltest.Result{Columns: []string{"id", "name"}, Rows: [][]driver.Value{
+				return testutil.Result{Columns: []string{"id", "name"}, Rows: [][]driver.Value{
 					{int64(1), "Alice"}, {int64(2), "Bob"},
 				}}, nil
 			}
-			return sqltest.Result{Columns: []string{"id", "user_id", "title"}, Rows: [][]driver.Value{
+			return testutil.Result{Columns: []string{"id", "user_id", "title"}, Rows: [][]driver.Value{
 				{int64(10), int64(1), "a"}, {int64(11), int64(2), "b"}, {int64(12), int64(1), "c"},
 			}}, nil
 		},
@@ -208,7 +208,7 @@ type nestAuthor struct {
 }
 
 // countQueries reports how many recorded queries mention table.
-func countQueries(fake *sqltest.Fake, table string) int {
+func countQueries(fake *testutil.Fake, table string) int {
 	n := 0
 	for _, q := range fake.Queries() {
 		if contains(q.SQL, table) {

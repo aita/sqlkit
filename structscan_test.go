@@ -11,12 +11,12 @@ import (
 	"time"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/internal/testutil"
 	"github.com/aita/sqlkit/sql"
 )
 
 func TestQueryRejectsUnsupportedQueryType(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 
 	var out []User
@@ -50,9 +50,9 @@ func (u *upperString) Scan(src any) error {
 func (u upperString) Value() (driver.Value, error) { return strings.ToLower(u.value), nil }
 
 func TestScanIntoSQLNullAndCustomScannerFields(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(string, []any) (sqltest.Result, error) {
-			return sqltest.Result{
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			return testutil.Result{
 				Columns: []string{"id", "email", "name"},
 				Rows: [][]driver.Value{
 					{int64(1), "a@example.com", "Alice"},
@@ -86,9 +86,9 @@ func TestScanIntoSQLNullAndCustomScannerFields(t *testing.T) {
 func TestScannerStructFieldIsNotFlattened(t *testing.T) {
 	// sql.NullString is a struct, but it implements Scanner, so it maps as a
 	// single column rather than being flattened into String/Valid fields.
-	fake := &sqltest.Fake{
-		QueryFunc: func(string, []any) (sqltest.Result, error) {
-			return sqltest.Result{Columns: []string{"name"}, Rows: [][]driver.Value{{"Alice"}}}, nil
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			return testutil.Result{Columns: []string{"name"}, Rows: [][]driver.Value{{"Alice"}}}, nil
 		},
 	}
 	db := sqlkit.WrapDB(fake.DB())
@@ -105,9 +105,9 @@ func TestScannerStructFieldIsNotFlattened(t *testing.T) {
 }
 
 func TestSqlkitTagIsTheOnlyTag(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(string, []any) (sqltest.Result, error) {
-			return sqltest.Result{
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			return testutil.Result{
 				Columns: []string{"id", "email"},
 				Rows:    [][]driver.Value{{int64(1), "a@example.com"}},
 			}, nil
@@ -151,11 +151,11 @@ type authorRow struct {
 	timestamps
 }
 
-func newAuthorFake() *sqltest.Fake {
+func newAuthorFake() *testutil.Fake {
 	now := time.Date(2026, 6, 11, 0, 0, 0, 0, time.UTC)
-	return &sqltest.Fake{
-		QueryFunc: func(sqlText string, args []any) (sqltest.Result, error) {
-			return sqltest.Result{
+	return &testutil.Fake{
+		QueryFunc: func(sqlText string, args []any) (testutil.Result, error) {
+			return testutil.Result{
 				Columns: []string{"user_id", "email", "name", "created_at"},
 				Rows: [][]driver.Value{
 					{int64(1), "a@example.com", "Alice", now},
@@ -221,7 +221,7 @@ func TestQueryScansOneRowAndReportsNoRows(t *testing.T) {
 		t.Fatalf("author = %#v", author)
 	}
 
-	empty := &sqltest.Fake{}
+	empty := &testutil.Fake{}
 	emptyDB := sqlkit.WrapDB(empty.DB())
 	if err := emptyDB.RawSQL(context.Background(), "SELECT ...").Scan(&author); !errors.Is(err, sqlkit.ErrNoRows) {
 		t.Fatalf("Scan() on empty result = %v, want ErrNoRows", err)
@@ -238,9 +238,9 @@ func TestQueryRejectsArgsWithBuiltQuery(t *testing.T) {
 }
 
 func TestSessionQueryRunsInTransaction(t *testing.T) {
-	fake := &sqltest.Fake{}
-	fake.QueryFunc = func(sqlText string, args []any) (sqltest.Result, error) {
-		return sqltest.Result{Columns: []string{"email"}, Rows: [][]driver.Value{{"a@example.com"}}}, nil
+	fake := &testutil.Fake{}
+	fake.QueryFunc = func(sqlText string, args []any) (testutil.Result, error) {
+		return testutil.Result{Columns: []string{"email"}, Rows: [][]driver.Value{{"a@example.com"}}}, nil
 	}
 	session := newSession(t, fake)
 
@@ -299,7 +299,7 @@ func TestScanRowsScansExternallyExecutedQuery(t *testing.T) {
 }
 
 func TestScanRowsSingleDestReportsNoRows(t *testing.T) {
-	empty := &sqltest.Fake{}
+	empty := &testutil.Fake{}
 	rows, err := empty.DB().QueryContext(context.Background(), "SELECT ...")
 	if err != nil {
 		t.Fatalf("QueryContext() error = %v", err)

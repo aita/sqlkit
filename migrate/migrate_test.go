@@ -9,23 +9,23 @@ import (
 
 	"github.com/aita/sqlkit"
 	"github.com/aita/sqlkit/decl"
-	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/internal/testutil"
 	"github.com/aita/sqlkit/migrate"
 )
 
 // appliedHistory returns a QueryFunc that reports the given revisions as applied
 // (the SELECT history against schema_migrations, all "up" events), and serves
 // empty for anything else.
-func appliedHistory(revisions ...string) func(string, []any) (sqltest.Result, error) {
+func appliedHistory(revisions ...string) func(string, []any) (testutil.Result, error) {
 	rows := make([][]driver.Value, len(revisions))
 	for i, rev := range revisions {
 		rows[i] = []driver.Value{rev, "m", "up", time.Unix(0, 0).UTC()}
 	}
-	return func(q string, _ []any) (sqltest.Result, error) {
+	return func(q string, _ []any) (testutil.Result, error) {
 		if strings.Contains(q, "schema_migrations") && strings.HasPrefix(strings.TrimSpace(q), "SELECT") {
-			return sqltest.Result{Columns: []string{"revision", "name", "direction", "applied_at"}, Rows: rows}, nil
+			return testutil.Result{Columns: []string{"revision", "name", "direction", "applied_at"}, Rows: rows}, nil
 		}
-		return sqltest.Result{}, nil
+		return testutil.Result{}, nil
 	}
 }
 
@@ -53,7 +53,7 @@ func sampleMigrations() []migrate.Migration {
 }
 
 func TestMigratorUpAppliesInTopologicalOrder(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: appliedHistory()}
+	fake := &testutil.Fake{QueryFunc: appliedHistory()}
 	db := sqlkit.WrapDB(fake.DB())
 	m := migrate.New(db, sampleMigrations())
 
@@ -90,7 +90,7 @@ func TestMigratorUpAppliesInTopologicalOrder(t *testing.T) {
 }
 
 func TestMigratorUpSkipsApplied(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: appliedHistory("0001", "0002")} // both applied
+	fake := &testutil.Fake{QueryFunc: appliedHistory("0001", "0002")} // both applied
 	db := sqlkit.WrapDB(fake.DB())
 	m := migrate.New(db, sampleMigrations())
 
@@ -108,7 +108,7 @@ func TestMigratorUpSkipsApplied(t *testing.T) {
 }
 
 func TestMigratorDownRollsBackLast(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: appliedHistory("0001", "0002")}
+	fake := &testutil.Fake{QueryFunc: appliedHistory("0001", "0002")}
 	db := sqlkit.WrapDB(fake.DB())
 	m := migrate.New(db, sampleMigrations())
 
@@ -136,7 +136,7 @@ func TestMigratorDownRollsBackLast(t *testing.T) {
 }
 
 func TestMigratorHistory(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: appliedHistory("0001", "0002")}
+	fake := &testutil.Fake{QueryFunc: appliedHistory("0001", "0002")}
 	db := sqlkit.WrapDB(fake.DB())
 	m := migrate.New(db, sampleMigrations())
 
@@ -153,7 +153,7 @@ func TestMigratorHistory(t *testing.T) {
 }
 
 func TestMigratorStatus(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: appliedHistory("0001")}
+	fake := &testutil.Fake{QueryFunc: appliedHistory("0001")}
 	db := sqlkit.WrapDB(fake.DB())
 	m := migrate.New(db, sampleMigrations())
 
@@ -173,7 +173,7 @@ func TestMigratorStatus(t *testing.T) {
 }
 
 func TestMigratorDuplicateRevisionRejected(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: appliedHistory()}
+	fake := &testutil.Fake{QueryFunc: appliedHistory()}
 	db := sqlkit.WrapDB(fake.DB())
 	m := migrate.New(db, []migrate.Migration{
 		{Revision: "x", Name: "a"},
@@ -185,7 +185,7 @@ func TestMigratorDuplicateRevisionRejected(t *testing.T) {
 }
 
 func TestMigratorDanglingDownRevisionRejected(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: appliedHistory()}
+	fake := &testutil.Fake{QueryFunc: appliedHistory()}
 	db := sqlkit.WrapDB(fake.DB())
 	m := migrate.New(db, []migrate.Migration{
 		{Revision: "0002", DownRevision: "missing", Name: "b"},
@@ -206,7 +206,7 @@ func firstLine(s string) string {
 // a bigint AUTO_INCREMENT key (not the PostgreSQL-only "int8") and a
 // CURRENT_TIMESTAMP default.
 func TestHistoryTableMySQL(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: appliedHistory()}
+	fake := &testutil.Fake{QueryFunc: appliedHistory()}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithDialect(sqlkit.MySQLDialect{}))
 	m := migrate.New(db, sampleMigrations())
 	if err := m.Up(context.Background()); err != nil {
@@ -238,7 +238,7 @@ func TestDowngradeIrreversible(t *testing.T) {
 	migs := []migrate.Migration{
 		{Revision: "0001", Name: "no_down", Up: func(*migrate.Operator) {}, Down: nil},
 	}
-	fake := &sqltest.Fake{QueryFunc: appliedHistory("0001")}
+	fake := &testutil.Fake{QueryFunc: appliedHistory("0001")}
 	m := migrate.New(sqlkit.WrapDB(fake.DB()), migs)
 
 	if err := m.Downgrade(context.Background(), "base"); err == nil {

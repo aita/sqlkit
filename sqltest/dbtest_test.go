@@ -1,4 +1,4 @@
-package dbtest_test
+package sqltest_test
 
 import (
 	"database/sql/driver"
@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/dbtest"
-	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/internal/testutil"
+	"github.com/aita/sqlkit/sqltest"
 )
 
 // userRow / postRow are caller-defined DTOs, mirroring how tests bring their own
@@ -74,19 +74,19 @@ func (t postsTable) Columns() []sqlkit.AnyColumn {
 func (t postsTable) PrimaryKey() []sqlkit.AnyColumn { return []sqlkit.AnyColumn{t.ID} }
 func (t postsTable) Defaulted() []sqlkit.AnyColumn  { return []sqlkit.AnyColumn{t.ID} }
 
-func wrap(fake *sqltest.Fake, dialect sqlkit.Dialect) *sqlkit.Database {
+func wrap(fake *testutil.Fake, dialect sqlkit.Dialect) *sqlkit.Database {
 	return sqlkit.WrapDB(fake.DB(), sqlkit.WithDialect(dialect))
 }
 
 func TestInsertIDReturning(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(string, []any) (sqltest.Result, error) {
-			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(42)}}}, nil
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(42)}}}, nil
 		},
 	}
 	db := wrap(fake, sqlkit.PostgreSQLDialect{})
 
-	id := dbtest.InsertID(t, db, newUsers(), userRow{Email: "alice@example.com"})
+	id := sqltest.InsertID(t, db, newUsers(), userRow{Email: "alice@example.com"})
 	if id != 42 {
 		t.Fatalf("InsertID = %d, want 42", id)
 	}
@@ -104,10 +104,10 @@ func TestInsertIDReturning(t *testing.T) {
 }
 
 func TestInsertIDLastInsertID(t *testing.T) {
-	fake := &sqltest.Fake{LastInsertID: 7}
+	fake := &testutil.Fake{LastInsertID: 7}
 	db := wrap(fake, sqlkit.MySQLDialect{})
 
-	id := dbtest.InsertID(t, db, newUsers(), userRow{Email: "bob@example.com"})
+	id := sqltest.InsertID(t, db, newUsers(), userRow{Email: "bob@example.com"})
 	if id != 7 {
 		t.Fatalf("InsertID = %d, want 7 (LastInsertId)", id)
 	}
@@ -125,10 +125,10 @@ func TestInsertIDLastInsertID(t *testing.T) {
 }
 
 func TestInsertBulk(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := wrap(fake, sqlkit.PostgreSQLDialect{})
 
-	dbtest.Insert(t, db, newUsers(),
+	sqltest.InsertRows(t, db, newUsers(),
 		userRow{Email: "alice@example.com"},
 		userRow{Email: "bob@example.com"},
 	)
@@ -143,11 +143,11 @@ func TestInsertBulk(t *testing.T) {
 }
 
 func TestFixtureLoadOrder(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := wrap(fake, sqlkit.PostgreSQLDialect{})
 
 	users, posts := newUsers(), newPosts()
-	dbtest.NewFixture("blog").
+	sqltest.NewFixture("blog").
 		Add(users, userRow{Email: "alice@example.com"}).
 		Add(posts, postRow{UserID: 1, Title: "Hello"}, postRow{UserID: 1, Title: "World"}).
 		Load(t, db)

@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/internal/testutil"
 )
 
 func TestTypedUpdateFromAndDeleteUsing(t *testing.T) {
@@ -42,7 +42,7 @@ func TestCheckVersionToSQL(t *testing.T) {
 func TestCheckVersionExecConflict(t *testing.T) {
 	// Zero rows affected under a version guard is reported as a conflict.
 	zero := int64(0)
-	db := sqlkit.WrapDB((&sqltest.Fake{RowsAffected: &zero}).DB())
+	db := sqlkit.WrapDB((&testutil.Fake{RowsAffected: &zero}).DB())
 
 	_, err := db.Update(Users).Set(Users.Email.Set("x@example.com")).
 		Where(Users.ID.Eq(1)).CheckVersion(version, 7).Exec(context.Background())
@@ -53,7 +53,7 @@ func TestCheckVersionExecConflict(t *testing.T) {
 
 func TestCheckVersionExecSuccess(t *testing.T) {
 	// A matched row (one affected, the fake's default) is not a conflict.
-	db := sqlkit.WrapDB((&sqltest.Fake{}).DB())
+	db := sqlkit.WrapDB((&testutil.Fake{}).DB())
 
 	if _, err := db.Update(Users).Set(Users.Email.Set("x@example.com")).
 		Where(Users.ID.Eq(1)).CheckVersion(version, 7).Exec(context.Background()); err != nil {
@@ -64,7 +64,7 @@ func TestCheckVersionExecSuccess(t *testing.T) {
 func TestUpdateWithoutVersionGuardIgnoresZeroRows(t *testing.T) {
 	// Without CheckVersion, zero rows affected is an ordinary no-op, not an error.
 	zero := int64(0)
-	db := sqlkit.WrapDB((&sqltest.Fake{RowsAffected: &zero}).DB())
+	db := sqlkit.WrapDB((&testutil.Fake{RowsAffected: &zero}).DB())
 
 	if _, err := db.Update(Users).Set(Users.Email.Set("x@example.com")).
 		Where(Users.ID.Eq(1)).Exec(context.Background()); err != nil {
@@ -131,9 +131,9 @@ func TestUpdateFromDB(t *testing.T) {
 }
 
 func TestUpdateReturningScans(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(string, []any) (sqltest.Result, error) {
-			return sqltest.Result{
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			return testutil.Result{
 				Columns: []string{"id", "email", "name"},
 				Rows:    [][]driver.Value{{int64(7), "new@example.com", nil}},
 			}, nil

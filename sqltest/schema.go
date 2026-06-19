@@ -1,4 +1,4 @@
-package dbtest
+package sqltest
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 // the database is left empty. Call it once at the top of a test:
 //
 //	md, _ := catalog.Build()
-//	dbtest.SetupSchema(t, db, md)
+//	sqltest.SetupSchema(t, db, md)
 //
 // md is the meta.Metadata a schema catalog produces (decl.Catalog.Build).
 func SetupSchema(t *testing.T, db *sqlkit.Database, md meta.Metadata) {
@@ -36,12 +36,12 @@ func ApplySchema(t *testing.T, db *sqlkit.Database, md meta.Metadata) {
 	dropTables(t, db, md)
 	createText, err := md.CreateSQL(db.Dialect())
 	if err != nil {
-		t.Fatalf("dbtest: render schema: %v", err)
+		t.Fatalf("sqltest: render schema: %v", err)
 	}
 	ctx := context.Background()
 	for _, stmt := range splitStatements(createText) {
 		if _, err := db.SQL().ExecContext(ctx, stmt); err != nil {
-			t.Fatalf("dbtest: apply schema statement %q: %v", stmt, err)
+			t.Fatalf("sqltest: apply schema statement %q: %v", stmt, err)
 		}
 	}
 }
@@ -55,7 +55,7 @@ func Truncate(t *testing.T, db *sqlkit.Database, tables ...sqlkit.Table) {
 	for i := len(tables) - 1; i >= 0; i-- {
 		ident := db.Dialect().QuoteIdent(tables[i].Info().QualifiedName())
 		if _, err := db.SQL().ExecContext(ctx, "DELETE FROM "+ident); err != nil {
-			t.Fatalf("dbtest: truncate %s: %v", tables[i].Info().QualifiedName(), err)
+			t.Fatalf("sqltest: truncate %s: %v", tables[i].Info().QualifiedName(), err)
 		}
 	}
 }
@@ -70,7 +70,7 @@ func dropTables(t *testing.T, db *sqlkit.Database, md meta.Metadata) {
 	for i := len(md.Tables) - 1; i >= 0; i-- {
 		ident := db.Dialect().QuoteIdent(qualifiedName(md.Tables[i]))
 		if _, err := db.SQL().ExecContext(ctx, "DROP TABLE IF EXISTS "+ident); err != nil {
-			t.Fatalf("dbtest: drop %s: %v", md.Tables[i].Name, err)
+			t.Fatalf("sqltest: drop %s: %v", md.Tables[i].Name, err)
 		}
 	}
 }

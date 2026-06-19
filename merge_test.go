@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/internal/testutil"
 	"github.com/aita/sqlkit/sql"
 )
 
@@ -27,7 +27,7 @@ func TestMergeToSQL(t *testing.T) {
 }
 
 func TestMergeExecBindsToDatabase(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 
 	src := sqlkit.Select(Users.ID, Users.Name).From(Users).As("src")

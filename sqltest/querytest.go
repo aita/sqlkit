@@ -1,27 +1,4 @@
-// Package querytest turns a querytrace.Trace into a test spy: it records the
-// SQL one operation actually issued, and this package asserts on it after the
-// fact. Where a mock library makes you declare the queries up front and fails
-// if they do not run, querytest works the other way around — run the code under
-// a Trace, then ask what it did: a query budget, no writes, no N+1, a SELECT on
-// a given table that ran exactly once, an INSERT before the COMMIT.
-//
-// The entry point is Expect, a fluent assertion bound to a testing.TB:
-//
-//	trace := querytrace.New("GetUserPage")
-//	ctx := querytrace.WithTrace(context.Background(), trace)
-//	service.RenderUserPage(ctx, id)
-//
-//	querytest.Expect(t, trace).
-//		MaxQueries(5).
-//		NoWrites().
-//		NoNPlusOne().
-//		Query(querytest.Select(), querytest.Table("users")).Times(1)
-//
-// Match values (Select, Table, Fingerprint, SqlContains, Caller, HasWhere, …)
-// select the statements an assertion applies to; pass several and they must all
-// hold. All, Any, and Not compose them. Count and Events expose the same matching
-// without a testing.TB, for inspecting a Trace directly.
-package querytest
+package sqltest
 
 import (
 	"fmt"
@@ -57,7 +34,7 @@ func Expect(t testing.TB, trace *querytrace.Trace) *Assertion {
 // fail reports an assertion failure, appending the trace report for context.
 func (a *Assertion) fail(format string, args ...any) {
 	a.t.Helper()
-	a.t.Errorf("querytest: %s\n%s", fmt.Sprintf(format, args...), a.rep.String())
+	a.t.Errorf("sqltest: %s\n%s", fmt.Sprintf(format, args...), a.rep.String())
 }
 
 func (a *Assertion) reads() int  { return a.rep.QueryCount - a.rep.WriteCount }

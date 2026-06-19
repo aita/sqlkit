@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	querytrace "github.com/aita/sqlkit/querytrace"
-	"github.com/aita/sqlkit/querytrace/querytest"
+	"github.com/aita/sqlkit/sqltest"
 )
 
 // nplusOneConfig enables repeated-query detection at the given threshold,
@@ -38,7 +38,7 @@ func TestRepeatedFromOneSiteIsLoop(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		recordQuery(trace, "SELECT * FROM comments WHERE post_id = ?", querytrace.StmtSelect, loop)
 	}
-	querytest.Expect(t, trace).Warns(querytrace.WarnQueryInLoop)
+	sqltest.Expect(t, trace).Warns(querytrace.WarnQueryInLoop)
 }
 
 func TestRepeatedAcrossSitesIsPossibleNPlusOne(t *testing.T) {
@@ -47,7 +47,7 @@ func TestRepeatedAcrossSitesIsPossibleNPlusOne(t *testing.T) {
 	for _, c := range sites {
 		recordQuery(trace, "SELECT * FROM users WHERE id = ?", querytrace.StmtSelect, c)
 	}
-	querytest.Expect(t, trace).Warns(querytrace.WarnPossibleNPlusOne)
+	sqltest.Expect(t, trace).Warns(querytrace.WarnPossibleNPlusOne)
 }
 
 func TestRepeatedWithoutCallerIsPossibleNPlusOne(t *testing.T) {
@@ -55,7 +55,7 @@ func TestRepeatedWithoutCallerIsPossibleNPlusOne(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		recordQuery(trace, "SELECT * FROM users WHERE id = ?", querytrace.StmtSelect, nil)
 	}
-	querytest.Expect(t, trace).Warns(querytrace.WarnPossibleNPlusOne)
+	sqltest.Expect(t, trace).Warns(querytrace.WarnPossibleNPlusOne)
 }
 
 func TestRepeatedBelowThresholdIsClean(t *testing.T) {
@@ -65,7 +65,7 @@ func TestRepeatedBelowThresholdIsClean(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		recordQuery(trace, "SELECT * FROM comments WHERE post_id = ?", querytrace.StmtSelect, loop)
 	}
-	querytest.Expect(t, trace).NoNPlusOne()
+	sqltest.Expect(t, trace).NoNPlusOne()
 }
 
 func TestRepeatedIgnoredOperationIsClean(t *testing.T) {
@@ -74,13 +74,13 @@ func TestRepeatedIgnoredOperationIsClean(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		recordQuery(trace, "INSERT INTO audit_log (msg) VALUES (?)", querytrace.StmtInsert, site)
 	}
-	querytest.Expect(t, trace).NoNPlusOne()
+	sqltest.Expect(t, trace).NoNPlusOne()
 
 	// A non-ignored operation at the same threshold still warns.
 	for i := 0; i < 3; i++ {
 		recordQuery(trace, "SELECT * FROM audit_log WHERE id = ?", querytrace.StmtSelect, site)
 	}
-	querytest.Expect(t, trace).Warns(querytrace.WarnQueryInLoop)
+	sqltest.Expect(t, trace).Warns(querytrace.WarnQueryInLoop)
 }
 
 func TestRepeatedDetectionDisabled(t *testing.T) {
@@ -91,5 +91,5 @@ func TestRepeatedDetectionDisabled(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		recordQuery(trace, "SELECT * FROM comments WHERE post_id = ?", querytrace.StmtSelect, loop)
 	}
-	querytest.Expect(t, trace).NoNPlusOne()
+	sqltest.Expect(t, trace).NoNPlusOne()
 }

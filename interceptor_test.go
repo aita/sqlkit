@@ -9,13 +9,13 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/internal/testutil"
 	"github.com/aita/sqlkit/sql"
 )
 
 // usersResult is a canned single-row result for the Users fixture.
-func usersResult() sqltest.Result {
-	return sqltest.Result{
+func usersResult() testutil.Result {
+	return testutil.Result{
 		Columns: []string{"id", "email", "name"},
 		Rows:    [][]driver.Value{{int64(7), "a@example.com", nil}},
 	}
@@ -24,7 +24,7 @@ func usersResult() sqltest.Result {
 // TestRewriteAppliesToReadAndWrite verifies that a Rewrite interceptor's edits
 // to Statement.SQL reach the driver for both queries and execs.
 func TestRewriteAppliesToReadAndWrite(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: func(string, []any) (sqltest.Result, error) { return usersResult(), nil }}
+	fake := &testutil.Fake{QueryFunc: func(string, []any) (testutil.Result, error) { return usersResult(), nil }}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithInterceptor(
 		sqlkit.Rewrite(func(_ context.Context, stmt sqlkit.Statement) (sqlkit.Statement, error) {
 			stmt.SQL = "/* tagged */ " + stmt.SQL
@@ -52,7 +52,7 @@ func TestRewriteAppliesToReadAndWrite(t *testing.T) {
 // TestInterceptorOrder verifies interceptors run in registration order, the
 // first wrapping the rest.
 func TestInterceptorOrder(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	var order []string
 	record := func(name string) sqlkit.Interceptor {
 		return sqlkit.Rewrite(func(_ context.Context, stmt sqlkit.Statement) (sqlkit.Statement, error) {
@@ -86,7 +86,7 @@ func (w *wrapInterceptor) InterceptExec(ctx context.Context, stmt sqlkit.Stateme
 // TestInterceptorWrapsExecution verifies an interceptor observes execution on
 // both sides of next.
 func TestInterceptorWrapsExecution(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	w := &wrapInterceptor{}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithInterceptor(w))
 
@@ -118,7 +118,7 @@ func (shortCircuit) InterceptExec(context.Context, sqlkit.Statement, sqlkit.Exec
 // TestInterceptorShortCircuits verifies an interceptor that does not call next
 // keeps the statement from reaching the driver.
 func TestInterceptorShortCircuits(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithInterceptor(shortCircuit{}))
 
 	res, err := db.Insert(Users).Values(User{ID: 1, Email: "a@example.com"}).Exec(context.Background())
@@ -135,7 +135,7 @@ func TestInterceptorShortCircuits(t *testing.T) {
 
 // TestInterceptorErrorAborts verifies an interceptor error stops execution.
 func TestInterceptorErrorAborts(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	sentinel := errors.New("blocked")
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithInterceptor(
 		sqlkit.Rewrite(func(context.Context, sqlkit.Statement) (sqlkit.Statement, error) {
@@ -173,7 +173,7 @@ func (c *captureInterceptor) InterceptExec(ctx context.Context, stmt sqlkit.Stat
 // TestStatementCarriesOpAndDSL verifies Op and the SQL DSL the interceptor sees:
 // non-nil Query for builder statements, nil for a RawSQL string.
 func TestStatementCarriesOpAndDSL(t *testing.T) {
-	fake := &sqltest.Fake{QueryFunc: func(string, []any) (sqltest.Result, error) { return usersResult(), nil }}
+	fake := &testutil.Fake{QueryFunc: func(string, []any) (testutil.Result, error) { return usersResult(), nil }}
 	cap := &captureInterceptor{}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithInterceptor(cap))
 	ctx := context.Background()
@@ -208,7 +208,7 @@ func TestStatementCarriesOpAndDSL(t *testing.T) {
 // TestInterceptorPropagatesToSession verifies a database's interceptors apply to
 // statements run through a session it opens.
 func TestInterceptorPropagatesToSession(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithInterceptor(
 		sqlkit.Rewrite(func(_ context.Context, stmt sqlkit.Statement) (sqlkit.Statement, error) {
 			stmt.SQL = "/* sess */ " + stmt.SQL
@@ -230,7 +230,7 @@ func TestInterceptorPropagatesToSession(t *testing.T) {
 // TestSavepointBypassesInterceptors verifies transaction-control statements are
 // not seen by interceptors.
 func TestSavepointBypassesInterceptors(t *testing.T) {
-	fake := &sqltest.Fake{}
+	fake := &testutil.Fake{}
 	cap := &captureInterceptor{}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithInterceptor(cap))
 	ctx := context.Background()
@@ -292,9 +292,9 @@ type passthrough struct{ sqlkit.NoopInterceptor }
 // InterceptExec: registered as an interceptor, neither method alters the
 // statement, so the read and write reach the executor unchanged.
 func TestNoopInterceptorPassThrough(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(string, []any) (sqltest.Result, error) {
-			return sqltest.Result{Columns: []string{"id", "email", "name"}}, nil
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			return testutil.Result{Columns: []string{"id", "email", "name"}}, nil
 		},
 	}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithInterceptor(passthrough{}))

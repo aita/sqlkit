@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/internal/testutil"
 	"github.com/aita/sqlkit/sql"
 )
 
@@ -112,9 +112,9 @@ func TestAllScanIntoSingleStruct(t *testing.T) {
 }
 
 func TestAllScanSingleStructNoRowsIsErrNoRows(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(string, []any) (sqltest.Result, error) {
-			return sqltest.Result{Columns: []string{"id", "email", "name"}}, nil
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			return testutil.Result{Columns: []string{"id", "email", "name"}}, nil
 		},
 	}
 	db := sqlkit.WrapDB(fake.DB())
@@ -128,10 +128,10 @@ func TestAllScanSingleStructNoRowsIsErrNoRows(t *testing.T) {
 
 func TestFirstAppliesLimitAndScansFirstRow(t *testing.T) {
 	var gotSQL string
-	fake := &sqltest.Fake{
-		QueryFunc: func(sqlText string, args []any) (sqltest.Result, error) {
+	fake := &testutil.Fake{
+		QueryFunc: func(sqlText string, args []any) (testutil.Result, error) {
 			gotSQL = sqlText
-			return sqltest.Result{
+			return testutil.Result{
 				Columns: []string{"id", "email", "name"},
 				Rows:    [][]driver.Value{{int64(1), "a@example.com", "Alice"}},
 			}, nil
@@ -152,9 +152,9 @@ func TestFirstAppliesLimitAndScansFirstRow(t *testing.T) {
 }
 
 func TestFirstNoRowsIsErrNoRows(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(string, []any) (sqltest.Result, error) {
-			return sqltest.Result{Columns: []string{"id", "email", "name"}}, nil
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			return testutil.Result{Columns: []string{"id", "email", "name"}}, nil
 		},
 	}
 	db := sqlkit.WrapDB(fake.DB())
@@ -168,10 +168,10 @@ func TestFirstNoRowsIsErrNoRows(t *testing.T) {
 
 func TestOneAppliesLimitAndScansSingleRow(t *testing.T) {
 	var gotSQL string
-	fake := &sqltest.Fake{
-		QueryFunc: func(sqlText string, args []any) (sqltest.Result, error) {
+	fake := &testutil.Fake{
+		QueryFunc: func(sqlText string, args []any) (testutil.Result, error) {
 			gotSQL = sqlText
-			return sqltest.Result{
+			return testutil.Result{
 				Columns: []string{"id", "email", "name"},
 				Rows:    [][]driver.Value{{int64(1), "a@example.com", "Alice"}},
 			}, nil
@@ -202,9 +202,9 @@ func TestOneMultipleRowsIsErrTooManyRows(t *testing.T) {
 }
 
 func TestOneNoRowsIsErrNoRows(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(string, []any) (sqltest.Result, error) {
-			return sqltest.Result{Columns: []string{"id", "email", "name"}}, nil
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			return testutil.Result{Columns: []string{"id", "email", "name"}}, nil
 		},
 	}
 	db := sqlkit.WrapDB(fake.DB())
@@ -227,9 +227,9 @@ func TestOneRejectsSliceDestination(t *testing.T) {
 }
 
 func TestOneScansScalar(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(string, []any) (sqltest.Result, error) {
-			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(7)}}}, nil
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(7)}}}, nil
 		},
 	}
 	db := sqlkit.WrapDB(fake.DB())
@@ -244,9 +244,9 @@ func TestOneScansScalar(t *testing.T) {
 }
 
 func TestFirstScansScalar(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(string, []any) (sqltest.Result, error) {
-			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(7)}}}, nil
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(7)}}}, nil
 		},
 	}
 	db := sqlkit.WrapDB(fake.DB())
@@ -262,10 +262,10 @@ func TestFirstScansScalar(t *testing.T) {
 
 func TestPageAppliesLimitAndOffset(t *testing.T) {
 	var gotSQL string
-	fake := &sqltest.Fake{
-		QueryFunc: func(sqlText string, args []any) (sqltest.Result, error) {
+	fake := &testutil.Fake{
+		QueryFunc: func(sqlText string, args []any) (testutil.Result, error) {
 			gotSQL = sqlText
-			return sqltest.Result{
+			return testutil.Result{
 				Columns: []string{"id", "email", "name"},
 				Rows:    [][]driver.Value{{int64(3), "c@example.com", "Carol"}},
 			}, nil
@@ -286,9 +286,9 @@ func TestPageAppliesLimitAndOffset(t *testing.T) {
 }
 
 func TestAllScanScalarSlice(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(string, []any) (sqltest.Result, error) {
-			return sqltest.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}, {int64(2)}}}, nil
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}, {int64(2)}}}, nil
 		},
 	}
 	db := sqlkit.WrapDB(fake.DB())
@@ -303,9 +303,9 @@ func TestAllScanScalarSlice(t *testing.T) {
 }
 
 func TestScanFailsOnUnmappedColumn(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(string, []any) (sqltest.Result, error) {
-			return sqltest.Result{Columns: []string{"mystery"}, Rows: [][]driver.Value{{int64(1)}}}, nil
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			return testutil.Result{Columns: []string{"mystery"}, Rows: [][]driver.Value{{int64(1)}}}, nil
 		},
 	}
 	db := sqlkit.WrapDB(fake.DB())
@@ -396,9 +396,9 @@ func TestTypedOrderByNulls(t *testing.T) {
 }
 
 func TestCount(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(sqlText string, args []any) (sqltest.Result, error) {
-			return sqltest.Result{Columns: []string{"count"}, Rows: [][]driver.Value{{int64(3)}}}, nil
+	fake := &testutil.Fake{
+		QueryFunc: func(sqlText string, args []any) (testutil.Result, error) {
+			return testutil.Result{Columns: []string{"count"}, Rows: [][]driver.Value{{int64(3)}}}, nil
 		},
 	}
 	db := sqlkit.WrapDB(fake.DB())
@@ -417,9 +417,9 @@ func TestCount(t *testing.T) {
 }
 
 func TestWindowProjectionScan(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(sqlText string, args []any) (sqltest.Result, error) {
-			return sqltest.Result{
+	fake := &testutil.Fake{
+		QueryFunc: func(sqlText string, args []any) (testutil.Result, error) {
+			return testutil.Result{
 				Columns: []string{"id", "rn"},
 				Rows:    [][]driver.Value{{int64(5), int64(1)}, {int64(6), int64(2)}},
 			}, nil

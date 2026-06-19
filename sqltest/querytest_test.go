@@ -1,4 +1,4 @@
-package querytest_test
+package sqltest_test
 
 import (
 	"context"
@@ -10,8 +10,8 @@ import (
 	"time"
 
 	querytrace "github.com/aita/sqlkit/querytrace"
-	"github.com/aita/sqlkit/querytrace/querytest"
 	sqlpkg "github.com/aita/sqlkit/sql"
+	"github.com/aita/sqlkit/sqltest"
 )
 
 // debugConfig is a verbose NewConfig with a small parser wired in, so the
@@ -21,17 +21,17 @@ func debugConfig() querytrace.Config {
 	return querytrace.NewConfig(querytrace.WithParser(fakeParser{}), querytrace.WithVerboseCapture())
 }
 
-func newDB(t *testing.T, opts ...querytest.Option) (*sql.DB, *querytest.Mock) {
+func newDB(t *testing.T, opts ...sqltest.Option) (*sql.DB, *sqltest.Mock) {
 	t.Helper()
-	opts = append([]querytest.Option{querytest.WithConfig(debugConfig())}, opts...)
+	opts = append([]sqltest.Option{sqltest.WithConfig(debugConfig())}, opts...)
 	// NewDB registers a t.Cleanup that verifies the mock and closes the DB.
-	return querytest.NewDB(t, opts...)
+	return sqltest.NewDB(t, opts...)
 }
 
 func TestMockReturnsRows(t *testing.T) {
 	db, mock := newDB(t)
-	mock.ExpectQuery(querytest.Contains("from users")).
-		Return(querytest.NewRows("id", "name").AddRow(1, "alice").AddRow(2, "bob")).
+	mock.ExpectQuery(sqltest.Contains("from users")).
+		Return(sqltest.NewRows("id", "name").AddRow(1, "alice").AddRow(2, "bob")).
 		Required()
 
 	trace := querytrace.New("op")
@@ -56,17 +56,17 @@ func TestMockReturnsRows(t *testing.T) {
 		t.Fatalf("names = %q, want alice,bob", got)
 	}
 
-	querytest.Expect(t, trace).
+	sqltest.Expect(t, trace).
 		Queries(1).
 		Reads(1).
 		NoWrites().
 		NoWarnings().
-		Query(querytest.Select(), querytest.Table("users"), querytest.HasWhere()).Times(1)
+		Query(sqltest.Select(), sqltest.Table("users"), sqltest.HasWhere()).Times(1)
 }
 
 func TestMockReturnsResult(t *testing.T) {
 	db, mock := newDB(t)
-	mock.ExpectExec(querytest.Contains("insert into audit_log")).ReturnResult(7, 1)
+	mock.ExpectExec(sqltest.Contains("insert into audit_log")).ReturnResult(7, 1)
 
 	trace := querytrace.New("op")
 	ctx := querytrace.WithTrace(context.Background(), trace)
@@ -82,15 +82,15 @@ func TestMockReturnsResult(t *testing.T) {
 		t.Fatalf("rows affected = %d, want 1", n)
 	}
 
-	querytest.Expect(t, trace).
+	sqltest.Expect(t, trace).
 		Writes(1).
-		Query(querytest.Insert(), querytest.Table("audit_log")).Times(1)
+		Query(sqltest.Insert(), sqltest.Table("audit_log")).Times(1)
 }
 
 func TestMockReturnsError(t *testing.T) {
 	db, mock := newDB(t)
 	want := errors.New("boom")
-	mock.ExpectQuery(querytest.Anything()).ReturnError(want)
+	mock.ExpectQuery(sqltest.Anything()).ReturnError(want)
 
 	trace := querytrace.New("op")
 	ctx := querytrace.WithTrace(context.Background(), trace)
@@ -103,7 +103,7 @@ func TestMockReturnsError(t *testing.T) {
 // TestUnstubbedIsLenient documents the fake-friendly default: a statement no
 // stub answers gets empty rows, so a test need only program what it asserts on.
 func TestUnstubbedIsLenient(t *testing.T) {
-	db, _ := newDB(t, querytest.Lenient())
+	db, _ := newDB(t, sqltest.Lenient())
 	trace := querytrace.New("op")
 	ctx := querytrace.WithTrace(context.Background(), trace)
 
@@ -116,13 +116,13 @@ func TestUnstubbedIsLenient(t *testing.T) {
 	}
 	rows.Close()
 
-	querytest.Expect(t, trace).Query(querytest.Table("widgets")).Times(1)
+	sqltest.Expect(t, trace).Query(sqltest.Table("widgets")).Times(1)
 }
 
 func TestTransactionTimeline(t *testing.T) {
 	db, mock := newDB(t)
-	mock.ExpectQuery(querytest.Contains("from users")).Return(querytest.NewRows("id").AddRow(1))
-	mock.ExpectExec(querytest.Anything()).ReturnResult(0, 1)
+	mock.ExpectQuery(sqltest.Contains("from users")).Return(sqltest.NewRows("id").AddRow(1))
+	mock.ExpectExec(sqltest.Anything()).ReturnResult(0, 1)
 
 	trace := querytrace.New("op")
 	ctx := querytrace.WithTrace(context.Background(), trace)
@@ -144,16 +144,16 @@ func TestTransactionTimeline(t *testing.T) {
 		t.Fatalf("commit: %v", err)
 	}
 
-	querytest.Expect(t, trace).
+	sqltest.Expect(t, trace).
 		Queries(2).
 		Transactions(1).
 		Committed().
-		InOrder(querytest.Select(), querytest.Insert(), querytest.Commit())
+		InOrder(sqltest.Select(), sqltest.Insert(), sqltest.Commit())
 }
 
 func TestSpyCountAndEvents(t *testing.T) {
 	db, mock := newDB(t)
-	mock.ExpectQuery(querytest.Anything()).Return(querytest.NewRows("id").AddRow(1))
+	mock.ExpectQuery(sqltest.Anything()).Return(sqltest.NewRows("id").AddRow(1))
 
 	trace := querytrace.New("op")
 	ctx := querytrace.WithTrace(context.Background(), trace)
@@ -171,19 +171,19 @@ func TestSpyCountAndEvents(t *testing.T) {
 	}
 	rows.Close()
 
-	if n := querytest.Count(trace, querytest.Table("users")); n != 3 {
+	if n := sqltest.Count(trace, sqltest.Table("users")); n != 3 {
 		t.Errorf("users count = %d, want 3", n)
 	}
-	if n := querytest.Count(trace, querytest.Select()); n != 4 {
+	if n := sqltest.Count(trace, sqltest.Select()); n != 4 {
 		t.Errorf("select count = %d, want 4", n)
 	}
-	if evs := querytest.Events(trace, querytest.Table("posts")); len(evs) != 1 {
+	if evs := sqltest.Events(trace, sqltest.Table("posts")); len(evs) != 1 {
 		t.Errorf("posts events = %d, want 1", len(evs))
 	}
 
-	querytest.Expect(t, trace).
-		Query(querytest.Table("users")).MinTimes(3).
-		Query(querytest.Table("comments")).Never().
+	sqltest.Expect(t, trace).
+		Query(sqltest.Table("users")).MinTimes(3).
+		Query(sqltest.Table("comments")).Never().
 		UniqueQueries(2)
 }
 
@@ -194,7 +194,7 @@ func TestExpectQueryBySQLQuery(t *testing.T) {
 		From(sqlpkg.Tbl("users")).
 		Where(sqlpkg.Eq(sqlpkg.Col("id"), sqlpkg.Expr(1)))
 	mock.ExpectQuery(q).
-		Return(querytest.NewRows("id", "name").AddRow(1, "alice")).
+		Return(sqltest.NewRows("id", "name").AddRow(1, "alice")).
 		Required()
 
 	text, args, err := q.ToSQL(sqlpkg.PostgreSQLDialect{})
@@ -218,15 +218,15 @@ func TestExpectQueryBySQLQuery(t *testing.T) {
 		t.Fatalf("rows = %d, want 1", n)
 	}
 
-	querytest.Expect(t, trace).Query(querytest.Table("users")).Times(1)
+	sqltest.Expect(t, trace).Query(sqltest.Table("users")).Times(1)
 }
 
 func TestMaxTimes(t *testing.T) {
-	db, mock := newDB(t, querytest.Lenient())
+	db, mock := newDB(t, sqltest.Lenient())
 	// The stub answers one statement, then later calls fall through to the
 	// lenient default (empty rows).
-	mock.ExpectQuery(querytest.Contains("from users")).
-		Return(querytest.NewRows("id").AddRow(1)).
+	mock.ExpectQuery(sqltest.Contains("from users")).
+		Return(sqltest.NewRows("id").AddRow(1)).
 		MaxTimes(1)
 
 	trace := querytrace.New("op")
@@ -252,10 +252,10 @@ func TestMaxTimes(t *testing.T) {
 
 func TestMatchers(t *testing.T) {
 	db, mock := newDB(t)
-	mock.ExpectQuery(querytest.Regexp(`(?i)FROM\s+users`)).
-		Return(querytest.NewRows("id").AddRow(1)).
+	mock.ExpectQuery(sqltest.Regexp(`(?i)FROM\s+users`)).
+		Return(sqltest.NewRows("id").AddRow(1)).
 		Required()
-	mock.ExpectExec(querytest.Equals("DELETE FROM users WHERE id = $1")).
+	mock.ExpectExec(sqltest.Equals("DELETE FROM users WHERE id = $1")).
 		ReturnResult(0, 1).
 		Required()
 
@@ -272,7 +272,7 @@ func TestMatchers(t *testing.T) {
 		t.Fatalf("exec: %v", err)
 	}
 
-	querytest.Expect(t, trace).Reads(1).Writes(1)
+	sqltest.Expect(t, trace).Reads(1).Writes(1)
 }
 
 func rowCount(t *testing.T, ctx context.Context, db *sql.DB, query string, args ...any) int {
@@ -290,14 +290,14 @@ func rowCount(t *testing.T, ctx context.Context, db *sql.DB, query string, args 
 }
 
 func TestArgMatchers(t *testing.T) {
-	db, mock := newDB(t, querytest.Lenient())
+	db, mock := newDB(t, sqltest.Lenient())
 	pg := sqlpkg.PostgreSQLDialect{}
 
 	// The expectation pins id to 5 with an Arg matcher.
 	mock.ExpectQuery(
 		sqlpkg.Select(sqlpkg.Col("id")).From(sqlpkg.Tbl("users")).
-			Where(sqlpkg.Eq(sqlpkg.Col("id"), querytest.Arg(5))),
-	).Return(querytest.NewRows("id").AddRow(1)).Required()
+			Where(sqlpkg.Eq(sqlpkg.Col("id"), sqltest.Arg(5))),
+	).Return(sqltest.NewRows("id").AddRow(1)).Required()
 
 	// The real statement has the same shape; only its bind value varies.
 	realText, _, err := sqlpkg.Select(sqlpkg.Col("id")).From(sqlpkg.Tbl("users")).
@@ -318,17 +318,17 @@ func TestArgMatchers(t *testing.T) {
 }
 
 func TestArgMatchFunc(t *testing.T) {
-	db, mock := newDB(t, querytest.Lenient())
+	db, mock := newDB(t, sqltest.Lenient())
 	pg := sqlpkg.PostgreSQLDialect{}
 
-	positive := querytest.ArgMatch(func(v any) bool {
+	positive := sqltest.ArgMatch(func(v any) bool {
 		n, ok := v.(int64)
 		return ok && n > 0
 	})
 	mock.ExpectQuery(
 		sqlpkg.Select(sqlpkg.Col("id")).From(sqlpkg.Tbl("users")).
 			Where(sqlpkg.Eq(sqlpkg.Col("id"), positive)),
-	).Return(querytest.NewRows("id").AddRow(1)).Required()
+	).Return(sqltest.NewRows("id").AddRow(1)).Required()
 
 	realText, _, _ := sqlpkg.Select(sqlpkg.Col("id")).From(sqlpkg.Tbl("users")).
 		Where(sqlpkg.Eq(sqlpkg.Col("id"), sqlpkg.Expr(0))).ToSQL(pg)
@@ -345,13 +345,13 @@ func TestArgMatchFunc(t *testing.T) {
 }
 
 func TestStructuralWildcards(t *testing.T) {
-	db, mock := newDB(t, querytest.Lenient())
+	db, mock := newDB(t, sqltest.Lenient())
 	pg := sqlpkg.PostgreSQLDialect{}
 
 	// Any table, but the column is fixed to id.
 	mock.ExpectQuery(
-		sqlpkg.Select(sqlpkg.Col("id")).From(querytest.AnyTable()),
-	).Return(querytest.NewRows("id").AddRow(1)).Required()
+		sqlpkg.Select(sqlpkg.Col("id")).From(sqltest.AnyTable()),
+	).Return(sqltest.NewRows("id").AddRow(1)).Required()
 
 	trace := querytrace.New("op")
 	ctx := querytrace.WithTrace(context.Background(), trace)
@@ -372,12 +372,12 @@ func TestStructuralWildcards(t *testing.T) {
 }
 
 func TestAnyColumnAndExpr(t *testing.T) {
-	db, mock := newDB(t, querytest.Lenient())
+	db, mock := newDB(t, sqltest.Lenient())
 	pg := sqlpkg.PostgreSQLDialect{}
 
 	mock.ExpectQuery(
-		sqlpkg.Select(querytest.AnyColumn()).From(sqlpkg.Tbl("users")).Where(querytest.AnyExpr()),
-	).Return(querytest.NewRows("x").AddRow(1)).Required()
+		sqlpkg.Select(sqltest.AnyColumn()).From(sqlpkg.Tbl("users")).Where(sqltest.AnyExpr()),
+	).Return(sqltest.NewRows("x").AddRow(1)).Required()
 
 	trace := querytrace.New("op")
 	ctx := querytrace.WithTrace(context.Background(), trace)
@@ -396,10 +396,10 @@ func TestAnyColumnAndExpr(t *testing.T) {
 }
 
 func TestWithArgs(t *testing.T) {
-	db, mock := newDB(t, querytest.Lenient())
-	mock.ExpectQuery(querytest.Contains("from users")).
-		WithArgs(querytest.Arg(5)).
-		Return(querytest.NewRows("id").AddRow(1)).
+	db, mock := newDB(t, sqltest.Lenient())
+	mock.ExpectQuery(sqltest.Contains("from users")).
+		WithArgs(sqltest.Arg(5)).
+		Return(sqltest.NewRows("id").AddRow(1)).
 		Required()
 
 	trace := querytrace.New("op")
@@ -416,8 +416,8 @@ func TestWithArgs(t *testing.T) {
 
 func TestTimes(t *testing.T) {
 	db, mock := newDB(t)
-	mock.ExpectQuery(querytest.Contains("from users")).
-		Return(querytest.NewRows("id").AddRow(1)).
+	mock.ExpectQuery(sqltest.Contains("from users")).
+		Return(sqltest.NewRows("id").AddRow(1)).
 		Times(2)
 
 	trace := querytrace.New("op")
@@ -434,17 +434,17 @@ func TestAnyTimes(t *testing.T) {
 	// An AnyTimes stub that never matches must not fail the cleanup Verify: it
 	// imposes no floor, unlike Required.
 	_, mock := newDB(t)
-	mock.ExpectQuery(querytest.Anything()).
-		Return(querytest.NewRows("id")).
+	mock.ExpectQuery(sqltest.Anything()).
+		Return(sqltest.NewRows("id")).
 		AnyTimes()
 	_ = mock
 }
 
 func TestWillDelayFor(t *testing.T) {
 	db, mock := newDB(t)
-	mock.ExpectQuery(querytest.Anything()).
+	mock.ExpectQuery(sqltest.Anything()).
 		WillDelayFor(50 * time.Millisecond).
-		Return(querytest.NewRows("id").AddRow(1))
+		Return(sqltest.NewRows("id").AddRow(1))
 
 	trace := querytrace.New("op")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
@@ -459,8 +459,8 @@ func TestWillDelayFor(t *testing.T) {
 func TestRowError(t *testing.T) {
 	db, mock := newDB(t)
 	boom := errors.New("read boom")
-	mock.ExpectQuery(querytest.Anything()).
-		Return(querytest.NewRows("id").AddRow(1).AddRow(2).RowError(1, boom))
+	mock.ExpectQuery(sqltest.Anything()).
+		Return(sqltest.NewRows("id").AddRow(1).AddRow(2).RowError(1, boom))
 
 	trace := querytrace.New("op")
 	ctx := querytrace.WithTrace(context.Background(), trace)
@@ -485,12 +485,12 @@ func TestRowError(t *testing.T) {
 // TestSentinelDoesNotCollide guards the wildcard sentinel: a real identifier
 // that looks like the marker must be matched literally, never as a wildcard.
 func TestSentinelDoesNotCollide(t *testing.T) {
-	db, mock := newDB(t, querytest.Lenient())
+	db, mock := newDB(t, sqltest.Lenient())
 	pg := sqlpkg.PostgreSQLDialect{}
 
 	mock.ExpectQuery(
 		sqlpkg.Select(sqlpkg.Col("id")).From(sqlpkg.Tbl("qtwild_0")),
-	).Return(querytest.NewRows("id").AddRow(1)).Required()
+	).Return(sqltest.NewRows("id").AddRow(1)).Required()
 
 	trace := querytrace.New("op")
 	ctx := querytrace.WithTrace(context.Background(), trace)

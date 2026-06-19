@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aita/sqlkit/internal/sqltest"
+	"github.com/aita/sqlkit/internal/testutil"
 	"github.com/aita/sqlkit/meta"
 	"github.com/aita/sqlkit/sql"
 )
@@ -19,18 +19,18 @@ func TestInspectRejectsUnsupportedDialects(t *testing.T) {
 }
 
 func TestInspectPostgres(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(sql string, args []any) (sqltest.Result, error) {
+	fake := &testutil.Fake{
+		QueryFunc: func(sql string, args []any) (testutil.Result, error) {
 			switch {
 			case strings.Contains(sql, "FOREIGN KEY"):
-				return sqltest.Result{
+				return testutil.Result{
 					Columns: []string{"constraint_name", "table_name", "column_name", "ref_schema", "ref_table", "ref_column", "delete_rule", "update_rule"},
 					Rows: [][]driver.Value{
 						{"posts_user_id_fkey", "posts", "user_id", "public", "users", "id", "CASCADE", "NO ACTION"},
 					},
 				}, nil
 			case strings.Contains(sql, "PRIMARY KEY"):
-				return sqltest.Result{
+				return testutil.Result{
 					Columns: []string{"table_name", "column_name"},
 					Rows: [][]driver.Value{
 						{"users", "id"},
@@ -38,7 +38,7 @@ func TestInspectPostgres(t *testing.T) {
 					},
 				}, nil
 			case strings.Contains(sql, "pg_index"):
-				return sqltest.Result{
+				return testutil.Result{
 					Columns: []string{"table_name", "index_name", "unique", "column_name"},
 					Rows: [][]driver.Value{
 						{"users", "users_email_key", true, "email"},
@@ -46,14 +46,14 @@ func TestInspectPostgres(t *testing.T) {
 					},
 				}, nil
 			case strings.Contains(sql, "pg_constraint"):
-				return sqltest.Result{
+				return testutil.Result{
 					Columns: []string{"table_name", "constraint_name", "clause"},
 					Rows: [][]driver.Value{
 						{"users", "users_balance_check", "CHECK ((balance >= (0)::numeric))"},
 					},
 				}, nil
 			case strings.Contains(sql, "pg_description"):
-				return sqltest.Result{
+				return testutil.Result{
 					Columns: []string{"table_name", "column_name", "comment"},
 					Rows: [][]driver.Value{
 						{"users", "", "Registered accounts"},
@@ -61,7 +61,7 @@ func TestInspectPostgres(t *testing.T) {
 					},
 				}, nil
 			default:
-				return sqltest.Result{
+				return testutil.Result{
 					Columns: []string{"table_name", "column_name", "udt_name", "nullable", "column_default", "is_identity", "length", "precision", "scale"},
 					Rows: [][]driver.Value{
 						{"users", "id", "int8", false, "nextval('users_id_seq'::regclass)", false, 0, 64, 0},
@@ -131,10 +131,10 @@ func TestInspectPostgres(t *testing.T) {
 // underscore-prefixed udt_name (e.g. "_int4", "_text"); the introspection strips the
 // prefix and resolves an array of the element type.
 func TestInspectPostgresArray(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(query string, args []any) (sqltest.Result, error) {
+	fake := &testutil.Fake{
+		QueryFunc: func(query string, args []any) (testutil.Result, error) {
 			if strings.Contains(query, "information_schema.columns") {
-				return sqltest.Result{
+				return testutil.Result{
 					Columns: []string{"table_name", "column_name", "udt_name", "nullable", "column_default", "is_identity", "length", "precision", "scale"},
 					Rows: [][]driver.Value{
 						{"docs", "id", "int8", false, nil, false, 0, 64, 0},
@@ -143,7 +143,7 @@ func TestInspectPostgresArray(t *testing.T) {
 					},
 				}, nil
 			}
-			return sqltest.Result{}, nil
+			return testutil.Result{}, nil
 		},
 	}
 
@@ -167,32 +167,32 @@ func TestInspectPostgresArray(t *testing.T) {
 }
 
 func TestInspectMySQL(t *testing.T) {
-	fake := &sqltest.Fake{
-		QueryFunc: func(sql string, args []any) (sqltest.Result, error) {
+	fake := &testutil.Fake{
+		QueryFunc: func(sql string, args []any) (testutil.Result, error) {
 			switch {
 			case strings.Contains(sql, "REFERENCED_TABLE_NAME"):
-				return sqltest.Result{
+				return testutil.Result{
 					Columns: []string{"constraint_name", "table_name", "column_name", "ref_schema", "ref_table", "ref_column", "delete_rule", "update_rule"},
 					Rows: [][]driver.Value{
 						{"fk_posts_user", "posts", "user_id", "app", "users", "id", "CASCADE", "NO ACTION"},
 					},
 				}, nil
 			case strings.Contains(sql, "STATISTICS"):
-				return sqltest.Result{
+				return testutil.Result{
 					Columns: []string{"table_name", "index_name", "unique", "column_name"},
 					Rows: [][]driver.Value{
 						{"users", "uq_users_email", true, "email"},
 					},
 				}, nil
 			case strings.Contains(sql, "CHECK_CONSTRAINTS"):
-				return sqltest.Result{
+				return testutil.Result{
 					Columns: []string{"table_name", "constraint_name", "clause"},
 					Rows: [][]driver.Value{
 						{"users", "users_chk_1", "(`balance` >= 0)"},
 					},
 				}, nil
 			default:
-				return sqltest.Result{
+				return testutil.Result{
 					Columns: []string{"table_name", "column_name", "data_type", "nullable", "column_default", "auto_increment", "is_pk", "length", "precision", "scale", "column_comment", "table_comment"},
 					Rows: [][]driver.Value{
 						{"users", "id", "bigint", false, nil, true, true, 0, 19, 0, "", "Registered accounts"},
