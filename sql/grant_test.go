@@ -49,3 +49,10 @@ func TestGrantRequiresObjectAndGrantee(t *testing.T) {
 		t.Fatal("GRANT without grantees succeeded, want error")
 	}
 }
+
+func TestGrantStmt(t *testing.T) {
+	g := Grant("SELECT", "INSERT").On("employees").To("analyst").WithGrantOption().Stmt()
+	if len(g.Privileges) != 2 || len(g.Objects) != 1 || len(g.Grantees) != 1 || !g.WithGrantOption {
+		t.Errorf("GrantStmt = %+v", g)
+	}
+}

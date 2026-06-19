@@ -8,9 +8,11 @@ import (
 )
 
 // CreateSQL returns the SQL that creates the whole schema for dialect d (it
-// does not touch a database): a CREATE SCHEMA IF NOT EXISTS for each distinct
-// schema marked for creation (Schema.Create) first — so the tables that live in
-// them never reference a missing schema — then CREATE TABLE statements with
+// does not touch a database): CREATE EXTENSION statements first, then a CREATE
+// SCHEMA IF NOT EXISTS for each distinct schema marked for creation
+// (Schema.Create) — so the tables that live in them never reference a missing
+// schema — then the enum types and sequences the tables may use, then CREATE
+// TABLE statements with
 // primary keys and CHECK constraints, then CREATE INDEX statements, then ALTER
 // TABLE statements for foreign keys (emitted after all tables so declaration
 // order never matters), then comments. Schemas not marked Create (including the
@@ -29,11 +31,36 @@ import (
 // has no type on the dialect or a default/check expression cannot be compiled.
 func (md Metadata) CreateSQL(d sql.Dialect) (string, error) {
 	var stmts []string
+	// Extensions first: an extension may provide a type or function a table or
+	// enum then uses.
+	for _, ext := range md.Extensions {
+		out, _, err := ext.CreateStatement().ToSQL(d)
+		if err != nil {
+			return "", err
+		}
+		stmts = append(stmts, out)
+	}
 	for _, s := range md.Schemas() {
 		if !s.Create || s.Name == "" {
 			continue
 		}
 		out, _, err := s.CreateStatement().ToSQL(d)
+		if err != nil {
+			return "", err
+		}
+		stmts = append(stmts, out)
+	}
+	// Enums and sequences before the tables, whose columns may use an enum type or
+	// a sequence-backed default.
+	for _, enum := range md.Enums {
+		out, _, err := enum.CreateStatement().ToSQL(d)
+		if err != nil {
+			return "", err
+		}
+		stmts = append(stmts, out)
+	}
+	for _, seq := range md.Sequences {
+		out, _, err := seq.CreateStatement().ToSQL(d)
 		if err != nil {
 			return "", err
 		}
@@ -61,6 +88,22 @@ func (md Metadata) CreateSQL(d sql.Dialect) (string, error) {
 			stmts = append(stmts, block)
 		}
 	}
+	// Materialized views read the tables, and grants target them, so both come
+	// after the tables exist.
+	for _, mv := range md.MaterializedViews {
+		out, _, err := mv.CreateStatement().ToSQL(d)
+		if err != nil {
+			return "", err
+		}
+		stmts = append(stmts, out)
+	}
+	for _, g := range md.Grants {
+		out, _, err := g.CreateStatement().ToSQL(d)
+		if err != nil {
+			return "", err
+		}
+		stmts = append(stmts, out)
+	}
 	return strings.Join(stmts, "\n\n") + "\n", nil
 }
 
@@ -75,6 +118,15 @@ func (md Metadata) CreateSQL(d sql.Dialect) (string, error) {
 // drops the database.
 func (md Metadata) DropSQL(d sql.Dialect) string {
 	var stmts []string
+	// Grants and materialized views go first, before the tables they depend on.
+	for _, g := range md.Grants {
+		out, _, _ := g.DropStatement().ToSQL(d)
+		stmts = append(stmts, out)
+	}
+	for _, mv := range md.MaterializedViews {
+		out, _, _ := mv.DropStatement().ToSQL(d)
+		stmts = append(stmts, out)
+	}
 	for _, table := range md.Tables {
 		for _, fk := range table.ForeignKeys {
 			stmts = append(stmts, fk.dropConstraintSQL(table, d))
@@ -83,11 +135,25 @@ func (md Metadata) DropSQL(d sql.Dialect) string {
 	for _, table := range md.Tables {
 		stmts = append(stmts, table.DropSQL(d))
 	}
+	// Reverse of CreateSQL: sequences and enums after the tables that used them,
+	// then schemas, then extensions last.
+	for _, seq := range md.Sequences {
+		out, _, _ := seq.DropStatement().ToSQL(d)
+		stmts = append(stmts, out)
+	}
+	for _, enum := range md.Enums {
+		out, _, _ := enum.DropStatement().ToSQL(d)
+		stmts = append(stmts, out)
+	}
 	for _, s := range md.Schemas() {
 		if !s.Create || s.Name == "" {
 			continue
 		}
 		out, _, _ := s.DropStatement().ToSQL(d)
+		stmts = append(stmts, out)
+	}
+	for _, ext := range md.Extensions {
+		out, _, _ := ext.DropStatement().ToSQL(d)
 		stmts = append(stmts, out)
 	}
 	return strings.Join(stmts, "\n\n") + "\n"
@@ -97,12 +163,12 @@ func (md Metadata) DropSQL(d sql.Dialect) string {
 // schema. The unnamed default schema (empty Name) has no statement to build —
 // CreateSQL skips it, leaving its tables unqualified.
 func (s Schema) CreateStatement() sql.CreateSchemaStmt {
-	return sql.CreateSchema(s.Name).IfNotExists()
+	return sql.CreateSchema(s.Name).IfNotExists().Stmt()
 }
 
 // DropStatement builds the DROP SCHEMA IF EXISTS DDL node for the schema.
 func (s Schema) DropStatement() sql.DropSchemaStmt {
-	return sql.DropSchema(s.Name).IfExists()
+	return sql.DropSchema(s.Name).IfExists().Stmt()
 }
 
 // SQLTable returns the sql-package table reference for the table.
@@ -191,7 +257,7 @@ func (t Table) CreateStatement() sql.CreateTableStmt {
 	for _, check := range t.Checks {
 		stmt = stmt.Check(check.Name, check.Expression)
 	}
-	return stmt.Comment(t.Comment)
+	return stmt.Comment(t.Comment).Stmt()
 }
 
 // CreateSQL returns the CREATE TABLE statement for the table on dialect d. It
@@ -206,7 +272,7 @@ func (t Table) CreateSQL(d sql.Dialect) (string, error) {
 
 // DropStatement builds the DROP TABLE DDL node for the table.
 func (t Table) DropStatement() sql.DropTableStmt {
-	return sql.DropTable(t.SQLTable()).IfExists()
+	return sql.DropTable(t.SQLTable()).IfExists().Stmt()
 }
 
 // DropSQL returns the DROP TABLE statement for the table on dialect d.
@@ -221,7 +287,7 @@ func (ix Index) CreateStatement(table Table) sql.CreateIndexStmt {
 	if ix.Unique {
 		stmt = stmt.Unique()
 	}
-	return stmt
+	return stmt.Stmt()
 }
 
 // CreateSQL returns the CREATE INDEX statement for the index on its table.
@@ -252,7 +318,7 @@ func (fk ForeignKey) AddStatement(table Table) sql.AlterTableStmt {
 		RefColumns: fk.RefColumns,
 		OnDelete:   string(fk.OnDelete),
 		OnUpdate:   string(fk.OnUpdate),
-	})
+	}).Stmt()
 }
 
 // DropStatement builds the DDL node that drops the foreign key from its table.

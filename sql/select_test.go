@@ -1,35 +1,82 @@
-package sql_test
+package sql
 
 import (
-	"reflect"
 	"strings"
 	"testing"
-
-	. "github.com/aita/sqlkit/sql"
 )
 
-var (
-	users = Table{Schema: "public", Name: "users"}
-	orgs  = Table{Name: "orgs"}
-)
+func TestOuterAndCrossJoins(t *testing.T) {
+	base := Select(Col("u.id")).From(SourceAlias(Table{Name: "users"}, "u"))
 
-func assertSQL(t *testing.T, query Query, wantSQL string, wantArgs []any) {
-	t.Helper()
-	sqlText, args, err := query.ToSQL(PostgreSQLDialect{})
-	if err != nil {
-		t.Fatalf("ToSQL() error = %v", err)
+	assertSQL(t, base.RightJoin(SourceAlias(Table{Name: "orgs"}, "o"), Eq(Col("u.org_id"), Col("o.id"))),
+		`SELECT "u"."id" FROM "users" AS "u" RIGHT JOIN "orgs" AS "o" ON ("u"."org_id" = "o"."id")`, nil)
+
+	assertSQL(t, base.FullJoin(SourceAlias(Table{Name: "orgs"}, "o"), Eq(Col("u.org_id"), Col("o.id"))),
+		`SELECT "u"."id" FROM "users" AS "u" FULL JOIN "orgs" AS "o" ON ("u"."org_id" = "o"."id")`, nil)
+
+	assertSQL(t, base.CrossJoin(SourceAlias(Table{Name: "orgs"}, "o")),
+		`SELECT "u"."id" FROM "users" AS "u" CROSS JOIN "orgs" AS "o"`, nil)
+}
+
+func TestSelectDistinct(t *testing.T) {
+	query := Select(Col("email")).Distinct().From(Table{Name: "users"})
+
+	assertSQL(t, query, `SELECT DISTINCT "email" FROM "users"`, nil)
+}
+
+func TestForUpdateAndShare(t *testing.T) {
+	base := Select(Col("id")).From(Table{Name: "jobs"})
+
+	assertSQL(t, base.ForUpdate(), `SELECT "id" FROM "jobs" FOR UPDATE`, nil)
+	assertSQL(t, base.ForShare(), `SELECT "id" FROM "jobs" FOR SHARE`, nil)
+	assertSQL(t, base.ForNoKeyUpdate(), `SELECT "id" FROM "jobs" FOR NO KEY UPDATE`, nil)
+	assertSQL(t, base.ForKeyShare(), `SELECT "id" FROM "jobs" FOR KEY SHARE`, nil)
+}
+
+func TestLockWaitModifiers(t *testing.T) {
+	base := Select(Col("id")).From(Table{Name: "jobs"})
+
+	assertSQL(t, base.ForUpdate(SkipLocked()),
+		`SELECT "id" FROM "jobs" FOR UPDATE SKIP LOCKED`, nil)
+	assertSQL(t, base.ForUpdate(NoWait()),
+		`SELECT "id" FROM "jobs" FOR UPDATE NOWAIT`, nil)
+}
+
+func TestLockOf(t *testing.T) {
+	q := Select(Col("jobs.id")).From(Table{Name: "jobs"}).
+		Join(Table{Name: "queues"}, Eq(Col("jobs.queue_id"), Col("queues.id"))).
+		ForUpdate(LockOf("jobs"), SkipLocked())
+	assertSQL(t, q,
+		`SELECT "jobs"."id" FROM "jobs" JOIN "queues" ON ("jobs"."queue_id" = "queues"."id") FOR UPDATE OF "jobs" SKIP LOCKED`,
+		nil)
+}
+
+func TestLockComesAfterLimitOffset(t *testing.T) {
+	q := Select(Col("id")).From(Table{Name: "jobs"}).
+		OrderBy(Asc(Col("id"))).Limit(10).Offset(5).ForUpdate(SkipLocked())
+	assertSQL(t, q,
+		`SELECT "id" FROM "jobs" ORDER BY "id" LIMIT 10 OFFSET 5 FOR UPDATE SKIP LOCKED`, nil)
+}
+
+func TestLockMySQL(t *testing.T) {
+	assertMySQL(t, Select(Col("id")).From(Table{Name: "jobs"}).ForUpdate(SkipLocked()),
+		"SELECT `id` FROM `jobs` FOR UPDATE SKIP LOCKED", nil)
+	assertMySQL(t, Select(Col("id")).From(Table{Name: "jobs"}).ForShare(),
+		"SELECT `id` FROM `jobs` FOR SHARE", nil)
+
+	// MySQL has no NO KEY UPDATE / KEY SHARE.
+	if _, _, err := Select(Col("id")).From(Table{Name: "jobs"}).ForKeyShare().ToSQL(MySQLDialect{}); err == nil ||
+		!strings.Contains(err.Error(), "FOR UPDATE and FOR SHARE") {
+		t.Fatalf("ToSQL(mysql) error = %v, want strength rejection", err)
 	}
-	if sqlText != wantSQL {
-		t.Fatalf("ToSQL() SQL = %q, want %q", sqlText, wantSQL)
-	}
-	if len(wantArgs) == 0 {
-		if len(args) != 0 {
-			t.Fatalf("ToSQL() args = %#v, want none", args)
+}
+
+func TestLockRejectedOnSQLiteAndStandard(t *testing.T) {
+	q := Select(Col("id")).From(Table{Name: "jobs"}).ForUpdate()
+	for _, d := range []Dialect{SQLiteDialect{}, StandardSQLDialect{}} {
+		if _, _, err := q.ToSQL(d); err == nil || !strings.Contains(err.Error(), "row-locking") {
+			t.Fatalf("ToSQL(%s) error = %v, want row-locking rejection", d.Name(), err)
 		}
-		return
-	}
-	if !reflect.DeepEqual(args, wantArgs) {
-		t.Fatalf("ToSQL() args = %#v, want %#v", args, wantArgs)
 	}
 }
 
@@ -119,34 +166,6 @@ func TestLogicalOperators(t *testing.T) {
 	assertSQL(t, query,
 		`SELECT "id" FROM "users" WHERE ((("a" = $1) OR ("b" = $2)) AND (NOT ("c" IN ($3, $4))) AND ("d" IS NULL))`,
 		[]any{1, 2, 3, 4})
-}
-
-func TestInsertQueryToSQL(t *testing.T) {
-	query := InsertInto(users).
-		Columns("email", "name").
-		Values("a@example.com", "Alice").
-		Values("b@example.com", "Bob").
-		Returning(Col("id"))
-
-	assertSQL(t, query,
-		`INSERT INTO "public"."users" ("email", "name") VALUES ($1, $2), ($3, $4) RETURNING "id"`,
-		[]any{"a@example.com", "Alice", "b@example.com", "Bob"})
-}
-
-func TestUpdateQueryToSQL(t *testing.T) {
-	query := Update(users).
-		Set(Set("email", "new@example.com"), Set("name", "New")).
-		Where(Eq(Col("id"), Int(7)))
-
-	assertSQL(t, query,
-		`UPDATE "public"."users" SET "email" = $1, "name" = $2 WHERE ("id" = $3)`,
-		[]any{"new@example.com", "New", 7})
-}
-
-func TestDeleteQueryToSQL(t *testing.T) {
-	query := DeleteFrom(users).Where(Eq(Col("id"), Int(7)))
-
-	assertSQL(t, query, `DELETE FROM "public"."users" WHERE ("id" = $1)`, []any{7})
 }
 
 func TestRepeatedWhereCombinesWithAnd(t *testing.T) {
@@ -245,5 +264,35 @@ func TestDistinctOnRejectedOnMySQL(t *testing.T) {
 	q := Select(Col("user_id")).From(Table{Name: "orders"}).DistinctOn(Col("user_id"))
 	if _, _, err := q.ToSQL(MySQLDialect{}); err == nil || !strings.Contains(err.Error(), "DISTINCT ON") {
 		t.Fatalf("ToSQL(mysql) error = %v, want DISTINCT ON rejection", err)
+	}
+}
+
+func TestSelectStmtFields(t *testing.T) {
+	users := Table{Name: "users"}
+	orders := Table{Name: "orders"}
+
+	// Build with the fluent builder, then read the pure AST directly — the
+	// statement's exported fields are the public, zero-copy introspection seam.
+	c := Select(Col("id")).
+		From(users).
+		Join(orders, Eq(Col("users.id"), Col("orders.user_id"))).
+		Where(Eq(Col("id"), Val(1))).
+		Limit(10).
+		Stmt()
+
+	if c.From == nil || c.From.SQLSource().Name != "users" {
+		t.Errorf("From = %v, want users", c.From)
+	}
+	if len(c.Joins) != 1 {
+		t.Fatalf("Joins = %d, want 1", len(c.Joins))
+	}
+	if c.Where == nil {
+		t.Error("Where = nil, want non-nil")
+	}
+	if !c.HasLimit || c.Limit != 10 {
+		t.Errorf("Limit = %d (has=%v), want 10", c.Limit, c.HasLimit)
+	}
+	if c.HasOffset {
+		t.Errorf("HasOffset = true, want false")
 	}
 }

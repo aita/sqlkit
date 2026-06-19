@@ -10,7 +10,7 @@ import (
 // with All(ctx).Scan(&dst).
 type UnionQuery struct {
 	ex    executorBinding
-	query sql.CompoundQuery
+	query sql.CompoundBuilder
 }
 
 // Union combines two or more SELECT queries with UNION, flattening what would

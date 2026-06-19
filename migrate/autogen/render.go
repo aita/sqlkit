@@ -191,20 +191,260 @@ func (r *renderer) plan(from, to meta.Metadata) (string, error) {
 		}
 	}
 
+	objs := r.objectOps(from, to)
+
 	// Renames run first: a renamed table must exist under its new name before
 	// the drops, alters, and re-adds that diffTable emitted against that name.
 	var out []string
 	out = append(out, renameTables...)
 	out = append(out, renameColumns...)
+	out = append(out, objs.dropGrants...)
+	out = append(out, objs.dropMatviews...)
 	out = append(out, dropFKs...)
 	out = append(out, dropIndexes...)
 	out = append(out, dropTables...)
+	out = append(out, objs.dropSequences...)
+	out = append(out, objs.dropEnums...)
+	out = append(out, objs.dropExtensions...)
+	out = append(out, objs.createExtensions...)
+	out = append(out, objs.createEnums...)
+	out = append(out, objs.createSequences...)
 	out = append(out, createTables...)
 	out = append(out, alters...)
 	out = append(out, createIndexes...)
 	out = append(out, addFKs...)
 	out = append(out, comments...)
+	out = append(out, objs.createMatviews...)
+	out = append(out, objs.createGrants...)
 	return strings.Join(out, "\n"), nil
+}
+
+// objectOps renders the op.* calls that reconcile the non-table objects
+// (extensions, enums, sequences) between from and to. Names are rendered bare,
+// since the Operator qualifies them with the migration's schema.
+func (r *renderer) objectOps(from, to meta.Metadata) renderedObjects {
+	var o renderedObjects
+
+	oldExt := map[string]meta.Extension{}
+	for _, e := range from.Extensions {
+		oldExt[e.Name] = e
+	}
+	newExt := map[string]meta.Extension{}
+	for _, e := range to.Extensions {
+		newExt[e.Name] = e
+	}
+	for _, e := range from.Extensions {
+		if n, ok := newExt[e.Name]; !ok || n != e {
+			o.dropExtensions = append(o.dropExtensions, fmt.Sprintf("op.DropExtension(%q)", e.Name))
+		}
+	}
+	for _, e := range to.Extensions {
+		if old, ok := oldExt[e.Name]; !ok || old != e {
+			o.createExtensions = append(o.createExtensions, r.extensionCreate(e))
+		}
+	}
+
+	oldEnum := map[string]meta.Enum{}
+	for _, e := range from.Enums {
+		oldEnum[e.QualifiedName()] = e
+	}
+	newEnum := map[string]meta.Enum{}
+	for _, e := range to.Enums {
+		newEnum[e.QualifiedName()] = e
+	}
+	for _, e := range from.Enums {
+		if n, ok := newEnum[e.QualifiedName()]; !ok || !e.Equal(n) {
+			o.dropEnums = append(o.dropEnums, fmt.Sprintf("op.DropEnum(%q)", e.Name))
+		}
+	}
+	for _, e := range to.Enums {
+		if old, ok := oldEnum[e.QualifiedName()]; !ok || !old.Equal(e) {
+			o.createEnums = append(o.createEnums, fmt.Sprintf("op.CreateEnum(%q, %s)", e.Name, quotedList(e.Values)))
+		}
+	}
+
+	oldSeq := map[string]meta.Sequence{}
+	for _, s := range from.Sequences {
+		oldSeq[s.QualifiedName()] = s
+	}
+	newSeq := map[string]meta.Sequence{}
+	for _, s := range to.Sequences {
+		newSeq[s.QualifiedName()] = s
+	}
+	for _, s := range from.Sequences {
+		if n, ok := newSeq[s.QualifiedName()]; !ok || !s.Equal(n) {
+			o.dropSequences = append(o.dropSequences, fmt.Sprintf("op.DropSequence(%q)", s.Name))
+		}
+	}
+	for _, s := range to.Sequences {
+		if old, ok := oldSeq[s.QualifiedName()]; !ok || !old.Equal(s) {
+			o.createSequences = append(o.createSequences, r.sequenceCreate(s))
+		}
+	}
+
+	oldMV := map[string]meta.MaterializedView{}
+	for _, v := range from.MaterializedViews {
+		oldMV[v.QualifiedName()] = v
+	}
+	newMV := map[string]meta.MaterializedView{}
+	for _, v := range to.MaterializedViews {
+		newMV[v.QualifiedName()] = v
+	}
+	for _, v := range from.MaterializedViews {
+		if n, ok := newMV[v.QualifiedName()]; !ok || !r.matviewEqual(v, n) {
+			o.dropMatviews = append(o.dropMatviews, fmt.Sprintf("op.DropMaterializedView(%q)", v.Name))
+		}
+	}
+	for _, v := range to.MaterializedViews {
+		if old, ok := oldMV[v.QualifiedName()]; !ok || !r.matviewEqual(old, v) {
+			o.createMatviews = append(o.createMatviews, r.matviewCreate(v))
+		}
+	}
+
+	oldGrant := map[string]meta.Grant{}
+	for _, g := range from.Grants {
+		oldGrant[grantKey(g)] = g
+	}
+	newGrant := map[string]meta.Grant{}
+	for _, g := range to.Grants {
+		newGrant[grantKey(g)] = g
+	}
+	for _, g := range from.Grants {
+		if n, ok := newGrant[grantKey(g)]; !ok || !g.Equal(n) {
+			o.dropGrants = append(o.dropGrants, r.grantRevoke(g))
+		}
+	}
+	for _, g := range to.Grants {
+		if old, ok := oldGrant[grantKey(g)]; !ok || !old.Equal(g) {
+			o.createGrants = append(o.createGrants, r.grantCreate(g))
+		}
+	}
+	return o
+}
+
+// renderedObjects holds the rendered op.* calls for each object kind.
+type renderedObjects struct {
+	createExtensions []string
+	createEnums      []string
+	createSequences  []string
+	createMatviews   []string
+	createGrants     []string
+	dropExtensions   []string
+	dropEnums        []string
+	dropSequences    []string
+	dropMatviews     []string
+	dropGrants       []string
+}
+
+// grantKey identifies a grant by its target (object type and objects), so a
+// change to the privileges or grantees of the same target is one modification.
+func grantKey(g meta.Grant) string {
+	return g.ObjectType + "\x00" + strings.Join(g.Objects, ",")
+}
+
+// matviewEqual compares two materialized views, rendering their bodies for the
+// dialect. A missing view never matches.
+func (r *renderer) matviewEqual(a, b meta.MaterializedView) bool {
+	if a.Query == nil || b.Query == nil {
+		return false
+	}
+	if a.Schema != b.Schema || a.Name != b.Name || a.WithNoData != b.WithNoData || !stringsEqual(a.Columns, b.Columns) {
+		return false
+	}
+	at, _, err := a.Query.ToSQL(r.dialect)
+	if err != nil {
+		return false
+	}
+	bt, _, err := b.Query.ToSQL(r.dialect)
+	if err != nil {
+		return false
+	}
+	return at == bt
+}
+
+func (r *renderer) matviewCreate(v meta.MaterializedView) string {
+	r.usesSQL = true
+	body, _, _ := v.Query.ToSQL(r.dialect)
+	var opts strings.Builder
+	if len(v.Columns) > 0 {
+		fmt.Fprintf(&opts, ", func(s sql.CreateMaterializedViewBuilder) sql.CreateMaterializedViewBuilder {\nreturn s.Columns(%s)\n}", quotedList(v.Columns))
+	} else if v.WithNoData {
+		opts.WriteString(", func(s sql.CreateMaterializedViewBuilder) sql.CreateMaterializedViewBuilder {\nreturn s.WithNoData()\n}")
+	}
+	return fmt.Sprintf("op.CreateMaterializedView(%q, sql.RawSQL(%q)%s)", v.Name, body, opts.String())
+}
+
+func (r *renderer) grantCreate(g meta.Grant) string {
+	r.usesSQL = true
+	return fmt.Sprintf("op.Grant(%s)", grantBuilderExpr("sql.Grant", g, true))
+}
+
+func (r *renderer) grantRevoke(g meta.Grant) string {
+	r.usesSQL = true
+	return fmt.Sprintf("op.Revoke(%s)", grantBuilderExpr("sql.Revoke", g, false))
+}
+
+// grantBuilderExpr renders a sql.Grant/sql.Revoke builder chain. grant chooses To
+// vs From and whether WITH GRANT OPTION applies (Revoke has no such clause).
+func grantBuilderExpr(ctor string, g meta.Grant, grant bool) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s(%s)", ctor, quotedList(g.Privileges))
+	if g.ObjectType != "" {
+		fmt.Fprintf(&b, ".OnType(%q, %s)", g.ObjectType, quotedList(g.Objects))
+	} else {
+		fmt.Fprintf(&b, ".On(%s)", quotedList(g.Objects))
+	}
+	if grant {
+		fmt.Fprintf(&b, ".To(%s)", quotedList(g.Grantees))
+		if g.WithGrantOption {
+			b.WriteString(".WithGrantOption()")
+		}
+	} else {
+		fmt.Fprintf(&b, ".From(%s)", quotedList(g.Grantees))
+	}
+	return b.String()
+}
+
+func (r *renderer) extensionCreate(e meta.Extension) string {
+	if e.Schema == "" {
+		return fmt.Sprintf("op.CreateExtension(%q)", e.Name)
+	}
+	r.usesSQL = true
+	return fmt.Sprintf("op.CreateExtension(%q, func(s sql.CreateExtensionBuilder) sql.CreateExtensionBuilder {\nreturn s.Schema(%q)\n})", e.Name, e.Schema)
+}
+
+func (r *renderer) sequenceCreate(s meta.Sequence) string {
+	var chain strings.Builder
+	if s.Increment != nil {
+		fmt.Fprintf(&chain, ".Increment(%d)", *s.Increment)
+	}
+	if s.MinValue != nil {
+		fmt.Fprintf(&chain, ".MinValue(%d)", *s.MinValue)
+	}
+	if s.MaxValue != nil {
+		fmt.Fprintf(&chain, ".MaxValue(%d)", *s.MaxValue)
+	}
+	if s.Start != nil {
+		fmt.Fprintf(&chain, ".Start(%d)", *s.Start)
+	}
+	if s.Cache != nil {
+		fmt.Fprintf(&chain, ".Cache(%d)", *s.Cache)
+	}
+	if s.Cycle != nil {
+		if *s.Cycle {
+			chain.WriteString(".Cycle()")
+		} else {
+			chain.WriteString(".NoCycle()")
+		}
+	}
+	if s.OwnedBy != "" {
+		fmt.Fprintf(&chain, ".OwnedBy(%q)", s.OwnedBy)
+	}
+	if chain.Len() == 0 {
+		return fmt.Sprintf("op.CreateSequence(%q)", s.Name)
+	}
+	r.usesSQL = true
+	return fmt.Sprintf("op.CreateSequence(%q, func(s sql.CreateSequenceBuilder) sql.CreateSequenceBuilder {\nreturn s%s\n})", s.Name, chain.String())
 }
 
 // diffTable appends the operations that turn oldT into newT to the buckets.

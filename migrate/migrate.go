@@ -716,7 +716,8 @@ func (m *Migrator) createTableStmt() sql.CreateTableStmt {
 		Column(sql.ColumnDef{Name: "direction", Type: sql.EngineType{Name: "varchar", Length: 4}, NotNull: true}).
 		Column(sql.ColumnDef{Name: "applied_at", Type: timestampType(m.db.Dialect()), NotNull: true, Default: sql.Raw("CURRENT_TIMESTAMP")}).
 		PrimaryKey("id").
-		IfNotExists()
+		IfNotExists().
+		Stmt()
 }
 
 // recordEvent inserts a history row for applying or rolling back a migration.

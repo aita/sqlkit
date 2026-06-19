@@ -31,6 +31,10 @@ type Querier interface {
 	// Delete starts a DELETE bound to this querier.
 	Delete(table Table) DeleteQuery
 
+	// Merge starts a MERGE bound to this querier. Set the source with Using,
+	// the join with On, and the actions with When.
+	Merge(target Table) MergeQuery
+
 	// RawSQL prepares a hand-written SQL string (with args) or a built
 	// sql.Query; materialize it with Scan.
 	RawSQL(ctx context.Context, query any, args ...any) Rows

@@ -14,31 +14,31 @@ import (
 // share the syntax (on MySQL a schema is a database and CREATE SCHEMA is its
 // synonym), so it renders directly through QuoteName.
 func (c *Compiler) CompileCreateSchema(s CreateSchemaStmt) (string, error) {
-	if s.name == "" {
+	if s.Name == "" {
 		return "", fmt.Errorf("sqlkit/sql: CREATE SCHEMA requires a name")
 	}
 	var sb strings.Builder
 	sb.WriteString("CREATE SCHEMA ")
-	if s.ifNotExists {
+	if s.IfNotExists {
 		sb.WriteString("IF NOT EXISTS ")
 	}
-	sb.WriteString(c.Dialect.QuoteName(s.name) + ";")
+	sb.WriteString(c.Dialect.QuoteName(s.Name) + ";")
 	return sb.String(), nil
 }
 
 // CompileDropSchema renders a DROP SCHEMA statement (shared syntax; CASCADE is
 // PostgreSQL-only, as MySQL's DROP SCHEMA always drops the database's contents).
 func (c *Compiler) CompileDropSchema(s DropSchemaStmt) (string, error) {
-	if s.name == "" {
+	if s.Name == "" {
 		return "", fmt.Errorf("sqlkit/sql: DROP SCHEMA requires a name")
 	}
 	var sb strings.Builder
 	sb.WriteString("DROP SCHEMA ")
-	if s.ifExists {
+	if s.IfExists {
 		sb.WriteString("IF EXISTS ")
 	}
-	sb.WriteString(c.Dialect.QuoteName(s.name))
-	if s.cascade && c.Dialect.Name() != "mysql" {
+	sb.WriteString(c.Dialect.QuoteName(s.Name))
+	if s.Cascade && c.Dialect.Name() != "mysql" {
 		sb.WriteString(" CASCADE")
 	}
 	sb.WriteString(";")
@@ -48,7 +48,7 @@ func (c *Compiler) CompileDropSchema(s DropSchemaStmt) (string, error) {
 // CompileCreateTable renders a CREATE TABLE statement.
 func (c *Compiler) CompileCreateTable(s CreateTableStmt) (string, error) {
 	var defs []string
-	for _, col := range s.columns {
+	for _, col := range s.Columns {
 		def, err := c.compileColumnDef(col)
 		if err != nil {
 			return "", err
@@ -59,17 +59,17 @@ func (c *Compiler) CompileCreateTable(s CreateTableStmt) (string, error) {
 	// (SQLite's INTEGER PRIMARY KEY AUTOINCREMENT); for those, a separate
 	// PRIMARY KEY constraint over that single column would be a duplicate, so
 	// skip it. PostgreSQL/MySQL keep the standalone constraint as before.
-	if len(s.primaryKey) > 0 && !c.inlinesAutoIncrementPK(s) {
-		defs = append(defs, "PRIMARY KEY ("+c.quoteAll(s.primaryKey)+")")
+	if len(s.PrimaryKey) > 0 && !c.inlinesAutoIncrementPK(s) {
+		defs = append(defs, "PRIMARY KEY ("+c.quoteAll(s.PrimaryKey)+")")
 	}
-	for _, check := range s.checks {
+	for _, check := range s.Checks {
 		expr, err := CompileStatic(c.Dialect, check.Expression)
 		if err != nil {
 			return "", err
 		}
 		defs = append(defs, "CONSTRAINT "+c.Dialect.QuoteName(check.Name)+" CHECK ("+expr+")")
 	}
-	for _, u := range s.uniques {
+	for _, u := range s.Uniques {
 		if len(u.Columns) == 0 {
 			return "", fmt.Errorf("sqlkit/sql: UNIQUE constraint requires at least one column")
 		}
@@ -79,20 +79,20 @@ func (c *Compiler) CompileCreateTable(s CreateTableStmt) (string, error) {
 		}
 		defs = append(defs, clause)
 	}
-	for _, fk := range s.foreignKeys {
+	for _, fk := range s.ForeignKeys {
 		defs = append(defs, c.foreignKeyDef(fk))
 	}
 
 	var sb strings.Builder
 	sb.WriteString("CREATE ")
-	if s.temporary {
+	if s.Temporary {
 		sb.WriteString("TEMPORARY ")
 	}
 	sb.WriteString("TABLE ")
-	if s.ifNotExists {
+	if s.IfNotExists {
 		sb.WriteString("IF NOT EXISTS ")
 	}
-	sb.WriteString(c.qualify(s.table))
+	sb.WriteString(c.qualify(s.Table))
 	sb.WriteString(" (\n")
 	for i, def := range defs {
 		sb.WriteString("    " + def)
@@ -101,7 +101,7 @@ func (c *Compiler) CompileCreateTable(s CreateTableStmt) (string, error) {
 		}
 		sb.WriteString("\n")
 	}
-	sb.WriteString(")" + c.Dialect.InlineTableComment(s.comment) + ";")
+	sb.WriteString(")" + c.Dialect.InlineTableComment(s.Comment) + ";")
 	return sb.String(), nil
 }
 
@@ -113,11 +113,11 @@ func (c *Compiler) CompileCreateTable(s CreateTableStmt) (string, error) {
 // unchanged.
 func (c *Compiler) inlinesAutoIncrementPK(s CreateTableStmt) bool {
 	ip, ok := c.Dialect.(InlineAutoIncrementPrimaryKey)
-	if !ok || !ip.InlinesAutoIncrementPrimaryKey() || len(s.primaryKey) != 1 {
+	if !ok || !ip.InlinesAutoIncrementPrimaryKey() || len(s.PrimaryKey) != 1 {
 		return false
 	}
-	for _, col := range s.columns {
-		if col.Name != s.primaryKey[0] || !col.AutoIncrement {
+	for _, col := range s.Columns {
+		if col.Name != s.PrimaryKey[0] || !col.AutoIncrement {
 			continue
 		}
 		ai, ok := col.Type.(AutoIncrementColumnType)
@@ -266,16 +266,16 @@ func (c *Compiler) compileRestateColumn(col ColumnDef) (string, error) {
 
 // CompileDropTable renders a DROP TABLE statement over one or more tables.
 func (c *Compiler) CompileDropTable(s DropTableStmt) (string, error) {
-	if len(s.tables) == 0 {
+	if len(s.Tables) == 0 {
 		return "", fmt.Errorf("sqlkit/sql: DROP TABLE requires at least one table")
 	}
-	tables := make([]string, len(s.tables))
-	for i, t := range s.tables {
+	tables := make([]string, len(s.Tables))
+	for i, t := range s.Tables {
 		tables[i] = c.qualify(t)
 	}
 	var sb strings.Builder
 	sb.WriteString("DROP TABLE ")
-	if s.ifExists {
+	if s.IfExists {
 		sb.WriteString("IF EXISTS ")
 	}
 	sb.WriteString(strings.Join(tables, ", ") + ";")
@@ -286,13 +286,13 @@ func (c *Compiler) CompileDropTable(s DropTableStmt) (string, error) {
 // plain SQL text; a body that binds values is rejected, since a DDL statement
 // carries no bind arguments (inline literals with Raw).
 func (c *Compiler) CompileCreateView(s CreateViewStmt) (string, error) {
-	if s.query == nil {
+	if s.Query == nil {
 		return "", fmt.Errorf("sqlkit/sql: CREATE VIEW requires a query")
 	}
-	if s.orReplace && c.Dialect.Name() == "sqlite" {
+	if s.OrReplace && c.Dialect.Name() == "sqlite" {
 		return "", fmt.Errorf("sqlkit/sql: SQLite does not support CREATE OR REPLACE VIEW; drop and recreate instead")
 	}
-	body, args, err := s.query.ToSQL(c.Dialect)
+	body, args, err := s.Query.ToSQL(c.Dialect)
 	if err != nil {
 		return "", err
 	}
@@ -301,13 +301,13 @@ func (c *Compiler) CompileCreateView(s CreateViewStmt) (string, error) {
 	}
 	var sb strings.Builder
 	sb.WriteString("CREATE ")
-	if s.orReplace {
+	if s.OrReplace {
 		sb.WriteString("OR REPLACE ")
 	}
 	sb.WriteString("VIEW ")
-	sb.WriteString(c.qualify(s.table))
-	if len(s.columns) > 0 {
-		sb.WriteString(" (" + c.quoteAll(s.columns) + ")")
+	sb.WriteString(c.qualify(s.Table))
+	if len(s.Columns) > 0 {
+		sb.WriteString(" (" + c.quoteAll(s.Columns) + ")")
 	}
 	sb.WriteString(" AS\n")
 	sb.WriteString(body)
@@ -320,11 +320,11 @@ func (c *Compiler) CompileCreateView(s CreateViewStmt) (string, error) {
 func (c *Compiler) CompileDropView(s DropViewStmt) (string, error) {
 	var sb strings.Builder
 	sb.WriteString("DROP VIEW ")
-	if s.ifExists {
+	if s.IfExists {
 		sb.WriteString("IF EXISTS ")
 	}
-	sb.WriteString(c.qualify(s.table))
-	if s.cascade && c.Dialect.Name() != "mysql" && c.Dialect.Name() != "sqlite" {
+	sb.WriteString(c.qualify(s.Table))
+	if s.Cascade && c.Dialect.Name() != "mysql" && c.Dialect.Name() != "sqlite" {
 		sb.WriteString(" CASCADE")
 	}
 	sb.WriteString(";")
@@ -334,25 +334,25 @@ func (c *Compiler) CompileDropView(s DropViewStmt) (string, error) {
 // CompileCreateIndex renders a CREATE INDEX statement.
 func (c *Compiler) CompileCreateIndex(s CreateIndexStmt) (string, error) {
 	kind := "INDEX"
-	if s.unique {
+	if s.Unique {
 		kind = "UNIQUE INDEX"
 	}
 	var sb strings.Builder
 	sb.WriteString("CREATE " + kind + " ")
-	if s.ifNotExists {
+	if s.IfNotExists {
 		sb.WriteString("IF NOT EXISTS ")
 	}
-	sb.WriteString(c.Dialect.QuoteName(s.name) + " ON " + c.qualify(s.table) +
-		" (" + c.quoteAll(s.columns) + ");")
+	sb.WriteString(c.Dialect.QuoteName(s.Name) + " ON " + c.qualify(s.Table) +
+		" (" + c.quoteAll(s.Columns) + ");")
 	return sb.String(), nil
 }
 
 // CompileDropIndex renders a DROP INDEX statement via the dialect.
 func (c *Compiler) CompileDropIndex(s DropIndexStmt) (string, error) {
 	return c.Dialect.DropIndex(
-		c.qualifyName(s.table.Schema, s.name),
-		c.Dialect.QuoteName(s.name),
-		c.qualify(s.table),
+		c.qualifyName(s.Table.Schema, s.Name),
+		c.Dialect.QuoteName(s.Name),
+		c.qualify(s.Table),
 	), nil
 }
 
@@ -361,21 +361,21 @@ func (c *Compiler) CompileDropIndex(s DropIndexStmt) (string, error) {
 // has no TRUNCATE. The unsupported combinations are rejected rather than
 // silently mis-rendered.
 func (c *Compiler) CompileTruncate(s TruncateStmt) (string, error) {
-	if len(s.tables) == 0 {
+	if len(s.Tables) == 0 {
 		return "", fmt.Errorf("sqlkit/sql: TRUNCATE requires at least one table")
 	}
 	name := c.Dialect.Name()
 	if name == "sqlite" {
 		return "", fmt.Errorf("sqlkit/sql: SQLite has no TRUNCATE; use DELETE FROM instead")
 	}
-	if len(s.tables) > 1 && name != "postgres" {
+	if len(s.Tables) > 1 && name != "postgres" {
 		return "", fmt.Errorf("sqlkit/sql: the %s dialect cannot TRUNCATE multiple tables in one statement", name)
 	}
-	if s.cascade && name != "postgres" {
+	if s.Cascade && name != "postgres" {
 		return "", fmt.Errorf("sqlkit/sql: CASCADE on TRUNCATE is supported only on the postgres dialect")
 	}
-	tables := make([]string, len(s.tables))
-	for i, t := range s.tables {
+	tables := make([]string, len(s.Tables))
+	for i, t := range s.Tables {
 		tables[i] = c.qualify(t)
 	}
 	var sb strings.Builder
@@ -383,10 +383,10 @@ func (c *Compiler) CompileTruncate(s TruncateStmt) (string, error) {
 	sb.WriteString(strings.Join(tables, ", "))
 	// RESTART IDENTITY is explicit on PostgreSQL and the standard target; MySQL
 	// always resets AUTO_INCREMENT, so the option renders nothing there.
-	if s.restartIdentity && name != "mysql" {
+	if s.RestartIdentity && name != "mysql" {
 		sb.WriteString(" RESTART IDENTITY")
 	}
-	if s.cascade {
+	if s.Cascade {
 		sb.WriteString(" CASCADE")
 	}
 	sb.WriteString(";")
@@ -395,115 +395,124 @@ func (c *Compiler) CompileTruncate(s TruncateStmt) (string, error) {
 
 // CompileDropForeignKey renders the drop-foreign-key statement via the dialect.
 func (c *Compiler) CompileDropForeignKey(s DropForeignKeyStmt) (string, error) {
-	return c.Dialect.DropForeignKey(c.qualify(s.table), c.Dialect.QuoteName(s.name)), nil
+	return c.Dialect.DropForeignKey(c.qualify(s.Table), c.Dialect.QuoteName(s.Name)), nil
 }
 
 // CompileCommentOnTable renders a standalone table comment ("" when the dialect
 // comments inline).
 func (c *Compiler) CompileCommentOnTable(s CommentOnTableStmt) (string, error) {
-	return c.Dialect.TableCommentStatement(c.qualify(s.table), s.comment), nil
+	return c.Dialect.TableCommentStatement(c.qualify(s.Table), s.Comment), nil
 }
 
 // CompileCommentOnColumn renders a standalone column comment ("" when the
 // dialect comments inline).
 func (c *Compiler) CompileCommentOnColumn(s CommentOnColumnStmt) (string, error) {
-	return c.Dialect.ColumnCommentStatement(c.qualify(s.table), c.Dialect.QuoteName(s.column), s.comment), nil
+	return c.Dialect.ColumnCommentStatement(c.qualify(s.Table), c.Dialect.QuoteName(s.Column), s.Comment), nil
 }
 
 // CompileAlterTable renders an ALTER TABLE statement as a single
 // comma-separated list of actions.
 func (c *Compiler) CompileAlterTable(s AlterTableStmt) (string, error) {
-	if len(s.alterations) == 0 {
+	if len(s.Alterations) == 0 {
 		return "", fmt.Errorf("sqlkit/sql: ALTER TABLE requires at least one alteration")
 	}
-	clauses := make([]string, len(s.alterations))
-	for i, a := range s.alterations {
-		clause, err := c.compileAlteration(s.table, a)
+	clauses := make([]string, len(s.Alterations))
+	for i, a := range s.Alterations {
+		clause, err := c.compileAlteration(s.Table, a)
 		if err != nil {
 			return "", err
 		}
 		clauses[i] = clause
 	}
-	return "ALTER TABLE " + c.qualify(s.table) + " " + strings.Join(clauses, ", ") + ";", nil
+	return "ALTER TABLE " + c.qualify(s.Table) + " " + strings.Join(clauses, ", ") + ";", nil
 }
 
-func (c *Compiler) compileAlteration(table Table, a alteration) (string, error) {
-	switch v := a.(type) {
-	case addColumnAlt:
-		def, err := c.compileColumnDef(v.col)
+func (c *Compiler) compileAlteration(table Table, a Alteration) (string, error) {
+	switch a.Kind {
+	case AlterAddColumn:
+		if a.Column == nil {
+			return "", fmt.Errorf("sqlkit/sql: ADD COLUMN has no column definition")
+		}
+		def, err := c.compileColumnDef(*a.Column)
 		if err != nil {
 			return "", err
 		}
 		return "ADD COLUMN " + def, nil
-	case dropColumnAlt:
-		return "DROP COLUMN " + c.Dialect.QuoteName(v.name), nil
-	case restateColumnAlt:
-		return c.compileRestateColumn(v.col)
-	case addPrimaryKeyAlt:
-		return "ADD PRIMARY KEY (" + c.quoteAll(v.columns) + ")", nil
-	case dropPrimaryKeyAlt:
+	case AlterDropColumn:
+		return "DROP COLUMN " + c.Dialect.QuoteName(a.Name), nil
+	case AlterRestateColumn:
+		if a.Column == nil {
+			return "", fmt.Errorf("sqlkit/sql: restate column has no column definition")
+		}
+		return c.compileRestateColumn(*a.Column)
+	case AlterAddPrimaryKey:
+		return "ADD PRIMARY KEY (" + c.quoteAll(a.Columns) + ")", nil
+	case AlterDropPrimaryKey:
 		if c.Dialect.Name() == "mysql" {
 			return "DROP PRIMARY KEY", nil
 		}
 		// PostgreSQL has no DROP PRIMARY KEY; drop the constraint by its
 		// conventional "<table>_pkey" name.
 		return "DROP CONSTRAINT " + c.Dialect.QuoteName(table.Name+"_pkey"), nil
-	case addForeignKeyAlt:
-		return c.foreignKeyClause(v.fk), nil
-	case addCheckAlt:
-		expr, err := CompileStatic(c.Dialect, v.expr)
+	case AlterAddForeignKey:
+		if a.ForeignKey == nil {
+			return "", fmt.Errorf("sqlkit/sql: ADD FOREIGN KEY has no constraint")
+		}
+		return c.foreignKeyClause(*a.ForeignKey), nil
+	case AlterAddCheck:
+		expr, err := CompileStatic(c.Dialect, a.Expression)
 		if err != nil {
 			return "", err
 		}
-		return "ADD CONSTRAINT " + c.Dialect.QuoteName(v.name) + " CHECK (" + expr + ")", nil
-	case addUniqueAlt:
-		if len(v.columns) == 0 {
+		return "ADD CONSTRAINT " + c.Dialect.QuoteName(a.Name) + " CHECK (" + expr + ")", nil
+	case AlterAddUnique:
+		if len(a.Columns) == 0 {
 			return "", fmt.Errorf("sqlkit/sql: ADD UNIQUE requires at least one column")
 		}
 		clause := "ADD "
-		if v.name != "" {
-			clause += "CONSTRAINT " + c.Dialect.QuoteName(v.name) + " "
+		if a.Name != "" {
+			clause += "CONSTRAINT " + c.Dialect.QuoteName(a.Name) + " "
 		}
-		return clause + "UNIQUE (" + c.quoteAll(v.columns) + ")", nil
-	case dropConstraintAlt:
-		return "DROP CONSTRAINT " + c.Dialect.QuoteName(v.name), nil
-	case renameColumnAlt:
-		return "RENAME COLUMN " + c.Dialect.QuoteName(v.from) + " TO " + c.Dialect.QuoteName(v.to), nil
-	case renameTableAlt:
-		return "RENAME TO " + c.Dialect.QuoteName(v.name), nil
-	case alterColumnTypeAlt:
+		return clause + "UNIQUE (" + c.quoteAll(a.Columns) + ")", nil
+	case AlterDropConstraint:
+		return "DROP CONSTRAINT " + c.Dialect.QuoteName(a.Name), nil
+	case AlterRenameColumn:
+		return "RENAME COLUMN " + c.Dialect.QuoteName(a.Name) + " TO " + c.Dialect.QuoteName(a.NewName), nil
+	case AlterRenameTable:
+		return "RENAME TO " + c.Dialect.QuoteName(a.NewName), nil
+	case AlterColumnType:
 		if err := c.requireColumnModify("ALTER COLUMN TYPE"); err != nil {
 			return "", err
 		}
-		t, err := v.typ.RenderType(c.Dialect)
+		t, err := a.Type.RenderType(c.Dialect)
 		if err != nil {
 			return "", err
 		}
-		return "ALTER COLUMN " + c.Dialect.QuoteName(v.name) + " TYPE " + t, nil
-	case notNullAlt:
+		return "ALTER COLUMN " + c.Dialect.QuoteName(a.Name) + " TYPE " + t, nil
+	case AlterSetNotNull, AlterDropNotNull:
 		if err := c.requireColumnModify("SET/DROP NOT NULL"); err != nil {
 			return "", err
 		}
 		op := "SET NOT NULL"
-		if !v.notNull {
+		if a.Kind == AlterDropNotNull {
 			op = "DROP NOT NULL"
 		}
-		return "ALTER COLUMN " + c.Dialect.QuoteName(v.name) + " " + op, nil
-	case defaultAlt:
+		return "ALTER COLUMN " + c.Dialect.QuoteName(a.Name) + " " + op, nil
+	case AlterSetDefault, AlterDropDefault:
 		if err := c.requireColumnModify("SET/DROP DEFAULT"); err != nil {
 			return "", err
 		}
-		col := c.Dialect.QuoteName(v.name)
-		if v.expr == nil {
+		col := c.Dialect.QuoteName(a.Name)
+		if a.Kind == AlterDropDefault {
 			return "ALTER COLUMN " + col + " DROP DEFAULT", nil
 		}
-		expr, err := CompileStatic(c.Dialect, v.expr)
+		expr, err := CompileStatic(c.Dialect, a.Expression)
 		if err != nil {
 			return "", err
 		}
 		return "ALTER COLUMN " + col + " SET DEFAULT " + expr, nil
 	default:
-		return "", fmt.Errorf("sqlkit/sql: unsupported alteration %T", a)
+		return "", fmt.Errorf("sqlkit/sql: unsupported alteration kind %d", a.Kind)
 	}
 }
 

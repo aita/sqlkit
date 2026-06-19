@@ -5,49 +5,16 @@ import (
 	"strings"
 )
 
-// GrantStmt builds a GRANT statement granting privileges on database objects to
-// roles. An empty privilege list means ALL PRIVILEGES; an empty object type
-// defaults to TABLE. It is a DDL Statement, so it compiles with no bind values.
+// GrantStmt is the AST for a GRANT statement granting privileges on database
+// objects to roles. An empty privilege list means ALL PRIVILEGES; an empty
+// object type defaults to TABLE. It is a DDL Statement, so it compiles with no
+// bind values.
 type GrantStmt struct {
-	privileges      []string
-	objectType      string
-	objects         []string
-	grantees        []string
-	withGrantOption bool
-}
-
-// Grant starts a GRANT builder for the given privilege keywords (e.g. "SELECT",
-// "INSERT"). Pass none for ALL PRIVILEGES.
-func Grant(privileges ...string) GrantStmt {
-	return GrantStmt{privileges: privileges}
-}
-
-// On sets the objects the privileges apply to, with the default object type
-// TABLE (GRANT ... ON TABLE objects ...).
-func (s GrantStmt) On(objects ...string) GrantStmt {
-	s.objects = objects
-	return s
-}
-
-// OnType sets the object type keyword (e.g. "SCHEMA", "SEQUENCE", "DATABASE")
-// and the objects the privileges apply to.
-func (s GrantStmt) OnType(objectType string, objects ...string) GrantStmt {
-	s.objectType = objectType
-	s.objects = objects
-	return s
-}
-
-// To sets the grantee roles. Use "PUBLIC" for the PUBLIC pseudo-role.
-func (s GrantStmt) To(grantees ...string) GrantStmt {
-	s.grantees = grantees
-	return s
-}
-
-// WithGrantOption adds WITH GRANT OPTION, letting grantees grant the privileges
-// onward.
-func (s GrantStmt) WithGrantOption() GrantStmt {
-	s.withGrantOption = true
-	return s
+	Privileges      []string
+	ObjectType      string
+	Objects         []string
+	Grantees        []string
+	WithGrantOption bool
 }
 
 // ToSQL compiles the GRANT statement.
@@ -60,59 +27,61 @@ func (s GrantStmt) compileDDL(c *Compiler) (string, error) {
 }
 func (GrantStmt) ddlStatement() {}
 
-// RevokeStmt builds a REVOKE statement removing privileges on database objects
-// from roles. It mirrors GrantStmt and is likewise a DDL Statement.
+// GrantBuilder is the fluent constructor for a GrantStmt.
+type GrantBuilder struct{ s GrantStmt }
+
+// Grant starts a GRANT builder for the given privilege keywords (e.g. "SELECT",
+// "INSERT"). Pass none for ALL PRIVILEGES.
+func Grant(privileges ...string) GrantBuilder {
+	return GrantBuilder{s: GrantStmt{Privileges: privileges}}
+}
+
+// Stmt returns the built GRANT statement.
+func (b GrantBuilder) Stmt() GrantStmt { return b.s }
+
+// On sets the objects the privileges apply to, with the default object type
+// TABLE (GRANT ... ON TABLE objects ...).
+func (b GrantBuilder) On(objects ...string) GrantBuilder {
+	b.s.Objects = objects
+	return b
+}
+
+// OnType sets the object type keyword (e.g. "SCHEMA", "SEQUENCE", "DATABASE")
+// and the objects the privileges apply to.
+func (b GrantBuilder) OnType(objectType string, objects ...string) GrantBuilder {
+	b.s.ObjectType = objectType
+	b.s.Objects = objects
+	return b
+}
+
+// To sets the grantee roles. Use "PUBLIC" for the PUBLIC pseudo-role.
+func (b GrantBuilder) To(grantees ...string) GrantBuilder {
+	b.s.Grantees = grantees
+	return b
+}
+
+// WithGrantOption adds WITH GRANT OPTION, letting grantees grant the privileges
+// onward.
+func (b GrantBuilder) WithGrantOption() GrantBuilder {
+	b.s.WithGrantOption = true
+	return b
+}
+
+// ToSQL compiles the building GRANT statement.
+func (b GrantBuilder) ToSQL(d Dialect) (string, []any, error) { return b.s.ToSQL(d) }
+func (b GrantBuilder) buildStmt() Query                       { return b.s }
+func (GrantBuilder) ddlStatement()                            {}
+
+// RevokeStmt is the AST for a REVOKE statement removing privileges on database
+// objects from roles. It mirrors GrantStmt and is likewise a DDL Statement.
+// Behavior is "", "CASCADE", or "RESTRICT".
 type RevokeStmt struct {
-	grantOptionFor bool
-	privileges     []string
-	objectType     string
-	objects        []string
-	grantees       []string
-	behavior       string // "", "CASCADE", or "RESTRICT"
-}
-
-// Revoke starts a REVOKE builder for the given privilege keywords. Pass none for
-// ALL PRIVILEGES.
-func Revoke(privileges ...string) RevokeStmt {
-	return RevokeStmt{privileges: privileges}
-}
-
-// GrantOptionFor revokes only the grant option (REVOKE GRANT OPTION FOR ...),
-// leaving the privileges themselves.
-func (s RevokeStmt) GrantOptionFor() RevokeStmt {
-	s.grantOptionFor = true
-	return s
-}
-
-// On sets the objects to revoke from, with the default object type TABLE.
-func (s RevokeStmt) On(objects ...string) RevokeStmt {
-	s.objects = objects
-	return s
-}
-
-// OnType sets the object type keyword and the objects to revoke from.
-func (s RevokeStmt) OnType(objectType string, objects ...string) RevokeStmt {
-	s.objectType = objectType
-	s.objects = objects
-	return s
-}
-
-// From sets the roles to revoke from. Use "PUBLIC" for the PUBLIC pseudo-role.
-func (s RevokeStmt) From(grantees ...string) RevokeStmt {
-	s.grantees = grantees
-	return s
-}
-
-// Cascade adds CASCADE, also revoking dependent privileges.
-func (s RevokeStmt) Cascade() RevokeStmt {
-	s.behavior = "CASCADE"
-	return s
-}
-
-// Restrict adds RESTRICT, refusing to revoke when dependent privileges exist.
-func (s RevokeStmt) Restrict() RevokeStmt {
-	s.behavior = "RESTRICT"
-	return s
+	GrantOptionFor bool
+	Privileges     []string
+	ObjectType     string
+	Objects        []string
+	Grantees       []string
+	Behavior       string
 }
 
 // ToSQL compiles the REVOKE statement.
@@ -125,16 +94,71 @@ func (s RevokeStmt) compileDDL(c *Compiler) (string, error) {
 }
 func (RevokeStmt) ddlStatement() {}
 
+// RevokeBuilder is the fluent constructor for a RevokeStmt.
+type RevokeBuilder struct{ s RevokeStmt }
+
+// Revoke starts a REVOKE builder for the given privilege keywords. Pass none for
+// ALL PRIVILEGES.
+func Revoke(privileges ...string) RevokeBuilder {
+	return RevokeBuilder{s: RevokeStmt{Privileges: privileges}}
+}
+
+// Stmt returns the built REVOKE statement.
+func (b RevokeBuilder) Stmt() RevokeStmt { return b.s }
+
+// GrantOptionFor revokes only the grant option (REVOKE GRANT OPTION FOR ...),
+// leaving the privileges themselves.
+func (b RevokeBuilder) GrantOptionFor() RevokeBuilder {
+	b.s.GrantOptionFor = true
+	return b
+}
+
+// On sets the objects to revoke from, with the default object type TABLE.
+func (b RevokeBuilder) On(objects ...string) RevokeBuilder {
+	b.s.Objects = objects
+	return b
+}
+
+// OnType sets the object type keyword and the objects to revoke from.
+func (b RevokeBuilder) OnType(objectType string, objects ...string) RevokeBuilder {
+	b.s.ObjectType = objectType
+	b.s.Objects = objects
+	return b
+}
+
+// From sets the roles to revoke from. Use "PUBLIC" for the PUBLIC pseudo-role.
+func (b RevokeBuilder) From(grantees ...string) RevokeBuilder {
+	b.s.Grantees = grantees
+	return b
+}
+
+// Cascade adds CASCADE, also revoking dependent privileges.
+func (b RevokeBuilder) Cascade() RevokeBuilder {
+	b.s.Behavior = "CASCADE"
+	return b
+}
+
+// Restrict adds RESTRICT, refusing to revoke when dependent privileges exist.
+func (b RevokeBuilder) Restrict() RevokeBuilder {
+	b.s.Behavior = "RESTRICT"
+	return b
+}
+
+// ToSQL compiles the building REVOKE statement.
+func (b RevokeBuilder) ToSQL(d Dialect) (string, []any, error) { return b.s.ToSQL(d) }
+func (b RevokeBuilder) buildStmt() Query                       { return b.s }
+func (RevokeBuilder) ddlStatement()                            {}
+
 // CompileGrant compiles a GRANT statement.
 func (c *Compiler) CompileGrant(s GrantStmt) (string, error) {
-	body, err := c.grantBody(s.privileges, s.objectType, s.objects, s.grantees)
+	body, err := c.grantBody(s.Privileges, s.ObjectType, s.Objects, s.Grantees)
 	if err != nil {
 		return "", err
 	}
 	var sb strings.Builder
 	sb.WriteString("GRANT ")
 	sb.WriteString(body)
-	if s.withGrantOption {
+	if s.WithGrantOption {
 		sb.WriteString(" WITH GRANT OPTION")
 	}
 	sb.WriteString(";")
@@ -145,18 +169,18 @@ func (c *Compiler) CompileGrant(s GrantStmt) (string, error) {
 func (c *Compiler) CompileRevoke(s RevokeStmt) (string, error) {
 	var sb strings.Builder
 	sb.WriteString("REVOKE ")
-	if s.grantOptionFor {
+	if s.GrantOptionFor {
 		sb.WriteString("GRANT OPTION FOR ")
 	}
-	body, err := c.grantBody(s.privileges, s.objectType, s.objects, s.grantees)
+	body, err := c.grantBody(s.Privileges, s.ObjectType, s.Objects, s.Grantees)
 	if err != nil {
 		return "", err
 	}
 	// grantBody renders the grantee clause with TO; REVOKE uses FROM.
 	sb.WriteString(strings.Replace(body, " TO ", " FROM ", 1))
-	if s.behavior != "" {
+	if s.Behavior != "" {
 		sb.WriteString(" ")
-		sb.WriteString(s.behavior)
+		sb.WriteString(s.Behavior)
 	}
 	sb.WriteString(";")
 	return sb.String(), nil

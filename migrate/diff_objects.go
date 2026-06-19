@@ -1,0 +1,172 @@
+package migrate
+
+import (
+	"strings"
+
+	"github.com/aita/sqlkit/meta"
+	"github.com/aita/sqlkit/sql"
+)
+
+// objectChanges holds the DDL for added, dropped, and changed non-table objects
+// (extensions, enum types, sequences, materialized views, grants). A changed
+// object is rendered as a drop plus a create, like the table path treats
+// incompatible changes.
+type objectChanges struct {
+	createExtensions []sql.Statement
+	createEnums      []sql.Statement
+	createSequences  []sql.Statement
+	createMatviews   []sql.Statement
+	createGrants     []sql.Statement
+	dropExtensions   []sql.Statement
+	dropEnums        []sql.Statement
+	dropSequences    []sql.Statement
+	dropMatviews     []sql.Statement
+	dropGrants       []sql.Statement
+}
+
+// diffObjects compares the non-table objects of old and next and returns the
+// create/drop statements that reconcile them. Objects are keyed by (qualified)
+// name; one whose definition changed is dropped and recreated. The dialect
+// renders materialized-view bodies for equality.
+func diffObjects(old, next meta.Metadata, dialect sql.Dialect) (objectChanges, error) {
+	var c objectChanges
+
+	// Extensions, keyed by name (they are not schema-scoped objects).
+	oldExt := map[string]meta.Extension{}
+	for _, e := range old.Extensions {
+		oldExt[e.Name] = e
+	}
+	newExt := map[string]meta.Extension{}
+	for _, e := range next.Extensions {
+		newExt[e.Name] = e
+	}
+	for _, e := range old.Extensions {
+		if n, ok := newExt[e.Name]; !ok || n != e {
+			c.dropExtensions = append(c.dropExtensions, e.DropStatement())
+		}
+	}
+	for _, e := range next.Extensions {
+		if o, ok := oldExt[e.Name]; !ok || o != e {
+			c.createExtensions = append(c.createExtensions, e.CreateStatement())
+		}
+	}
+
+	// Enums, keyed by qualified name; a label change recreates the type.
+	oldEnum := map[string]meta.Enum{}
+	for _, e := range old.Enums {
+		oldEnum[e.QualifiedName()] = e
+	}
+	newEnum := map[string]meta.Enum{}
+	for _, e := range next.Enums {
+		newEnum[e.QualifiedName()] = e
+	}
+	for _, e := range old.Enums {
+		if n, ok := newEnum[e.QualifiedName()]; !ok || !e.Equal(n) {
+			c.dropEnums = append(c.dropEnums, e.DropStatement())
+		}
+	}
+	for _, e := range next.Enums {
+		if o, ok := oldEnum[e.QualifiedName()]; !ok || !o.Equal(e) {
+			c.createEnums = append(c.createEnums, e.CreateStatement())
+		}
+	}
+
+	// Sequences, keyed by qualified name.
+	oldSeq := map[string]meta.Sequence{}
+	for _, s := range old.Sequences {
+		oldSeq[s.QualifiedName()] = s
+	}
+	newSeq := map[string]meta.Sequence{}
+	for _, s := range next.Sequences {
+		newSeq[s.QualifiedName()] = s
+	}
+	for _, s := range old.Sequences {
+		if n, ok := newSeq[s.QualifiedName()]; !ok || !s.Equal(n) {
+			c.dropSequences = append(c.dropSequences, s.DropStatement())
+		}
+	}
+	for _, s := range next.Sequences {
+		if o, ok := oldSeq[s.QualifiedName()]; !ok || !o.Equal(s) {
+			c.createSequences = append(c.createSequences, s.CreateStatement())
+		}
+	}
+
+	// Materialized views, keyed by qualified name; equality renders the body.
+	oldMV := map[string]meta.MaterializedView{}
+	for _, v := range old.MaterializedViews {
+		oldMV[v.QualifiedName()] = v
+	}
+	newMV := map[string]meta.MaterializedView{}
+	for _, v := range next.MaterializedViews {
+		newMV[v.QualifiedName()] = v
+	}
+	for _, v := range old.MaterializedViews {
+		eq, err := matviewEqual(v, newMV[v.QualifiedName()], dialect)
+		if err != nil {
+			return objectChanges{}, err
+		}
+		if _, ok := newMV[v.QualifiedName()]; !ok || !eq {
+			c.dropMatviews = append(c.dropMatviews, v.DropStatement())
+		}
+	}
+	for _, v := range next.MaterializedViews {
+		o, ok := oldMV[v.QualifiedName()]
+		eq, err := matviewEqual(o, v, dialect)
+		if err != nil {
+			return objectChanges{}, err
+		}
+		if !ok || !eq {
+			c.createMatviews = append(c.createMatviews, v.CreateStatement())
+		}
+	}
+
+	// Grants, keyed by their full definition: a grant is identified by the
+	// (privileges, type, objects, grantees) tuple, so any change is an add+drop.
+	oldGrant := map[string]meta.Grant{}
+	for _, g := range old.Grants {
+		oldGrant[grantKey(g)] = g
+	}
+	newGrant := map[string]meta.Grant{}
+	for _, g := range next.Grants {
+		newGrant[grantKey(g)] = g
+	}
+	for _, g := range old.Grants {
+		if n, ok := newGrant[grantKey(g)]; !ok || !g.Equal(n) {
+			c.dropGrants = append(c.dropGrants, g.DropStatement())
+		}
+	}
+	for _, g := range next.Grants {
+		if o, ok := oldGrant[grantKey(g)]; !ok || !o.Equal(g) {
+			c.createGrants = append(c.createGrants, g.CreateStatement())
+		}
+	}
+	return c, nil
+}
+
+// matviewEqual reports whether two materialized views are identical, rendering
+// their bodies for the dialect to compare. A zero (missing) view never matches.
+func matviewEqual(a, b meta.MaterializedView, dialect sql.Dialect) (bool, error) {
+	if a.Query == nil || b.Query == nil {
+		return false, nil
+	}
+	if a.Schema != b.Schema || a.Name != b.Name || a.WithNoData != b.WithNoData ||
+		!stringsEqual(a.Columns, b.Columns) {
+		return false, nil
+	}
+	at, _, err := a.Query.ToSQL(dialect)
+	if err != nil {
+		return false, err
+	}
+	bt, _, err := b.Query.ToSQL(dialect)
+	if err != nil {
+		return false, err
+	}
+	return at == bt, nil
+}
+
+// grantKey identifies a grant by its object type and objects, so a change to the
+// privileges or grantees of the same target is detected as a modification rather
+// than an unrelated add and drop.
+func grantKey(g meta.Grant) string {
+	return g.ObjectType + "\x00" + strings.Join(g.Objects, ",")
+}

@@ -11,24 +11,29 @@ type compilable interface {
 	compile(c *Compiler) (string, []any, error)
 }
 
-// SelectQuery is the runtime representation for a SELECT statement.
-type SelectQuery struct {
-	with       []CTE
-	from       Source
-	columns    []Selection
-	joins      []JoinClause
-	where      Expression
-	groupBy    []Expression
-	having     Expression
-	orderBy    []OrderTerm
-	limit      int
-	hasLimit   bool
-	offset     int
-	hasOffset  bool
-	distinct   bool
-	distinctOn []Expression
-	windows    []NamedWindow
-	lock       *lockClause
+// SelectStmt is the immutable AST for a SELECT statement. Every field is
+// exported: this struct is the package's read-only public contract, traversed
+// and compiled directly with no Parts() snapshot. Build one with the fluent
+// SelectBuilder (sql.Select) or, from a parser, as a struct literal. A nil
+// Where/Having/From or an empty slice means the clause is absent; HasLimit /
+// HasOffset distinguish a zero LIMIT/OFFSET from none.
+type SelectStmt struct {
+	With       []CTE
+	From       Source
+	Columns    []Selection
+	Joins      []JoinClause
+	Where      Expression
+	GroupBy    []Expression
+	Having     Expression
+	OrderBy    []OrderTerm
+	Limit      int
+	HasLimit   bool
+	Offset     int
+	HasOffset  bool
+	Distinct   bool
+	DistinctOn []Expression
+	Windows    []NamedWindow
+	Lock       *lockClause
 }
 
 // lockClause is a SELECT row-locking clause: a strength (UPDATE / SHARE / NO KEY
@@ -53,15 +58,38 @@ type JoinClause struct {
 	Natural bool
 }
 
-// Select creates a SELECT query builder.
-func Select(columns ...Selection) SelectQuery {
-	return SelectQuery{columns: columns}
+// SQLSource marks SelectStmt as a subquery source.
+func (q SelectStmt) SQLSource() SourceExpression { return SourceExpression{Query: q} }
+
+// ToSQL compiles the SELECT statement.
+func (q SelectStmt) ToSQL(dialect Dialect) (string, []any, error) {
+	return q.compile(NewCompiler(dialect))
 }
 
+func (q SelectStmt) compile(c *Compiler) (string, []any, error) {
+	return c.CompileSelect(q)
+}
+
+// SelectBuilder is the fluent constructor for a SelectStmt. It is a separate
+// type from the AST because the exported field SelectStmt.Where and a same-named
+// builder method cannot coexist in Go; construction lives here and the data on
+// SelectStmt. Each method copies the in-progress statement and returns a new
+// builder, so a builder value can be branched and reused. Build (or any terminal
+// such as ToSQL) yields the finished SelectStmt.
+type SelectBuilder struct{ s SelectStmt }
+
+// Select creates a SELECT query builder.
+func Select(columns ...Selection) SelectBuilder {
+	return SelectBuilder{s: SelectStmt{Columns: columns}}
+}
+
+// Stmt returns the built SELECT statement — the pure AST value.
+func (b SelectBuilder) Stmt() SelectStmt { return b.s }
+
 // Distinct marks the query as SELECT DISTINCT.
-func (q SelectQuery) Distinct() SelectQuery {
-	q.distinct = true
-	return q
+func (b SelectBuilder) Distinct() SelectBuilder {
+	b.s.Distinct = true
+	return b
 }
 
 // DistinctOn marks the query as SELECT DISTINCT ON (exprs...), keeping the first
@@ -69,122 +97,122 @@ func (q SelectQuery) Distinct() SelectQuery {
 // PostgreSQL extension: dialects without it reject the query at compile time.
 // Pair it with an ORDER BY that begins with the same expressions to make "first"
 // deterministic.
-func (q SelectQuery) DistinctOn(exprs ...Expression) SelectQuery {
-	q.distinctOn = append(append([]Expression(nil), q.distinctOn...), exprs...)
-	return q
+func (b SelectBuilder) DistinctOn(exprs ...Expression) SelectBuilder {
+	b.s.DistinctOn = append(append([]Expression(nil), b.s.DistinctOn...), exprs...)
+	return b
 }
 
 // From sets the table or subquery for the SELECT query.
-func (q SelectQuery) From(source Source) SelectQuery {
-	q.from = source
-	return q
+func (b SelectBuilder) From(source Source) SelectBuilder {
+	b.s.From = source
+	return b
 }
 
 // Join adds an INNER JOIN clause.
-func (q SelectQuery) Join(source Source, on Expression) SelectQuery {
-	q.joins = append(q.joins, JoinClause{Kind: "JOIN", Source: source, On: on})
-	return q
+func (b SelectBuilder) Join(source Source, on Expression) SelectBuilder {
+	b.s.Joins = appendJoin(b.s.Joins, JoinClause{Kind: "JOIN", Source: source, On: on})
+	return b
 }
 
 // LeftJoin adds a LEFT JOIN clause.
-func (q SelectQuery) LeftJoin(source Source, on Expression) SelectQuery {
-	q.joins = append(q.joins, JoinClause{Kind: "LEFT JOIN", Source: source, On: on})
-	return q
+func (b SelectBuilder) LeftJoin(source Source, on Expression) SelectBuilder {
+	b.s.Joins = appendJoin(b.s.Joins, JoinClause{Kind: "LEFT JOIN", Source: source, On: on})
+	return b
 }
 
 // RightJoin adds a RIGHT JOIN clause.
-func (q SelectQuery) RightJoin(source Source, on Expression) SelectQuery {
-	q.joins = append(q.joins, JoinClause{Kind: "RIGHT JOIN", Source: source, On: on})
-	return q
+func (b SelectBuilder) RightJoin(source Source, on Expression) SelectBuilder {
+	b.s.Joins = appendJoin(b.s.Joins, JoinClause{Kind: "RIGHT JOIN", Source: source, On: on})
+	return b
 }
 
 // FullJoin adds a FULL OUTER JOIN clause.
-func (q SelectQuery) FullJoin(source Source, on Expression) SelectQuery {
-	q.joins = append(q.joins, JoinClause{Kind: "FULL JOIN", Source: source, On: on})
-	return q
+func (b SelectBuilder) FullJoin(source Source, on Expression) SelectBuilder {
+	b.s.Joins = appendJoin(b.s.Joins, JoinClause{Kind: "FULL JOIN", Source: source, On: on})
+	return b
 }
 
 // CrossJoin adds a CROSS JOIN clause. A cross join has no ON condition; it
 // produces the Cartesian product of its inputs.
-func (q SelectQuery) CrossJoin(source Source) SelectQuery {
-	q.joins = append(q.joins, JoinClause{Kind: "CROSS JOIN", Source: source})
-	return q
+func (b SelectBuilder) CrossJoin(source Source) SelectBuilder {
+	b.s.Joins = appendJoin(b.s.Joins, JoinClause{Kind: "CROSS JOIN", Source: source})
+	return b
 }
 
 // JoinUsing adds an INNER JOIN ... USING (columns) clause, matching rows on the
 // equally named columns (which collapse to a single output column each).
-func (q SelectQuery) JoinUsing(source Source, columns ...string) SelectQuery {
-	q.joins = append(q.joins, JoinClause{Kind: "JOIN", Source: source, Using: columns})
-	return q
+func (b SelectBuilder) JoinUsing(source Source, columns ...string) SelectBuilder {
+	b.s.Joins = appendJoin(b.s.Joins, JoinClause{Kind: "JOIN", Source: source, Using: columns})
+	return b
 }
 
 // LeftJoinUsing adds a LEFT JOIN ... USING (columns) clause.
-func (q SelectQuery) LeftJoinUsing(source Source, columns ...string) SelectQuery {
-	q.joins = append(q.joins, JoinClause{Kind: "LEFT JOIN", Source: source, Using: columns})
-	return q
+func (b SelectBuilder) LeftJoinUsing(source Source, columns ...string) SelectBuilder {
+	b.s.Joins = appendJoin(b.s.Joins, JoinClause{Kind: "LEFT JOIN", Source: source, Using: columns})
+	return b
 }
 
 // NaturalJoin adds a NATURAL JOIN clause, an inner join on every column the two
 // sources share by name. It takes no condition.
-func (q SelectQuery) NaturalJoin(source Source) SelectQuery {
-	q.joins = append(q.joins, JoinClause{Kind: "JOIN", Source: source, Natural: true})
-	return q
+func (b SelectBuilder) NaturalJoin(source Source) SelectBuilder {
+	b.s.Joins = appendJoin(b.s.Joins, JoinClause{Kind: "JOIN", Source: source, Natural: true})
+	return b
 }
 
 // NaturalLeftJoin adds a NATURAL LEFT JOIN clause.
-func (q SelectQuery) NaturalLeftJoin(source Source) SelectQuery {
-	q.joins = append(q.joins, JoinClause{Kind: "LEFT JOIN", Source: source, Natural: true})
-	return q
+func (b SelectBuilder) NaturalLeftJoin(source Source) SelectBuilder {
+	b.s.Joins = appendJoin(b.s.Joins, JoinClause{Kind: "LEFT JOIN", Source: source, Natural: true})
+	return b
 }
 
 // Where adds a WHERE predicate, combined with AND when called repeatedly.
-func (q SelectQuery) Where(expr Expression) SelectQuery {
-	if q.where == nil {
-		q.where = expr
+func (b SelectBuilder) Where(expr Expression) SelectBuilder {
+	if b.s.Where == nil {
+		b.s.Where = expr
 	} else {
-		q.where = And(q.where, expr)
+		b.s.Where = And(b.s.Where, expr)
 	}
-	return q
+	return b
 }
 
 // GroupBy adds GROUP BY expressions.
-func (q SelectQuery) GroupBy(exprs ...Expression) SelectQuery {
-	q.groupBy = append(q.groupBy, exprs...)
-	return q
+func (b SelectBuilder) GroupBy(exprs ...Expression) SelectBuilder {
+	b.s.GroupBy = append(append([]Expression(nil), b.s.GroupBy...), exprs...)
+	return b
 }
 
 // Having sets the HAVING predicate.
-func (q SelectQuery) Having(expr Expression) SelectQuery {
-	q.having = expr
-	return q
+func (b SelectBuilder) Having(expr Expression) SelectBuilder {
+	b.s.Having = expr
+	return b
 }
 
 // Window adds named window definitions to the SELECT's WINDOW clause, referenced
 // from an OVER clause with WindowExpression.Named, e.g.
 // Window(WindowDef("w").PartitionBy(Col("team")).OrderBy(Desc(Col("score")))).
-func (q SelectQuery) Window(defs ...NamedWindow) SelectQuery {
-	q.windows = append(append([]NamedWindow(nil), q.windows...), defs...)
-	return q
+func (b SelectBuilder) Window(defs ...NamedWindow) SelectBuilder {
+	b.s.Windows = append(append([]NamedWindow(nil), b.s.Windows...), defs...)
+	return b
 }
 
 // OrderBy adds ORDER BY terms.
-func (q SelectQuery) OrderBy(terms ...OrderTerm) SelectQuery {
-	q.orderBy = append(q.orderBy, terms...)
-	return q
+func (b SelectBuilder) OrderBy(terms ...OrderTerm) SelectBuilder {
+	b.s.OrderBy = append(append([]OrderTerm(nil), b.s.OrderBy...), terms...)
+	return b
 }
 
 // Limit sets the LIMIT clause.
-func (q SelectQuery) Limit(n int) SelectQuery {
-	q.limit = n
-	q.hasLimit = true
-	return q
+func (b SelectBuilder) Limit(n int) SelectBuilder {
+	b.s.Limit = n
+	b.s.HasLimit = true
+	return b
 }
 
 // Offset sets the OFFSET clause.
-func (q SelectQuery) Offset(n int) SelectQuery {
-	q.offset = n
-	q.hasOffset = true
-	return q
+func (b SelectBuilder) Offset(n int) SelectBuilder {
+	b.s.Offset = n
+	b.s.HasOffset = true
+	return b
 }
 
 // LockOption refines a SELECT row-locking clause (ForUpdate / ForShare / …):
@@ -209,41 +237,46 @@ func LockOf(tables ...string) LockOption {
 // against concurrent updates and deletes until the transaction ends. Refine it
 // with the SkipLocked / NoWait / LockOf options. Row locking is PostgreSQL/MySQL
 // (8.0+) only; other dialects reject it at compile time.
-func (q SelectQuery) ForUpdate(opts ...LockOption) SelectQuery { return q.lockWith("UPDATE", opts) }
+func (b SelectBuilder) ForUpdate(opts ...LockOption) SelectBuilder { return b.lockWith("UPDATE", opts) }
 
 // ForShare adds a FOR SHARE row-locking clause, a shared lock that blocks
 // concurrent writes but not other shared locks.
-func (q SelectQuery) ForShare(opts ...LockOption) SelectQuery { return q.lockWith("SHARE", opts) }
+func (b SelectBuilder) ForShare(opts ...LockOption) SelectBuilder { return b.lockWith("SHARE", opts) }
 
 // ForNoKeyUpdate adds a FOR NO KEY UPDATE clause, a weaker FOR UPDATE that does
 // not block concurrent inserts of referencing rows (PostgreSQL only).
-func (q SelectQuery) ForNoKeyUpdate(opts ...LockOption) SelectQuery {
-	return q.lockWith("NO KEY UPDATE", opts)
+func (b SelectBuilder) ForNoKeyUpdate(opts ...LockOption) SelectBuilder {
+	return b.lockWith("NO KEY UPDATE", opts)
 }
 
 // ForKeyShare adds a FOR KEY SHARE clause, the weakest lock, blocking only
 // changes to the key columns (PostgreSQL only).
-func (q SelectQuery) ForKeyShare(opts ...LockOption) SelectQuery {
-	return q.lockWith("KEY SHARE", opts)
+func (b SelectBuilder) ForKeyShare(opts ...LockOption) SelectBuilder {
+	return b.lockWith("KEY SHARE", opts)
 }
 
-func (q SelectQuery) lockWith(strength string, opts []LockOption) SelectQuery {
+func (b SelectBuilder) lockWith(strength string, opts []LockOption) SelectBuilder {
 	lock := &lockClause{strength: strength}
 	for _, opt := range opts {
 		opt(lock)
 	}
-	q.lock = lock
-	return q
+	b.s.Lock = lock
+	return b
 }
 
-// SQLSource marks SelectQuery as a subquery source.
-func (q SelectQuery) SQLSource() SourceExpression { return SourceExpression{Query: q} }
+// SQLSource marks the building SELECT as a subquery source, so a builder can be
+// dropped straight into a FROM/JOIN position.
+func (b SelectBuilder) SQLSource() SourceExpression { return b.s.SQLSource() }
 
-// ToSQL compiles the SELECT query.
-func (q SelectQuery) ToSQL(dialect Dialect) (string, []any, error) {
-	return q.compile(NewCompiler(dialect))
-}
+// ToSQL compiles the building SELECT statement.
+func (b SelectBuilder) ToSQL(dialect Dialect) (string, []any, error) { return b.s.ToSQL(dialect) }
 
-func (q SelectQuery) compile(c *Compiler) (string, []any, error) {
-	return c.CompileSelect(q)
+func (b SelectBuilder) compile(c *Compiler) (string, []any, error) { return b.s.compile(c) }
+
+func (b SelectBuilder) buildStmt() Query { return b.s }
+
+// appendJoin returns joins with j appended to a fresh backing array, so chaining
+// from a shared builder value never disturbs a sibling chain.
+func appendJoin(joins []JoinClause, j JoinClause) []JoinClause {
+	return append(append([]JoinClause(nil), joins...), j)
 }

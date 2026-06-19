@@ -94,6 +94,7 @@ var (
 	_ Query = InsertQuery{}
 	_ Query = UpdateQuery{}
 	_ Query = DeleteQuery{}
+	_ Query = MergeQuery{}
 
 	_ Scannable = SelectQuery{}
 	_ Scannable = UnionQuery{}
@@ -105,4 +106,5 @@ var (
 	_ Execable = InsertQuery{}
 	_ Execable = UpdateQuery{}
 	_ Execable = DeleteQuery{}
+	_ Execable = MergeQuery{}
 )

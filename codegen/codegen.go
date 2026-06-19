@@ -251,8 +251,8 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 	}
 
 	tables := filterTables(md.Tables, opts.Tables)
-	if len(tables) == 0 {
-		return nil, fmt.Errorf("codegen: no tables to generate")
+	if len(tables) == 0 && len(md.Enums) == 0 {
+		return nil, fmt.Errorf("codegen: no tables or enums to generate")
 	}
 
 	// Reserve binding identifiers so generated DTO names never collide.
@@ -290,7 +290,16 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 		}
 	}
 
-	return assemble(models, opts)
+	files, err := assemble(models, opts)
+	if err != nil {
+		return nil, err
+	}
+	if ef, ok, err := enumFile(md.Enums, opts); err != nil {
+		return nil, err
+	} else if ok {
+		files = append(files, ef)
+	}
+	return files, nil
 }
 
 // buildTable builds the binding model for a single table. bindingName derives
@@ -410,21 +419,25 @@ func assemble(models []*tableModel, opts Options) ([]File, error) {
 		return files, nil
 	}
 
-	fb := newFileBuf()
-	for _, tm := range models {
-		fb.add(bindingImports(tm)...)
-		fb.write(renderBinding(tm))
-		if opts.EmitDTO && !opts.DTOSeparateFile {
-			fb.add(dtoImports(tm)...)
-			fb.write(renderDTO(tm))
+	// With no table models (an enums-only catalog), skip the combined table file
+	// entirely; the caller appends the enum file.
+	if len(models) > 0 {
+		fb := newFileBuf()
+		for _, tm := range models {
+			fb.add(bindingImports(tm)...)
+			fb.write(renderBinding(tm))
+			if opts.EmitDTO && !opts.DTOSeparateFile {
+				fb.add(dtoImports(tm)...)
+				fb.write(renderDTO(tm))
+			}
 		}
-	}
-	name := opts.FileName
-	if name == "" {
-		name = "tables.go"
-	}
-	if err := emit(fb, name); err != nil {
-		return nil, err
+		name := opts.FileName
+		if name == "" {
+			name = "tables.go"
+		}
+		if err := emit(fb, name); err != nil {
+			return nil, err
+		}
 	}
 
 	if opts.EmitDTO && opts.DTOSeparateFile {

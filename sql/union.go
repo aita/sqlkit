@@ -5,122 +5,136 @@ import (
 	"strings"
 )
 
-// CompoundQuery combines SELECT statements with a set operator such as UNION.
-// Operands are parenthesized, and ORDER BY / LIMIT / OFFSET apply to the
-// combined result.
-type CompoundQuery struct {
-	left      Query
-	operator  string
-	right     Query
-	orderBy   []OrderTerm
-	limit     int
-	hasLimit  bool
-	offset    int
-	hasOffset bool
+// CompoundStmt is the immutable AST for a set operation (UNION/INTERSECT/EXCEPT)
+// combining two query operands. Operands are parenthesized as needed, and
+// ORDER BY / LIMIT / OFFSET apply to the combined result. Build one with a
+// SelectBuilder/CompoundBuilder set-operation method.
+type CompoundStmt struct {
+	Left      Query
+	Operator  string
+	Right     Query
+	OrderBy   []OrderTerm
+	Limit     int
+	HasLimit  bool
+	Offset    int
+	HasOffset bool
+}
+
+// SQLSource marks CompoundStmt as a subquery source.
+func (q CompoundStmt) SQLSource() SourceExpression { return SourceExpression{Query: q} }
+
+// ToSQL compiles the compound statement.
+func (q CompoundStmt) ToSQL(dialect Dialect) (string, []any, error) {
+	return q.compile(NewCompiler(dialect))
+}
+
+func (q CompoundStmt) compile(c *Compiler) (string, []any, error) {
+	return c.CompileCompound(q)
 }
 
 // Union combines this query with another using UNION.
-func (q SelectQuery) Union(other Query) CompoundQuery {
-	return CompoundQuery{left: q, operator: "UNION", right: other}
-}
+func (b SelectBuilder) Union(other Query) CompoundBuilder { return compound(b.s, "UNION", other) }
 
 // UnionAll combines this query with another using UNION ALL.
-func (q SelectQuery) UnionAll(other Query) CompoundQuery {
-	return CompoundQuery{left: q, operator: "UNION ALL", right: other}
+func (b SelectBuilder) UnionAll(other Query) CompoundBuilder {
+	return compound(b.s, "UNION ALL", other)
 }
 
 // Intersect combines this query with another using INTERSECT.
-func (q SelectQuery) Intersect(other Query) CompoundQuery {
-	return CompoundQuery{left: q, operator: "INTERSECT", right: other}
+func (b SelectBuilder) Intersect(other Query) CompoundBuilder {
+	return compound(b.s, "INTERSECT", other)
 }
 
 // IntersectAll combines this query with another using INTERSECT ALL, which keeps
 // duplicate rows (the multiset intersection) rather than collapsing them.
-func (q SelectQuery) IntersectAll(other Query) CompoundQuery {
-	return CompoundQuery{left: q, operator: "INTERSECT ALL", right: other}
+func (b SelectBuilder) IntersectAll(other Query) CompoundBuilder {
+	return compound(b.s, "INTERSECT ALL", other)
 }
 
 // Except combines this query with another using EXCEPT.
-func (q SelectQuery) Except(other Query) CompoundQuery {
-	return CompoundQuery{left: q, operator: "EXCEPT", right: other}
-}
+func (b SelectBuilder) Except(other Query) CompoundBuilder { return compound(b.s, "EXCEPT", other) }
 
 // ExceptAll combines this query with another using EXCEPT ALL, the multiset
 // difference: a row in the left result is dropped once per matching right row
 // rather than entirely.
-func (q SelectQuery) ExceptAll(other Query) CompoundQuery {
-	return CompoundQuery{left: q, operator: "EXCEPT ALL", right: other}
+func (b SelectBuilder) ExceptAll(other Query) CompoundBuilder {
+	return compound(b.s, "EXCEPT ALL", other)
 }
+
+// CompoundBuilder is the fluent constructor for a CompoundStmt, separate from the
+// AST data for the same reason as SelectBuilder.
+type CompoundBuilder struct{ s CompoundStmt }
+
+func compound(left Query, operator string, right Query) CompoundBuilder {
+	return CompoundBuilder{s: CompoundStmt{Left: left, Operator: operator, Right: astOf(right)}}
+}
+
+// Stmt returns the built set-operation statement — the pure AST value.
+func (b CompoundBuilder) Stmt() CompoundStmt { return b.s }
 
 // Union appends another UNION operand.
-func (q CompoundQuery) Union(other Query) CompoundQuery {
-	return CompoundQuery{left: q, operator: "UNION", right: other}
-}
+func (b CompoundBuilder) Union(other Query) CompoundBuilder { return compound(b.s, "UNION", other) }
 
 // UnionAll appends another UNION ALL operand.
-func (q CompoundQuery) UnionAll(other Query) CompoundQuery {
-	return CompoundQuery{left: q, operator: "UNION ALL", right: other}
+func (b CompoundBuilder) UnionAll(other Query) CompoundBuilder {
+	return compound(b.s, "UNION ALL", other)
 }
 
 // Intersect appends another INTERSECT operand.
-func (q CompoundQuery) Intersect(other Query) CompoundQuery {
-	return CompoundQuery{left: q, operator: "INTERSECT", right: other}
+func (b CompoundBuilder) Intersect(other Query) CompoundBuilder {
+	return compound(b.s, "INTERSECT", other)
 }
 
 // IntersectAll appends another INTERSECT ALL operand.
-func (q CompoundQuery) IntersectAll(other Query) CompoundQuery {
-	return CompoundQuery{left: q, operator: "INTERSECT ALL", right: other}
+func (b CompoundBuilder) IntersectAll(other Query) CompoundBuilder {
+	return compound(b.s, "INTERSECT ALL", other)
 }
 
 // Except appends another EXCEPT operand.
-func (q CompoundQuery) Except(other Query) CompoundQuery {
-	return CompoundQuery{left: q, operator: "EXCEPT", right: other}
-}
+func (b CompoundBuilder) Except(other Query) CompoundBuilder { return compound(b.s, "EXCEPT", other) }
 
 // ExceptAll appends another EXCEPT ALL operand.
-func (q CompoundQuery) ExceptAll(other Query) CompoundQuery {
-	return CompoundQuery{left: q, operator: "EXCEPT ALL", right: other}
+func (b CompoundBuilder) ExceptAll(other Query) CompoundBuilder {
+	return compound(b.s, "EXCEPT ALL", other)
 }
 
 // OrderBy adds ORDER BY terms applied to the combined result.
-func (q CompoundQuery) OrderBy(terms ...OrderTerm) CompoundQuery {
-	q.orderBy = append(q.orderBy, terms...)
-	return q
+func (b CompoundBuilder) OrderBy(terms ...OrderTerm) CompoundBuilder {
+	b.s.OrderBy = append(append([]OrderTerm(nil), b.s.OrderBy...), terms...)
+	return b
 }
 
 // Limit sets the LIMIT clause of the combined result.
-func (q CompoundQuery) Limit(n int) CompoundQuery {
-	q.limit = n
-	q.hasLimit = true
-	return q
+func (b CompoundBuilder) Limit(n int) CompoundBuilder {
+	b.s.Limit = n
+	b.s.HasLimit = true
+	return b
 }
 
 // Offset sets the OFFSET clause of the combined result.
-func (q CompoundQuery) Offset(n int) CompoundQuery {
-	q.offset = n
-	q.hasOffset = true
-	return q
+func (b CompoundBuilder) Offset(n int) CompoundBuilder {
+	b.s.Offset = n
+	b.s.HasOffset = true
+	return b
 }
 
-// SQLSource marks CompoundQuery as a subquery source.
-func (q CompoundQuery) SQLSource() SourceExpression { return SourceExpression{Query: q} }
+// SQLSource marks the building compound query as a subquery source.
+func (b CompoundBuilder) SQLSource() SourceExpression { return b.s.SQLSource() }
 
-// ToSQL compiles the compound query.
-func (q CompoundQuery) ToSQL(dialect Dialect) (string, []any, error) {
-	return q.compile(NewCompiler(dialect))
-}
+// ToSQL compiles the building compound statement.
+func (b CompoundBuilder) ToSQL(dialect Dialect) (string, []any, error) { return b.s.ToSQL(dialect) }
 
-func (q CompoundQuery) compile(c *Compiler) (string, []any, error) {
-	return c.CompileCompound(q)
-}
+func (b CompoundBuilder) compile(c *Compiler) (string, []any, error) { return b.s.compile(c) }
+
+func (b CompoundBuilder) buildStmt() Query { return b.s }
 
 // CompileCompound compiles a set-operation query.
-func (c *Compiler) CompileCompound(q CompoundQuery) (string, []any, error) {
-	leftSQL, args, err := c.compileOperand(q.left, q.operator)
+func (c *Compiler) CompileCompound(q CompoundStmt) (string, []any, error) {
+	leftSQL, args, err := c.compileOperand(q.Left, q.Operator)
 	if err != nil {
 		return "", nil, err
 	}
-	rightSQL, rightArgs, err := c.compileOperand(q.right, q.operator)
+	rightSQL, rightArgs, err := c.compileOperand(q.Right, q.Operator)
 	if err != nil {
 		return "", nil, err
 	}
@@ -129,12 +143,12 @@ func (c *Compiler) CompileCompound(q CompoundQuery) (string, []any, error) {
 	var sb strings.Builder
 	sb.WriteString(leftSQL)
 	sb.WriteString(" ")
-	sb.WriteString(q.operator)
+	sb.WriteString(q.Operator)
 	sb.WriteString(" ")
 	sb.WriteString(rightSQL)
-	if len(q.orderBy) > 0 {
+	if len(q.OrderBy) > 0 {
 		sb.WriteString(" ORDER BY ")
-		for i, term := range q.orderBy {
+		for i, term := range q.OrderBy {
 			if i > 0 {
 				sb.WriteString(", ")
 			}
@@ -147,13 +161,13 @@ func (c *Compiler) CompileCompound(q CompoundQuery) (string, []any, error) {
 			args = append(args, termArgs...)
 		}
 	}
-	if q.hasLimit {
+	if q.HasLimit {
 		sb.WriteString(" LIMIT ")
-		sb.WriteString(strconv.Itoa(q.limit))
+		sb.WriteString(strconv.Itoa(q.Limit))
 	}
-	if q.hasOffset {
+	if q.HasOffset {
 		sb.WriteString(" OFFSET ")
-		sb.WriteString(strconv.Itoa(q.offset))
+		sb.WriteString(strconv.Itoa(q.Offset))
 	}
 	return sb.String(), args, nil
 }
@@ -170,11 +184,32 @@ func (c *Compiler) compileOperand(query Query, parentOperator string) (string, [
 	if err != nil {
 		return "", nil, err
 	}
-	if sub, ok := query.(CompoundQuery); ok {
-		if sub.operator == parentOperator {
+	if sub, ok := astOf(query).(CompoundStmt); ok {
+		if sub.Operator == parentOperator {
 			return sql, args, nil
 		}
 		return "(" + sql + ")", args, nil
 	}
 	return "(" + sql + ")", args, nil
 }
+
+// builder is implemented by the fluent builders, each returning the immutable
+// statement AST it has assembled.
+type builder interface{ buildStmt() Query }
+
+// astOf normalizes a query to its pure AST value: a builder yields the statement
+// it has assembled, any other query passes through. It lets a builder be used in
+// a subquery (or executed) position while the structural switches (Walk,
+// compileOperand) and introspection need only handle the statement types.
+func astOf(q Query) Query {
+	if b, ok := q.(builder); ok {
+		return b.buildStmt()
+	}
+	return q
+}
+
+// Unwrap returns the underlying statement AST of a builder, or q unchanged when
+// it is already a statement. Introspection that type-switches on the concrete
+// statement types (querytrace) calls it so a builder and its built statement are
+// treated alike.
+func Unwrap(q Query) Query { return astOf(q) }

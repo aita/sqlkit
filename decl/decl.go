@@ -74,6 +74,12 @@ type Catalog struct {
 	tableIndex    map[string]int    // schema\x00name -> index into tables, for FK resolution
 	bindingNames  map[string]string // schema\x00name -> binding identifier override (decl.BindingName)
 	pendingFKs    []pendingFK       // foreign keys awaiting resolution at Build time
+	extensions    []meta.Extension
+	enums         []meta.Enum
+	sequences     []meta.Sequence
+	matviews      []meta.MaterializedView
+	grants        []meta.Grant
+	objectNames   map[string]bool // schema\x00kind\x00name -> declared, for duplicate detection
 	errs          []error
 }
 
@@ -99,7 +105,7 @@ func DefaultSchema(name string) CatalogOption {
 // point of the DSL: var Catalog = decl.NewCatalog(). Options configure
 // catalog-wide defaults such as DefaultSchema.
 func NewCatalog(opts ...CatalogOption) *Catalog {
-	c := &Catalog{tableIndex: map[string]int{}, createSchemas: map[string]bool{}, bindingNames: map[string]string{}}
+	c := &Catalog{tableIndex: map[string]int{}, createSchemas: map[string]bool{}, bindingNames: map[string]string{}, objectNames: map[string]bool{}}
 	for _, opt := range opts {
 		opt(c)
 	}

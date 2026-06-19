@@ -2,6 +2,16 @@ package sql
 
 import "testing"
 
+func TestCreateSequenceStmt(t *testing.T) {
+	seq := CreateSequence(Table{Name: "s"}).Start(5).NoMaxValue().Cycle().Stmt()
+	if seq.Start == nil || *seq.Start != 5 {
+		t.Errorf("CreateSequenceStmt.Start = %v, want 5", seq.Start)
+	}
+	if !seq.NoMaxValue || seq.Cycle == nil || !*seq.Cycle {
+		t.Errorf("CreateSequenceStmt = %+v, want NoMaxValue and Cycle=true", seq)
+	}
+}
+
 func TestSequenceCompile(t *testing.T) {
 	cases := []struct {
 		stmt Statement

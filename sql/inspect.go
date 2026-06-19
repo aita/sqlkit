@@ -9,107 +9,13 @@ package sql
 // AST without the package exposing — and freezing as API — its internal field
 // layout, and without letting callers mutate a built query.
 
-// SelectParts is a read-only snapshot of every clause of a SelectQuery.
-// A nil Limit/Offset means the clause is absent. It is returned by
-// SelectQuery.Parts.
-type SelectParts struct {
-	With       []CTE
-	Distinct   bool
-	DistinctOn []Expression
-	Columns    []Selection
-	From       Source
-	Joins      []JoinClause
-	Where      Expression
-	GroupBy    []Expression
-	Having     Expression
-	Windows    []NamedWindow
-	OrderBy    []OrderTerm
-	Limit      *int
-	Offset     *int
-	Lock       *LockClause
-}
+// SELECT and set-operation statements expose their structure as the public
+// fields of SelectStmt and CompoundStmt directly (read them, or traverse with
+// Walk/Decompose); they need no Parts snapshot. The Parts accessors below remain
+// for the statement types whose builders still keep unexported fields.
 
-// LockClause is a read-only snapshot of a SELECT row-locking clause (FOR UPDATE
-// / FOR SHARE ...), with its optional OF table list and wait mode.
-type LockClause struct {
-	Strength string   // e.g. "UPDATE", "SHARE", "NO KEY UPDATE", "KEY SHARE"
-	Of       []string // tables named in OF, if any
-	Wait     string   // "", "NOWAIT", or "SKIP LOCKED"
-}
-
-// Parts returns a read-only snapshot of q's clauses.
-func (q SelectQuery) Parts() SelectParts {
-	c := SelectParts{
-		With:       cloneSlice(q.with),
-		Distinct:   q.distinct,
-		DistinctOn: cloneSlice(q.distinctOn),
-		Columns:    cloneSlice(q.columns),
-		From:       q.from,
-		Joins:      cloneSlice(q.joins),
-		Where:      q.where,
-		GroupBy:    cloneSlice(q.groupBy),
-		Having:     q.having,
-		Windows:    cloneSlice(q.windows),
-		OrderBy:    cloneSlice(q.orderBy),
-	}
-	if q.hasLimit {
-		limit := q.limit
-		c.Limit = &limit
-	}
-	if q.hasOffset {
-		offset := q.offset
-		c.Offset = &offset
-	}
-	if q.lock != nil {
-		c.Lock = &LockClause{Strength: q.lock.strength, Of: cloneSlice(q.lock.of), Wait: q.lock.wait}
-	}
-	return c
-}
-
-// CompoundParts is a read-only snapshot of a CompoundQuery (a set operation
-// such as UNION/INTERSECT/EXCEPT). It is returned by CompoundQuery.Parts.
-type CompoundParts struct {
-	Left     Query
-	Operator string // e.g. "UNION", "UNION ALL", "INTERSECT", "EXCEPT"
-	Right    Query
-	OrderBy  []OrderTerm
-	Limit    *int
-	Offset   *int
-}
-
-// Parts returns a read-only snapshot of q's parts.
-func (q CompoundQuery) Parts() CompoundParts {
-	c := CompoundParts{
-		Left:     q.left,
-		Operator: q.operator,
-		Right:    q.right,
-		OrderBy:  cloneSlice(q.orderBy),
-	}
-	if q.hasLimit {
-		limit := q.limit
-		c.Limit = &limit
-	}
-	if q.hasOffset {
-		offset := q.offset
-		c.Offset = &offset
-	}
-	return c
-}
-
-// InsertParts is a read-only snapshot of every clause of an InsertQuery.
-// Exactly one of Rows or Select carries the inserted data. It is returned by
-// InsertQuery.Parts.
-type InsertParts struct {
-	Table     Table
-	Columns   []string
-	Rows      [][]Expression
-	Select    Query
-	Conflict  *ConflictClause
-	Returning []Selection
-}
-
-// ConflictClause is a read-only snapshot of an INSERT upsert action
-// (ON CONFLICT / ON DUPLICATE KEY). At most one of Target, TargetExprs, or
+// ConflictClause is the INSERT upsert action (ON CONFLICT / ON DUPLICATE KEY)
+// carried by InsertStmt.Conflict. At most one of Target, TargetExprs, or
 // TargetConstraint is set. DoUpdate distinguishes DO UPDATE (with Sets and an
 // optional Where) from DO NOTHING.
 type ConflictClause struct {
@@ -121,90 +27,8 @@ type ConflictClause struct {
 	Where            Expression
 }
 
-// Parts returns a read-only snapshot of q's clauses.
-func (q InsertQuery) Parts() InsertParts {
-	c := InsertParts{
-		Table:     q.table,
-		Columns:   cloneSlice(q.columns),
-		Rows:      cloneRows(q.rows),
-		Select:    q.selectSrc,
-		Returning: cloneSlice(q.returning),
-	}
-	if q.conflict != nil {
-		c.Conflict = &ConflictClause{
-			Target:           cloneSlice(q.conflict.target),
-			TargetExprs:      cloneSlice(q.conflict.targetExprs),
-			TargetConstraint: q.conflict.targetConstraint,
-			DoUpdate:         q.conflict.doUpdate,
-			Sets:             cloneSlice(q.conflict.sets),
-			Where:            q.conflict.where,
-		}
-	}
-	return c
-}
-
-// UpdateParts is a read-only snapshot of every clause of an UpdateQuery.
-// It is returned by UpdateQuery.Parts.
-type UpdateParts struct {
-	With      []CTE
-	Table     Table
-	Sets      []Assignment
-	From      []Source
-	Joins     []JoinClause
-	Where     Expression
-	Returning []Selection
-}
-
-// Parts returns a read-only snapshot of q's clauses.
-func (q UpdateQuery) Parts() UpdateParts {
-	return UpdateParts{
-		With:      cloneSlice(q.with),
-		Table:     q.table,
-		Sets:      cloneSlice(q.sets),
-		From:      cloneSlice(q.from),
-		Joins:     cloneSlice(q.joins),
-		Where:     q.where,
-		Returning: cloneSlice(q.returning),
-	}
-}
-
-// DeleteParts is a read-only snapshot of every clause of a DeleteQuery.
-// It is returned by DeleteQuery.Parts.
-type DeleteParts struct {
-	With      []CTE
-	Table     Table
-	Using     []Source
-	Joins     []JoinClause
-	Where     Expression
-	Returning []Selection
-}
-
-// Parts returns a read-only snapshot of q's clauses.
-func (q DeleteQuery) Parts() DeleteParts {
-	return DeleteParts{
-		With:      cloneSlice(q.with),
-		Table:     q.table,
-		Using:     cloneSlice(q.using),
-		Joins:     cloneSlice(q.joins),
-		Where:     q.where,
-		Returning: cloneSlice(q.returning),
-	}
-}
-
-// MergeParts is a read-only snapshot of every clause of a MergeQuery.
-// It is returned by MergeQuery.Parts.
-type MergeParts struct {
-	With        []CTE
-	Target      Table
-	TargetAlias string
-	Using       Source
-	On          Expression
-	When        []MergeWhenClause
-	Returning   []Selection
-}
-
-// MergeWhenClause is a read-only snapshot of one MERGE WHEN clause. Match is
-// "MATCHED", "NOT MATCHED", or "NOT MATCHED BY SOURCE"; Action is "UPDATE",
+// MergeWhenClause is one MERGE WHEN clause as carried by MergeStmt.When. Match
+// is "MATCHED", "NOT MATCHED", or "NOT MATCHED BY SOURCE"; Action is "UPDATE",
 // "DELETE", "INSERT", "DO NOTHING", or "" when none was set. Sets applies to
 // UPDATE; InsertColumns/InsertValues (or InsertDefault) to INSERT.
 type MergeWhenClause struct {
@@ -217,25 +41,7 @@ type MergeWhenClause struct {
 	InsertDefault bool
 }
 
-// Parts returns a read-only snapshot of q's clauses.
-func (q MergeQuery) Parts() MergeParts {
-	c := MergeParts{
-		With:        cloneSlice(q.with),
-		Target:      q.target,
-		TargetAlias: q.targetAlias,
-		Using:       q.using,
-		On:          q.on,
-		Returning:   cloneSlice(q.returning),
-	}
-	if len(q.whens) > 0 {
-		c.When = make([]MergeWhenClause, len(q.whens))
-		for i, w := range q.whens {
-			c.When[i] = mergeWhenView(w)
-		}
-	}
-	return c
-}
-
+// mergeWhenView converts a MergeWhen builder into its MergeWhenClause AST value.
 func mergeWhenView(w MergeWhen) MergeWhenClause {
 	match := map[mergeMatch]string{
 		mergeMatched:            "MATCHED",
