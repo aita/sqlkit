@@ -1,0 +1,138 @@
+package mysql_test
+
+import (
+	"reflect"
+	"testing"
+
+	"github.com/aita/sqlkit/sql"
+	"github.com/aita/sqlkit/sqlparse/mysql"
+)
+
+// assertRoundTrip parses input and checks it both ways, for maximum precision:
+//   - the parsed query is structurally identical to want (reflect.DeepEqual,
+//     unexported fields included), proving the parser builds the expected AST
+//     nodes — not merely an SQL string that recompiles the same way;
+//   - that query compiles under MySQLDialect to wantSQL with wantArgs,
+//     documenting the output and guarding the sql-core rendering. Because sqlkit
+//     parameterizes literals, the recompiled SQL replaces constants with ?.
+func assertRoundTrip(t *testing.T, input string, want sql.Query, wantSQL string, wantArgs ...any) {
+	t.Helper()
+	got, err := mysql.ParseOne(input)
+	if err != nil {
+		t.Fatalf("ParseOne(%q) error = %v", input, err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("AST mismatch for %q\n got: %#v\nwant: %#v", input, got, want)
+	}
+	gotSQL, args, err := got.ToSQL(sql.MySQLDialect{})
+	if err != nil {
+		t.Fatalf("ToSQL() error = %v", err)
+	}
+	if gotSQL != wantSQL {
+		t.Fatalf("round-trip SQL =\n  %q\nwant\n  %q", gotSQL, wantSQL)
+	}
+	if len(wantArgs) == 0 {
+		if len(args) != 0 {
+			t.Fatalf("args = %#v, want none", args)
+		}
+		return
+	}
+	if !reflect.DeepEqual(args, wantArgs) {
+		t.Fatalf("args = %#v, want %#v", args, wantArgs)
+	}
+}
+
+// assertRaw checks that input parses to a verbatim RawQuery — the deparse
+// fallback the parser uses for statements (and sub-constructs) the typed
+// converters do not model — and that the passthrough is stable: the RawQuery
+// emits its text unchanged with no args, and that text re-parses to an equal
+// RawQuery.
+func assertRaw(t *testing.T, input string) sql.RawQuery {
+	t.Helper()
+	got, err := mysql.ParseOne(input)
+	if err != nil {
+		t.Fatalf("ParseOne(%q) error = %v", input, err)
+	}
+	raw, ok := got.(sql.RawQuery)
+	if !ok {
+		t.Fatalf("ParseOne(%q) = %T, want sql.RawQuery", input, got)
+	}
+	text, args, err := raw.ToSQL(sql.MySQLDialect{})
+	if err != nil {
+		t.Fatalf("ToSQL() error = %v", err)
+	}
+	if len(args) != 0 {
+		t.Fatalf("RawQuery args = %#v, want none", args)
+	}
+	if text != raw.SQL() {
+		t.Fatalf("RawQuery text = %q, want %q", text, raw.SQL())
+	}
+	again, err := mysql.ParseOne(text)
+	if err != nil {
+		t.Fatalf("re-parse of %q error = %v", text, err)
+	}
+	if !reflect.DeepEqual(again, got) {
+		t.Fatalf("deparse not stable for %q:\n got: %#v\nwant: %#v", input, again, got)
+	}
+	return raw
+}
+
+func TestParseMultipleStatements(t *testing.T) {
+	queries, err := mysql.Parse("SELECT 1; SELECT 2")
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if len(queries) != 2 {
+		t.Fatalf("Parse() returned %d queries, want 2", len(queries))
+	}
+}
+
+func TestParseOneRejectsMultiple(t *testing.T) {
+	if _, err := mysql.ParseOne("SELECT 1; SELECT 2"); err == nil {
+		t.Fatal("ParseOne() with two statements succeeded, want error")
+	}
+}
+
+func TestParseSyntaxError(t *testing.T) {
+	if _, err := mysql.Parse("SELECT FROM WHERE"); err == nil {
+		t.Fatal("Parse() of invalid SQL succeeded, want error")
+	}
+}
+
+// Statement types the typed converters do not model still parse, falling back
+// to a verbatim RawQuery rather than erroring.
+func TestUnmodeledStatementFallsBackToRaw(t *testing.T) {
+	for _, input := range []string{
+		"SET autocommit = 1",
+		"CREATE VIEW v AS SELECT id FROM users",
+		"RENAME TABLE a TO b, c TO d",
+	} {
+		assertRaw(t, input)
+	}
+}
+
+// A parsed query is a normal builder, so its statement's exported fields are
+// directly inspectable.
+func TestParsedQueryExposesStmt(t *testing.T) {
+	got, err := mysql.ParseOne("SELECT id, name FROM users WHERE id = 1 LIMIT 10")
+	if err != nil {
+		t.Fatalf("ParseOne() error = %v", err)
+	}
+	b, ok := got.(sql.SelectBuilder)
+	if !ok {
+		t.Fatalf("ParseOne() = %T, want sql.SelectBuilder", got)
+	}
+	stmt := b.Stmt()
+	if len(stmt.Columns) != 2 {
+		t.Fatalf("Columns = %d, want 2", len(stmt.Columns))
+	}
+	if table, ok := stmt.From.(sql.Table); !ok || table.Name != "users" {
+		t.Fatalf("From = %#v, want table users", stmt.From)
+	}
+	if stmt.Where == nil {
+		t.Fatal("Where = nil, want the WHERE predicate")
+	}
+	if !stmt.HasLimit || stmt.Limit != 10 {
+		t.Fatalf("Limit = %d (has=%v), want 10", stmt.Limit, stmt.HasLimit)
+	}
+}
