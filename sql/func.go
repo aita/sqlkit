@@ -15,6 +15,7 @@ package sql
 // Distinct set it renders an aggregate over distinct values, name(DISTINCT
 // args...), as in SUM(DISTINCT x); DISTINCT is meaningful only for aggregates.
 type FuncExpression struct {
+	posField
 	Name     string
 	Args     []Expression
 	Distinct bool
@@ -103,6 +104,7 @@ var (
 
 // CountExpression represents COUNT(expr), COUNT(*), or COUNT(DISTINCT expr).
 type CountExpression struct {
+	posField
 	Target   Selection
 	All      bool
 	Distinct bool
@@ -133,6 +135,7 @@ func CountDistinct(target Selection) CountExpression {
 // through Func. The delimiter is emitted as a static SQL string literal (MySQL's
 // SEPARATOR does not accept a bind placeholder), so it must be a constant.
 type StringAggExpression struct {
+	posField
 	Arg       Expression
 	Delimiter string
 }
@@ -272,6 +275,7 @@ func CurrentTimestamp() RawExpression { return Raw("CURRENT_TIMESTAMP") }
 // operand), which PostgreSQL and MySQL both accept. Field is emitted verbatim as
 // a keyword (not quoted, not bound), so pass a bare field name such as "year".
 type ExtractExpression struct {
+	posField
 	Field   string
 	Operand Expression
 }
@@ -291,6 +295,7 @@ func Extract(field string, operand any) ExtractExpression {
 // standard POSITION(substring IN string), which PostgreSQL and MySQL both accept
 // (the comma forms STRPOS / LOCATE diverge, so this is the portable spelling).
 type PositionExpression struct {
+	posField
 	Substring Expression
 	String    Expression
 }
@@ -311,6 +316,7 @@ func Position(substring, str any) PositionExpression {
 // target type spelling is the caller's responsibility (e.g. "integer",
 // "text", "numeric(10, 2)").
 type CastExpression struct {
+	posField
 	Operand Expression
 	Type    string
 }
@@ -378,6 +384,7 @@ var JSONArrayAgg = makeFunc("JSON_ARRAYAGG")
 // separator — so it renders per dialect rather than through Func. Agg selects
 // the JSON_OBJECTAGG aggregate, which takes a single key/value pair.
 type JSONObjectExpression struct {
+	posField
 	Pairs []Expression
 	Agg   bool
 }
@@ -408,6 +415,7 @@ func JSONObjectAgg(key, value any) JSONObjectExpression {
 // form. The path is portable: each dialect (a JSONAccessor) renders it in its
 // native syntax (PostgreSQL -> / ->>, MySQL JSON_EXTRACT / JSON_UNQUOTE).
 type JSONAccessExpression struct {
+	posField
 	Operand Expression
 	Path    []any
 	AsText  bool

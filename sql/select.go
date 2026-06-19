@@ -18,6 +18,7 @@ type compilable interface {
 // Where/Having/From or an empty slice means the clause is absent; HasLimit /
 // HasOffset distinguish a zero LIMIT/OFFSET from none.
 type SelectStmt struct {
+	posField
 	With       []CTE
 	From       Source
 	Columns    []Selection

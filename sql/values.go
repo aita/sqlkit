@@ -15,6 +15,7 @@ import (
 // built specifically as a FROM/JOIN source, and from InsertQuery.Values, which
 // is the VALUES list of an INSERT.
 type ValuesQuery struct {
+	posField
 	rows [][]Expression
 }
 

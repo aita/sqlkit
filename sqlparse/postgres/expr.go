@@ -53,7 +53,7 @@ func convertExpr(node *pg.Node) (sql.Expression, error) {
 		if err != nil {
 			return nil, err
 		}
-		return sql.Func("coalesce", args...), nil
+		return positioned(sql.Func("coalesce", args...), node.GetCoalesceExpr().GetLocation()), nil
 	case node.GetMinMaxExpr() != nil:
 		return convertMinMax(node.GetMinMaxExpr())
 	case node.GetRowExpr() != nil:
@@ -61,7 +61,7 @@ func convertExpr(node *pg.Node) (sql.Expression, error) {
 		if err != nil {
 			return nil, err
 		}
-		return sql.Row(args...), nil
+		return positioned(sql.Row(args...), node.GetRowExpr().GetLocation()), nil
 	case node.GetAArrayExpr() != nil:
 		return convertArray(node.GetAArrayExpr())
 	default:
@@ -86,6 +86,149 @@ func columnRefParts(cr *pg.ColumnRef) (name string, star bool, qualifier string,
 	return strings.Join(parts, "."), false, "", nil
 }
 
+// offsetOf normalizes a pg_query node location (a 0-based byte offset, or -1 when
+// unknown) into the value sqlkit stores in NodePos: the byte offset plus one, so
+// the zero value is reserved for "no position". An unknown location stores 0.
+func offsetOf(location int32) int {
+	if location < 0 {
+		return 0
+	}
+	return int(location) + 1
+}
+
+// positioned records location as the source offset of e when e is a node that
+// carries a position, returning it unchanged otherwise (a RawExpression, a
+// passthrough). It lets a convert wrap a result built through a constructor that
+// returns the Expression interface — sql.And, sql.In — without a type assertion at
+// the call site.
+func positioned(e sql.Expression, location int32) sql.Expression {
+	pos := offsetOf(location)
+	switch x := e.(type) {
+	case sql.BinaryExpression:
+		x.NodePos = pos
+		return x
+	case sql.LogicalExpression:
+		x.NodePos = pos
+		return x
+	case sql.NotExpression:
+		x.NodePos = pos
+		return x
+	case sql.UnaryExpression:
+		x.NodePos = pos
+		return x
+	case sql.NullPredicate:
+		x.NodePos = pos
+		return x
+	case sql.DistinctPredicate:
+		x.NodePos = pos
+		return x
+	case sql.BetweenExpression:
+		x.NodePos = pos
+		return x
+	case sql.InExpression:
+		x.NodePos = pos
+		return x
+	case sql.ILikeExpression:
+		x.NodePos = pos
+		return x
+	case sql.RegexpExpression:
+		x.NodePos = pos
+		return x
+	case sql.SimilarToExpression:
+		x.NodePos = pos
+		return x
+	case sql.ConcatExpression:
+		x.NodePos = pos
+		return x
+	case sql.RowExpression:
+		x.NodePos = pos
+		return x
+	case sql.ArrayExpression:
+		x.NodePos = pos
+		return x
+	case sql.QuantifiedExpression:
+		x.NodePos = pos
+		return x
+	case sql.QuantifiedArrayExpression:
+		x.NodePos = pos
+		return x
+	case sql.CaseExpression:
+		x.NodePos = pos
+		return x
+	case sql.CastExpression:
+		x.NodePos = pos
+		return x
+	case sql.CollateExpression:
+		x.NodePos = pos
+		return x
+	case sql.FieldExpression:
+		x.NodePos = pos
+		return x
+	case sql.SubscriptExpression:
+		x.NodePos = pos
+		return x
+	case sql.FuncExpression:
+		x.NodePos = pos
+		return x
+	case sql.CountExpression:
+		x.NodePos = pos
+		return x
+	case sql.StringAggExpression:
+		x.NodePos = pos
+		return x
+	case sql.ExtractExpression:
+		x.NodePos = pos
+		return x
+	case sql.PositionExpression:
+		x.NodePos = pos
+		return x
+	case sql.JSONObjectExpression:
+		x.NodePos = pos
+		return x
+	case sql.JSONAccessExpression:
+		x.NodePos = pos
+		return x
+	case sql.GroupingExpression:
+		x.NodePos = pos
+		return x
+	case sql.GroupingSetsExpression:
+		x.NodePos = pos
+		return x
+	case sql.WindowExpression:
+		x.NodePos = pos
+		return x
+	case sql.ExistsExpression:
+		x.NodePos = pos
+		return x
+	case sql.ScalarSubqueryExpression:
+		x.NodePos = pos
+		return x
+	case sql.ColumnExpression:
+		x.NodePos = pos
+		return x
+	case sql.ValueExpression:
+		x.NodePos = pos
+		return x
+	default:
+		return e
+	}
+}
+
+// colAt and valAt are the internal positioned constructors the parser uses: they
+// build a builder node and record its source offset, keeping position-setting out
+// of the public sql builder API.
+func colAt(name string, location int32) sql.ColumnExpression {
+	e := sql.Col(name)
+	e.NodePos = offsetOf(location)
+	return e
+}
+
+func valAt(value any, location int32) sql.ValueExpression {
+	e := sql.Val(value)
+	e.NodePos = offsetOf(location)
+	return e
+}
+
 func convertColumnRef(cr *pg.ColumnRef) (sql.Expression, error) {
 	name, star, _, err := columnRefParts(cr)
 	if err != nil {
@@ -94,26 +237,27 @@ func convertColumnRef(cr *pg.ColumnRef) (sql.Expression, error) {
 	if star {
 		return nil, sqlparse.Unsupported("'*' outside the select list")
 	}
-	return sql.Col(name), nil
+	return colAt(name, cr.GetLocation()), nil
 }
 
 func convertAConst(c *pg.A_Const) (sql.Expression, error) {
+	loc := c.GetLocation()
 	switch {
 	case c.GetIsnull():
-		return sql.Val(nil), nil
+		return valAt(nil, loc), nil
 	case c.GetIval() != nil:
-		return sql.Val(int(c.GetIval().GetIval())), nil
+		return valAt(int(c.GetIval().GetIval()), loc), nil
 	case c.GetFval() != nil:
 		// A numeric literal (a "float" node in the grammar, but the spelling of any
 		// non-integer constant: 3.14, 1e10, or an exact decimal too wide for any Go
 		// numeric type). Parameterizing it would force a lossy float64, so emit the
 		// literal verbatim instead — exact, and consistent with how a $N param ref
-		// is passed through as Raw.
+		// is passed through as Raw. RawExpression carries no position.
 		return sql.Raw(c.GetFval().GetFval()), nil
 	case c.GetSval() != nil:
-		return sql.Val(c.GetSval().GetSval()), nil
+		return valAt(c.GetSval().GetSval(), loc), nil
 	case c.GetBoolval() != nil:
-		return sql.Val(c.GetBoolval().GetBoolval()), nil
+		return valAt(c.GetBoolval().GetBoolval(), loc), nil
 	default:
 		return nil, sqlparse.Unsupported("constant literal")
 	}
@@ -149,7 +293,9 @@ func convertAExpr(e *pg.A_Expr) (sql.Expression, error) {
 		if err != nil {
 			return nil, err
 		}
-		return sql.BinaryExpression{Left: left, Operator: op, Right: right}, nil
+		be := sql.BinaryExpression{Left: left, Operator: op, Right: right}
+		be.NodePos = offsetOf(e.GetLocation())
+		return be, nil
 	case pg.A_Expr_Kind_AEXPR_OP_ANY, pg.A_Expr_Kind_AEXPR_OP_ALL:
 		return convertArrayQuantified(e, op)
 	case pg.A_Expr_Kind_AEXPR_LIKE, pg.A_Expr_Kind_AEXPR_ILIKE:
@@ -170,9 +316,13 @@ func convertAExpr(e *pg.A_Expr) (sql.Expression, error) {
 			return nil, err
 		}
 		if e.GetKind() == pg.A_Expr_Kind_AEXPR_NOT_DISTINCT {
-			return sql.IsNotDistinctFrom(left, right), nil
+			x := sql.IsNotDistinctFrom(left, right)
+			x.NodePos = offsetOf(e.GetLocation())
+			return x, nil
 		}
-		return sql.IsDistinctFrom(left, right), nil
+		x := sql.IsDistinctFrom(left, right)
+		x.NodePos = offsetOf(e.GetLocation())
+		return x, nil
 	case pg.A_Expr_Kind_AEXPR_NULLIF:
 		left, err := convertExpr(e.GetLexpr())
 		if err != nil {
@@ -182,7 +332,7 @@ func convertAExpr(e *pg.A_Expr) (sql.Expression, error) {
 		if err != nil {
 			return nil, err
 		}
-		return sql.Func("nullif", left, right), nil
+		return positioned(sql.Func("nullif", left, right), e.GetLocation()), nil
 	default:
 		return nil, sqlparse.Unsupportedf("operator expression kind %s", e.GetKind())
 	}
@@ -224,16 +374,24 @@ func convertLike(e *pg.A_Expr, op string) (sql.Expression, error) {
 	if err != nil {
 		return nil, err
 	}
+	pos := offsetOf(e.GetLocation())
 	switch op {
 	case "~~":
-		return sql.Like(left, pattern), nil
+		x := sql.Like(left, pattern)
+		x.NodePos = pos
+		return x, nil
 	case "!~~":
-		return sql.NotLike(left, pattern), nil
+		x := sql.NotLike(left, pattern)
+		x.NodePos = pos
+		return x, nil
 	case "~~*":
-		return sql.ILike(left, pattern), nil
+		x := sql.ILike(left, pattern)
+		x.NodePos = pos
+		return x, nil
 	case "!~~*":
-		notILike := sql.Not(sql.ILike(left, pattern))
-		return notILike, nil
+		x := sql.Not(sql.ILike(left, pattern))
+		x.NodePos = pos
+		return x, nil
 	default:
 		return nil, sqlparse.Unsupportedf("LIKE operator %q", op)
 	}
@@ -256,10 +414,15 @@ func convertInList(e *pg.A_Expr, op string) (sql.Expression, error) {
 		}
 		items = append(items, expr)
 	}
+	pos := offsetOf(e.GetLocation())
 	if op == "<>" {
-		return sql.NotIn(left, items...), nil
+		x := sql.NotIn(left, items...)
+		x.NodePos = pos
+		return x, nil
 	}
-	return sql.In(left, items...), nil
+	x := sql.In(left, items...)
+	x.NodePos = pos
+	return x, nil
 }
 
 func convertBetween(e *pg.A_Expr) (sql.Expression, error) {
@@ -279,10 +442,15 @@ func convertBetween(e *pg.A_Expr) (sql.Expression, error) {
 	if err != nil {
 		return nil, err
 	}
+	pos := offsetOf(e.GetLocation())
 	if e.GetKind() == pg.A_Expr_Kind_AEXPR_NOT_BETWEEN {
-		return sql.NotBetween(operand, low, high), nil
+		x := sql.NotBetween(operand, low, high)
+		x.NodePos = pos
+		return x, nil
 	}
-	return sql.Between(operand, low, high), nil
+	x := sql.Between(operand, low, high)
+	x.NodePos = pos
+	return x, nil
 }
 
 func convertBoolExpr(e *pg.BoolExpr) (sql.Expression, error) {
@@ -294,13 +462,14 @@ func convertBoolExpr(e *pg.BoolExpr) (sql.Expression, error) {
 		}
 		operands = append(operands, expr)
 	}
+	loc := e.GetLocation()
 	switch e.GetBoolop() {
 	case pg.BoolExprType_AND_EXPR:
-		return sql.And(operands...), nil
+		return positioned(sql.And(operands...), loc), nil
 	case pg.BoolExprType_OR_EXPR:
-		return sql.Or(operands...), nil
+		return positioned(sql.Or(operands...), loc), nil
 	case pg.BoolExprType_NOT_EXPR:
-		return sql.Not(operands[0]), nil
+		return positioned(sql.Not(operands[0]), loc), nil
 	default:
 		return nil, sqlparse.Unsupportedf("boolean operator %s", e.GetBoolop())
 	}
@@ -312,9 +481,9 @@ func convertNullTest(e *pg.NullTest) (sql.Expression, error) {
 		return nil, err
 	}
 	if e.GetNulltesttype() == pg.NullTestType_IS_NOT_NULL {
-		return sql.IsNotNull(operand), nil
+		return positioned(sql.IsNotNull(operand), e.GetLocation()), nil
 	}
-	return sql.IsNull(operand), nil
+	return positioned(sql.IsNull(operand), e.GetLocation()), nil
 }
 
 func convertSubLink(e *pg.SubLink) (sql.Expression, error) {
@@ -322,11 +491,12 @@ func convertSubLink(e *pg.SubLink) (sql.Expression, error) {
 	if err != nil {
 		return nil, err
 	}
+	loc := e.GetLocation()
 	switch e.GetSubLinkType() {
 	case pg.SubLinkType_EXISTS_SUBLINK:
-		return sql.Exists(query), nil
+		return positioned(sql.Exists(query), loc), nil
 	case pg.SubLinkType_EXPR_SUBLINK:
-		return sql.ScalarSubquery(query), nil
+		return positioned(sql.ScalarSubquery(query), loc), nil
 	case pg.SubLinkType_ANY_SUBLINK, pg.SubLinkType_ALL_SUBLINK:
 		left, err := convertExpr(e.GetTestexpr())
 		if err != nil {
@@ -340,14 +510,14 @@ func convertSubLink(e *pg.SubLink) (sql.Expression, error) {
 		}
 		if e.GetSubLinkType() == pg.SubLinkType_ANY_SUBLINK {
 			if op == "=" {
-				return sql.InQuery(left, query), nil
+				return positioned(sql.InQuery(left, query), loc), nil
 			}
-			return sql.Any(left, op, query), nil
+			return positioned(sql.Any(left, op, query), loc), nil
 		}
 		if op == "<>" {
-			return sql.NotInQuery(left, query), nil
+			return positioned(sql.NotInQuery(left, query), loc), nil
 		}
-		return sql.All(left, op, query), nil
+		return positioned(sql.All(left, op, query), loc), nil
 	default:
 		return nil, sqlparse.Unsupportedf("subquery link type %s", e.GetSubLinkType())
 	}
@@ -362,13 +532,13 @@ func convertGroupingSet(gs *pg.GroupingSet) (sql.Expression, error) {
 		if err != nil {
 			return nil, err
 		}
-		return sql.Rollup(elems...), nil
+		return positioned(sql.Rollup(elems...), gs.GetLocation()), nil
 	case pg.GroupingSetKind_GROUPING_SET_CUBE:
 		elems, err := convertExprList(gs.GetContent())
 		if err != nil {
 			return nil, err
 		}
-		return sql.Cube(elems...), nil
+		return positioned(sql.Cube(elems...), gs.GetLocation()), nil
 	case pg.GroupingSetKind_GROUPING_SET_SETS:
 		sets := make([][]sql.Expression, 0, len(gs.GetContent()))
 		for _, item := range gs.GetContent() {
@@ -402,7 +572,7 @@ func convertGroupingSet(gs *pg.GroupingSet) (sql.Expression, error) {
 			}
 			sets = append(sets, []sql.Expression{expr})
 		}
-		return sql.GroupingSets(sets...), nil
+		return positioned(sql.GroupingSets(sets...), gs.GetLocation()), nil
 	default:
 		return nil, sqlparse.Unsupportedf("grouping set kind %s", gs.GetKind())
 	}
@@ -432,7 +602,9 @@ func convertIndirection(e *pg.A_Indirection) (sql.Expression, error) {
 	items := e.GetIndirection()
 	// A single String element is a composite field access.
 	if len(items) == 1 && items[0].GetString_() != nil {
-		return sql.Field(operand, items[0].GetString_().GetSval()), nil
+		f := sql.Field(operand, items[0].GetString_().GetSval())
+		f.NodePos = childPos(operand)
+		return f, nil
 	}
 	// Otherwise every element must be a subscript/slice.
 	indices := make([]sql.SubscriptIndex, 0, len(items))
@@ -454,7 +626,21 @@ func convertIndirection(e *pg.A_Indirection) (sql.Expression, error) {
 		}
 		indices = append(indices, idx)
 	}
-	return sql.SubscriptExpression{Operand: operand, Indices: indices}, nil
+	x := sql.SubscriptExpression{Operand: operand, Indices: indices}
+	x.NodePos = childPos(operand)
+	return x, nil
+}
+
+// childPos returns the stored NodePos value (offset+1) of e when it is a
+// positioned node — how a node pg_query does not locate (an array subscript or
+// field access) inherits its start from its operand, which the parser has already
+// positioned. It re-encodes the operand's reported offset, mapping NoPos back to
+// the zero stored value.
+func childPos(e sql.Expression) int {
+	if n, ok := e.(sql.Node); ok {
+		return n.Pos() + 1
+	}
+	return 0
 }
 
 // convertCollate converts an operand COLLATE "name" expression.
@@ -467,7 +653,7 @@ func convertCollate(e *pg.CollateClause) (sql.Expression, error) {
 	if err != nil {
 		return nil, err
 	}
-	return sql.Collate(operand, name), nil
+	return positioned(sql.Collate(operand, name), e.GetLocation()), nil
 }
 
 // convertSQLValueFunction maps the niladic SQL value functions (CURRENT_DATE,
@@ -529,7 +715,9 @@ func convertBooleanTest(e *pg.BooleanTest) (sql.Expression, error) {
 	default:
 		return nil, sqlparse.Unsupportedf("boolean test %s", e.GetBooltesttype())
 	}
-	return sql.BinaryExpression{Left: arg, Operator: op, Right: sql.Raw(value)}, nil
+	x := sql.BinaryExpression{Left: arg, Operator: op, Right: sql.Raw(value)}
+	x.NodePos = offsetOf(e.GetLocation())
+	return x, nil
 }
 
 func convertCaseExpr(e *pg.CaseExpr) (sql.Expression, error) {
@@ -563,7 +751,7 @@ func convertCaseExpr(e *pg.CaseExpr) (sql.Expression, error) {
 		}
 		c = c.Else(def)
 	}
-	return c, nil
+	return positioned(c, e.GetLocation()), nil
 }
 
 // convertExprArgs converts a list of expression nodes into Func arguments.
@@ -584,7 +772,7 @@ func convertArray(e *pg.A_ArrayExpr) (sql.Expression, error) {
 	if err != nil {
 		return nil, err
 	}
-	return sql.Array(elements...), nil
+	return positioned(sql.Array(elements...), e.GetLocation()), nil
 }
 
 // convertArrayQuantified handles "left op ANY/ALL (array)" where the right side
@@ -599,9 +787,9 @@ func convertArrayQuantified(e *pg.A_Expr, op string) (sql.Expression, error) {
 		return nil, err
 	}
 	if e.GetKind() == pg.A_Expr_Kind_AEXPR_OP_ALL {
-		return sql.AllArray(left, op, array), nil
+		return positioned(sql.AllArray(left, op, array), e.GetLocation()), nil
 	}
-	return sql.AnyArray(left, op, array), nil
+	return positioned(sql.AnyArray(left, op, array), e.GetLocation()), nil
 }
 
 // convertSimilar handles "left SIMILAR TO pattern". PostgreSQL rewrites the
@@ -617,9 +805,9 @@ func convertSimilar(e *pg.A_Expr, op string) (sql.Expression, error) {
 		return nil, err
 	}
 	if op == "!~" {
-		return sql.NotSimilarTo(left, pattern), nil
+		return positioned(sql.NotSimilarTo(left, pattern), e.GetLocation()), nil
 	}
-	return sql.SimilarTo(left, pattern), nil
+	return positioned(sql.SimilarTo(left, pattern), e.GetLocation()), nil
 }
 
 func similarPattern(node *pg.Node) (sql.Expression, error) {
@@ -644,7 +832,7 @@ func convertMinMax(e *pg.MinMaxExpr) (sql.Expression, error) {
 	if e.GetOp() == pg.MinMaxOp_IS_LEAST {
 		name = "least"
 	}
-	return sql.Func(name, args...), nil
+	return positioned(sql.Func(name, args...), e.GetLocation()), nil
 }
 
 func convertTypeCast(e *pg.TypeCast) (sql.Expression, error) {
@@ -660,9 +848,9 @@ func convertTypeCast(e *pg.TypeCast) (sql.Expression, error) {
 	if typeName == "boolean" {
 		if v, ok := operand.(sql.ValueExpression); ok {
 			if s, ok := v.Value.(string); ok && (s == "t" || s == "f") {
-				return sql.Val(s == "t"), nil
+				return positioned(sql.Val(s == "t"), e.GetLocation()), nil
 			}
 		}
 	}
-	return sql.Cast(operand, typeName), nil
+	return positioned(sql.Cast(operand, typeName), e.GetLocation()), nil
 }

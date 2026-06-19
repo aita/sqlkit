@@ -53,7 +53,7 @@ func (Parser) Parse(text string) ([]sql.Query, error) {
 			}
 			return nil, err
 		}
-		queries = append(queries, query)
+		queries = append(queries, sql.SetPos(query, offsetOf(raw.GetStmtLocation())))
 	}
 	return queries, nil
 }

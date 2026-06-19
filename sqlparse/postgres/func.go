@@ -40,6 +40,7 @@ func convertFuncCall(fc *pg.FuncCall) (sql.Expression, error) {
 	if err != nil {
 		return nil, err
 	}
+	base = positioned(base, fc.GetLocation())
 
 	if fc.GetOver() != nil {
 		return convertWindow(base, fc.GetOver())

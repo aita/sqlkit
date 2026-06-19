@@ -98,6 +98,7 @@ func (w MergeWhen) ThenInsert(columns []string, values ...any) MergeWhen {
 // condition and applies a list of WHEN clauses. Build it with MergeInto; read
 // its exported fields directly to introspect.
 type MergeStmt struct {
+	posField
 	With        []CTE
 	Target      Table
 	TargetAlias string
