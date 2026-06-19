@@ -173,6 +173,8 @@ func (b MergeBuilder) ToSQL(dialect Dialect) (string, []any, error) { return b.s
 
 func (b MergeBuilder) compile(c *Compiler) (string, []any, error) { return b.s.compile(c) }
 
+func (b MergeBuilder) buildStmt() Query { return b.s }
+
 // CompileMerge compiles a MERGE statement. The dialect must implement
 // MergeDialect (PostgreSQL and the standard target do); others error.
 func (c *Compiler) CompileMerge(q MergeStmt) (string, []any, error) {

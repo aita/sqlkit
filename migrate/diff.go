@@ -262,7 +262,7 @@ func diffTable(oldT, newT meta.Table, d sql.Dialect) (tableChanges, error) {
 // ALTER COLUMN actions (TYPE / SET|DROP NOT NULL / SET|DROP DEFAULT); MySQL,
 // which has no per-property ALTER COLUMN, restates the whole column with a
 // single MODIFY COLUMN.
-func columnAlterations(alter *sql.AlterTableStmt, oc, nc meta.Column, d sql.Dialect) (bool, error) {
+func columnAlterations(alter *sql.AlterTableBuilder, oc, nc meta.Column, d sql.Dialect) (bool, error) {
 	typeChanged, err := engineEqual(oc, nc, d)
 	if err != nil {
 		return false, err

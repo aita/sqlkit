@@ -41,7 +41,7 @@ func TestTruncateRejections(t *testing.T) {
 
 	cases := []struct {
 		name    string
-		stmt    sql.TruncateStmt
+		stmt    sql.Statement
 		dialect string
 		want    string
 	}{

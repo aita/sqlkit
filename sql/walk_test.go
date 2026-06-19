@@ -121,11 +121,11 @@ func TestCTEAccessors(t *testing.T) {
 	}
 }
 
-func TestDDLParts(t *testing.T) {
+func TestDDLStmt(t *testing.T) {
 	users := sql.Table{Name: "users"}
 	orders := sql.Table{Name: "orders"}
 
-	alter := sql.AlterTable(users).DropColumn("x").RenameColumn("a", "b").Parts()
+	alter := sql.AlterTable(users).DropColumn("x").RenameColumn("a", "b").Stmt()
 	if alter.Table.Name != "users" {
 		t.Errorf("AlterTable Table = %q, want users", alter.Table.Name)
 	}
@@ -139,14 +139,14 @@ func TestDDLParts(t *testing.T) {
 		t.Errorf("second alteration = %+v, want RENAME COLUMN a -> b", a)
 	}
 
-	dropped := sql.DropTable(users, orders).Parts().Tables
+	dropped := sql.DropTable(users, orders).Stmt().Tables
 	if len(dropped) != 2 || dropped[0].Name != "users" || dropped[1].Name != "orders" {
 		t.Errorf("DropTable Tables = %v, want [users orders]", dropped)
 	}
 
 	created := sql.CreateTable(users).
 		Column(sql.ColumnDef{Name: "id", Type: sql.RawType("int")}).
-		PrimaryKey("id").Parts()
+		PrimaryKey("id").Stmt()
 	if created.Table.Name != "users" || len(created.Columns) != 1 || len(created.PrimaryKey) != 1 {
 		t.Errorf("CreateTable parts = %+v, want one column and a primary key", created)
 	}

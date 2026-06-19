@@ -85,9 +85,7 @@ func (o *Operator) createTable(name string, temporary bool, elements ...decl.Tab
 		return
 	}
 	create := tbl.CreateStatement()
-	if temporary {
-		create = create.Temporary()
-	}
+	create.Temporary = temporary
 	o.emit(create)
 	for _, ix := range tbl.Indexes {
 		o.emit(ix.CreateStatement(tbl))
@@ -123,16 +121,16 @@ func (o *Operator) DropView(name string) {
 }
 
 // ViewOption configures a view created with CreateView.
-type ViewOption func(sql.CreateViewStmt) sql.CreateViewStmt
+type ViewOption func(sql.CreateViewBuilder) sql.CreateViewBuilder
 
 // OrReplace makes CreateView emit CREATE OR REPLACE VIEW (PostgreSQL/MySQL).
 func OrReplace() ViewOption {
-	return func(s sql.CreateViewStmt) sql.CreateViewStmt { return s.OrReplace() }
+	return func(s sql.CreateViewBuilder) sql.CreateViewBuilder { return s.OrReplace() }
 }
 
 // ViewColumns sets explicit view column names.
 func ViewColumns(columns ...string) ViewOption {
-	return func(s sql.CreateViewStmt) sql.CreateViewStmt { return s.Columns(columns...) }
+	return func(s sql.CreateViewBuilder) sql.CreateViewBuilder { return s.Columns(columns...) }
 }
 
 // AddColumn adds a column, declared with a single decl.Column element.
@@ -283,18 +281,18 @@ func (o *Operator) Exec(query sql.Query) {
 
 // AlterColumnChange is one change applied by AlterColumn (TypeTo, SetNullable,
 // SetDefault, DropDefault).
-type AlterColumnChange func(stmt sql.AlterTableStmt, column string) sql.AlterTableStmt
+type AlterColumnChange func(stmt sql.AlterTableBuilder, column string) sql.AlterTableBuilder
 
 // TypeTo changes a column's type to the given portable type.
 func TypeTo(typ decl.DataType) AlterColumnChange {
-	return func(stmt sql.AlterTableStmt, column string) sql.AlterTableStmt {
+	return func(stmt sql.AlterTableBuilder, column string) sql.AlterTableBuilder {
 		return stmt.AlterColumnType(column, meta.Column{Name: column, Type: typ}.ColumnDef().Type)
 	}
 }
 
 // SetNullable makes a column nullable (true) or NOT NULL (false).
 func SetNullable(nullable bool) AlterColumnChange {
-	return func(stmt sql.AlterTableStmt, column string) sql.AlterTableStmt {
+	return func(stmt sql.AlterTableBuilder, column string) sql.AlterTableBuilder {
 		if nullable {
 			return stmt.DropNotNull(column)
 		}
@@ -304,14 +302,14 @@ func SetNullable(nullable bool) AlterColumnChange {
 
 // SetDefault sets a column's default to the given boolean/expression text.
 func SetDefault(expr string) AlterColumnChange {
-	return func(stmt sql.AlterTableStmt, column string) sql.AlterTableStmt {
+	return func(stmt sql.AlterTableBuilder, column string) sql.AlterTableBuilder {
 		return stmt.SetDefault(column, sql.Raw(expr))
 	}
 }
 
 // DropDefault drops a column's default.
 func DropDefault() AlterColumnChange {
-	return func(stmt sql.AlterTableStmt, column string) sql.AlterTableStmt {
+	return func(stmt sql.AlterTableBuilder, column string) sql.AlterTableBuilder {
 		return stmt.DropDefault(column)
 	}
 }

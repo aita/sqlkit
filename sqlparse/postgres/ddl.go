@@ -328,7 +328,7 @@ func convertTruncate(s *pg.TruncateStmt) (sql.Query, error) {
 
 // applyAddConstraint maps an ALTER TABLE ADD CONSTRAINT for UNIQUE and FOREIGN
 // KEY constraints.
-func applyAddConstraint(at sql.AlterTableStmt, con *pg.Constraint) (sql.AlterTableStmt, error) {
+func applyAddConstraint(at sql.AlterTableBuilder, con *pg.Constraint) (sql.AlterTableBuilder, error) {
 	if con == nil {
 		return at, sqlparse.Unsupported("empty ADD CONSTRAINT")
 	}

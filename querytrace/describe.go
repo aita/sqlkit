@@ -323,29 +323,29 @@ func (t *tableCollector) tables() []string { return dedupe(t.names) }
 // ddlTables reports whether q is a DDL statement and, if so, the tables it
 // names, read through the sql DDL introspection seam (Parts).
 func ddlTables(q sql.Query) (tables []string, ok bool) {
-	switch v := q.(type) {
+	switch v := sql.Unwrap(q).(type) {
 	case sql.CreateTableStmt:
-		return []string{v.Parts().Table.QualifiedName()}, true
+		return []string{v.Table.QualifiedName()}, true
 	case sql.CreateViewStmt:
-		return []string{v.Parts().Table.QualifiedName()}, true
+		return []string{v.Table.QualifiedName()}, true
 	case sql.CreateIndexStmt:
-		return []string{v.Parts().Table.QualifiedName()}, true
+		return []string{v.Table.QualifiedName()}, true
 	case sql.DropIndexStmt:
-		return []string{v.Parts().Table.QualifiedName()}, true
+		return []string{v.Table.QualifiedName()}, true
 	case sql.DropForeignKeyStmt:
-		return []string{v.Parts().Table.QualifiedName()}, true
+		return []string{v.Table.QualifiedName()}, true
 	case sql.CommentOnTableStmt:
-		return []string{v.Parts().Table.QualifiedName()}, true
+		return []string{v.Table.QualifiedName()}, true
 	case sql.CommentOnColumnStmt:
-		return []string{v.Parts().Table.QualifiedName()}, true
+		return []string{v.Table.QualifiedName()}, true
 	case sql.AlterTableStmt:
-		return []string{v.Parts().Table.QualifiedName()}, true
+		return []string{v.Table.QualifiedName()}, true
 	case sql.DropTableStmt:
-		return qualifiedNames(v.Parts().Tables), true
+		return qualifiedNames(v.Tables), true
 	case sql.DropViewStmt:
-		return []string{v.Parts().Table.QualifiedName()}, true
+		return []string{v.Table.QualifiedName()}, true
 	case sql.TruncateStmt:
-		return qualifiedNames(v.Parts().Tables), true
+		return qualifiedNames(v.Tables), true
 	case sql.CreateSchemaStmt, sql.DropSchemaStmt:
 		return nil, true
 	default:

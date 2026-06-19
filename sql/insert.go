@@ -176,6 +176,8 @@ func (b InsertBuilder) ToSQL(dialect Dialect) (string, []any, error) { return b.
 
 func (b InsertBuilder) compile(c *Compiler) (string, []any, error) { return b.s.compile(c) }
 
+func (b InsertBuilder) buildStmt() Query { return b.s }
+
 // UpdateStmt is the immutable AST for an UPDATE statement.
 type UpdateStmt struct {
 	With      []CTE
@@ -259,6 +261,8 @@ func (b UpdateBuilder) ToSQL(dialect Dialect) (string, []any, error) { return b.
 
 func (b UpdateBuilder) compile(c *Compiler) (string, []any, error) { return b.s.compile(c) }
 
+func (b UpdateBuilder) buildStmt() Query { return b.s }
+
 // DeleteStmt is the immutable AST for a DELETE statement.
 type DeleteStmt struct {
 	With      []CTE
@@ -334,3 +338,5 @@ func (b DeleteBuilder) Returning(selections ...Selection) DeleteBuilder {
 func (b DeleteBuilder) ToSQL(dialect Dialect) (string, []any, error) { return b.s.ToSQL(dialect) }
 
 func (b DeleteBuilder) compile(c *Compiler) (string, []any, error) { return b.s.compile(c) }
+
+func (b DeleteBuilder) buildStmt() Query { return b.s }

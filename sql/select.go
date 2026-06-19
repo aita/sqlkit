@@ -273,6 +273,8 @@ func (b SelectBuilder) ToSQL(dialect Dialect) (string, []any, error) { return b.
 
 func (b SelectBuilder) compile(c *Compiler) (string, []any, error) { return b.s.compile(c) }
 
+func (b SelectBuilder) buildStmt() Query { return b.s }
+
 // appendJoin returns joins with j appended to a fresh backing array, so chaining
 // from a shared builder value never disturbs a sibling chain.
 func appendJoin(joins []JoinClause, j JoinClause) []JoinClause {

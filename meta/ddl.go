@@ -163,12 +163,12 @@ func (md Metadata) DropSQL(d sql.Dialect) string {
 // schema. The unnamed default schema (empty Name) has no statement to build —
 // CreateSQL skips it, leaving its tables unqualified.
 func (s Schema) CreateStatement() sql.CreateSchemaStmt {
-	return sql.CreateSchema(s.Name).IfNotExists()
+	return sql.CreateSchema(s.Name).IfNotExists().Stmt()
 }
 
 // DropStatement builds the DROP SCHEMA IF EXISTS DDL node for the schema.
 func (s Schema) DropStatement() sql.DropSchemaStmt {
-	return sql.DropSchema(s.Name).IfExists()
+	return sql.DropSchema(s.Name).IfExists().Stmt()
 }
 
 // SQLTable returns the sql-package table reference for the table.
@@ -257,7 +257,7 @@ func (t Table) CreateStatement() sql.CreateTableStmt {
 	for _, check := range t.Checks {
 		stmt = stmt.Check(check.Name, check.Expression)
 	}
-	return stmt.Comment(t.Comment)
+	return stmt.Comment(t.Comment).Stmt()
 }
 
 // CreateSQL returns the CREATE TABLE statement for the table on dialect d. It
@@ -272,7 +272,7 @@ func (t Table) CreateSQL(d sql.Dialect) (string, error) {
 
 // DropStatement builds the DROP TABLE DDL node for the table.
 func (t Table) DropStatement() sql.DropTableStmt {
-	return sql.DropTable(t.SQLTable()).IfExists()
+	return sql.DropTable(t.SQLTable()).IfExists().Stmt()
 }
 
 // DropSQL returns the DROP TABLE statement for the table on dialect d.
@@ -287,7 +287,7 @@ func (ix Index) CreateStatement(table Table) sql.CreateIndexStmt {
 	if ix.Unique {
 		stmt = stmt.Unique()
 	}
-	return stmt
+	return stmt.Stmt()
 }
 
 // CreateSQL returns the CREATE INDEX statement for the index on its table.
@@ -318,7 +318,7 @@ func (fk ForeignKey) AddStatement(table Table) sql.AlterTableStmt {
 		RefColumns: fk.RefColumns,
 		OnDelete:   string(fk.OnDelete),
 		OnUpdate:   string(fk.OnUpdate),
-	})
+	}).Stmt()
 }
 
 // DropStatement builds the DDL node that drops the foreign key from its table.

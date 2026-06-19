@@ -126,6 +126,8 @@ func (b CompoundBuilder) ToSQL(dialect Dialect) (string, []any, error) { return 
 
 func (b CompoundBuilder) compile(c *Compiler) (string, []any, error) { return b.s.compile(c) }
 
+func (b CompoundBuilder) buildStmt() Query { return b.s }
+
 // CompileCompound compiles a set-operation query.
 func (c *Compiler) CompileCompound(q CompoundStmt) (string, []any, error) {
 	leftSQL, args, err := c.compileOperand(q.Left, q.Operator)
@@ -191,25 +193,23 @@ func (c *Compiler) compileOperand(query Query, parentOperator string) (string, [
 	return "(" + sql + ")", args, nil
 }
 
+// builder is implemented by the fluent builders, each returning the immutable
+// statement AST it has assembled.
+type builder interface{ buildStmt() Query }
+
 // astOf normalizes a query to its pure AST value: a builder yields the statement
 // it has assembled, any other query passes through. It lets a builder be used in
-// a subquery position while the structural switches (Walk, compileOperand) need
-// only handle the statement types.
+// a subquery (or executed) position while the structural switches (Walk,
+// compileOperand) and introspection need only handle the statement types.
 func astOf(q Query) Query {
-	switch b := q.(type) {
-	case SelectBuilder:
-		return b.s
-	case CompoundBuilder:
-		return b.s
-	case InsertBuilder:
-		return b.s
-	case UpdateBuilder:
-		return b.s
-	case DeleteBuilder:
-		return b.s
-	case MergeBuilder:
-		return b.s
-	default:
-		return q
+	if b, ok := q.(builder); ok {
+		return b.buildStmt()
 	}
+	return q
 }
+
+// Unwrap returns the underlying statement AST of a builder, or q unchanged when
+// it is already a statement. Introspection that type-switches on the concrete
+// statement types (querytrace) calls it so a builder and its built statement are
+// treated alike.
+func Unwrap(q Query) Query { return astOf(q) }
