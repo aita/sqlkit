@@ -42,20 +42,20 @@ func (s cteNameSet) has(name string) bool {
 }
 
 func describe(q sql.Query, scope cteNameSet) (Shape, bool) {
-	switch v := derefQuery(q).(type) {
+	switch v := sql.Unwrap(q).(type) {
 	case nil:
 		return Shape{}, false
-	case sql.SelectQuery:
+	case sql.SelectStmt:
 		return describeSelect(v, scope), true
-	case sql.CompoundQuery:
+	case sql.CompoundStmt:
 		return describeCompound(v, scope), true
 	case sql.ValuesQuery:
 		return Shape{Kind: StmtSelect}, true
-	case sql.InsertQuery:
+	case sql.InsertStmt:
 		return describeInsert(v, scope), true
-	case sql.UpdateQuery:
+	case sql.UpdateStmt:
 		return describeUpdate(v, scope), true
-	case sql.DeleteQuery:
+	case sql.DeleteStmt:
 		return describeDelete(v, scope), true
 	default:
 		if tables, isDDL := ddlTables(v); isDDL {
@@ -65,29 +65,8 @@ func describe(q sql.Query, scope cteNameSet) (Shape, bool) {
 	}
 }
 
-// derefQuery converts a pointer to a query node into its value form so the type
-// switch need only handle value types.
-func derefQuery(q sql.Query) sql.Query {
-	switch p := q.(type) {
-	case *sql.SelectQuery:
-		return *p
-	case *sql.CompoundQuery:
-		return *p
-	case *sql.InsertQuery:
-		return *p
-	case *sql.UpdateQuery:
-		return *p
-	case *sql.DeleteQuery:
-		return *p
-	case *sql.ValuesQuery:
-		return *p
-	default:
-		return q
-	}
-}
-
-func describeSelect(q sql.SelectQuery, scope cteNameSet) Shape {
-	parts := q.Parts()
+func describeSelect(q sql.SelectStmt, scope cteNameSet) Shape {
+	parts := q
 	scope = scope.with(cteNames(parts.With))
 	t := tableCollector{scope: scope}
 	t.cteBodies(parts.With)
@@ -113,13 +92,13 @@ func describeSelect(q sql.SelectQuery, scope cteNameSet) Shape {
 		Tables:     t.tables(),
 		HasWhere:   parts.Where != nil,
 		HasJoin:    len(parts.Joins) > 0,
-		HasLimit:   parts.Limit != nil,
+		HasLimit:   parts.HasLimit,
 		SelectStar: hasStar(parts.Columns),
 	}
 }
 
-func describeCompound(q sql.CompoundQuery, scope cteNameSet) Shape {
-	parts := q.Parts()
+func describeCompound(q sql.CompoundStmt, scope cteNameSet) Shape {
+	parts := q
 	t := tableCollector{scope: scope}
 	t.query(parts.Left)
 	t.query(parts.Right)
@@ -127,12 +106,12 @@ func describeCompound(q sql.CompoundQuery, scope cteNameSet) Shape {
 	return Shape{
 		Kind:     StmtSelect,
 		Tables:   t.tables(),
-		HasLimit: parts.Limit != nil,
+		HasLimit: parts.HasLimit,
 	}
 }
 
-func describeInsert(q sql.InsertQuery, scope cteNameSet) Shape {
-	parts := q.Parts()
+func describeInsert(q sql.InsertStmt, scope cteNameSet) Shape {
+	parts := q
 	t := tableCollector{scope: scope}
 	t.add(parts.Table.QualifiedName())
 	t.query(parts.Select)
@@ -155,8 +134,8 @@ func describeInsert(q sql.InsertQuery, scope cteNameSet) Shape {
 	}
 }
 
-func describeUpdate(q sql.UpdateQuery, scope cteNameSet) Shape {
-	parts := q.Parts()
+func describeUpdate(q sql.UpdateStmt, scope cteNameSet) Shape {
+	parts := q
 	scope = scope.with(cteNames(parts.With))
 	t := tableCollector{scope: scope}
 	t.cteBodies(parts.With)
@@ -184,8 +163,8 @@ func describeUpdate(q sql.UpdateQuery, scope cteNameSet) Shape {
 	}
 }
 
-func describeDelete(q sql.DeleteQuery, scope cteNameSet) Shape {
-	parts := q.Parts()
+func describeDelete(q sql.DeleteStmt, scope cteNameSet) Shape {
+	parts := q
 	scope = scope.with(cteNames(parts.With))
 	t := tableCollector{scope: scope}
 	t.cteBodies(parts.With)

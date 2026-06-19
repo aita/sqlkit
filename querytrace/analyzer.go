@@ -12,13 +12,13 @@ import (
 // descends into subqueries, because a predicate that scopes the outer statement
 // lives in that statement's own WHERE.
 func topLevelWhere(q sql.Query) sql.Expression {
-	switch v := derefQuery(q).(type) {
-	case sql.SelectQuery:
-		return v.Parts().Where
-	case sql.UpdateQuery:
-		return v.Parts().Where
-	case sql.DeleteQuery:
-		return v.Parts().Where
+	switch v := sql.Unwrap(q).(type) {
+	case sql.SelectStmt:
+		return v.Where
+	case sql.UpdateStmt:
+		return v.Where
+	case sql.DeleteStmt:
+		return v.Where
 	default:
 		return nil
 	}
