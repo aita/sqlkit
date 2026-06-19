@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/aita/sqlkit/internal/names"
+	"github.com/aita/sqlkit/internal/reflectmap"
 	"github.com/aita/sqlkit/sql"
 )
 
@@ -214,5 +214,5 @@ func columnKey(field reflect.StructField) string {
 			return name
 		}
 	}
-	return names.SnakeCase(field.Name)
+	return reflectmap.SnakeCase(field.Name)
 }

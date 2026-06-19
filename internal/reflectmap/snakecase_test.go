@@ -1,4 +1,4 @@
-package names
+package reflectmap
 
 import "testing"
 
