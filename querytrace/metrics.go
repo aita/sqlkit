@@ -92,7 +92,7 @@ func MetricsFromReport(r Report) Metrics {
 		switch ev.Kind {
 		case EventQuery, EventExec:
 			if ev.Query != nil {
-				m.ByStatement[ev.Query.Operation]++
+				m.ByStatement[ev.Query.Kind]++
 			}
 		case EventTx:
 			if ev.Tx != nil && ev.Tx.Action == TxBegin {

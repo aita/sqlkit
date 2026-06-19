@@ -37,7 +37,7 @@ func query(desc string, pred func(*querytrace.QueryInfo) bool) Match {
 
 // Op matches a statement of the given kind.
 func Op(k querytrace.StmtKind) Match {
-	return query("op="+k.String(), func(qi *querytrace.QueryInfo) bool { return qi.Operation == k })
+	return query("op="+k.String(), func(qi *querytrace.QueryInfo) bool { return qi.Kind == k })
 }
 
 // Select matches a SELECT (or other read).
@@ -57,12 +57,12 @@ func Ddl() Match { return Op(querytrace.StmtDDL) }
 
 // Read matches any read statement.
 func Read() Match {
-	return query("read", func(qi *querytrace.QueryInfo) bool { return qi.Operation.IsRead() })
+	return query("read", func(qi *querytrace.QueryInfo) bool { return qi.Kind.IsRead() })
 }
 
 // Write matches any write statement (INSERT/UPDATE/DELETE).
 func Write() Match {
-	return query("write", func(qi *querytrace.QueryInfo) bool { return qi.Operation.IsWrite() })
+	return query("write", func(qi *querytrace.QueryInfo) bool { return qi.Kind.IsWrite() })
 }
 
 // Table matches a statement that references table, by name and case-insensitively.

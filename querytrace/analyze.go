@@ -2,8 +2,8 @@ package querytrace
 
 import (
 	"reflect"
-	"strings"
 
+	"github.com/aita/sqlkit/analyze"
 	"github.com/aita/sqlkit/sql"
 	"github.com/aita/sqlkit/sqlparse"
 )
@@ -22,91 +22,41 @@ func (c Config) Analyze(sqlText string, args []any) *QueryInfo {
 		qi.ParamTypes = argTypeNames(args)
 	}
 
+	a := analyze.New(analyze.WithDialect(c.dialect()))
+
 	var parsed sql.Query
+	var parseErr error
 	if (c.AnalyzeSQL || c.Fingerprint) && c.Parser != nil {
 		if q, err := sqlparse.ParseOne(c.Parser, sqlText); err != nil {
-			qi.AnalyzeErr = err
+			parseErr = err
 		} else {
 			parsed = q
 		}
 	}
 
 	if c.AnalyzeSQL {
-		if shape, ok := Describe(parsed); ok {
-			qi.Operation = shape.Kind
-			qi.Tables = shape.Tables
-			qi.HasWhere = shape.HasWhere
-			qi.HasJoin = shape.HasJoin
-			qi.HasLimit = shape.HasLimit
-			qi.HasReturning = shape.HasReturning
-			qi.SelectStar = shape.SelectStar
-			qi.analyzed = true
-		} else {
-			qi.Operation = detectOperation(sqlText)
-		}
-		// The advanced analyzer checks (large IN, tenant/soft-delete predicates)
-		// read predicate structure that only the parsed AST carries; on the
-		// keyword-fallback path they simply stay empty.
-		if parsed != nil {
-			qi.MaxInList = maxInListLen(parsed)
-			qi.filterColumns = topLevelFilterColumns(parsed)
-		}
+		// The static analysis is produced and owned by the analyze framework; the
+		// advanced facts stay empty on the keyword-fallback path, so the warnings
+		// that read them do not fire there.
+		qi.Analysis = a.Analyze(sqlText, parsed)
+		qi.Err = parseErr
 	}
 
 	if c.Fingerprint {
-		qi.Fingerprint = c.fingerprint(sqlText, parsed)
+		qi.Fingerprint = fingerprint(a, sqlText, parsed)
 	}
 	return qi
 }
 
-// detectOperation guesses a statement's kind from its leading keyword, the
-// fallback when no AST is available. It returns StmtUnknown when the leading
-// token is unrecognized.
-func detectOperation(sqlText string) StmtKind {
-	switch leadingKeyword(sqlText) {
-	case "SELECT", "WITH", "VALUES", "TABLE":
-		return StmtSelect
-	case "INSERT":
-		return StmtInsert
-	case "UPDATE":
-		return StmtUpdate
-	case "DELETE":
-		return StmtDelete
-	case "CREATE", "ALTER", "DROP", "TRUNCATE", "COMMENT":
-		return StmtDDL
-	default:
-		return StmtUnknown
+// fingerprint returns the normalized form of a statement used to group repeats.
+// It prefers the parsed AST (recompiled through the analyzer's dialect, with every
+// bind collapsed to "?") and falls back to normalizing the raw SQL text when no
+// AST is available or it fails to recompile.
+func fingerprint(a *analyze.Analyzer, sqlText string, parsed sql.Query) string {
+	if fp, ok := a.Fingerprint(parsed); ok {
+		return fp
 	}
-}
-
-// leadingKeyword returns the upper-cased first word of sqlText, skipping leading
-// whitespace and a single leading line/block comment.
-func leadingKeyword(sqlText string) string {
-	s := strings.TrimSpace(sqlText)
-	for {
-		switch {
-		case strings.HasPrefix(s, "--"):
-			if i := strings.IndexByte(s, '\n'); i >= 0 {
-				s = strings.TrimSpace(s[i+1:])
-				continue
-			}
-			return ""
-		case strings.HasPrefix(s, "/*"):
-			if i := strings.Index(s, "*/"); i >= 0 {
-				s = strings.TrimSpace(s[i+2:])
-				continue
-			}
-			return ""
-		}
-		break
-	}
-	i := strings.IndexFunc(s, func(r rune) bool {
-		return r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == '(' || r == ';'
-	})
-	if i < 0 {
-		i = len(s)
-	}
-	return strings.ToUpper(s[:i])
+	return analyze.FingerprintRaw(sqlText)
 }
 
 // argTypeNames returns the Go type name of each argument, or "nil" for a nil.

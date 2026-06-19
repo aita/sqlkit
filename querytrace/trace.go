@@ -224,7 +224,7 @@ func (t *Trace) checkStatement(ev Event, exp expectations) {
 	if q == nil {
 		return
 	}
-	isWrite := q.Operation.IsWrite()
+	isWrite := q.Kind.IsWrite()
 
 	if exp.forbidQueries {
 		t.addWarning(Warning{
@@ -259,8 +259,8 @@ func (t *Trace) checkStatement(ev Event, exp expectations) {
 
 	// Missing-WHERE checks are only trustworthy when the WHERE presence came
 	// from the AST, not the keyword fallback.
-	if q.analyzed && !q.HasWhere {
-		switch q.Operation {
+	if q.Parsed && !q.HasWhere {
+		switch q.Kind {
 		case StmtUpdate:
 			t.addWarning(Warning{
 				Code:     WarnUpdateWithoutWhere,

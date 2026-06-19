@@ -219,7 +219,7 @@ func (e *Exporter) statementAttrs(ev qt.Event) []attribute.KeyValue {
 	if q == nil {
 		return attrs
 	}
-	if op := operationString(q.Operation); op != "" {
+	if op := operationString(q.Kind); op != "" {
 		attrs = append(attrs, attribute.String(attrDBOperation, op))
 	}
 	if len(q.Tables) > 0 {
@@ -306,7 +306,7 @@ func statementName(ev qt.Event) string {
 	if q == nil {
 		return string(ev.Kind)
 	}
-	op := operationString(q.Operation)
+	op := operationString(q.Kind)
 	if op != "" && len(q.Tables) > 0 {
 		return op + " " + q.Tables[0]
 	}

@@ -78,8 +78,8 @@ func TestQueryRecordsEventAndRows(t *testing.T) {
 	if ev.Query == nil {
 		t.Fatal("event has no QueryInfo")
 	}
-	if ev.Query.Operation != querytrace.StmtSelect {
-		t.Errorf("operation = %v, want select", ev.Query.Operation)
+	if ev.Query.Kind != querytrace.StmtSelect {
+		t.Errorf("operation = %v, want select", ev.Query.Kind)
 	}
 	if len(ev.Query.Tables) != 1 || ev.Query.Tables[0] != "users" {
 		t.Errorf("tables = %v, want [users]", ev.Query.Tables)
@@ -330,7 +330,7 @@ func TestPreparedStatement(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("recorded %d events, want 1", len(events))
 	}
-	if ev := events[0]; ev.Query == nil || ev.Query.Operation != querytrace.StmtSelect {
+	if ev := events[0]; ev.Query == nil || ev.Query.Kind != querytrace.StmtSelect {
 		t.Errorf("prepared statement query not analyzed: %+v", ev.Query)
 	}
 }

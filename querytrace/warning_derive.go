@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
+	"github.com/aita/sqlkit/analyze"
 )
 
 // deriveWarnings computes the whole-trace warnings from the recorded events:
@@ -101,9 +103,9 @@ func deriveAnalyzerWarnings(ev Event, wc WarningConfig) []Warning {
 	// The predicate checks only make sense for an analyzed statement that filters
 	// rows of a base table. INSERT carries its tenant value in the row, not a
 	// WHERE, so it is out of scope.
-	if q.analyzed && len(q.Tables) > 0 {
-		if len(wc.RequireTenantColumns) > 0 && q.Operation.filtersRows() &&
-			!containsAny(q.filterColumns, wc.RequireTenantColumns) {
+	if q.Parsed && len(q.Tables) > 0 {
+		if len(wc.RequireTenantColumns) > 0 && q.Kind.FiltersRows() &&
+			!containsAny(q.FilterColumns, wc.RequireTenantColumns) {
 			d := fingerprintDetails(q)
 			d["required_any_of"] = wc.RequireTenantColumns
 			out = append(out, Warning{
@@ -115,8 +117,8 @@ func deriveAnalyzerWarnings(ev Event, wc WarningConfig) []Warning {
 				Details:  d,
 			})
 		}
-		if len(wc.SoftDeleteColumns) > 0 && q.Operation == StmtSelect &&
-			!containsAny(q.filterColumns, wc.SoftDeleteColumns) {
+		if len(wc.SoftDeleteColumns) > 0 && q.Kind == StmtSelect &&
+			!containsAny(q.FilterColumns, wc.SoftDeleteColumns) {
 			d := fingerprintDetails(q)
 			d["required_any_of"] = wc.SoftDeleteColumns
 			out = append(out, Warning{
@@ -177,14 +179,14 @@ func (t *Trace) deriveRepeated() []Warning {
 		if q == nil || q.Fingerprint == "" {
 			continue
 		}
-		if ignored[q.Operation] {
+		if ignored[q.Kind] {
 			continue
 		}
 		g := groups[q.Fingerprint]
 		if g == nil {
 			g = &repeatGroup{
 				fingerprint: q.Fingerprint,
-				operation:   q.Operation,
+				operation:   q.Kind,
 				name:        ev.Name,
 				callers:     make(map[string]*Caller),
 			}
@@ -298,11 +300,30 @@ func fingerprintDetails(q *QueryInfo) map[string]any {
 	if q == nil {
 		return map[string]any{}
 	}
-	d := map[string]any{"operation": q.Operation.String()}
+	d := map[string]any{"operation": q.Kind.String()}
 	if q.Fingerprint != "" {
 		d["fingerprint"] = q.Fingerprint
 	}
 	return d
+}
+
+// containsAny reports whether cols contains any of the bare column names in
+// want. Both sides are compared as bare, lower-cased names through
+// analyze.BareColumn.
+func containsAny(cols, want []string) bool {
+	if len(cols) == 0 || len(want) == 0 {
+		return false
+	}
+	set := make(map[string]struct{}, len(cols))
+	for _, c := range cols {
+		set[c] = struct{}{}
+	}
+	for _, w := range want {
+		if _, ok := set[analyze.BareColumn(w)]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // classifyCtxErr maps a context cancellation or deadline error to its warning
