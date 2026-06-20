@@ -40,7 +40,8 @@ func TestApplySchema(t *testing.T) {
 	fake := &testutil.Fake{}
 	db := wrap(fake, sqlkit.PostgreSQLDialect{})
 
-	sqltest.ApplySchema(t, db, schemaModel(t))
+	// ApplySchema drops, then creates — New itself touches nothing.
+	sqltest.New(db, schemaModel(t)).ApplySchema(t)
 
 	stmts := fake.Statements()
 	// Drops come first, children before parents (posts before users), then the
@@ -75,7 +76,7 @@ func TestSetupSchemaTearsDown(t *testing.T) {
 
 	var afterApply int
 	t.Run("inner", func(t *testing.T) {
-		sqltest.SetupSchema(t, db, md)
+		sqltest.New(db, md).SetupSchema(t)
 		// At this point only the apply (drops + creates) has run; the cleanup
 		// drop is registered but not yet executed.
 		afterApply = len(fake.Statements())

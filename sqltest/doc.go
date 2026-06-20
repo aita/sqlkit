@@ -6,30 +6,47 @@
 //
 // # Seeding a database
 //
-// The seeding helpers cut the boilerplate of inserting fixtures and managing the
-// schema, leaving the connection (and any test container) to the caller. Every
+// The seeding helpers cut the boilerplate of managing the schema and inserting
+// fixtures, leaving the connection (and any test container) to the caller. Every
 // helper takes *testing.T and fails the test with t.Fatalf on error, so callers
-// write linear setup code with no error handling. The insert helpers accept a
-// sqlkit.Querier — the interface both *sqlkit.Database (auto-commit) and
-// *sqlkit.Session (a transaction) implement — so the same helper seeds data
-// directly or inside a transaction.
+// write linear setup code with no error handling.
 //
-// They smooth over the main cross-dialect wrinkle in seeding: reading back a
-// database-generated key. InsertID uses RETURNING on PostgreSQL and
-// Result.LastInsertId on MySQL, so fixture code that wires up foreign keys works
-// on both without branching. Foreign-key ordering is the caller's
-// responsibility: insert parent rows before the children that reference them,
-// exactly as in hand-written seed code.
+// A DB is the entry point. New wraps a *sqlkit.Database the caller opened against
+// a disposable test database, returning a handle whose methods reset, isolate,
+// and seed it. New itself changes nothing; an explicit SetupSchema applies the
+// schema and drops it again on cleanup:
 //
-// Four groups of seeding helpers:
+//	tdb := sqltest.New(database, md)
+//	tdb.SetupSchema(t) // schema applied now, dropped on t.Cleanup
+//	id := tdb.InsertID(t, appdb.Users, UserDTO{Email: "a@example.com"})
+//	tdb.InsertRows(t, appdb.Posts, PostDTO{UserID: id, Title: "hello"})
 //
-//   - Data insertion: InsertRows, InsertID, and InsertReturning.
+// Constructing a DB is the safety bar: the destructive operations (applying or
+// dropping the schema, truncating tables) live only as DB methods, so a database
+// the test did not deliberately wrap as throwaway is never dropped.
+//
+//   - Schema lifecycle: DB.SetupSchema (apply now, drop on t.Cleanup), and the
+//     methods DB.ApplySchema (apply, no teardown) and DB.Truncate for resetting
+//     within a test. Their drop and truncate steps are foreign-key-safe regardless
+//     of how the tables were declared — children before or after parents,
+//     cross-schema, or in a cycle.
+//   - Isolation: DB.Tx hands each case its own transaction, rolled back on
+//     t.Cleanup, so cases that share one schema stay independent and may run in
+//     parallel. Snapshot (and Fixture.LoadSnapshot) instead capture the seeded
+//     state of a single session as a SAVEPOINT and return a restore function, so
+//     many serial cases reuse one seed by rolling back between them.
+//   - Data insertion: the DB.InsertRows / DB.InsertID / DB.Load methods seed
+//     through auto-commit; the InsertRows, InsertID, InsertReturning, and
+//     Fixture.Load functions take any sqlkit.Querier, so they seed into a Tx
+//     session (isolated, rolled back with the case) just as well.
 //   - Fixtures: Fixture, a named, ordered set of rows across tables, with Load.
-//   - Schema lifecycle: SetupSchema (apply now, drop on t.Cleanup), the lower
-//     level ApplySchema, and Truncate.
-//   - Snapshots: Snapshot (and Fixture.LoadSnapshot) capture the seeded state of
-//     a session as a SAVEPOINT and return a restore function, so many cases
-//     reuse one seed by rolling back between them instead of reloading it.
+//
+// The insert helpers smooth over the main cross-dialect wrinkle in seeding:
+// reading back a database-generated key. InsertID uses RETURNING on PostgreSQL
+// and Result.LastInsertId on MySQL, so fixture code that wires up foreign keys
+// works on both without branching. Foreign-key ordering of the rows is the
+// caller's responsibility: insert parent rows before the children that reference
+// them, exactly as in hand-written seed code.
 //
 // # Asserting on queries
 //

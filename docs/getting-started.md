@@ -134,12 +134,12 @@ on the queries your code issues — no driver or container dependency of its own
 
 ```go
 func TestService(t *testing.T) {
-    db := openTestDB(t)
     md, _ := schema.Catalog.Build()
-    sqltest.SetupSchema(t, db, md)
+    db := sqltest.New(openTestDB(t), md)
+    db.SetupSchema(t)
 
-    id := sqltest.InsertID(t, db, blogdb.Users, blogdb.User{Email: "a@example.com"})
-    sqltest.InsertRows(t, db, blogdb.Posts, blogdb.Post{UserID: id, Title: "hello"})
+    id := db.InsertID(t, blogdb.Users, blogdb.User{Email: "a@example.com"})
+    db.InsertRows(t, blogdb.Posts, blogdb.Post{UserID: id, Title: "hello"})
     // ... exercise the code under test.
 }
 ```
