@@ -12,6 +12,9 @@ import (
 type Compiler struct {
 	Dialect Dialect
 	ordinal int
+	// inlineValues renders a ValueExpression as an inline literal instead of a
+	// bind placeholder; CompileInline sets it. The result carries no args.
+	inlineValues bool
 }
 
 // NewCompiler creates a compiler for the supplied dialect.
@@ -48,6 +51,9 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 	case ColumnExpression:
 		return c.Dialect.QuoteIdent(e.Reference()), nil, nil
 	case ValueExpression:
+		if c.inlineValues {
+			return inlineLiteral(e), nil, nil
+		}
 		return c.nextPlaceholder(), []any{e.Value}, nil
 	case GroupingExpression:
 		inner, args, err := c.compileExprList(e.Elements)
