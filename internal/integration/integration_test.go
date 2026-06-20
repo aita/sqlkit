@@ -417,7 +417,7 @@ func TestTransactions(t *testing.T) {
 		aliceID, _ := seedBlog(t, db, eng)
 
 		// A committed session persists its writes.
-		if err := db.WithSession(func(session *sqlkit.Session) error {
+		if err := db.WithSession(ctx, func(session *sqlkit.Session) error {
 			_, err := session.Update(blogdb.Users).
 				Set(blogdb.Users.Name.Set(ptr("Committed"))).
 				Where(blogdb.Users.ID.Eq(aliceID)).
@@ -435,7 +435,7 @@ func TestTransactions(t *testing.T) {
 		// check never short-circuits the rollback via t.Fatal's goroutine exit.
 		rollback := errors.New("rollback")
 		var inTxName string
-		err := db.WithSession(func(session *sqlkit.Session) error {
+		err := db.WithSession(ctx, func(session *sqlkit.Session) error {
 			if _, err := session.Update(blogdb.Users).
 				Set(blogdb.Users.Name.Set(ptr("Rolled back"))).
 				Where(blogdb.Users.ID.Eq(aliceID)).

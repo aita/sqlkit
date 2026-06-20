@@ -35,7 +35,7 @@ func TestWithRetrySucceedsAfterTransientFailure(t *testing.T) {
 	db := sqlkit.WrapDB(fake.DB())
 
 	attempts := 0
-	err := db.WithSession(func(s *sqlkit.Session) error {
+	err := db.WithSession(ctx, func(s *sqlkit.Session) error {
 		attempts++
 		var users []User
 		if err := s.Select().From(Users).All(ctx).Scan(&users); err != nil {
@@ -70,7 +70,7 @@ func TestWithRetryExhaustsAttempts(t *testing.T) {
 
 	attempts := 0
 	want := serializationError{code: "40P01"} // deadlock_detected
-	err := db.WithSession(func(s *sqlkit.Session) error {
+	err := db.WithSession(ctx, func(s *sqlkit.Session) error {
 		attempts++
 		var users []User
 		_ = s.Select().From(Users).All(ctx).Scan(&users)
@@ -91,7 +91,7 @@ func TestWithRetryStopsOnNonRetryableError(t *testing.T) {
 
 	attempts := 0
 	boom := errors.New("application error")
-	err := db.WithSession(func(s *sqlkit.Session) error {
+	err := db.WithSession(ctx, func(s *sqlkit.Session) error {
 		attempts++
 		var users []User
 		_ = s.Select().From(Users).All(ctx).Scan(&users)
@@ -106,6 +106,34 @@ func TestWithRetryStopsOnNonRetryableError(t *testing.T) {
 	}
 }
 
+func TestWithRetryStopsWhenContextCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	db := sqlkit.WrapDB(retryFakeDB().DB())
+
+	// A long backoff would block the retry forever; cancelling ctx before it
+	// elapses must cut it short and return the last error after a single attempt.
+	attempts := 0
+	want := serializationError{code: "40001"}
+	err := db.WithSession(ctx, func(s *sqlkit.Session) error {
+		attempts++
+		var users []User
+		_ = s.Select().From(Users).All(ctx).Scan(&users)
+		cancel()
+		return want
+	}, sqlkit.WithRetry(
+		sqlkit.MaxAttempts(5),
+		sqlkit.RetryBackoff(func(int) time.Duration { return time.Hour }),
+	))
+
+	if !errors.Is(err, want) {
+		t.Fatalf("WithSession() error = %v, want %v", err, want)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1 (a cancelled ctx cuts the backoff short)", attempts)
+	}
+}
+
 func TestWithRetryDefaultIgnoresVersionConflict(t *testing.T) {
 	ctx := context.Background()
 	db := sqlkit.WrapDB(retryFakeDB().DB())
@@ -113,7 +141,7 @@ func TestWithRetryDefaultIgnoresVersionConflict(t *testing.T) {
 	// ErrVersionConflict is not retried by default — the callback would have to
 	// reload its inputs — so opt in explicitly with RetryIf.
 	attempts := 0
-	_ = db.WithSession(func(s *sqlkit.Session) error {
+	_ = db.WithSession(ctx, func(s *sqlkit.Session) error {
 		attempts++
 		var users []User
 		_ = s.Select().From(Users).All(ctx).Scan(&users)
@@ -124,7 +152,7 @@ func TestWithRetryDefaultIgnoresVersionConflict(t *testing.T) {
 	}
 
 	attempts = 0
-	_ = db.WithSession(func(s *sqlkit.Session) error {
+	_ = db.WithSession(ctx, func(s *sqlkit.Session) error {
 		attempts++
 		var users []User
 		_ = s.Select().From(Users).All(ctx).Scan(&users)
@@ -144,7 +172,7 @@ func TestWithSessionWithoutRetryRunsOnce(t *testing.T) {
 
 	attempts := 0
 	boom := serializationError{code: "40001"}
-	err := db.WithSession(func(s *sqlkit.Session) error {
+	err := db.WithSession(ctx, func(s *sqlkit.Session) error {
 		attempts++
 		var users []User
 		_ = s.Select().From(Users).All(ctx).Scan(&users)
@@ -183,7 +211,7 @@ func TestWithRetryReplaysRetryableWrappedError(t *testing.T) {
 	db := sqlkit.WrapDB(retryFakeDB().DB())
 
 	attempts := 0
-	err := db.WithSession(func(s *sqlkit.Session) error {
+	err := db.WithSession(ctx, func(s *sqlkit.Session) error {
 		attempts++
 		var users []User
 		_ = s.Select().From(Users).All(ctx).Scan(&users)
