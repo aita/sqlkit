@@ -75,13 +75,13 @@ func TestParseQualifiedColumnIdentPosition(t *testing.T) {
 	}
 }
 
-// TestParseTableIdentUnpositioned pins a known limitation of the TiDB frontend:
-// it records offsets on expression nodes but not on table-name nodes, so a parsed
-// relation's Ident carries NoPos. The identAt helper deliberately leaves it
-// unpositioned rather than reporting a false offset; if the upstream parser starts
-// recording table offsets, this test flips and the position flows through for free.
-func TestParseTableIdentUnpositioned(t *testing.T) {
-	q, err := mysql.ParseOne("SELECT id FROM users")
+// TestParseTableIdentPosition checks the parser recovers a relation's byte offset
+// onto the table Name identifier. The TiDB parser records no offset on table-name
+// nodes, so the position is reconstructed by scanning the statement text; this
+// pins that recovery end to end.
+func TestParseTableIdentPosition(t *testing.T) {
+	src := "SELECT id FROM users WHERE name = 'taro'"
+	q, err := mysql.ParseOne(src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,8 +89,67 @@ func TestParseTableIdentUnpositioned(t *testing.T) {
 	if !ok {
 		t.Fatalf("FROM source is not a Table: %T", sql.Unwrap(q).(sql.SelectStmt).From)
 	}
+	if got, want := tbl.Name.Pos(), strings.Index(src, "users"); got != want {
+		t.Errorf("table name Ident offset = %d, want %d", got, want)
+	} else if !strings.HasPrefix(src[got:], "users") {
+		t.Errorf("table name offset %d does not point at \"users\"", got)
+	}
+}
+
+// TestParseAliasedAndQualifiedTablePositions checks table offsets survive an alias
+// (which collapses the table into a single Name identifier) and a schema qualifier
+// (db.users records the offset of the table name itself), across a JOIN.
+func TestParseAliasedAndQualifiedTablePositions(t *testing.T) {
+	src := "SELECT u.id FROM db.users AS u JOIN orders o ON u.id = o.uid"
+	q, err := mysql.ParseOne(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := sql.Unwrap(q).(sql.SelectStmt)
+
+	base, ok := sel.From.(sql.SourceExpression)
+	if !ok {
+		t.Fatalf("FROM base is not a SourceExpression: %T", sel.From)
+	}
+	if got, want := base.Name.Pos(), strings.Index(src, "users"); got != want {
+		t.Errorf("aliased/qualified table offset = %d, want %d", got, want)
+	}
+
+	if len(sel.Joins) != 1 {
+		t.Fatalf("got %d joins, want 1", len(sel.Joins))
+	}
+	joined, ok := sel.Joins[0].Source.(sql.SourceExpression)
+	if !ok {
+		t.Fatalf("joined source is not a SourceExpression: %T", sel.Joins[0].Source)
+	}
+	if got, want := joined.Name.Pos(), strings.Index(src, "orders"); got != want {
+		t.Errorf("joined table offset = %d, want %d", got, want)
+	}
+}
+
+// TestParseSubqueryTableUnpositioned pins the documented boundary: a table inside a
+// subquery in an expression (WHERE ... IN (SELECT ...)) is reached through the
+// expression path, which scans no table offsets, so its Ident stays unpositioned
+// rather than carrying a guess.
+func TestParseSubqueryTableUnpositioned(t *testing.T) {
+	q, err := mysql.ParseOne("SELECT id FROM users WHERE id IN (SELECT uid FROM bans)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	in, ok := sql.Unwrap(q).(sql.SelectStmt).Where.(sql.InExpression)
+	if !ok {
+		t.Fatalf("WHERE is not an IN: %T", sql.Unwrap(q).(sql.SelectStmt).Where)
+	}
+	sub, ok := sql.Unwrap(in.Subquery).(sql.SelectStmt)
+	if !ok {
+		t.Fatalf("IN operand is not a subquery: %T", in.Subquery)
+	}
+	tbl, ok := sub.From.(sql.Table)
+	if !ok {
+		t.Fatalf("subquery FROM is not a Table: %T", sub.From)
+	}
 	if got := tbl.Name.Pos(); got != sql.NoPos {
-		t.Errorf("table name Ident offset = %d, want NoPos (TiDB records no table offset)", got)
+		t.Errorf("subquery table offset = %d, want NoPos", got)
 	}
 }
 

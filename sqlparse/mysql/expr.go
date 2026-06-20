@@ -314,7 +314,7 @@ func convertIn(e *ast.PatternInExpr) (sql.Expression, error) {
 		if !ok {
 			return nil, sqlparse.Unsupportedf("IN subquery %T", e.Sel)
 		}
-		query, err := convertSubquery(sub)
+		query, err := convertSubquery(sub, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -383,7 +383,7 @@ func convertCase(e *ast.CaseExpr) (sql.Expression, error) {
 }
 
 func convertScalarSubquery(e *ast.SubqueryExpr) (sql.Expression, error) {
-	query, err := convertSubquery(e)
+	query, err := convertSubquery(e, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -395,7 +395,7 @@ func convertExists(e *ast.ExistsSubqueryExpr) (sql.Expression, error) {
 	if !ok {
 		return nil, sqlparse.Unsupportedf("EXISTS operand %T", e.Sel)
 	}
-	query, err := convertSubquery(sub)
+	query, err := convertSubquery(sub, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -414,7 +414,7 @@ func convertCompareSubquery(e *ast.CompareSubqueryExpr) (sql.Expression, error) 
 	if !ok {
 		return nil, sqlparse.Unsupportedf("quantified comparison operand %T", e.R)
 	}
-	query, err := convertSubquery(sub)
+	query, err := convertSubquery(sub, nil)
 	if err != nil {
 		return nil, err
 	}

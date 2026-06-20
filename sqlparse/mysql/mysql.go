@@ -52,7 +52,7 @@ func (Parser) Parse(text string) ([]sql.Query, error) {
 	for _, stmt := range stmts {
 		stmtOffset := offset
 		offset += len(stmt.Text())
-		query, err := convertStmt(stmt)
+		query, err := convertStmt(stmt, buildTablePos(stmt, stmtOffset))
 		if err != nil {
 			// A construct the converters recognize but cannot model as typed nodes
 			// still round-trips: deparse just this statement back to SQL and keep it
@@ -92,19 +92,21 @@ func Parse(text string) ([]sql.Query, error) { return New().Parse(text) }
 // ParseOne parses exactly one MySQL statement.
 func ParseOne(text string) (sql.Query, error) { return sqlparse.ParseOne(New(), text) }
 
-// convertStmt dispatches a top-level statement node to its converter.
-func convertStmt(node ast.StmtNode) (sql.Query, error) {
+// convertStmt dispatches a top-level statement node to its converter. tp carries
+// the statement's recovered table offsets to the DML converters; DDL converters
+// take none.
+func convertStmt(node ast.StmtNode, tp tablePos) (sql.Query, error) {
 	switch s := node.(type) {
 	case *ast.SelectStmt:
-		return convertSelect(s)
+		return convertSelect(s, tp)
 	case *ast.SetOprStmt:
-		return convertSetOpr(s)
+		return convertSetOpr(s, tp)
 	case *ast.InsertStmt:
-		return convertInsert(s)
+		return convertInsert(s, tp)
 	case *ast.UpdateStmt:
-		return convertUpdate(s)
+		return convertUpdate(s, tp)
 	case *ast.DeleteStmt:
-		return convertDelete(s)
+		return convertDelete(s, tp)
 	case *ast.CreateTableStmt:
 		return convertCreateTable(s)
 	case *ast.AlterTableStmt:

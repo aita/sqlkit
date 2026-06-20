@@ -25,7 +25,7 @@ type cteMaker interface {
 	CTE(string, ...sql.CTEOption) sql.CTE
 }
 
-func convertSelect(s *ast.SelectStmt) (sql.Query, error) {
+func convertSelect(s *ast.SelectStmt, tp tablePos) (sql.Query, error) {
 	if s.Kind != ast.SelectStmtKindSelect {
 		return nil, sqlparse.Unsupportedf("%s statement", s.Kind.String())
 	}
@@ -44,7 +44,7 @@ func convertSelect(s *ast.SelectStmt) (sql.Query, error) {
 	}
 
 	if s.From != nil && s.From.TableRefs != nil {
-		base, joins, err := convertFrom(s.From.TableRefs)
+		base, joins, err := convertFrom(s.From.TableRefs, tp)
 		if err != nil {
 			return nil, err
 		}
@@ -115,7 +115,7 @@ func convertSelect(s *ast.SelectStmt) (sql.Query, error) {
 	}
 
 	if s.With != nil {
-		ctes, err := convertWith(s.With)
+		ctes, err := convertWith(s.With, tp)
 		if err != nil {
 			return nil, err
 		}
@@ -179,11 +179,11 @@ func applyLocking(q sql.SelectBuilder, info *ast.SelectLockInfo) (sql.SelectBuil
 
 // convertSetOpr converts a UNION/INTERSECT/EXCEPT statement, folding its operand
 // list left-to-right and applying the statement-level ORDER BY / LIMIT.
-func convertSetOpr(s *ast.SetOprStmt) (sql.Query, error) {
+func convertSetOpr(s *ast.SetOprStmt, tp tablePos) (sql.Query, error) {
 	if s.With != nil {
 		return nil, sqlparse.Unsupported("WITH on a set operation")
 	}
-	q, err := convertSetOprList(s.SelectList)
+	q, err := convertSetOprList(s.SelectList, tp)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +218,7 @@ func convertSetOpr(s *ast.SetOprStmt) (sql.Query, error) {
 	return compound, nil
 }
 
-func convertSetOprList(list *ast.SetOprSelectList) (sql.Query, error) {
+func convertSetOprList(list *ast.SetOprSelectList, tp tablePos) (sql.Query, error) {
 	if list == nil || len(list.Selects) == 0 {
 		return nil, sqlparse.Unsupported("empty set operation")
 	}
@@ -226,12 +226,12 @@ func convertSetOprList(list *ast.SetOprSelectList) (sql.Query, error) {
 		return nil, sqlparse.Unsupported("WITH on a set operation")
 	}
 
-	result, _, err := setOprOperand(list.Selects[0])
+	result, _, err := setOprOperand(list.Selects[0], tp)
 	if err != nil {
 		return nil, err
 	}
 	for _, node := range list.Selects[1:] {
-		right, op, err := setOprOperand(node)
+		right, op, err := setOprOperand(node, tp)
 		if err != nil {
 			return nil, err
 		}
@@ -295,13 +295,13 @@ func convertSetOprList(list *ast.SetOprSelectList) (sql.Query, error) {
 
 // setOprOperand converts one element of a set-operation list, returning the
 // operator that joins it to the preceding element (nil for the first).
-func setOprOperand(node ast.Node) (sql.Query, *ast.SetOprType, error) {
+func setOprOperand(node ast.Node, tp tablePos) (sql.Query, *ast.SetOprType, error) {
 	switch n := node.(type) {
 	case *ast.SelectStmt:
-		q, err := convertSelect(n)
+		q, err := convertSelect(n, tp)
 		return q, n.AfterSetOperator, err
 	case *ast.SetOprSelectList:
-		q, err := convertSetOprList(n)
+		q, err := convertSetOprList(n, tp)
 		return q, n.AfterSetOperator, err
 	default:
 		return nil, nil, sqlparse.Unsupportedf("set-operation element %T", node)
@@ -309,19 +309,19 @@ func setOprOperand(node ast.Node) (sql.Query, *ast.SetOprType, error) {
 }
 
 // convertResultSetQuery converts a SELECT or set-operation subtree into a query.
-func convertResultSetQuery(node ast.ResultSetNode) (sql.Query, error) {
+func convertResultSetQuery(node ast.ResultSetNode, tp tablePos) (sql.Query, error) {
 	switch n := node.(type) {
 	case *ast.SelectStmt:
-		return convertSelect(n)
+		return convertSelect(n, tp)
 	case *ast.SetOprStmt:
-		return convertSetOpr(n)
+		return convertSetOpr(n, tp)
 	default:
 		return nil, sqlparse.Unsupportedf("subquery %T", node)
 	}
 }
 
-func convertSubquery(e *ast.SubqueryExpr) (sql.Query, error) {
-	return convertResultSetQuery(e.Query)
+func convertSubquery(e *ast.SubqueryExpr, tp tablePos) (sql.Query, error) {
+	return convertResultSetQuery(e.Query, tp)
 }
 
 func convertFieldList(list *ast.FieldList) ([]sql.Selection, error) {
@@ -440,10 +440,10 @@ func convertNamedWindow(w *ast.WindowSpec) (sql.NamedWindow, error) {
 	return def, nil
 }
 
-func convertWith(wc *ast.WithClause) ([]sql.CTE, error) {
+func convertWith(wc *ast.WithClause, tp tablePos) ([]sql.CTE, error) {
 	ctes := make([]sql.CTE, 0, len(wc.CTEs))
 	for _, cte := range wc.CTEs {
-		body, err := convertSubquery(cte.Query)
+		body, err := convertSubquery(cte.Query, tp)
 		if err != nil {
 			return nil, err
 		}

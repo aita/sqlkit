@@ -7,7 +7,7 @@ import (
 )
 
 // singleTable extracts the one TableName a single-table DML statement writes to.
-func singleTable(refs *ast.TableRefsClause) (sql.Table, error) {
+func singleTable(refs *ast.TableRefsClause, tp tablePos) (sql.Table, error) {
 	if refs == nil || refs.TableRefs == nil {
 		return sql.Table{}, sqlparse.Unsupported("statement without a table")
 	}
@@ -23,14 +23,14 @@ func singleTable(refs *ast.TableRefsClause) (sql.Table, error) {
 	if !ok {
 		return sql.Table{}, sqlparse.Unsupportedf("table source %T", ts.Source)
 	}
-	return tableFromName(tn), nil
+	return tableAt(tn, tp), nil
 }
 
-func convertInsert(s *ast.InsertStmt) (sql.Query, error) {
+func convertInsert(s *ast.InsertStmt, tp tablePos) (sql.Query, error) {
 	if len(s.Returning) > 0 {
 		return nil, sqlparse.Unsupported("INSERT ... RETURNING")
 	}
-	table, err := singleTable(s.Table)
+	table, err := singleTable(s.Table, tp)
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +57,7 @@ func convertInsert(s *ast.InsertStmt) (sql.Query, error) {
 			q = q.Values(cells...)
 		}
 	case s.Select != nil:
-		sub, err := convertResultSetQuery(s.Select)
+		sub, err := convertResultSetQuery(s.Select, tp)
 		if err != nil {
 			return nil, err
 		}
@@ -91,7 +91,7 @@ func convertInsertRow(row []ast.ExprNode) ([]any, error) {
 	return cells, nil
 }
 
-func convertUpdate(s *ast.UpdateStmt) (sql.Query, error) {
+func convertUpdate(s *ast.UpdateStmt, tp tablePos) (sql.Query, error) {
 	if len(s.Returning) > 0 {
 		return nil, sqlparse.Unsupported("UPDATE ... RETURNING")
 	}
@@ -105,11 +105,11 @@ func convertUpdate(s *ast.UpdateStmt) (sql.Query, error) {
 	// MultipleTable flag, which MySQL leaves false for a single-target join.
 	var q sql.UpdateBuilder
 	if refs := s.TableRefs; refs != nil && refs.TableRefs != nil && refs.TableRefs.Right != nil {
-		if q, err = multiTableUpdate(s, assignments); err != nil {
+		if q, err = multiTableUpdate(s, assignments, tp); err != nil {
 			return nil, err
 		}
 	} else {
-		table, err := singleTable(s.TableRefs)
+		table, err := singleTable(s.TableRefs, tp)
 		if err != nil {
 			return nil, err
 		}
@@ -138,7 +138,7 @@ func convertUpdate(s *ast.UpdateStmt) (sql.Query, error) {
 		q = q.Limit(n)
 	}
 	if s.With != nil {
-		ctes, err := convertWith(s.With)
+		ctes, err := convertWith(s.With, tp)
 		if err != nil {
 			return nil, err
 		}
@@ -160,8 +160,8 @@ func rowLimitCount(limit *ast.Limit) (int, error) {
 // Update(base).Join(...) form. The base must be a plain table and the joins must
 // be INNER/LEFT (the only kinds UpdateQuery models); anything else round-trips
 // raw.
-func multiTableUpdate(s *ast.UpdateStmt, assignments []sql.Assignment) (sql.UpdateBuilder, error) {
-	base, joins, err := convertFrom(s.TableRefs.TableRefs)
+func multiTableUpdate(s *ast.UpdateStmt, assignments []sql.Assignment, tp tablePos) (sql.UpdateBuilder, error) {
+	base, joins, err := convertFrom(s.TableRefs.TableRefs, tp)
 	if err != nil {
 		return sql.UpdateBuilder{}, err
 	}
@@ -185,18 +185,18 @@ func multiTableUpdate(s *ast.UpdateStmt, assignments []sql.Assignment) (sql.Upda
 	return q, nil
 }
 
-func convertDelete(s *ast.DeleteStmt) (sql.Query, error) {
+func convertDelete(s *ast.DeleteStmt, tp tablePos) (sql.Query, error) {
 	if len(s.Returning) > 0 {
 		return nil, sqlparse.Unsupported("DELETE ... RETURNING")
 	}
 	var q sql.DeleteBuilder
 	var err error
 	if s.IsMultiTable {
-		if q, err = multiTableDelete(s); err != nil {
+		if q, err = multiTableDelete(s, tp); err != nil {
 			return nil, err
 		}
 	} else {
-		table, terr := singleTable(s.TableRefs)
+		table, terr := singleTable(s.TableRefs, tp)
 		if terr != nil {
 			return nil, terr
 		}
@@ -225,7 +225,7 @@ func convertDelete(s *ast.DeleteStmt) (sql.Query, error) {
 		q = q.Limit(n)
 	}
 	if s.With != nil {
-		ctes, err := convertWith(s.With)
+		ctes, err := convertWith(s.With, tp)
 		if err != nil {
 			return nil, err
 		}
@@ -238,16 +238,18 @@ func convertDelete(s *ast.DeleteStmt) (sql.Query, error) {
 // DeleteFrom(t).Join(...). It handles a single delete target whose name matches
 // the FROM base (an aliased target or a target distinct from the base has no
 // typed home and round-trips raw).
-func multiTableDelete(s *ast.DeleteStmt) (sql.DeleteBuilder, error) {
+func multiTableDelete(s *ast.DeleteStmt, tp tablePos) (sql.DeleteBuilder, error) {
 	if s.Tables == nil || len(s.Tables.Tables) != 1 {
 		return sql.DeleteBuilder{}, sqlparse.Unsupported("multi-target DELETE")
 	}
-	target := tableFromName(s.Tables.Tables[0])
-	base, joins, err := convertFrom(s.TableRefs.TableRefs)
+	target := tableAt(s.Tables.Tables[0], tp)
+	base, joins, err := convertFrom(s.TableRefs.TableRefs, tp)
 	if err != nil {
 		return sql.DeleteBuilder{}, err
 	}
-	if baseTable, ok := base.(sql.Table); !ok || baseTable != target {
+	// Compare by name, not by value: the target and the FROM base are different
+	// source occurrences of the same table, so they carry different positions.
+	if baseTable, ok := base.(sql.Table); !ok || !baseTable.Name.Equal(target.Name) || !baseTable.Schema.Equal(target.Schema) {
 		return sql.DeleteBuilder{}, sqlparse.Unsupported("DELETE target distinct from the FROM base")
 	}
 	q := sql.DeleteFrom(target)

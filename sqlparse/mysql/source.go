@@ -20,22 +20,22 @@ type joinSpec struct {
 
 // convertFrom flattens a FROM clause's join tree into a base source plus the
 // joins applied to it, left-to-right.
-func convertFrom(j *ast.Join) (sql.Source, []joinSpec, error) {
-	return flattenJoin(j)
+func convertFrom(j *ast.Join, tp tablePos) (sql.Source, []joinSpec, error) {
+	return flattenJoin(j, tp)
 }
 
-func flattenJoin(node ast.ResultSetNode) (sql.Source, []joinSpec, error) {
+func flattenJoin(node ast.ResultSetNode, tp tablePos) (sql.Source, []joinSpec, error) {
 	switch n := node.(type) {
 	case *ast.Join:
 		// A single-table FROM is a Join whose Right is nil wrapping the source.
 		if n.Right == nil {
-			return flattenJoin(n.Left)
+			return flattenJoin(n.Left, tp)
 		}
-		base, joins, err := flattenJoin(n.Left)
+		base, joins, err := flattenJoin(n.Left, tp)
 		if err != nil {
 			return nil, nil, err
 		}
-		right, err := convertTableSourceNode(n.Right)
+		right, err := convertTableSourceNode(n.Right, tp)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -45,7 +45,7 @@ func flattenJoin(node ast.ResultSetNode) (sql.Source, []joinSpec, error) {
 		}
 		return base, append(joins, spec), nil
 	case *ast.TableSource:
-		src, err := convertTableSource(n)
+		src, err := convertTableSource(n, tp)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -125,27 +125,31 @@ func applyJoin(q sql.SelectBuilder, j joinSpec) sql.SelectBuilder {
 
 // convertTableSourceNode converts a join operand, which is normally a
 // TableSource; a parenthesized join on the right side is not yet supported.
-func convertTableSourceNode(node ast.ResultSetNode) (sql.Source, error) {
+func convertTableSourceNode(node ast.ResultSetNode, tp tablePos) (sql.Source, error) {
 	ts, ok := node.(*ast.TableSource)
 	if !ok {
 		return nil, sqlparse.Unsupportedf("join operand %T", node)
 	}
-	return convertTableSource(ts)
+	return convertTableSource(ts, tp)
 }
 
-func convertTableSource(ts *ast.TableSource) (sql.Source, error) {
+func convertTableSource(ts *ast.TableSource, tp tablePos) (sql.Source, error) {
 	switch src := ts.Source.(type) {
 	case *ast.TableName:
-		table := tableFromName(src)
+		table := tableAt(src, tp)
 		if alias := ts.AsName.O; alias != "" {
-			return sql.SourceAlias(table, alias), nil
+			// SourceAlias collapses the table into a single qualified Name Ident, so
+			// carry the table name's recovered offset onto it explicitly.
+			aliased := sql.SourceAlias(table, alias)
+			aliased.Name.NodePos = table.Name.NodePos
+			return aliased, nil
 		}
 		return table, nil
 	case *ast.SelectStmt, *ast.SetOprStmt:
 		if ts.AsName.O == "" {
 			return nil, sqlparse.Unsupported("derived table without an alias")
 		}
-		query, err := convertResultSetQuery(src.(ast.ResultSetNode))
+		query, err := convertResultSetQuery(src.(ast.ResultSetNode), tp)
 		if err != nil {
 			return nil, err
 		}
