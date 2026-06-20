@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/aita/sqlkit/analyze"
 	querytrace "github.com/aita/sqlkit/querytrace"
 	"github.com/aita/sqlkit/sqltest"
 )
@@ -21,7 +22,7 @@ func TestExecutionErrorsAreNotWarned(t *testing.T) {
 		trace := querytrace.New("op", querytrace.WithConfig(querytrace.Config{Enabled: true}))
 		trace.RecordStatement(context.Background(), querytrace.Event{
 			Kind:  querytrace.EventQuery,
-			Query: &querytrace.QueryInfo{Operation: querytrace.StmtSelect},
+			Query: &querytrace.QueryInfo{Analysis: analyze.Analysis{Kind: querytrace.StmtSelect}},
 			Err:   err,
 		})
 		sqltest.Expect(t, trace).NoWarnings()
@@ -34,7 +35,7 @@ func TestTooManyParametersWarns(t *testing.T) {
 
 	trace.RecordStatement(context.Background(), querytrace.Event{
 		Kind:  querytrace.EventQuery,
-		Query: &querytrace.QueryInfo{Operation: querytrace.StmtSelect, ParamCount: 100, Fingerprint: "SELECT * FROM t WHERE id IN (?)"},
+		Query: &querytrace.QueryInfo{Analysis: analyze.Analysis{Kind: querytrace.StmtSelect, Fingerprint: "SELECT * FROM t WHERE id IN (?)"}, ParamCount: 100},
 	})
 	sqltest.Expect(t, trace).Warns(querytrace.WarnTooManyParameters)
 }
@@ -45,7 +46,7 @@ func TestParametersBelowBudgetIsClean(t *testing.T) {
 
 	trace.RecordStatement(context.Background(), querytrace.Event{
 		Kind:  querytrace.EventQuery,
-		Query: &querytrace.QueryInfo{Operation: querytrace.StmtSelect, ParamCount: 99},
+		Query: &querytrace.QueryInfo{Analysis: analyze.Analysis{Kind: querytrace.StmtSelect}, ParamCount: 99},
 	})
 	sqltest.Expect(t, trace).NoWarnings()
 }
@@ -56,7 +57,7 @@ func TestIterationCanceledWarns(t *testing.T) {
 	// iteration, recorded on the cursor as IterErr.
 	trace.RecordStatement(context.Background(), querytrace.Event{
 		Kind:  querytrace.EventQuery,
-		Query: &querytrace.QueryInfo{Operation: querytrace.StmtSelect},
+		Query: &querytrace.QueryInfo{Analysis: analyze.Analysis{Kind: querytrace.StmtSelect}},
 		Rows:  &querytrace.RowsInfo{NextCount: 3, Closed: true, IterErr: context.Canceled},
 	})
 	sqltest.Expect(t, trace).Warns(querytrace.WarnQueryCanceled)
@@ -76,7 +77,7 @@ func TestIterationDeadlineExceededWarns(t *testing.T) {
 	trace := querytrace.New("op", querytrace.WithConfig(querytrace.Config{Enabled: true}))
 	trace.RecordStatement(context.Background(), querytrace.Event{
 		Kind:  querytrace.EventQuery,
-		Query: &querytrace.QueryInfo{Operation: querytrace.StmtSelect},
+		Query: &querytrace.QueryInfo{Analysis: analyze.Analysis{Kind: querytrace.StmtSelect}},
 		Rows:  &querytrace.RowsInfo{NextCount: 1, Closed: true, IterErr: context.DeadlineExceeded},
 	})
 	sqltest.Expect(t, trace).Warns(querytrace.WarnQueryDeadlineExceeded)
@@ -86,7 +87,7 @@ func TestCleanIterationIsQuiet(t *testing.T) {
 	trace := querytrace.New("op", querytrace.WithConfig(querytrace.Config{Enabled: true}))
 	trace.RecordStatement(context.Background(), querytrace.Event{
 		Kind:  querytrace.EventQuery,
-		Query: &querytrace.QueryInfo{Operation: querytrace.StmtSelect},
+		Query: &querytrace.QueryInfo{Analysis: analyze.Analysis{Kind: querytrace.StmtSelect}},
 		Rows:  &querytrace.RowsInfo{NextCount: 3, Closed: true}, // IterErr nil
 	})
 	sqltest.Expect(t, trace).NoWarnings()
@@ -98,7 +99,7 @@ func TestIterationWarningsAreIdempotent(t *testing.T) {
 	trace := querytrace.New("op", querytrace.WithConfig(querytrace.Config{Enabled: true}))
 	trace.RecordStatement(context.Background(), querytrace.Event{
 		Kind:  querytrace.EventQuery,
-		Query: &querytrace.QueryInfo{Operation: querytrace.StmtSelect},
+		Query: &querytrace.QueryInfo{Analysis: analyze.Analysis{Kind: querytrace.StmtSelect}},
 		Rows:  &querytrace.RowsInfo{NextCount: 5, Closed: true, IterErr: context.Canceled},
 	})
 

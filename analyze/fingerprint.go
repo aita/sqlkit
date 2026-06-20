@@ -1,4 +1,4 @@
-package querytrace
+package analyze
 
 import (
 	"regexp"
@@ -20,19 +20,21 @@ var (
 	whitespaceRe = regexp.MustCompile(`\s+`)
 )
 
-// fingerprint returns the normalized form of a statement used to group repeats.
-// When parsed is non-nil it recompiles the AST through fingerprintDialect, which
-// emits a constant "?" for every bind placeholder (the parser has already
-// collapsed literals to placeholders), so the result is numbering- and
-// dialect-placeholder-independent with no text post-processing. Otherwise it
-// falls back to collapsing literals and placeholders in the raw text.
-func (c Config) fingerprint(sqlText string, parsed sql.Query) string {
-	if parsed != nil {
-		if normalized, _, err := parsed.ToSQL(fingerprintDialect{c.dialect()}); err == nil {
-			return collapse(normalized)
-		}
+// Fingerprint returns the normalized form of a parsed query used to group
+// repeats. It recompiles the AST through a dialect that emits a constant "?" for
+// every bind placeholder (the parser has already collapsed literals to
+// placeholders), so the result is numbering- and dialect-placeholder-independent
+// with no text post-processing. ok is false when q is nil or fails to compile,
+// in which case callers fall back to FingerprintRaw on the SQL text.
+func Fingerprint(q sql.Query, dialect sql.Dialect) (string, bool) {
+	if q == nil {
+		return "", false
 	}
-	return fingerprintRaw(sqlText)
+	normalized, _, err := q.ToSQL(fingerprintDialect{dialect})
+	if err != nil {
+		return "", false
+	}
+	return collapse(normalized), true
 }
 
 // fingerprintDialect renders a query for fingerprinting: it follows the
@@ -44,9 +46,10 @@ type fingerprintDialect struct{ sql.Dialect }
 // Placeholder renders every bind position as "?", regardless of its index.
 func (fingerprintDialect) Placeholder(int) string { return "?" }
 
-// fingerprintRaw normalizes SQL text without a parser: string and numeric
+// FingerprintRaw normalizes SQL text without a parser: string and numeric
 // literals and bind placeholders all collapse to ?, and whitespace is squeezed.
-func fingerprintRaw(sqlText string) string {
+// It is the fallback for FingerprintRaw when no parsed AST is available.
+func FingerprintRaw(sqlText string) string {
 	// Order matters: collapse string literals first (their contents may contain
 	// digits), then placeholders such as $1 (before the numeric pass would
 	// strip their digits), then bare numeric literals.

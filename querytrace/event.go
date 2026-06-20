@@ -20,6 +20,8 @@ package querytrace
 
 import (
 	"time"
+
+	"github.com/aita/sqlkit/analyze"
 )
 
 // EventKind is the kind of thing an Event records. SQL reads and writes are the
@@ -76,37 +78,22 @@ type Event struct {
 	Err error
 }
 
-// QueryInfo holds the SQL details of an EventQuery or EventExec. Raw SQL and
-// argument values are captured only when configuration allows; the structural
-// fields (kind, tables, shape, parameter count) are always safe to keep.
+// QueryInfo holds the SQL details of an EventQuery or EventExec. It is split into
+// two halves: the static analysis of the statement — the embedded analyze.Analysis,
+// the facts derived from the SQL itself (kind, tables, clause shape, fingerprint),
+// owned and produced by the analyze framework — and the runtime details querytrace
+// captures around execution (raw text, parameters, transaction). The Analysis
+// fields are promoted, so qi.Kind, qi.Tables, qi.HasWhere, and the rest read
+// directly. Raw SQL and argument values are kept only when configuration allows;
+// the static fields are always safe to keep.
 type QueryInfo struct {
+	// Analysis is the static SQL analysis of the statement, produced by the analyze
+	// framework. Its fields are promoted onto QueryInfo.
+	analyze.Analysis
+
 	// RawSQL is the executed SQL text, kept only when Config.CaptureRawSQL is
 	// set; otherwise empty.
 	RawSQL string
-	// Fingerprint is the normalized SQL with literals and placeholders
-	// collapsed, used to group repeated queries. It is empty when
-	// fingerprinting is disabled.
-	Fingerprint string
-
-	// Operation is the statement kind, from analysis or a best-effort guess.
-	Operation StmtKind
-	// Tables are the tables the statement references, when analysis succeeded.
-	Tables []string
-
-	// HasWhere, HasJoin, HasLimit, HasReturning mirror Shape; they are
-	// false when analysis could not determine them.
-	HasWhere     bool
-	HasJoin      bool
-	HasLimit     bool
-	HasReturning bool
-	// SelectStar mirrors Shape.SelectStar: the statement is a SELECT projecting
-	// "*". It backs the select_star warning and is false on the fallback path.
-	SelectStar bool
-
-	// MaxInList is the length of the largest IN (...) value list in the
-	// statement's top-level WHERE, or 0 when there is none. It backs the
-	// large_in_list warning and is only set when the SQL parsed.
-	MaxInList int
 
 	// ParamCount is the number of bind arguments.
 	ParamCount int
@@ -116,21 +103,6 @@ type QueryInfo struct {
 
 	// TxID links the statement to its transaction, empty outside one.
 	TxID string
-
-	// AnalyzeErr records why structural analysis fell back to a guess, for
-	// diagnostics. It is never an execution error.
-	AnalyzeErr error
-
-	// analyzed reports whether the structural fields came from the AST (true)
-	// rather than a keyword guess (false). Checks that depend on WHERE/JOIN
-	// presence consult it to avoid false positives on the fallback path.
-	analyzed bool
-
-	// filterColumns are the bare (unqualified, lower-cased) column names
-	// referenced in the statement's top-level WHERE clause. They drive the
-	// tenant/soft-delete predicate checks and are populated only when the SQL
-	// parsed. Unexported: an analysis detail, not part of the exported surface.
-	filterColumns []string
 }
 
 // TxInfo holds the details of an EventTx.
