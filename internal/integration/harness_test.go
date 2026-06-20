@@ -213,19 +213,22 @@ func image(envVar, fallback string) string {
 	return fallback
 }
 
-// applySchema recreates the shared schema (testCatalog) for the engine,
-// delegating to sqltest.ApplySchema: it drops the tables in reverse declaration
-// order (children before parents, so foreign keys never block the drop) and
-// executes the CREATE SQL the meta model renders for the database's dialect.
-// Running it per subtest gives each test a clean database. eng is unused now
-// that dbtest reads the dialect from the database handle.
+// applySchema recreates the shared schema (testCatalog) for the engine by
+// wrapping the shared connection as a sqltest.DB and calling ApplySchema: it
+// drops the tables foreign-key-safely (CASCADE on PostgreSQL, foreign-key checks
+// off on MySQL, so declaration order never matters) and executes the CREATE SQL
+// the meta model renders for the database's dialect. ApplySchema registers no
+// teardown — the next subtest re-applies — and the suite already holds the shared
+// *sqlkit.Database for its queries. Running it per subtest gives each test a
+// clean database. eng is unused now that dbtest reads the dialect from the
+// database handle.
 func applySchema(t *testing.T, db *sqlkit.Database, eng engine) {
 	t.Helper()
 	md, err := testCatalog.Build()
 	if err != nil {
 		t.Fatalf("build catalog: %v", err)
 	}
-	sqltest.ApplySchema(t, db, md)
+	sqltest.New(db, md).ApplySchema(t)
 }
 
 func qualifiedName(t meta.Table) string {

@@ -13,9 +13,9 @@ import (
 // returned restore between cases to discard that case's writes and return to the
 // seeded state — far cheaper than reloading the fixtures every time:
 //
-//	session := db.NewSession()
-//	defer session.Close()
-//	sqltest.SetupSchema(t, db, md)
+//	tdb := sqltest.New(db, md)
+//	tdb.SetupSchema(t)
+//	session := tdb.Tx(t)             // one session, rolled back at the end
 //	blog.Load(t, session)            // seed once
 //	restore := sqltest.Snapshot(t, session)
 //

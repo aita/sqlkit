@@ -9,29 +9,11 @@ import (
 	"github.com/aita/sqlkit/meta"
 )
 
-// SetupSchema gives a test a clean schema and tears it down automatically. It
-// calls ApplySchema to drop and (re)create every table in md now, then
-// registers a t.Cleanup that drops the tables again when the test finishes, so
-// the database is left empty. Call it once at the top of a test:
-//
-//	md, _ := catalog.Build()
-//	sqltest.SetupSchema(t, db, md)
-//
-// md is the meta.Metadata a schema catalog produces (decl.Catalog.Build).
-func SetupSchema(t *testing.T, db *sqlkit.Database, md meta.Metadata) {
-	t.Helper()
-	ApplySchema(t, db, md)
-	t.Cleanup(func() {
-		dropTables(t, db, md)
-	})
-}
-
-// ApplySchema resets md's tables on db: it drops them (children before parents,
-// so foreign keys never block a drop and an empty database is a no-op), then
-// executes the CREATE SQL the meta model renders for db's dialect. Running it
-// before a test gives that test a clean schema. SetupSchema wraps it with an
-// automatic teardown.
-func ApplySchema(t *testing.T, db *sqlkit.Database, md meta.Metadata) {
+// applySchema resets md's tables on db: it drops them foreign-key-safely (so an
+// empty database is a no-op and declaration order never matters), then executes
+// the CREATE SQL the meta model renders for db's dialect. DB.ApplySchema and New
+// drive it.
+func applySchema(t *testing.T, db *sqlkit.Database, md meta.Metadata) {
 	t.Helper()
 	dropTables(t, db, md)
 	createText, err := md.CreateSQL(db.Dialect())
@@ -46,34 +28,97 @@ func ApplySchema(t *testing.T, db *sqlkit.Database, md meta.Metadata) {
 	}
 }
 
-// Truncate deletes every row from the given tables, children before parents.
-// It is a faster between-tests reset than ApplySchema when the tables already
-// exist and only their data needs clearing.
-func Truncate(t *testing.T, db *sqlkit.Database, tables ...sqlkit.Table) {
+// truncate deletes every row from the named tables foreign-key-safely, whatever
+// order they were declared in: on MySQL it disables foreign-key checks for the
+// duration, and on PostgreSQL it issues a single TRUNCATE ... CASCADE so a row
+// referenced from another table (or a cycle between the listed tables) never
+// blocks the delete. With no tables it clears every table in md. DB.Truncate
+// drives it.
+func truncate(t *testing.T, db *sqlkit.Database, md meta.Metadata, tables []sqlkit.Table) {
 	t.Helper()
+	names := truncateNames(md, tables)
+	if len(names) == 0 {
+		return
+	}
 	ctx := context.Background()
-	for i := len(tables) - 1; i >= 0; i-- {
-		ident := db.Dialect().QuoteIdent(tables[i].Info().QualifiedName())
-		if _, err := db.SQL().ExecContext(ctx, "DELETE FROM "+ident); err != nil {
-			t.Fatalf("sqltest: truncate %s: %v", tables[i].Info().QualifiedName(), err)
+	exec := func(stmt string) {
+		if _, err := db.SQL().ExecContext(ctx, stmt); err != nil {
+			t.Fatalf("sqltest: truncate: %v (%s)", err, stmt)
 		}
 	}
+	dialect := db.Dialect()
+	if isMySQL(dialect) {
+		// MySQL TRUNCATE cannot touch a table referenced by a foreign key, so
+		// disable the checks and clear each table individually.
+		exec("SET FOREIGN_KEY_CHECKS = 0")
+		defer exec("SET FOREIGN_KEY_CHECKS = 1")
+		for _, name := range names {
+			exec("TRUNCATE TABLE " + dialect.QuoteIdent(name))
+		}
+		return
+	}
+	// PostgreSQL truncates all tables in one CASCADE statement: order does not
+	// matter and dependent rows in tables not listed are cleared too.
+	quoted := make([]string, len(names))
+	for i, name := range names {
+		quoted[i] = dialect.QuoteIdent(name)
+	}
+	exec("TRUNCATE TABLE " + strings.Join(quoted, ", ") + " CASCADE")
 }
 
-// dropTables drops model's tables in reverse declaration order with DROP TABLE
-// IF EXISTS. The drops are issued directly rather than via Metadata.DropSQL
-// because that drops foreign-key constraints with ALTER TABLE first, which
-// fails on the not-yet-created tables of a fresh database.
+// truncateNames resolves the qualified names to clear: the given table bindings,
+// or every table in md when none are named.
+func truncateNames(md meta.Metadata, tables []sqlkit.Table) []string {
+	if len(tables) == 0 {
+		names := make([]string, len(md.Tables))
+		for i, tbl := range md.Tables {
+			names[i] = qualifiedName(tbl)
+		}
+		return names
+	}
+	names := make([]string, len(tables))
+	for i, tbl := range tables {
+		names[i] = tbl.Info().QualifiedName()
+	}
+	return names
+}
+
+// dropTables removes md's tables foreign-key-safely, independent of the order
+// they were declared in. The drops are issued directly rather than via
+// Metadata.DropSQL because that drops foreign-key constraints with ALTER TABLE
+// first, which fails on the not-yet-created tables of a fresh database.
+//
+// Plain DROP TABLE in reverse declaration order only works when that order
+// happens to be a topological sort of the foreign keys; it breaks on tables
+// declared parent-after-child, on cross-schema references, and on cycles. So the
+// drop is made order-independent per dialect: PostgreSQL drops each table with
+// CASCADE (which also drops the foreign-key constraints pointing at it), and
+// MySQL disables foreign-key checks for the duration.
 func dropTables(t *testing.T, db *sqlkit.Database, md meta.Metadata) {
 	t.Helper()
 	ctx := context.Background()
-	for i := len(md.Tables) - 1; i >= 0; i-- {
-		ident := db.Dialect().QuoteIdent(qualifiedName(md.Tables[i]))
-		if _, err := db.SQL().ExecContext(ctx, "DROP TABLE IF EXISTS "+ident); err != nil {
-			t.Fatalf("sqltest: drop %s: %v", md.Tables[i].Name, err)
+	exec := func(stmt string) {
+		if _, err := db.SQL().ExecContext(ctx, stmt); err != nil {
+			t.Fatalf("sqltest: drop tables: %v (%s)", err, stmt)
 		}
 	}
+	mysql := isMySQL(db.Dialect())
+	if mysql {
+		exec("SET FOREIGN_KEY_CHECKS = 0")
+		defer exec("SET FOREIGN_KEY_CHECKS = 1")
+	}
+	for i := len(md.Tables) - 1; i >= 0; i-- {
+		stmt := "DROP TABLE IF EXISTS " + db.Dialect().QuoteIdent(qualifiedName(md.Tables[i]))
+		if !mysql {
+			stmt += " CASCADE"
+		}
+		exec(stmt)
+	}
 }
+
+// isMySQL reports whether the dialect is MySQL, which needs FOREIGN_KEY_CHECKS
+// toggled rather than CASCADE to drop or truncate foreign-key-linked tables.
+func isMySQL(d sqlkit.Dialect) bool { return d.Name() == "mysql" }
 
 func qualifiedName(tbl meta.Table) string {
 	if tbl.Schema.Name == "" {
