@@ -49,17 +49,23 @@ func Columns(specs ...string) Policy {
 	return s
 }
 
-// CommentMarker is a Policy of every column of md whose schema comment contains
-// marker (case-insensitive substring) — the convention-driven source, so a schema
-// declares its own PII by annotating columns (Comment: "pii"). The metadata is
-// supplied here, to the hint that needs it.
-func CommentMarker(md meta.Metadata, marker string) Policy {
+// CommentPredicate reports whether a column is PII, given its table, column, and
+// comment. CommentMarker calls it for every column of the schema, so the caller
+// decides what marks a column sensitive — most often a substring of the comment,
+// but the table and column names are available too.
+type CommentPredicate func(table, column, comment string) bool
+
+// CommentMarker is a Policy of every column of md for which sensitive reports
+// true — the convention-driven source, so a schema declares its own PII through
+// its column comments (e.g. sensitive returns whether the comment contains
+// "pii"). The metadata is supplied here, to the hint that needs it; a nil
+// predicate matches nothing.
+func CommentMarker(md meta.Metadata, sensitive CommentPredicate) Policy {
 	s := columnSet{}
-	mk := fold(marker)
-	if mk != "" {
+	if sensitive != nil {
 		for _, t := range md.Tables {
 			for _, c := range t.Columns {
-				if c.Comment != "" && strings.Contains(fold(c.Comment), mk) {
+				if sensitive(t.Name, c.Name, c.Comment) {
 					s.add(t.Name, c.Name)
 				}
 			}

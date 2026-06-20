@@ -2,6 +2,7 @@ package redact_test
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/aita/sqlkit/meta"
@@ -129,7 +130,9 @@ func TestPolicyFromCommentMarker(t *testing.T) {
 		Name:    "users",
 		Columns: []meta.Column{{Name: "id"}, {Name: "name", Comment: "the user's PII name"}, {Name: "email"}},
 	}}}
-	m := redact.New(redact.CommentMarker(md, "pii"))
+	m := redact.New(redact.CommentMarker(md, func(_, _, comment string) bool {
+		return strings.Contains(strings.ToLower(comment), "pii")
+	}))
 	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
 	q := sql.Select(sql.Star()).From(users).Where(sql.And(
 		sql.Eq(sql.Col("name"), sql.Val("taro")),
