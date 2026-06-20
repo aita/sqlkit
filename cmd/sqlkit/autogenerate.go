@@ -189,7 +189,7 @@ func (c *autogenerateCmd) gitSnapshot(importPath, ref, dialect string) (autogen.
 	if out, err := exec.Command("git", "worktree", "add", "--detach", worktree, ref).CombinedOutput(); err != nil {
 		return autogen.Snapshot{}, fmt.Errorf("git worktree add %s: %v: %s", ref, err, strings.TrimSpace(string(out)))
 	}
-	defer exec.Command("git", "worktree", "remove", "--force", worktree).Run()
+	defer func() { _ = exec.Command("git", "worktree", "remove", "--force", worktree).Run() }()
 
 	src, err := renderTemplate(snapshotShimTmpl, snapshotData{ImportPath: importPath, Var: c.Var, Dialect: dialect})
 	if err != nil {

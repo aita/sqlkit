@@ -1,0 +1,30 @@
+# golangci-lint configuration (schema v2).
+#
+# This file lives at the repo root and is passed explicitly to every module via
+# `--config` in CI, so the same rules apply to the root module and to each of
+# the satellite modules (cmd/sqlkit, examples, internal/integration, the
+# sqlparse/* frontends and querytrace/otelquery).
+version: "2"
+
+linters:
+  # The standard set: errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+
+  settings:
+    errcheck:
+      # Don't flag the well-known fire-and-forget calls. These either write to
+      # an in-memory/stdout writer or release a resource on a deferred cleanup
+      # path where there is nothing useful to do with the error. Calls whose
+      # error genuinely matters (exec.Cmd.Run, conn.ExecContext, ...) are left
+      # checked and handled in code instead.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - io.WriteString
+        - os.RemoveAll
+        - (*database/sql.Rows).Close
+        - (*database/sql.DB).Close
+        - (*database/sql.Stmt).Close
+        - (*database/sql.Conn).Close
+        - (*github.com/aita/sqlkit.Session).Close

@@ -88,15 +88,3 @@ func cloneSlice[T any](s []T) []T {
 	}
 	return append([]T(nil), s...)
 }
-
-// cloneRows shallow-copies a row-of-expressions matrix.
-func cloneRows(rows [][]Expression) [][]Expression {
-	if len(rows) == 0 {
-		return nil
-	}
-	out := make([][]Expression, len(rows))
-	for i, r := range rows {
-		out[i] = cloneSlice(r)
-	}
-	return out
-}

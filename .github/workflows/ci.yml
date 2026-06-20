@@ -45,31 +45,16 @@ jobs:
       - name: Test
         run: go test -race ./...
 
-      # The sqlkit command and the examples are separate modules so their
-      # database drivers stay out of the root module that consumers import;
-      # build, vet and test them here since `./...` above does not reach them.
+      # The sqlkit command is a separate module so its database drivers stay out
+      # of the root module that consumers import; build, vet and test it here
+      # since `./...` above does not reach it. The examples module (also
+      # separate) has its own dedicated job below.
       - name: Build, vet & test cmd/sqlkit module
         working-directory: cmd/sqlkit
         run: |
           go build ./...
           go vet ./...
           go test -race ./...
-
-      - name: Build, vet & test examples module
-        working-directory: examples
-        run: |
-          go build ./...
-          go vet ./...
-          go test -race ./...
-
-      # The querytrace web example is its own module so the cgo PostgreSQL
-      # parser and the SQLite driver it links stay out of the examples module.
-      - name: Build & vet examples/querytrace module
-        working-directory: examples/querytrace
-        run: |
-          test -z "$(gofmt -l .)"
-          go build ./...
-          go vet ./...
 
       - name: Build & vet integration module
         working-directory: internal/integration
@@ -110,6 +95,72 @@ jobs:
           go build ./...
           go vet ./...
           go test -race ./...
+
+  # Static analysis with golangci-lint (errcheck, govet, ineffassign,
+  # staticcheck, unused) across every module, using the shared root config in
+  # .golangci.yml. golangci-lint type-checks each package, so this job also
+  # fails if any module — including any of the example programs under examples/
+  # — stops compiling.
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+
+      - name: Install golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/v2.5.0/install.sh \
+            | sh -s -- -b "$(go env GOPATH)/bin" v2.5.0
+
+      - name: golangci-lint
+        run: |
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          config="$PWD/.golangci.yml"
+          status=0
+          # The repo is several Go modules; lint each one against the shared
+          # config. Keep going on failure so every module's findings are
+          # reported in a single run.
+          for dir in . cmd/sqlkit examples examples/querytrace internal/integration querytrace/otelquery sqlparse/postgres sqlparse/mysql; do
+            echo "::group::golangci-lint $dir"
+            (cd "$dir" && golangci-lint run --config "$config" ./...) || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+
+  # Build, vet and test every example program so a broken example fails CI. The
+  # examples are their own module (their database drivers stay out of the root
+  # module consumers import), so the root unit-test job's `go build ./...` does
+  # not reach them; this job owns them.
+  examples:
+    name: examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+
+      - name: Build, vet & test examples module
+        working-directory: examples
+        run: |
+          test -z "$(gofmt -l .)"
+          go build ./...
+          go vet ./...
+          go test -race ./...
+
+      # The querytrace web example is its own module so the cgo PostgreSQL parser
+      # and the SQLite driver it links stay out of the examples module.
+      - name: Build & vet examples/querytrace module
+        working-directory: examples/querytrace
+        run: |
+          test -z "$(gofmt -l .)"
+          go build ./...
+          go vet ./...
 
   # Run the integration suite against real PostgreSQL and MySQL service
   # containers. The suite connects via the SQLKIT_TEST_*_DSN variables instead

@@ -219,7 +219,7 @@ func resetSchema(t *testing.T, db *sqlkit.Database, eng engine) {
 		if _, err := conn.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS = 0"); err != nil {
 			t.Fatalf("disable foreign key checks: %v", err)
 		}
-		defer conn.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS = 1")
+		defer func() { _, _ = conn.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS = 1") }()
 	}
 	for _, tbl := range model.Tables {
 		stmt := "DROP TABLE IF EXISTS " + eng.dialect.QuoteIdent(qualifiedName(tbl))

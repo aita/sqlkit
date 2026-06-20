@@ -212,14 +212,11 @@ func TestInsertBatchSizeSplitsExec(t *testing.T) {
 }
 
 func TestInsertBatchSizeSingleStatementWhenNotExceeded(t *testing.T) {
-	fake := &testutil.Fake{}
-	db := sqlkit.WrapDB(fake.DB())
-
 	users := []User{{Email: "a@example.com"}, {Email: "b@example.com"}}
 	// batchSize >= rows, and batchSize <= 0, both run as a single statement.
 	for _, size := range []int{2, 5, 0, -1} {
-		fake = &testutil.Fake{}
-		db = sqlkit.WrapDB(fake.DB())
+		fake := &testutil.Fake{}
+		db := sqlkit.WrapDB(fake.DB())
 		if _, err := db.Insert(Users).Values(users).BatchSize(size).Exec(context.Background()); err != nil {
 			t.Fatalf("BatchSize(%d) Exec() error = %v", size, err)
 		}
