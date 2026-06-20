@@ -31,41 +31,41 @@ import (
 	"strings"
 
 	"github.com/aita/sqlkit/codegen"
+	"github.com/aita/sqlkit/decl"
 	"github.com/aita/sqlkit/meta"
 	"github.com/aita/sqlkit/sql"
-	"github.com/aita/sqlkit/sqldef"
 )
 
 // catalog declares the schema we generate from. In a real project this is its
 // own package (see examples/blog/schema) and the source of truth for both the
 // bindings and the DDL.
-func catalog() *sqldef.Catalog {
-	cat := sqldef.NewCatalog()
+func catalog() *decl.Catalog {
+	cat := decl.NewCatalog()
 	public := cat.Schema("public")
 
-	users := public.Table("users",
-		sqldef.TableComment("Registered accounts"),
+	public.Table("users",
+		decl.TableComment("Registered accounts"),
 		// A uuid primary key: by default codegen maps uuid -> string. We override
 		// it to the appdb.UUID domain type below via ColumnOverrides.
-		sqldef.Column("id", sqldef.UUID, sqldef.PrimaryKey()),
-		sqldef.Column("email", sqldef.VarChar(255), sqldef.Unique()),
+		decl.Column("id", decl.UUID, decl.PrimaryKey()),
+		decl.Column("email", decl.VarChar(255), decl.Unique()),
 		// A money amount: numeric defaults to string. We map every numeric column
 		// to appdb.Decimal below via Overrides.
-		sqldef.Column("balance", sqldef.Decimal(18, 2), sqldef.Default(sql.Raw("0"))),
+		decl.Column("balance", decl.Decimal(18, 2), decl.Default(sql.Raw("0"))),
 		// A free-form JSON blob: jsonb defaults to []byte. We map it to
 		// json.RawMessage below via ColumnOverrides.
-		sqldef.Column("metadata", sqldef.JSON, sqldef.Default(sql.Raw("'{}'"))),
+		decl.Column("metadata", decl.JSON, decl.Default(sql.Raw("'{}'"))),
 		// A status column we map to a typed Go enum via OverrideFunc.
-		sqldef.Column("status", sqldef.VarChar(32), sqldef.Default(sql.Raw("'active'"))),
-		sqldef.Column("created_at", sqldef.Timestamp, sqldef.Default(sql.Raw("now()"))),
+		decl.Column("status", decl.VarChar(32), decl.Default(sql.Raw("'active'"))),
+		decl.Column("created_at", decl.Timestamp, decl.Default(sql.Raw("now()"))),
 	)
 
 	public.Table("orders",
-		sqldef.Column("id", sqldef.UUID, sqldef.PrimaryKey()),
-		sqldef.Column("user_id", sqldef.UUID, sqldef.References(users, "id")),
-		sqldef.Column("total", sqldef.Decimal(18, 2)),
-		sqldef.Column("status", sqldef.VarChar(32), sqldef.Default(sql.Raw("'pending'"))),
-		sqldef.Index("user_id"),
+		decl.Column("id", decl.UUID, decl.PrimaryKey()),
+		decl.Column("user_id", decl.UUID, decl.References("users", "id")),
+		decl.Column("total", decl.Decimal(18, 2)),
+		decl.Column("status", decl.VarChar(32), decl.Default(sql.Raw("'pending'"))),
+		decl.Index("user_id"),
 	)
 
 	return cat

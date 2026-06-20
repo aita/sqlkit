@@ -62,6 +62,15 @@ jobs:
           go vet ./...
           go test -race ./...
 
+      # The querytrace web example is its own module so the cgo PostgreSQL
+      # parser and the SQLite driver it links stay out of the examples module.
+      - name: Build & vet examples/querytrace module
+        working-directory: examples/querytrace
+        run: |
+          test -z "$(gofmt -l .)"
+          go build ./...
+          go vet ./...
+
       - name: Build & vet integration module
         working-directory: internal/integration
         run: |

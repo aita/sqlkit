@@ -1,0 +1,50 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>{{.Demo.Title}} — querytrace</title><style>{{css}}</style></head>
+<body>
+  <nav><a href="/">&larr; all demos</a> &middot; <a href="{{.Demo.Path}}?format=json">view as JSON</a></nav>
+  <h1>{{.Demo.Title}}</h1>
+  <p>{{.Demo.Desc}}</p>
+
+  {{if .Err}}<p class="sev-error badge">handler error: {{.Err}}</p>{{end}}
+
+  <h2>Result</h2>
+  <pre>{{if .Output}}{{.Output}}{{else}}(no output){{end}}</pre>
+
+  <h2>Trace</h2>
+  <p class="summary">
+    <span><strong>operation</strong> {{.Report.Operation}}</span>
+    <span><strong>queries</strong> {{.Report.QueryCount}}</span>
+    <span><strong>writes</strong> {{.Report.WriteCount}}</span>
+    <span><strong>unique shapes</strong> {{.Report.UniqueFingerprintCount}}</span>
+    <span><strong>warnings</strong> {{len .Report.Warnings}}</span>
+  </p>
+
+  <h2>Warnings</h2>
+  {{if .Warnings}}
+  <table>
+    <tr><th>severity</th><th>code</th><th>message</th><th>caller</th></tr>
+    {{range .Warnings}}
+    <tr>
+      <td><span class="badge sev-{{.Severity}}">{{.Severity}}</span></td>
+      <td class="mono">{{.Code}}</td>
+      <td>{{.Message}}</td>
+      <td class="mono">{{.Caller}}</td>
+    </tr>
+    {{end}}
+  </table>
+  {{else}}<p class="none">none — this trace is clean.</p>{{end}}
+
+  <h2>Timeline</h2>
+  <table>
+    <tr><th>#</th><th>kind</th><th>dur</th><th>statement</th><th>rows</th></tr>
+    {{range .Timeline}}
+    <tr>
+      <td>{{.N}}</td>
+      <td>{{.Kind}}</td>
+      <td class="mono">{{.Duration}}</td>
+      <td class="mono">{{.Label}}</td>
+      <td>{{.Rows}}</td>
+    </tr>
+    {{end}}
+  </table>
+</body></html>
