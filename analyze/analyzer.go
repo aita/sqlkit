@@ -51,11 +51,11 @@ type Analysis struct {
 	Kind StmtKind
 	// Tables are the base tables the statement references (Tables); nil unless Parsed.
 	Tables []string
-	// HasWhere, HasJoin, and SelectStar are the top-level clause facts (HasWhere,
-	// HasJoin, SelectsStar); all false unless Parsed.
-	HasWhere   bool
-	HasJoin    bool
-	SelectStar bool
+	// HasTopLevelWhere, HasTopLevelJoin, and SelectStar are the top-level clause
+	// facts (HasTopLevelWhere, HasTopLevelJoin, SelectsStar); all false unless Parsed.
+	HasTopLevelWhere bool
+	HasTopLevelJoin  bool
+	SelectStar       bool
 	// FilterColumns are the bare column names in the top-level WHERE (FilterColumns),
 	// and MaxInList the largest IN (...) value list there (MaxInList); both zero
 	// unless Parsed. They back the tenant/soft-delete and large-IN checks.
@@ -89,14 +89,14 @@ func (a *Analyzer) Analyze(sqlText string, q sql.Query) Analysis {
 	}
 	cols, maxIn := WherePredicates(q)
 	return Analysis{
-		Kind:          kind,
-		Tables:        Tables(q),
-		HasWhere:      HasWhere(q),
-		HasJoin:       HasJoin(q),
-		SelectStar:    SelectsStar(q),
-		FilterColumns: cols,
-		MaxInList:     maxIn,
-		Parsed:        true,
+		Kind:             kind,
+		Tables:           Tables(q),
+		HasTopLevelWhere: HasTopLevelWhere(q),
+		HasTopLevelJoin:  HasTopLevelJoin(q),
+		SelectStar:       SelectsStar(q),
+		FilterColumns:    cols,
+		MaxInList:        maxIn,
+		Parsed:           true,
 	}
 }
 
@@ -106,11 +106,11 @@ func (a *Analyzer) Kind(q sql.Query) (StmtKind, bool) { return KindOf(q) }
 // Tables returns the base tables the statement references; see Tables.
 func (a *Analyzer) Tables(q sql.Query) []string { return Tables(q) }
 
-// HasWhere reports a top-level WHERE; see HasWhere.
-func (a *Analyzer) HasWhere(q sql.Query) bool { return HasWhere(q) }
+// HasTopLevelWhere reports a top-level WHERE; see HasTopLevelWhere.
+func (a *Analyzer) HasTopLevelWhere(q sql.Query) bool { return HasTopLevelWhere(q) }
 
-// HasJoin reports a top-level JOIN; see HasJoin.
-func (a *Analyzer) HasJoin(q sql.Query) bool { return HasJoin(q) }
+// HasTopLevelJoin reports a top-level JOIN; see HasTopLevelJoin.
+func (a *Analyzer) HasTopLevelJoin(q sql.Query) bool { return HasTopLevelJoin(q) }
 
 // SelectsStar reports a top-level SELECT *; see SelectsStar.
 func (a *Analyzer) SelectsStar(q sql.Query) bool { return SelectsStar(q) }

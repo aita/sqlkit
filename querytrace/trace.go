@@ -259,7 +259,7 @@ func (t *Trace) checkStatement(ev Event, exp expectations) {
 
 	// Missing-WHERE checks are only trustworthy when the WHERE presence came
 	// from the AST, not the keyword fallback.
-	if q.Parsed && !q.HasWhere {
+	if q.Parsed && !q.HasTopLevelWhere {
 		switch q.Kind {
 		case StmtUpdate:
 			t.addWarning(Warning{

@@ -2,17 +2,18 @@ package analyze
 
 import "github.com/aita/sqlkit/sql"
 
-// HasWhere reports whether a statement's top-level node carries a WHERE clause —
-// a SELECT, UPDATE, or DELETE. It is false for a set operation, INSERT, VALUES,
-// or DDL, which have no top-level WHERE. A WHERE inside a subquery, a CTE body, or
-// one arm of a UNION is that nested query's property, not the outer statement's.
-// It backs the update_without_where / delete_without_where checks.
-func HasWhere(q sql.Query) bool { return TopLevelWhere(q) != nil }
+// HasTopLevelWhere reports whether a statement's top-level node carries a WHERE
+// clause — a SELECT, UPDATE, or DELETE. It is false for a set operation, INSERT,
+// VALUES, or DDL, which have no top-level WHERE. A WHERE inside a subquery, a CTE
+// body, or one arm of a UNION is that nested query's property, not the outer
+// statement's, and the name says so: it asks only about the top-level node. It
+// backs the update_without_where / delete_without_where checks.
+func HasTopLevelWhere(q sql.Query) bool { return TopLevelWhere(q) != nil }
 
-// HasJoin reports whether a statement's top-level node carries a JOIN clause — a
-// SELECT, UPDATE, or DELETE. A JOIN inside a subquery, a CTE body, or one arm of a
-// UNION belongs to that nested query and is not counted.
-func HasJoin(q sql.Query) bool {
+// HasTopLevelJoin reports whether a statement's top-level node carries a JOIN
+// clause — a SELECT, UPDATE, or DELETE. A JOIN inside a subquery, a CTE body, or
+// one arm of a UNION belongs to that nested query and is not counted.
+func HasTopLevelJoin(q sql.Query) bool {
 	switch v := sql.Unwrap(q).(type) {
 	case sql.SelectStmt:
 		return len(v.Joins) > 0

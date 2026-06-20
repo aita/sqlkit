@@ -15,8 +15,8 @@ func TestAnalyzerDelegates(t *testing.T) {
 	if kind, ok := a.Kind(q); !ok || kind != analyze.StmtSelect {
 		t.Errorf("Kind = (%v, %v), want (select, true)", kind, ok)
 	}
-	if !a.HasWhere(q) || a.HasJoin(q) || !a.SelectsStar(q) {
-		t.Errorf("clauses: HasWhere=%v HasJoin=%v SelectsStar=%v", a.HasWhere(q), a.HasJoin(q), a.SelectsStar(q))
+	if !a.HasTopLevelWhere(q) || a.HasTopLevelJoin(q) || !a.SelectsStar(q) {
+		t.Errorf("clauses: HasTopLevelWhere=%v HasTopLevelJoin=%v SelectsStar=%v", a.HasTopLevelWhere(q), a.HasTopLevelJoin(q), a.SelectsStar(q))
 	}
 	cols, maxIn := a.WherePredicates(q)
 	if len(cols) != 1 || cols[0] != "tenant_id" || maxIn != 3 {

@@ -14,10 +14,10 @@ import (
 // explicitly.
 //
 // Most matchers look at the statement: Select/Insert/Update/Delete, Table,
-// Fingerprint, HasWhere, Params, SqlContains. A few look at the surrounding
+// Fingerprint, HasTopLevelWhere, Params, SqlContains. A few look at the surrounding
 // Event (Named, Caller, Label, InTransaction) or the transaction timeline
 // (Begin, Commit, Rollback). Matchers that depend on structural analysis
-// (Table, HasWhere, Fingerprint) need a parser wired into the Config; without
+// (Table, HasTopLevelWhere, Fingerprint) need a parser wired into the Config; without
 // one they do not match, while operation and SQL-text matchers still do.
 type Match struct {
 	desc string
@@ -83,14 +83,16 @@ func Fingerprint(fp string) Match {
 	return query("fingerprint="+fp, func(qi *querytrace.QueryInfo) bool { return qi.Fingerprint == fp })
 }
 
-// HasWhere matches a statement that carries a WHERE clause (from analysis).
-func HasWhere() Match {
-	return query("has_where", func(qi *querytrace.QueryInfo) bool { return qi.HasWhere })
+// HasTopLevelWhere matches a statement whose top-level node carries a WHERE clause
+// (from analysis). A WHERE inside a subquery, CTE body, or UNION arm does not count.
+func HasTopLevelWhere() Match {
+	return query("has_top_level_where", func(qi *querytrace.QueryInfo) bool { return qi.HasTopLevelWhere })
 }
 
-// HasJoin matches a statement that carries a JOIN clause (from analysis).
-func HasJoin() Match {
-	return query("has_join", func(qi *querytrace.QueryInfo) bool { return qi.HasJoin })
+// HasTopLevelJoin matches a statement whose top-level node carries a JOIN clause
+// (from analysis). A JOIN inside a subquery, CTE body, or UNION arm does not count.
+func HasTopLevelJoin() Match {
+	return query("has_top_level_join", func(qi *querytrace.QueryInfo) bool { return qi.HasTopLevelJoin })
 }
 
 // Params matches a statement carrying exactly n bind arguments.

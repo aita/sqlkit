@@ -7,7 +7,7 @@ import (
 	"github.com/aita/sqlkit/sql"
 )
 
-func TestHasWhere(t *testing.T) {
+func TestHasTopLevelWhere(t *testing.T) {
 	users := sql.Table{Name: sql.NewIdent("users")}
 	tests := []struct {
 		name  string
@@ -22,34 +22,35 @@ func TestHasWhere(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := analyze.HasWhere(tt.query); got != tt.want {
-				t.Errorf("HasWhere = %v, want %v", got, tt.want)
+			if got := analyze.HasTopLevelWhere(tt.query); got != tt.want {
+				t.Errorf("HasTopLevelWhere = %v, want %v", got, tt.want)
 			}
 		})
 	}
 }
 
-// TestHasWhereIsNodeLocal pins that HasWhere describes only the top-level node: a
-// WHERE inside a CTE body or a UNION arm is that nested query's, not the outer's.
-func TestHasWhereIsNodeLocal(t *testing.T) {
+// TestHasTopLevelWhereIsNodeLocal pins that HasTopLevelWhere describes only the
+// top-level node: a WHERE inside a CTE body or a UNION arm is that nested query's,
+// not the outer's.
+func TestHasTopLevelWhereIsNodeLocal(t *testing.T) {
 	users := sql.Table{Name: sql.NewIdent("users")}
 	orders := sql.Table{Name: sql.NewIdent("orders")}
 
 	body := sql.Select(sql.Col("id")).From(users).Where(sql.Eq(sql.Col("active"), sql.Val(true)))
 	cte := body.CTE("c")
 	withQuery := sql.Select(cte.Col("id")).From(cte).WithCTE(cte)
-	if analyze.HasWhere(withQuery) {
-		t.Error("CTE outer: HasWhere = true, want false (the WHERE is the CTE body's)")
+	if analyze.HasTopLevelWhere(withQuery) {
+		t.Error("CTE outer: HasTopLevelWhere = true, want false (the WHERE is the CTE body's)")
 	}
 
 	union := sql.Select(sql.Col("id")).From(users).Where(sql.Eq(sql.Col("id"), sql.Val(1))).
 		Union(sql.Select(sql.Col("id")).From(orders))
-	if analyze.HasWhere(union) {
-		t.Error("union: HasWhere = true, want false (the WHERE belongs to an arm)")
+	if analyze.HasTopLevelWhere(union) {
+		t.Error("union: HasTopLevelWhere = true, want false (the WHERE belongs to an arm)")
 	}
 }
 
-func TestHasJoin(t *testing.T) {
+func TestHasTopLevelJoin(t *testing.T) {
 	users := sql.Table{Name: sql.NewIdent("users")}
 	orders := sql.Table{Name: sql.NewIdent("orders")}
 	tests := []struct {
@@ -63,8 +64,8 @@ func TestHasJoin(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := analyze.HasJoin(tt.query); got != tt.want {
-				t.Errorf("HasJoin = %v, want %v", got, tt.want)
+			if got := analyze.HasTopLevelJoin(tt.query); got != tt.want {
+				t.Errorf("HasTopLevelJoin = %v, want %v", got, tt.want)
 			}
 		})
 	}

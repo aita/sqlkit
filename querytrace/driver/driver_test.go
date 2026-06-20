@@ -84,8 +84,8 @@ func TestQueryRecordsEventAndRows(t *testing.T) {
 	if len(ev.Query.Tables) != 1 || ev.Query.Tables[0] != "users" {
 		t.Errorf("tables = %v, want [users]", ev.Query.Tables)
 	}
-	if !ev.Query.HasWhere {
-		t.Error("HasWhere = false, want true")
+	if !ev.Query.HasTopLevelWhere {
+		t.Error("HasTopLevelWhere = false, want true")
 	}
 	if ev.Caller == nil {
 		t.Error("caller not captured under CallerAlways")
