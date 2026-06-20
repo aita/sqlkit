@@ -7,3 +7,6 @@
 
 # throwaway program "sqlkit migrate" builds to run a project's migrations
 .sqlkit-migrate-*
+
+# querytrace example binary
+/examples/querytrace/querytrace

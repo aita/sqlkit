@@ -1,0 +1,20 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>querytrace demos</title><style>{{css}}</style></head>
+<body>
+  <h1>querytrace web demos</h1>
+  <p>Each endpoint runs a different piece of bad SQL code. Open one and read the
+     trace it produced — its warnings and its statement timeline. Append
+     <code>?format=json</code> to any URL (or send <code>Accept: application/json</code>)
+     to get the trace as JSON.</p>
+  <div class="cards">
+    {{range .}}
+    <div class="card">
+      <h3><a href="{{.Path}}">{{.Title}}</a></h3>
+      <p><code>GET {{.Path}}</code></p>
+      <p>{{.Desc}}</p>
+      {{if .Expect}}<p>{{range .Expect}}<span class="badge">{{.}}</span>{{end}}</p>
+      {{else}}<p class="none">no warnings expected</p>{{end}}
+    </div>
+    {{end}}
+  </div>
+</body></html>
