@@ -61,16 +61,54 @@ func Star() StarSelection { return StarSelection{} }
 // whole alongside individual columns of others (SELECT users.*, profiles.bio).
 func StarOf(qualifier string) StarSelection { return StarSelection{Qualifier: NewIdent(qualifier)} }
 
-// ValueExpression binds a value as a SQL argument.
+// ValueExpression binds a value as a SQL argument. Quoted records whether the
+// value should render as a single-quoted string literal in the inline compile
+// mode (see CompileInline); it does not affect the normal placeholder-binding
+// compile. Val sets it for a plain string or a Quoter; for any other
+// string-wrapping type, mark it with Quote.
 type ValueExpression struct {
 	posField
-	Value any
+	Value  any
+	Quoted bool
 }
 
 func (ValueExpression) SQLExpression() {}
 
-// Val creates a bind parameter expression.
-func Val(value any) ValueExpression { return ValueExpression{Value: value} }
+// Quoter lets a value opt into being rendered as a single-quoted string literal
+// by the inline compile mode (see CompileInline), so a string-wrapping type (a
+// SecureString, say) whose Go type is not a plain string is quoted without an
+// explicit Quote call. Val consults it when constructing a ValueExpression.
+type Quoter interface {
+	SQLQuoted() bool
+}
+
+// Val creates a bind parameter expression, marking it Quoted when value is a
+// plain string or a Quoter that reports true. A non-string type that does not
+// implement Quoter can still be marked with Quote.
+func Val(value any) ValueExpression {
+	return ValueExpression{Value: value, Quoted: quoted(value)}
+}
+
+// quoted reports whether value should render as a quoted string literal in the
+// inline mode: a plain string, or a value that opts in through Quoter.
+func quoted(value any) bool {
+	switch v := value.(type) {
+	case string:
+		return true
+	case Quoter:
+		return v.SQLQuoted()
+	}
+	return false
+}
+
+// Quote marks the value to render as a single-quoted string literal in the
+// inline compile mode, for a value whose Go type is not a plain string and does
+// not implement Quoter — a string-wrapping type from another package, say. It
+// does not affect the placeholder-binding compile.
+func (e ValueExpression) Quote() ValueExpression {
+	e.Quoted = true
+	return e
+}
 
 // Int creates an integer bind parameter expression.
 func Int(value int) ValueExpression { return Val(value) }
