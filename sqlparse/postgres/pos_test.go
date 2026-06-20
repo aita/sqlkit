@@ -166,6 +166,48 @@ func TestParseStatementPosition(t *testing.T) {
 	}
 }
 
+// TestParseDDLStatementPosition checks the parser records a DDL statement's
+// offset on its node, the same way it does for DML: SetPos now reaches the DDL
+// statements and their builders, so a parsed CREATE TABLE reports where it began.
+func TestParseDDLStatementPosition(t *testing.T) {
+	src := "CREATE TABLE users (id integer)"
+	q, err := postgres.ParseOne(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, ok := sql.Unwrap(q).(sql.Node)
+	if !ok {
+		t.Fatalf("DDL statement %T does not satisfy Node", sql.Unwrap(q))
+	}
+	if got, want := n.Pos(), strings.Index(src, "CREATE"); got != want {
+		t.Errorf("CREATE TABLE offset = %d, want %d", got, want)
+	}
+}
+
+// TestParseDDLStatementPositionOffset checks a DDL statement that does not start
+// at byte 0 records its true offset, using the second of two statements.
+func TestParseDDLStatementPositionOffset(t *testing.T) {
+	src := "SELECT 1; DROP TABLE users"
+	qs, err := postgres.Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(qs) != 2 {
+		t.Fatalf("parsed %d statements, want 2", len(qs))
+	}
+	n, ok := sql.Unwrap(qs[1]).(sql.Node)
+	if !ok {
+		t.Fatalf("DDL statement %T does not satisfy Node", sql.Unwrap(qs[1]))
+	}
+	got := n.Pos()
+	if got == sql.NoPos {
+		t.Fatal("DROP TABLE statement carries no position")
+	}
+	if !strings.HasPrefix(strings.TrimSpace(src[got:]), "DROP TABLE") {
+		t.Errorf("statement offset %d does not reach DROP TABLE: %q", got, src[got:])
+	}
+}
+
 // TestBuiltNodesHaveNoPos pins that builder-constructed nodes carry NoPos: only
 // parsing records positions.
 func TestBuiltNodesHaveNoPos(t *testing.T) {

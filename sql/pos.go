@@ -32,49 +32,129 @@ func (p posField) Pos() int { return p.NodePos - 1 }
 // PostgreSQL records that offset on the RawStmt wrapper, not on the statement
 // node, and the builders keep their statement in an unexported field, so it
 // cannot be set from outside the package. A query kind that carries no position
-// (a DDL builder, a raw passthrough) is returned unchanged.
+// (a raw passthrough) is returned unchanged.
 func SetPos(q Query, pos int) Query {
-	switch b := q.(type) {
-	case SelectBuilder:
-		b.s.NodePos = pos
-		return b
-	case CompoundBuilder:
-		b.s.NodePos = pos
-		return b
-	case InsertBuilder:
-		b.s.NodePos = pos
-		return b
-	case UpdateBuilder:
-		b.s.NodePos = pos
-		return b
-	case DeleteBuilder:
-		b.s.NodePos = pos
-		return b
-	case MergeBuilder:
-		b.s.NodePos = pos
-		return b
-	case ValuesQuery:
-		b.NodePos = pos
-		return b
-	case SelectStmt:
-		b.NodePos = pos
-		return b
-	case CompoundStmt:
-		b.NodePos = pos
-		return b
-	case InsertStmt:
-		b.NodePos = pos
-		return b
-	case UpdateStmt:
-		b.NodePos = pos
-		return b
-	case DeleteStmt:
-		b.NodePos = pos
-		return b
-	case MergeStmt:
-		b.NodePos = pos
-		return b
-	default:
-		return q
+	if s, ok := q.(posSetter); ok {
+		return s.setPos(pos)
 	}
+	return q
 }
+
+// posSetter is implemented by every statement node and its fluent builder: a
+// value that can record a top-level source position and return itself. A
+// builder sets the offset on the statement it wraps (its unexported field), a
+// statement value on its own embedded posField. SetPos uses it to attach a
+// parsed statement's offset uniformly, without enumerating every concrete kind
+// at the call site or knowing which one it holds. The methods live here, beside
+// SetPos, so the whole position-setting seam reads in one place.
+type posSetter interface {
+	Query
+	setPos(pos int) Query
+}
+
+// DML statements and their builders.
+
+func (b SelectBuilder) setPos(pos int) Query   { b.s.NodePos = pos; return b }
+func (b CompoundBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
+func (b InsertBuilder) setPos(pos int) Query   { b.s.NodePos = pos; return b }
+func (b UpdateBuilder) setPos(pos int) Query   { b.s.NodePos = pos; return b }
+func (b DeleteBuilder) setPos(pos int) Query   { b.s.NodePos = pos; return b }
+func (b MergeBuilder) setPos(pos int) Query    { b.s.NodePos = pos; return b }
+
+func (s SelectStmt) setPos(pos int) Query   { s.NodePos = pos; return s }
+func (s CompoundStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+func (s InsertStmt) setPos(pos int) Query   { s.NodePos = pos; return s }
+func (s UpdateStmt) setPos(pos int) Query   { s.NodePos = pos; return s }
+func (s DeleteStmt) setPos(pos int) Query   { s.NodePos = pos; return s }
+func (s MergeStmt) setPos(pos int) Query    { s.NodePos = pos; return s }
+func (q ValuesQuery) setPos(pos int) Query  { q.NodePos = pos; return q }
+
+// DDL statements and their builders.
+
+func (b CreateSchemaBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
+func (b DropSchemaBuilder) setPos(pos int) Query   { b.s.NodePos = pos; return b }
+func (b CreateTableBuilder) setPos(pos int) Query  { b.s.NodePos = pos; return b }
+func (b DropTableBuilder) setPos(pos int) Query    { b.s.NodePos = pos; return b }
+func (b CreateViewBuilder) setPos(pos int) Query   { b.s.NodePos = pos; return b }
+func (b DropViewBuilder) setPos(pos int) Query     { b.s.NodePos = pos; return b }
+func (b CreateIndexBuilder) setPos(pos int) Query  { b.s.NodePos = pos; return b }
+func (b TruncateBuilder) setPos(pos int) Query     { b.s.NodePos = pos; return b }
+func (b AlterTableBuilder) setPos(pos int) Query   { b.s.NodePos = pos; return b }
+
+func (s CreateSchemaStmt) setPos(pos int) Query    { s.NodePos = pos; return s }
+func (s DropSchemaStmt) setPos(pos int) Query      { s.NodePos = pos; return s }
+func (s CreateTableStmt) setPos(pos int) Query     { s.NodePos = pos; return s }
+func (s DropTableStmt) setPos(pos int) Query       { s.NodePos = pos; return s }
+func (s CreateViewStmt) setPos(pos int) Query      { s.NodePos = pos; return s }
+func (s DropViewStmt) setPos(pos int) Query        { s.NodePos = pos; return s }
+func (s CreateIndexStmt) setPos(pos int) Query     { s.NodePos = pos; return s }
+func (s DropIndexStmt) setPos(pos int) Query       { s.NodePos = pos; return s }
+func (s TruncateStmt) setPos(pos int) Query        { s.NodePos = pos; return s }
+func (s DropForeignKeyStmt) setPos(pos int) Query  { s.NodePos = pos; return s }
+func (s CommentOnTableStmt) setPos(pos int) Query  { s.NodePos = pos; return s }
+func (s CommentOnColumnStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+func (s AlterTableStmt) setPos(pos int) Query      { s.NodePos = pos; return s }
+
+// Enum / type DDL.
+
+func (b DropTypeBuilder) setPos(pos int) Query          { b.s.NodePos = pos; return b }
+func (b AlterTypeAddValueBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
+
+func (s CreateEnumStmt) setPos(pos int) Query           { s.NodePos = pos; return s }
+func (s DropTypeStmt) setPos(pos int) Query             { s.NodePos = pos; return s }
+func (s AlterTypeAddValueStmt) setPos(pos int) Query    { s.NodePos = pos; return s }
+func (s AlterTypeRenameValueStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+
+// Extension DDL.
+
+func (b CreateExtensionBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
+func (b DropExtensionBuilder) setPos(pos int) Query   { b.s.NodePos = pos; return b }
+
+func (s CreateExtensionStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+func (s DropExtensionStmt) setPos(pos int) Query   { s.NodePos = pos; return s }
+
+// Materialized view DDL.
+
+func (b CreateMaterializedViewBuilder) setPos(pos int) Query  { b.s.NodePos = pos; return b }
+func (b DropMaterializedViewBuilder) setPos(pos int) Query    { b.s.NodePos = pos; return b }
+func (b RefreshMaterializedViewBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
+
+func (s CreateMaterializedViewStmt) setPos(pos int) Query  { s.NodePos = pos; return s }
+func (s DropMaterializedViewStmt) setPos(pos int) Query    { s.NodePos = pos; return s }
+func (s RefreshMaterializedViewStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+
+// Privilege DDL.
+
+func (b GrantBuilder) setPos(pos int) Query  { b.s.NodePos = pos; return b }
+func (b RevokeBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
+
+func (s GrantStmt) setPos(pos int) Query  { s.NodePos = pos; return s }
+func (s RevokeStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+
+// Rename DDL.
+
+func (s RenameTableStmt) setPos(pos int) Query  { s.NodePos = pos; return s }
+func (s RenameColumnStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+
+// Sequence DDL.
+
+func (b CreateSequenceBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
+func (b DropSequenceBuilder) setPos(pos int) Query   { b.s.NodePos = pos; return b }
+
+func (s CreateSequenceStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+func (s DropSequenceStmt) setPos(pos int) Query   { s.NodePos = pos; return s }
+
+// Function DDL.
+
+func (b CreateFunctionBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
+func (b DropFunctionBuilder) setPos(pos int) Query   { b.s.NodePos = pos; return b }
+
+func (s CreateFunctionStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+func (s DropFunctionStmt) setPos(pos int) Query   { s.NodePos = pos; return s }
+
+// Session/administrative statements.
+
+func (s UseStmt) setPos(pos int) Query          { s.NodePos = pos; return s }
+func (s LockTablesStmt) setPos(pos int) Query   { s.NodePos = pos; return s }
+func (s UnlockTablesStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+func (s SetStmt) setPos(pos int) Query          { s.NodePos = pos; return s }
