@@ -19,7 +19,9 @@ to your APM stack. `querytrace` answers a different question:
 > For this request/usecase, what did the code ask the database to do, and from
 > where?
 
-This package lives under `x/` with its own module.
+This package is part of the root `github.com/aita/sqlkit` module; its only
+optional add-on is `querytrace/otelquery` (OpenTelemetry export), which is a
+separate module so the OpenTelemetry SDK stays out of the core.
 
 ## What it catches
 
