@@ -209,3 +209,9 @@ func TestColumnSimilarTo(t *testing.T) {
 		`SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."email" SIMILAR TO $1)`,
 		[]any{"%@example.com"})
 }
+
+func TestColumnMatch(t *testing.T) {
+	where(t, sqlkit.Match("alice", Users.Email),
+		`(to_tsvector("public"."users"."email") @@ plainto_tsquery($1))`,
+		[]any{"alice"})
+}

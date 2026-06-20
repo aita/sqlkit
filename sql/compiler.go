@@ -408,6 +408,34 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 			return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support SIMILAR TO", c.Dialect.Name())
 		}
 		return matcher.SimilarTo(leftSQL, patternSQL, e.Negate), args, nil
+	case MatchExpression:
+		if len(e.Columns) == 0 {
+			return "", nil, fmt.Errorf("sqlkit/sql: full-text search requires at least one column")
+		}
+		columns := make([]string, len(e.Columns))
+		var args []any
+		for i, col := range e.Columns {
+			colSQL, colArgs, err := c.CompileExpression(col)
+			if err != nil {
+				return "", nil, err
+			}
+			columns[i] = colSQL
+			args = append(args, colArgs...)
+		}
+		querySQL, queryArgs, err := c.CompileExpression(e.Query)
+		if err != nil {
+			return "", nil, err
+		}
+		args = append(args, queryArgs...)
+		searcher, ok := c.Dialect.(FullTextSearcher)
+		if !ok {
+			return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support full-text search", c.Dialect.Name())
+		}
+		out, err := searcher.Match(columns, querySQL, e.Mode == FTSBoolean, e.Config)
+		if err != nil {
+			return "", nil, err
+		}
+		return out, args, nil
 	case NullPredicate:
 		operandSQL, args, err := c.CompileExpression(e.Operand)
 		if err != nil {
