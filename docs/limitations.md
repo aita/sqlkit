@@ -21,8 +21,10 @@ PostgreSQL); override with `WithDialect`.
 
 ## Feature support by dialect
 
-✅ supported · ⚠️ supported with a caveat (see **Notes**) · ❌ not supported
-(rejected at compile time with a descriptive error, not malformed SQL).
+- ✅ supported
+- ⚠️ supported with a caveat (see **Notes**)
+- ❌ not supported (rejected at compile time with a descriptive error, not
+  malformed SQL)
 
 | Feature | PostgreSQL | MySQL | Notes |
 | --- | :---: | :---: | --- |
