@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aita/sqlkit"
 	"github.com/aita/sqlkit/internal/testutil"
@@ -253,4 +254,81 @@ type toManyScalarUser struct {
 type nullableKeyUser struct {
 	ID    *int64 `sqlkit:"id"`
 	Posts []prePost
+}
+
+// Items exercises the write-time tag options: a JSON column, an optimistic-lock
+// version column, and a database-generated read-only column. Its columns are
+// id (pk), sku, meta (json), rev (version), created (read-only). None are
+// defaulted, so column selection turns purely on the tag options.
+type ItemsTable struct {
+	info    sqlkit.TableInfo
+	ID      sqlkit.Column[int64]
+	SKU     sqlkit.Column[string]
+	Meta    sqlkit.Column[string]
+	Rev     sqlkit.Column[int64]
+	Created sqlkit.Column[int64]
+}
+
+var Items = func() ItemsTable {
+	info := sqlkit.TableInfo{Schema: "public", Name: "items"}
+	return ItemsTable{
+		info:    info,
+		ID:      sqlkit.NewColumn[int64](info, "id"),
+		SKU:     sqlkit.NewColumn[string](info, "sku"),
+		Meta:    sqlkit.NewColumn[string](info, "meta"),
+		Rev:     sqlkit.NewColumn[int64](info, "rev"),
+		Created: sqlkit.NewColumn[int64](info, "created"),
+	}
+}()
+
+func (t ItemsTable) Info() sqlkit.TableInfo             { return t.info }
+func (t ItemsTable) SQLSource() sqlkit.SourceExpression { return t.info.SQLSource() }
+func (t ItemsTable) Columns() []sqlkit.AnyColumn {
+	return []sqlkit.AnyColumn{t.ID, t.SKU, t.Meta, t.Rev, t.Created}
+}
+func (t ItemsTable) PrimaryKey() []sqlkit.AnyColumn { return []sqlkit.AnyColumn{t.ID} }
+func (t ItemsTable) Defaulted() []sqlkit.AnyColumn  { return nil }
+
+// Item is a row DTO that opts into every write-time tag option.
+type Item struct {
+	ID      int64          `sqlkit:"id"`
+	SKU     string         `sqlkit:"sku"`
+	Meta    map[string]any `sqlkit:"meta,json"`
+	Rev     int64          `sqlkit:"rev,version"`
+	Created int64          `sqlkit:"created,readonly"`
+}
+
+// Events exercises the `touch` tag option: an app-maintained timestamp column
+// set to CURRENT_TIMESTAMP on every INSERT and implicit SetStruct UPDATE. Its
+// columns are id (pk), name, and updated_at (touch); none are defaulted.
+type EventsTable struct {
+	info      sqlkit.TableInfo
+	ID        sqlkit.Column[int64]
+	Name      sqlkit.Column[string]
+	UpdatedAt sqlkit.Column[time.Time]
+}
+
+var Events = func() EventsTable {
+	info := sqlkit.TableInfo{Schema: "public", Name: "events"}
+	return EventsTable{
+		info:      info,
+		ID:        sqlkit.NewColumn[int64](info, "id"),
+		Name:      sqlkit.NewColumn[string](info, "name"),
+		UpdatedAt: sqlkit.NewColumn[time.Time](info, "updated_at"),
+	}
+}()
+
+func (t EventsTable) Info() sqlkit.TableInfo             { return t.info }
+func (t EventsTable) SQLSource() sqlkit.SourceExpression { return t.info.SQLSource() }
+func (t EventsTable) Columns() []sqlkit.AnyColumn {
+	return []sqlkit.AnyColumn{t.ID, t.Name, t.UpdatedAt}
+}
+func (t EventsTable) PrimaryKey() []sqlkit.AnyColumn { return []sqlkit.AnyColumn{t.ID} }
+func (t EventsTable) Defaulted() []sqlkit.AnyColumn  { return nil }
+
+// Event is a row DTO whose updated_at opts into the touch option.
+type Event struct {
+	ID        int64     `sqlkit:"id"`
+	Name      string    `sqlkit:"name"`
+	UpdatedAt time.Time `sqlkit:"updated_at,touch"`
 }

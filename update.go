@@ -161,6 +161,12 @@ func (q UpdateQuery) structAssignments(row any, columns []AnyColumn) (assignment
 			versionCol, versionCur = name, value
 			continue
 		}
+		// A touch field in an implicit update is set to the current time rather
+		// than copied from the struct; name it explicitly to override.
+		if f.Touch && !explicit {
+			assignments = append(assignments, sql.Set(name, sql.CurrentTimestamp()))
+			continue
+		}
 		if f.JSON {
 			value = jsonValue{v: value}
 		}

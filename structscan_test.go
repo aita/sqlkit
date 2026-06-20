@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -425,5 +426,31 @@ func TestSetColumnsErrors(t *testing.T) {
 	}
 	if err := sqlkit.SetColumns(&row, []string{"id"}, []any{"not-an-int"}); err == nil {
 		t.Fatal("SetColumns() with an inconvertible value should error")
+	}
+}
+
+func TestScanJSONColumn(t *testing.T) {
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			return testutil.Result{
+				Columns: []string{"id", "sku", "meta", "rev", "created"},
+				Rows: [][]driver.Value{
+					{int64(1), "abc", []byte(`{"k":"v"}`), int64(3), int64(99)},
+					{int64(2), "def", nil, int64(1), int64(0)}, // NULL meta
+				},
+			}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var items []Item
+	if err := db.Select().From(Items).All(context.Background()).Scan(&items); err != nil {
+		t.Fatalf("Scan() error = %v", err)
+	}
+	if want := map[string]any{"k": "v"}; !reflect.DeepEqual(items[0].Meta, want) {
+		t.Fatalf("items[0].Meta = %#v, want %#v", items[0].Meta, want)
+	}
+	if items[1].Meta != nil {
+		t.Fatalf("items[1].Meta = %#v, want nil for NULL", items[1].Meta)
 	}
 }

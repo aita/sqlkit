@@ -5,6 +5,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/aita/sqlkit"
 	"github.com/aita/sqlkit/internal/testutil"
@@ -162,4 +163,63 @@ func TestUpdateWithoutReturningHasNoAll(t *testing.T) {
 	assertToSQL(t, query,
 		`UPDATE "public"."users" SET "email" = $1 WHERE ("public"."users"."id" = $2)`,
 		[]any{"x@example.com", int64(1)})
+}
+
+func TestUpdateSetStructVersionReadonlyJSON(t *testing.T) {
+	item := Item{ID: 1, SKU: "abc", Meta: map[string]any{"k": "v"}, Rev: 3, Created: 99}
+
+	// Implicit update: read-only "created" excluded, "meta" written as JSON, and
+	// the version column bumped with a guard on its current value (3).
+	assertToSQL(t,
+		sqlkit.Update(Items).SetStruct(item).Where(Items.ID.Eq(item.ID)),
+		`UPDATE "public"."items" SET "sku" = $1, "meta" = $2, "rev" = ("rev" + $3) WHERE (("rev" = $4) AND ("public"."items"."id" = $5))`,
+		nil)
+}
+
+func TestSetStructVersionGuardConflict(t *testing.T) {
+	item := Item{ID: 1, SKU: "abc", Rev: 3}
+
+	// Zero rows affected under the tag-driven version guard is a conflict.
+	zero := int64(0)
+	db := sqlkit.WrapDB((&testutil.Fake{RowsAffected: &zero}).DB())
+	_, err := db.Update(Items).SetStruct(item).Where(Items.ID.Eq(item.ID)).Exec(context.Background())
+	if !errors.Is(err, sqlkit.ErrVersionConflict) {
+		t.Fatalf("Exec() error = %v, want ErrVersionConflict", err)
+	}
+
+	// A matched row is not a conflict.
+	ok := sqlkit.WrapDB((&testutil.Fake{}).DB())
+	if _, err := ok.Update(Items).SetStruct(item).Where(Items.ID.Eq(item.ID)).Exec(context.Background()); err != nil {
+		t.Fatalf("Exec() error = %v, want nil", err)
+	}
+}
+
+func TestExplicitColumnsIgnoreReadonlyAndVersionSemantics(t *testing.T) {
+	item := Item{ID: 1, Rev: 3, Created: 99}
+
+	// Naming columns explicitly overrides the implicit exclusions: a read-only
+	// column is written verbatim and a version column is copied, not bumped.
+	assertToSQL(t,
+		sqlkit.Update(Items).SetStruct(item, Items.Created, Items.Rev).Where(Items.ID.Eq(item.ID)),
+		`UPDATE "public"."items" SET "created" = $1, "rev" = $2 WHERE ("public"."items"."id" = $3)`,
+		[]any{int64(99), int64(3), int64(1)})
+}
+
+func TestUpdateSetStructTouch(t *testing.T) {
+	// Implicit update: the pk is excluded and the touch column is set to the
+	// current time rather than copied from the struct.
+	assertToSQL(t,
+		sqlkit.Update(Events).SetStruct(Event{ID: 1, Name: "closed"}).Where(Events.ID.Eq(1)),
+		`UPDATE "public"."events" SET "name" = $1, "updated_at" = CURRENT_TIMESTAMP WHERE ("public"."events"."id" = $2)`,
+		[]any{"closed", int64(1)})
+}
+
+func TestUpdateSetStructTouchExplicitOverride(t *testing.T) {
+	// Naming the touch column explicitly copies the struct value instead of
+	// using CURRENT_TIMESTAMP.
+	when := time.Date(2026, 6, 19, 0, 0, 0, 0, time.UTC)
+	assertToSQL(t,
+		sqlkit.Update(Events).SetStruct(Event{ID: 1, UpdatedAt: when}, Events.UpdatedAt).Where(Events.ID.Eq(1)),
+		`UPDATE "public"."events" SET "updated_at" = $1 WHERE ("public"."events"."id" = $2)`,
+		[]any{when, int64(1)})
 }

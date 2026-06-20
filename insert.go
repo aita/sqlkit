@@ -275,6 +275,7 @@ func (q InsertQuery) mapRows() ([]string, [][]any, error) {
 		names []string
 		paths [][]int
 		jsons []bool
+		touch []bool
 	}
 	plans := map[reflect.Type]plan{}
 	var names []string
@@ -295,13 +296,20 @@ func (q InsertQuery) mapRows() ([]string, [][]any, error) {
 		if !ok {
 			fields := reflectmap.Fields(rv.Type())
 			for _, name := range q.def.Columns {
-				// Read-only columns (identity keys, computed columns) are scanned
-				// but never inserted; their database side supplies the value.
-				if f, found := fields[strings.ToLower(name)]; found && !f.ReadOnly {
-					p.names = append(p.names, name)
-					p.paths = append(p.paths, f.Path)
-					p.jsons = append(p.jsons, f.JSON)
+				f, found := fields[strings.ToLower(name)]
+				if !found {
+					continue
 				}
+				// Read-only columns (identity keys, computed columns) are scanned
+				// but never inserted; their database side supplies the value. A
+				// touch column is written even so — to CURRENT_TIMESTAMP, set below.
+				if f.ReadOnly && !f.Touch {
+					continue
+				}
+				p.names = append(p.names, name)
+				p.paths = append(p.paths, f.Path)
+				p.jsons = append(p.jsons, f.JSON)
+				p.touch = append(p.touch, f.Touch)
 			}
 			if len(p.names) == 0 {
 				return nil, nil, fmt.Errorf("sqlkit: no fields of %s map to columns of %s",
@@ -317,6 +325,12 @@ func (q InsertQuery) mapRows() ([]string, [][]any, error) {
 		}
 		values := make([]any, len(p.paths))
 		for i, path := range p.paths {
+			// A touch column is set to the current time on every INSERT rather
+			// than copied from the struct.
+			if p.touch[i] {
+				values[i] = sql.CurrentTimestamp()
+				continue
+			}
 			value := rv.FieldByIndex(path).Interface()
 			if p.jsons[i] {
 				value = jsonValue{v: value}
