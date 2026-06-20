@@ -1,6 +1,6 @@
-// Command basic demonstrates the typed sqlkit query builder with a
+// Command minimal demonstrates the typed sqlkit query builder with a
 // hand-written table binding. Real projects generate the binding from a live
-// PostgreSQL schema with sqlkit; see examples/blog.
+// PostgreSQL schema with sqlkit; see examples/generated.
 package main
 
 import (

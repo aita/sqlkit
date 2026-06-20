@@ -1,4 +1,4 @@
-// Command querytrace-web is its own module so the cgo PostgreSQL parser
+// Command querytrace is its own module so the cgo PostgreSQL parser
 // (pg_query_go) and the modernc SQLite driver it links stay out of the main
 // examples module, which is pure Go.
 module github.com/aita/sqlkit/examples/querytrace

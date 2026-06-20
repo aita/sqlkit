@@ -1,5 +1,5 @@
-// Command blog demonstrates the typed query builder and DTO scanning against
-// the bindings generated from the catalog in schema/. The go:generate
+// Command generated demonstrates the typed query builder and DTO scanning
+// against the bindings generated from the catalog in schema/. The go:generate
 // directives below regenerate the blogdb bindings and schema.sql from that
 // catalog with the sqlkit generate and ddl commands (no hand-written
 // generator program); run them with `go generate ./...` from this directory.
@@ -23,7 +23,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/examples/blog/blogdb"
+	"github.com/aita/sqlkit/examples/generated/blogdb"
 	"github.com/aita/sqlkit/sql"
 )
 

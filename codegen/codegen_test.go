@@ -13,7 +13,7 @@ import (
 
 var update = flag.Bool("update", false, "rewrite golden files")
 
-// fixtureTables mirrors examples/blog/schema.sql: users and posts with a
+// fixtureTables mirrors examples/generated/schema.sql: users and posts with a
 // foreign key from posts.user_id to users.id.
 func fixtureTables() []meta.Table {
 	return []meta.Table{

@@ -6,7 +6,7 @@ package integration
 // one definition instead of borrowing the blog example's catalog or repeating
 // migrations inline, so a schema change touches exactly one place.
 //
-// testCatalog mirrors the generated examples/blog/blogdb bindings the typed
+// testCatalog mirrors the generated examples/generated/blogdb bindings the typed
 // query tests reference (same tables, columns, keys), so the DDL this catalog
 // renders matches the columns those bindings name.
 

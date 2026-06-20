@@ -1,4 +1,4 @@
-// Command querytrace-web is a self-contained web server that demonstrates what
+// Command querytrace is a self-contained web server that demonstrates what
 // querytrace catches. Every endpoint deliberately runs a different piece of
 // "bad code" — an N+1, a missing WHERE, a write where only reads were expected,
 // a query budget blown, a leaked cursor, an oversized IN list — and the trace

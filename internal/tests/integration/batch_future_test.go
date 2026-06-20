@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/examples/blog/blogdb"
+	"github.com/aita/sqlkit/examples/generated/blogdb"
 	"github.com/aita/sqlkit/uow"
 )
 

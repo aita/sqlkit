@@ -4,10 +4,53 @@ The schema is the source of truth. You author it once — as a `decl` catalog in
 Go, or bootstrapped from a live database — and generate the typed bindings and
 the DDL from it.
 
+- [Table bindings](#table-bindings)
 - [Declaring the schema (decl)](#declaring-the-schema-decl)
 - [Generating bindings and DDL](#generating-bindings-and-ddl)
 - [Customizing generation (codegen as a library)](#customizing-generation-codegen-as-a-library)
 - [Bootstrapping from an existing database](#bootstrapping-from-an-existing-database)
+
+## Table bindings
+
+A binding is the typed handle the query builder starts from —
+`db.Select().From(Users)`, `Users.ID.Eq(42)`. It is a plain Go value: a
+`sqlkit.TableInfo` identity, one `sqlkit.Column[T]` field per column, and a small
+set of methods the builder reads for metadata (`Info`, `SQLSource`, `Columns`,
+`PrimaryKey`, `Defaulted`). There is no ORM and no query-time reflection — the
+binding is just data describing the table, which is why `Users.ID.Eq("foo")` is a
+compile error: `ID` is a `Column[int64]`.
+
+You normally **generate** bindings from the schema rather than write them — see
+[Generating bindings and DDL](#generating-bindings-and-ddl). Hand-writing one is
+occasionally useful: to see exactly what the generator emits, or to bind a table
+that isn't declared in a catalog. The shape is small:
+
+```go
+type UsersTable struct {
+    info  sqlkit.TableInfo
+    ID    sqlkit.Column[int64]
+    Email sqlkit.Column[string]
+}
+
+var Users = func() UsersTable {
+    info := sqlkit.TableInfo{Name: "users"}
+    return UsersTable{
+        info:  info,
+        ID:    sqlkit.NewColumn[int64](info, "id"),
+        Email: sqlkit.NewColumn[string](info, "email"),
+    }
+}()
+
+func (t UsersTable) Info() sqlkit.TableInfo             { return t.info }
+func (t UsersTable) SQLSource() sqlkit.SourceExpression { return t.info.SQLSource() }
+func (t UsersTable) Columns() []sqlkit.AnyColumn        { return []sqlkit.AnyColumn{t.ID, t.Email} }
+func (t UsersTable) PrimaryKey() []sqlkit.AnyColumn     { return []sqlkit.AnyColumn{t.ID} }
+func (t UsersTable) Defaulted() []sqlkit.AnyColumn      { return []sqlkit.AnyColumn{t.ID} }
+```
+
+A runnable version is [`examples/minimal`](../examples/minimal). For anything
+real, declare the schema once and generate the bindings (and DDL) from it — the
+rest of this page.
 
 ## Declaring the schema (decl)
 
@@ -82,7 +125,7 @@ go run github.com/aita/sqlkit/cmd/sqlkit@latest ddl ./schema --out schema.sql
 ```
 
 The natural home for both is a pair of `go:generate` directives next to the
-catalog, so `go generate ./...` rebuilds them (see `examples/blog`):
+catalog, so `go generate ./...` rebuilds them (see `examples/generated`):
 
 ```go
 //go:generate go run github.com/aita/sqlkit/cmd/sqlkit@latest generate ./schema --name blogdb --out blogdb

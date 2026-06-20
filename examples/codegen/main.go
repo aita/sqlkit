@@ -37,7 +37,7 @@ import (
 )
 
 // catalog declares the schema we generate from. In a real project this is its
-// own package (see examples/blog/schema) and the source of truth for both the
+// own package (see examples/generated/schema) and the source of truth for both the
 // bindings and the DDL.
 func catalog() *decl.Catalog {
 	cat := decl.NewCatalog()
