@@ -1,0 +1,10 @@
+-- Portable set-operation statements: UNION, INTERSECT, EXCEPT.
+
+SELECT id FROM users UNION SELECT id FROM admins;
+SELECT id FROM users UNION ALL SELECT id FROM admins;
+SELECT id FROM users INTERSECT SELECT id FROM admins;
+SELECT id FROM users EXCEPT SELECT id FROM admins;
+SELECT id FROM users UNION SELECT id FROM admins ORDER BY id;
+SELECT id FROM users UNION ALL SELECT id FROM admins ORDER BY id DESC;
+SELECT id FROM users UNION SELECT id FROM admins UNION SELECT id FROM guests;
+SELECT id FROM a UNION ALL SELECT id FROM b UNION ALL SELECT id FROM c;
