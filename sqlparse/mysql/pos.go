@@ -349,7 +349,7 @@ func skipBlockComment(src string, i int) int {
 }
 
 // skipString skips a quoted string starting at the quote src[i], honoring doubled
-// quotes ('') and backslash escapes, and returns the index just past it.
+// quotes (”) and backslash escapes, and returns the index just past it.
 func skipString(src string, i int) int {
 	quote := src[i]
 	i++
@@ -372,7 +372,7 @@ func skipString(src string, i int) int {
 
 // scanQuotedIdent reads a backtick-quoted identifier starting at src[i] (the
 // backtick), returning the unquoted name and the index just past the closing
-// backtick. A doubled backtick (``) is an escaped backtick within the name.
+// backtick. A doubled backtick (“) is an escaped backtick within the name.
 func scanQuotedIdent(src string, i int) (string, int) {
 	i++ // opening backtick
 	var b strings.Builder
