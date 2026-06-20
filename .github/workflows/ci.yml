@@ -119,14 +119,15 @@ jobs:
       - name: golangci-lint
         run: |
           export PATH="$(go env GOPATH)/bin:$PATH"
-          config="$PWD/.golangci.yml"
           status=0
-          # The repo is several Go modules; lint each one against the shared
-          # config. Keep going on failure so every module's findings are
-          # reported in a single run.
+          # The repo is several Go modules; lint each one. golangci-lint picks up
+          # the nearest config, so every module under the root uses the root
+          # .golangci.yml while examples/ (and examples/querytrace) use the
+          # stricter examples/.golangci.yml. Keep going on failure so every
+          # module's findings surface in one run.
           for dir in . cmd/sqlkit examples examples/querytrace internal/integration querytrace/otelquery sqlparse/postgres sqlparse/mysql; do
             echo "::group::golangci-lint $dir"
-            (cd "$dir" && golangci-lint run --config "$config" ./...) || status=1
+            (cd "$dir" && golangci-lint run ./...) || status=1
             echo "::endgroup::"
           done
           exit $status

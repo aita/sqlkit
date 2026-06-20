@@ -40,7 +40,7 @@ func init() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	ddl, err := os.ReadFile("schema.sql")
 	if err != nil {
 		log.Fatal(err)
@@ -55,7 +55,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Introspect the schema into metadata, carrying each column's comment.
 	md, err := introspect.Schema(context.Background(), db, "postgres", "public")
