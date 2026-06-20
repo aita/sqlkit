@@ -14,10 +14,7 @@ are grouped here so the repo's test suites are discoverable in one place.
 | Suite | Verifies | Needs a database? | Heavy deps | CI job |
 |---|---|---|---|---|
 | [`roundtrip`](roundtrip) | The compiler never emits SQL its own grammar rejects, and rendering is stable (a **static / syntactic** oracle). | No | the two SQL **parsers** (`pg_query_go` cgo, TiDB parser) | unit-test |
-| [`integration`](../integration) | The full stack — builder, scanner, DDL, introspection, migrations — behaves correctly when **executed** against real engines (a **dynamic / behavioral** oracle). | Yes (real PostgreSQL + MySQL) | `testcontainers`, `pgx`, the MySQL driver | integration |
-
-> `integration` currently still lives at `internal/integration`; moving it here
-> alongside `roundtrip` is a follow-up so the umbrella is consistent.
+| [`integration`](integration) | The full stack — builder, scanner, DDL, introspection, migrations — behaves correctly when **executed** against real engines (a **dynamic / behavioral** oracle). | Yes (real PostgreSQL + MySQL) | `testcontainers`, `pgx`, the MySQL driver | integration |
 
 ## How they relate
 

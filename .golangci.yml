@@ -2,8 +2,9 @@
 #
 # This is the repo-root config. golangci-lint uses the nearest config to the
 # directory it runs in, so this file governs the root module and the satellite
-# modules that sit under it (cmd/sqlkit, internal/integration, the sqlparse/*
-# frontends and querytrace/otelquery). The examples module has its own stricter
+# modules that sit under it (cmd/sqlkit, internal/tests/integration,
+# internal/tests/roundtrip, the sqlparse/* frontends and querytrace/otelquery).
+# The examples module has its own stricter
 # config (examples/.golangci.yml) and deliberately does NOT inherit the errcheck
 # exclusions below — example code should model proper error handling.
 #
