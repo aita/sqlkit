@@ -423,11 +423,6 @@ func TestCreateViewRejectsBoundValues(t *testing.T) {
 	if _, _, err := CreateView(Table{Name: "v"}, body).ToSQL(mustDialect(t, "postgres")); err == nil {
 		t.Error("CreateView with a value-binding body: expected error")
 	}
-	// SQLite has no OR REPLACE for views.
-	ok := Select(Star()).From(Table{Name: "t"})
-	if _, _, err := CreateView(Table{Name: "v"}, ok).OrReplace().ToSQL(mustDialect(t, "sqlite")); err == nil {
-		t.Error("CreateView().OrReplace() on sqlite: expected error")
-	}
 }
 
 func TestDropView(t *testing.T) {
@@ -458,34 +453,6 @@ func TestPrimaryKeyAlterations(t *testing.T) {
 	}
 	if got, want := mustDDL(t, drop, "postgres"), `ALTER TABLE "t" DROP CONSTRAINT "t_pkey";`; got != want {
 		t.Errorf("DropPrimaryKey(postgres) =\n%s\nwant\n%s", got, want)
-	}
-}
-
-// TestSQLiteDDL covers SQLite's DDL rendering, which differs from PostgreSQL on
-// the statements SQLite cannot express: dropping a single foreign key requires
-// rebuilding the table (so it is a no-op here) and SQLite has no COMMENT syntax.
-func TestSQLiteDDL(t *testing.T) {
-	users := Table{Schema: "public", Name: "users"}
-	posts := Table{Schema: "public", Name: "posts"}
-
-	if got, want := mustDDL(t, DropTable(users).IfExists(), "sqlite"),
-		`DROP TABLE IF EXISTS "public"."users";`; got != want {
-		t.Errorf("DropTable(sqlite) = %q, want %q", got, want)
-	}
-	if got, want := mustDDL(t, DropIndex("uq_users_email", users), "sqlite"),
-		`DROP INDEX IF EXISTS "public"."uq_users_email";`; got != want {
-		t.Errorf("DropIndex(sqlite) = %q, want %q", got, want)
-	}
-	// SQLite cannot drop a single FK in place: the statement renders empty.
-	if got := mustDDL(t, DropForeignKey(posts, "fk_posts_user_id"), "sqlite"); got != "" {
-		t.Errorf("DropForeignKey(sqlite) = %q, want empty (unsupported)", got)
-	}
-	// SQLite has no COMMENT syntax, inline or standalone.
-	if got := mustDDL(t, CommentOnTable(users, "hi"), "sqlite"); got != "" {
-		t.Errorf("CommentOnTable(sqlite) = %q, want empty", got)
-	}
-	if got := mustDDL(t, CommentOnColumn(users, "email", "addr"), "sqlite"); got != "" {
-		t.Errorf("CommentOnColumn(sqlite) = %q, want empty", got)
 	}
 }
 
@@ -603,7 +570,6 @@ func TestTruncateRejections(t *testing.T) {
 		dialect string
 		want    string
 	}{
-		{"sqlite", Truncate(users), "sqlite", "TRUNCATE"},
 		{"mysql multiple", Truncate(users, logs), "mysql", "multiple tables"},
 		{"mysql cascade", Truncate(users).Cascade(), "mysql", "CASCADE"},
 	}

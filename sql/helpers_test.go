@@ -53,20 +53,6 @@ func assertSQL(t *testing.T, query Query, wantSQL string, wantArgs []any) {
 	}
 }
 
-func assertSQLite(t *testing.T, query Query, wantSQL string, wantArgs []any) {
-	t.Helper()
-	sqlText, args, err := query.ToSQL(SQLiteDialect{})
-	if err != nil {
-		t.Fatalf("ToSQL() error = %v", err)
-	}
-	if sqlText != wantSQL {
-		t.Fatalf("ToSQL() SQL = %q,\nwant %q", sqlText, wantSQL)
-	}
-	if len(wantArgs) > 0 && len(args) != len(wantArgs) {
-		t.Fatalf("ToSQL() args = %#v, want %#v", args, wantArgs)
-	}
-}
-
 func assertStandard(t *testing.T, query Query, wantSQL string, wantArgs []any) {
 	t.Helper()
 	sqlText, args, err := query.ToSQL(StandardSQLDialect{})

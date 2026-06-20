@@ -71,12 +71,11 @@ func TestLockMySQL(t *testing.T) {
 	}
 }
 
-func TestLockRejectedOnSQLiteAndStandard(t *testing.T) {
+func TestLockRejectedOnStandard(t *testing.T) {
 	q := Select(Col("id")).From(Table{Name: "jobs"}).ForUpdate()
-	for _, d := range []Dialect{SQLiteDialect{}, StandardSQLDialect{}} {
-		if _, _, err := q.ToSQL(d); err == nil || !strings.Contains(err.Error(), "row-locking") {
-			t.Fatalf("ToSQL(%s) error = %v, want row-locking rejection", d.Name(), err)
-		}
+	d := StandardSQLDialect{}
+	if _, _, err := q.ToSQL(d); err == nil || !strings.Contains(err.Error(), "row-locking") {
+		t.Fatalf("ToSQL(%s) error = %v, want row-locking rejection", d.Name(), err)
 	}
 }
 

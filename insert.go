@@ -135,7 +135,7 @@ func (q InsertQuery) OnConflict(columns ...AnyColumn) InsertQuery {
 }
 
 // OnConflictConstraint starts an upsert clause targeting a named constraint
-// (PostgreSQL ON CONFLICT ON CONSTRAINT). PostgreSQL/SQLite only.
+// (PostgreSQL ON CONFLICT ON CONSTRAINT). PostgreSQL only.
 func (q InsertQuery) OnConflictConstraint(name string) InsertQuery {
 	return q.withConflict(func(c *insertConflict) {
 		c.targetConstraint, c.target, c.targetExprs = name, nil, nil

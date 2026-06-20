@@ -427,7 +427,7 @@ func ILike(expr TypedExpr[string], pattern string) Predicate {
 
 // SimilarTo creates a SQL-standard SIMILAR TO predicate for string expressions,
 // whose pattern extends LIKE's % and _ with regex metacharacters. It is
-// supported on PostgreSQL and the standard target; MySQL and SQLite reject it.
+// supported on PostgreSQL and the standard target; MySQL rejects it.
 func SimilarTo(expr TypedExpr[string], pattern string) Predicate {
 	return newPredicate(sql.SimilarTo(expr, sql.Val(pattern)))
 }

@@ -158,7 +158,7 @@ type ExcludedRenderer interface {
 // for the MERGE statement (SQL:2003). The compiler detects it with a type
 // assertion, so it is not a breaking change to Dialect; a dialect without it (or
 // returning false) rejects MERGE at compile time. PostgreSQL (15+) and the
-// standard target support it; MySQL and SQLite do not.
+// standard target support it; MySQL does not.
 type MergeDialect interface {
 	SupportsMerge() bool
 }
@@ -188,7 +188,7 @@ type JoinedUpdateDeleter interface {
 
 // RegexpMatcher is an optional capability a Dialect implements to render a
 // regular-expression match (RegexpExpression) in its native syntax (PostgreSQL
-// ~ / ~*, MySQL and SQLite REGEXP, the SQL standard LIKE_REGEX). The compiler
+// ~ / ~*, MySQL REGEXP, the SQL standard LIKE_REGEX). The compiler
 // detects it with a type assertion, so it is not a breaking change to Dialect;
 // a dialect without it rejects regex at compile time, because regex syntax is
 // genuinely non-portable. left and pattern are already-compiled SQL fragments;
@@ -208,17 +208,6 @@ type RegexpMatcher interface {
 // (including any raw Func) passes through verbatim.
 type FuncRenderer interface {
 	RenderFunc(name string, args []string) (string, bool)
-}
-
-// InlineAutoIncrementPrimaryKey is an optional capability for dialects whose
-// auto-increment column clause already declares the primary key inline (SQLite's
-// INTEGER PRIMARY KEY AUTOINCREMENT). When it reports true, CompileCreateTable
-// omits the standalone PRIMARY KEY constraint for a single auto-increment
-// primary-key column, which would otherwise be a duplicate. The compiler detects
-// it with a type assertion; PostgreSQL/MySQL do not implement it and keep the
-// standalone constraint.
-type InlineAutoIncrementPrimaryKey interface {
-	InlinesAutoIncrementPrimaryKey() bool
 }
 
 // DerivedValuesUnionDialect is an optional capability for dialects that cannot
@@ -248,7 +237,7 @@ type ValuesCaster interface {
 
 // ArrayDialect is an optional capability for dialects with a first-class array
 // type and the ARRAY[...] constructor / "op ANY(array)" comparison (PostgreSQL).
-// MySQL and SQLite have no array type and reject array expressions
+// MySQL has no array type and rejects array expressions
 // (ArrayExpression, QuantifiedArrayExpression) at compile time. The compiler
 // detects it with a type assertion, so it is not a breaking change to Dialect.
 type ArrayDialect interface {
@@ -259,7 +248,7 @@ type ArrayDialect interface {
 
 // RowLocker is an optional capability a Dialect implements to render a SELECT
 // row-locking clause (SelectBuilder.ForUpdate / ForShare / …). PostgreSQL and
-// MySQL (8.0+) support it; SQLite and the standard target do not, and reject it
+// MySQL (8.0+) support it; the standard target does not, and rejects it
 // at compile time. The compiler detects it with a type assertion, so it is not a
 // breaking change to Dialect. strength is "UPDATE", "SHARE", "NO KEY UPDATE", or
 // "KEY SHARE"; of is the already-quoted, comma-joined OF table list ("" when
@@ -280,7 +269,7 @@ type DistinctOnDialect interface {
 
 // SimilarToMatcher is an optional capability a Dialect implements to render a
 // SQL-standard SIMILAR TO match (SimilarToExpression). PostgreSQL and the SQL
-// standard support it; MySQL and SQLite do not, and reject it at compile time
+// standard support it; MySQL does not, and rejects it at compile time
 // (the compiler detects the capability with a type assertion, so adding it is
 // not a breaking change to Dialect). left and pattern are already-compiled SQL
 // fragments; negate selects NOT SIMILAR TO.
@@ -293,7 +282,7 @@ type SimilarToMatcher interface {
 // from the SQL standard. MySQL has no IS DISTINCT FROM and uses the null-safe
 // equality operator <=> instead. The compiler detects it with a type assertion,
 // so it is not a breaking change to Dialect; a dialect without it renders the
-// standard IS [NOT] DISTINCT FROM (PostgreSQL, SQLite, the standard target).
+// standard IS [NOT] DISTINCT FROM (PostgreSQL, the standard target).
 // left and right are already-compiled SQL fragments; negate selects IS NOT
 // DISTINCT FROM (the null-safe equality).
 type NullSafeEqualityDialect interface {
@@ -301,20 +290,18 @@ type NullSafeEqualityDialect interface {
 }
 
 // DialectByName returns the Dialect for a name: "postgres"/"postgresql" (or
-// empty, the default), "mysql", "sqlite"/"sqlite3", or "standard"/"ansi"/"sql"
-// (the SQL standard / ANSI text target). It errors on an unknown name.
+// empty, the default), "mysql", or "standard"/"ansi"/"sql" (the SQL standard /
+// ANSI text target). It errors on an unknown name.
 func DialectByName(name string) (Dialect, error) {
 	switch name {
 	case "", "postgres", "postgresql":
 		return PostgreSQLDialect{}, nil
 	case "mysql":
 		return MySQLDialect{}, nil
-	case "sqlite", "sqlite3":
-		return SQLiteDialect{}, nil
 	case "standard", "ansi", "sql":
 		return StandardSQLDialect{}, nil
 	default:
-		return nil, fmt.Errorf("sql: unsupported dialect %q (want postgres, mysql, sqlite, or standard)", name)
+		return nil, fmt.Errorf("sql: unsupported dialect %q (want postgres, mysql, or standard)", name)
 	}
 }
 
@@ -536,9 +523,8 @@ func (PostgreSQLDialect) Upsert(cl UpsertClause) (string, error) {
 	return renderOnConflict(cl, "PostgreSQL")
 }
 
-// renderOnConflict renders the PostgreSQL-style ON CONFLICT clause shared by
-// PostgreSQL and SQLite (which uses the same syntax, including excluded.<col>).
-// engine names the dialect in error messages.
+// renderOnConflict renders the PostgreSQL-style ON CONFLICT clause. engine names
+// the dialect in error messages.
 func renderOnConflict(cl UpsertClause, engine string) (string, error) {
 	// ON CONFLICT DO NOTHING needs no target, but DO UPDATE requires a conflict
 	// target (column list or constraint) to arbitrate.
@@ -607,7 +593,7 @@ func (PostgreSQLDialect) JSONAccess(operand string, path []any, asText bool) (st
 }
 
 // renderArrowJSONAccess chains the -> / ->> operators (the last uses ->> when
-// asText), shared by PostgreSQL and SQLite (3.38+ has the same operators).
+// asText).
 func renderArrowJSONAccess(operand string, path []any, asText bool) (string, error) {
 	if len(path) == 0 {
 		return "", fmt.Errorf("sql: JSON access requires at least one path step")
@@ -834,121 +820,6 @@ func (MySQLDialect) JSONAccess(operand string, path []any, asText bool) (string,
 		return "JSON_UNQUOTE(" + extract + ")", nil
 	}
 	return extract, nil
-}
-
-// SQLiteDialect implements SQLite identifier quoting, placeholders, and DDL
-// rendering. SQLite is dynamically typed with type affinity, so DDL types are
-// rendered leniently; it supports RETURNING (>= 3.35), the PostgreSQL-style ON
-// CONFLICT upsert (including excluded.<col>), and the -> / ->> JSON operators
-// (>= 3.38). Its REGEXP operator requires a host-registered regexp() function.
-type SQLiteDialect struct{}
-
-// Name identifies the dialect.
-func (SQLiteDialect) Name() string { return "sqlite" }
-
-func (d SQLiteDialect) QuoteIdent(identifier string) string {
-	parts := strings.Split(identifier, ".")
-	for i, part := range parts {
-		parts[i] = d.QuoteName(part)
-	}
-	return strings.Join(parts, ".")
-}
-
-func (SQLiteDialect) QuoteName(name string) string {
-	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
-}
-
-func (SQLiteDialect) Placeholder(int) string { return "?" }
-
-// SupportsReturning reports RETURNING support (SQLite >= 3.35 has it).
-func (SQLiteDialect) SupportsReturning() bool { return true }
-
-var sqliteLengthTypes = map[string]bool{"varchar": true, "char": true}
-var sqliteDecimalTypes = map[string]bool{"numeric": true, "decimal": true}
-
-func (SQLiteDialect) ColumnType(name string, length, precision, scale int) string {
-	return typeWithArgs(strings.ToLower(name), length, precision, scale, sqliteLengthTypes, sqliteDecimalTypes)
-}
-
-var sqliteIntegerTypes = map[string]bool{"integer": true, "int": true, "bigint": true}
-
-// AutoIncrementColumn renders SQLite's rowid auto-increment clause, which also
-// declares the primary key inline (see InlinesAutoIncrementPrimaryKey).
-func (SQLiteDialect) AutoIncrementColumn(name string, length, precision, scale int) (string, bool) {
-	if !sqliteIntegerTypes[strings.ToLower(name)] {
-		return "", false
-	}
-	return "INTEGER PRIMARY KEY AUTOINCREMENT", true
-}
-
-// InlinesAutoIncrementPrimaryKey reports that the auto-increment clause already
-// declares the primary key inline, so CREATE TABLE omits the standalone
-// PRIMARY KEY constraint for that column.
-func (SQLiteDialect) InlinesAutoIncrementPrimaryKey() bool { return true }
-
-// SQLite has no COMMENT syntax, inline or standalone.
-func (SQLiteDialect) InlineColumnComment(string) string           { return "" }
-func (SQLiteDialect) InlineTableComment(string) string            { return "" }
-func (SQLiteDialect) TableCommentStatement(string, string) string { return "" }
-func (SQLiteDialect) ColumnCommentStatement(string, string, string) string {
-	return ""
-}
-
-// DropForeignKey is a no-op: SQLite cannot drop a single foreign key in place
-// (it requires rebuilding the table), so there is no standalone statement.
-func (SQLiteDialect) DropForeignKey(string, string) string { return "" }
-
-func (SQLiteDialect) DropIndex(qualifiedIndex, _, _ string) string {
-	return "DROP INDEX IF EXISTS " + qualifiedIndex + ";"
-}
-
-// Upsert renders SQLite's PostgreSQL-style ON CONFLICT clause.
-func (SQLiteDialect) Upsert(cl UpsertClause) (string, error) {
-	return renderOnConflict(cl, "SQLite")
-}
-
-// JSONAccess chains the -> / ->> operators like PostgreSQL (SQLite >= 3.38).
-func (SQLiteDialect) JSONAccess(operand string, path []any, asText bool) (string, error) {
-	return renderArrowJSONAccess(operand, path, asText)
-}
-
-// JSONObject renders SQLite's flat json_object(key, value, ...) form; the
-// aggregate is json_group_object rather than the standard JSON_OBJECTAGG.
-func (SQLiteDialect) JSONObject(funcName string, pairs [][2]string) string {
-	name := "json_object"
-	if strings.EqualFold(funcName, "JSON_OBJECTAGG") {
-		name = "json_group_object"
-	}
-	parts := make([]string, 0, len(pairs)*2)
-	for _, kv := range pairs {
-		parts = append(parts, kv[0], kv[1])
-	}
-	return name + "(" + strings.Join(parts, ", ") + ")"
-}
-
-// Regexp renders SQLite's REGEXP / NOT REGEXP operator. It requires a host-
-// registered regexp() function (SQLite ships no built-in implementation). SQLite
-// has no inline case-insensitivity flag, so a case-insensitive match is rejected.
-func (SQLiteDialect) Regexp(left, pattern string, negate, caseInsensitive bool) (string, error) {
-	if caseInsensitive {
-		return "", fmt.Errorf("sql: SQLite cannot express a case-insensitive regular-expression match inline")
-	}
-	operator := "REGEXP"
-	if negate {
-		operator = "NOT REGEXP"
-	}
-	return "(" + left + " " + operator + " " + pattern + ")", nil
-}
-
-// RenderFunc remaps canonical function names to SQLite's spelling.
-func (SQLiteDialect) RenderFunc(name string, args []string) (string, bool) {
-	switch strings.ToUpper(name) {
-	case "NOW", "CURRENT_TIMESTAMP":
-		return "CURRENT_TIMESTAMP", true
-	case "CHAR_LENGTH", "LENGTH":
-		return "LENGTH(" + strings.Join(args, ", ") + ")", true
-	}
-	return "", false
 }
 
 // StandardSQLDialect renders portable ANSI/SQL-standard text. It is a text

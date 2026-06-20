@@ -182,7 +182,7 @@ func Row(elements ...any) RowExpression {
 // FROM, the null-safe counterparts of <> and =: two NULLs are not distinct, and a
 // NULL is distinct from any non-NULL value, so the result is never itself NULL.
 // It renders per dialect: the SQL-standard IS [NOT] DISTINCT FROM (PostgreSQL,
-// SQLite, the standard target) and, through a NullSafeEqualityDialect, MySQL's
+// the standard target) and, through a NullSafeEqualityDialect, MySQL's
 // null-safe equality operator <=> (a <=> b for IS NOT DISTINCT FROM, NOT (a <=>
 // b) for IS DISTINCT FROM).
 type DistinctPredicate struct {
@@ -246,7 +246,7 @@ func ILike(left, pattern any) ILikeExpression {
 
 // RegexpExpression is a regular-expression match. Regex syntax and operators
 // are genuinely non-portable, so it renders per dialect through a RegexpMatcher
-// (PostgreSQL ~ / ~* / !~ / !~*, MySQL and SQLite REGEXP / NOT REGEXP, the SQL
+// (PostgreSQL ~ / ~* / !~ / !~*, MySQL REGEXP / NOT REGEXP, the SQL
 // standard LIKE_REGEX [FLAG 'i']); a dialect without that capability rejects it
 // at compile time. CaseInsensitive selects a case-insensitive match where the
 // dialect can express one inline (it errors on dialects that cannot).
@@ -291,7 +291,7 @@ func NotIRegexp(left, pattern any) RegexpExpression {
 // SimilarToExpression matches a string against a SQL regular expression with the
 // SQL-standard SIMILAR TO operator, whose pattern language is LIKE's (% and _)
 // extended with the regex metacharacters | * + ? () [] {}. It is genuinely
-// non-portable — PostgreSQL and the SQL standard have it, MySQL and SQLite do
+// non-portable — PostgreSQL and the SQL standard have it, MySQL does
 // not — so it renders through a SimilarToMatcher and a dialect without that
 // capability rejects it at compile time.
 type SimilarToExpression struct {
@@ -451,7 +451,7 @@ func ScalarSubquery(query Query) ScalarSubqueryExpression {
 }
 
 // ArrayExpression is an ARRAY[...] constructor. Arrays are non-portable —
-// PostgreSQL has a first-class array type, MySQL and SQLite do not — so it
+// PostgreSQL has a first-class array type, MySQL does not — so it
 // renders through an ArrayDialect and a dialect without that capability rejects
 // it at compile time.
 type ArrayExpression struct {

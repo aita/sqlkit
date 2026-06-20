@@ -55,11 +55,7 @@ func (c *Compiler) CompileCreateTable(s CreateTableStmt) (string, error) {
 		}
 		defs = append(defs, def)
 	}
-	// Some dialects declare the primary key inline on the auto-increment column
-	// (SQLite's INTEGER PRIMARY KEY AUTOINCREMENT); for those, a separate
-	// PRIMARY KEY constraint over that single column would be a duplicate, so
-	// skip it. PostgreSQL/MySQL keep the standalone constraint as before.
-	if len(s.PrimaryKey) > 0 && !c.inlinesAutoIncrementPK(s) {
+	if len(s.PrimaryKey) > 0 {
 		defs = append(defs, "PRIMARY KEY ("+c.quoteAll(s.PrimaryKey)+")")
 	}
 	for _, check := range s.Checks {
@@ -118,31 +114,6 @@ func (c *Compiler) CompileCreateTable(s CreateTableStmt) (string, error) {
 	}
 	sb.WriteString(")" + c.Dialect.InlineTableComment(s.Comment) + ";")
 	return sb.String(), nil
-}
-
-// inlinesAutoIncrementPK reports whether the table's primary key is a single
-// auto-increment column whose clause already declares the primary key inline for
-// this dialect (so CompileCreateTable must not also emit a standalone PRIMARY
-// KEY constraint). It is false for dialects that do not implement
-// InlineAutoIncrementPrimaryKey (PostgreSQL, MySQL), keeping their output
-// unchanged.
-func (c *Compiler) inlinesAutoIncrementPK(s CreateTableStmt) bool {
-	ip, ok := c.Dialect.(InlineAutoIncrementPrimaryKey)
-	if !ok || !ip.InlinesAutoIncrementPrimaryKey() || len(s.PrimaryKey) != 1 {
-		return false
-	}
-	for _, col := range s.Columns {
-		if col.Name != s.PrimaryKey[0] || !col.AutoIncrement {
-			continue
-		}
-		ai, ok := col.Type.(AutoIncrementColumnType)
-		if !ok {
-			return false
-		}
-		_, rendered := ai.RenderAutoIncrement(c.Dialect)
-		return rendered
-	}
-	return false
 }
 
 // compileColumnDef renders a single column definition, including any inline
@@ -231,10 +202,9 @@ func (c *Compiler) compileColumnDef(col ColumnDef) (string, error) {
 }
 
 // requireIdentity guards IDENTITY columns, which PostgreSQL and the standard
-// target support but MySQL and SQLite do not (they use AutoIncrement).
+// target support but MySQL does not (it uses AutoIncrement).
 func (c *Compiler) requireIdentity() error {
-	switch c.Dialect.Name() {
-	case "mysql", "sqlite":
+	if c.Dialect.Name() == "mysql" {
 		return fmt.Errorf("sqlkit/sql: the %s dialect has no IDENTITY columns; use an auto-increment column instead", c.Dialect.Name())
 	}
 	return nil
@@ -317,9 +287,6 @@ func (c *Compiler) CompileCreateView(s CreateViewStmt) (string, error) {
 	if s.Query == nil {
 		return "", fmt.Errorf("sqlkit/sql: CREATE VIEW requires a query")
 	}
-	if s.OrReplace && c.Dialect.Name() == "sqlite" {
-		return "", fmt.Errorf("sqlkit/sql: SQLite does not support CREATE OR REPLACE VIEW; drop and recreate instead")
-	}
 	body, args, err := s.Query.ToSQL(c.Dialect)
 	if err != nil {
 		return "", err
@@ -344,7 +311,7 @@ func (c *Compiler) CompileCreateView(s CreateViewStmt) (string, error) {
 }
 
 // CompileDropView renders a DROP VIEW statement (CASCADE is PostgreSQL/standard
-// only; MySQL and SQLite have no CASCADE clause for DROP VIEW).
+// only; MySQL has no CASCADE clause for DROP VIEW).
 func (c *Compiler) CompileDropView(s DropViewStmt) (string, error) {
 	var sb strings.Builder
 	sb.WriteString("DROP VIEW ")
@@ -352,7 +319,7 @@ func (c *Compiler) CompileDropView(s DropViewStmt) (string, error) {
 		sb.WriteString("IF EXISTS ")
 	}
 	sb.WriteString(c.qualify(s.Table))
-	if s.Cascade && c.Dialect.Name() != "mysql" && c.Dialect.Name() != "sqlite" {
+	if s.Cascade && c.Dialect.Name() != "mysql" {
 		sb.WriteString(" CASCADE")
 	}
 	sb.WriteString(";")
@@ -385,17 +352,13 @@ func (c *Compiler) CompileDropIndex(s DropIndexStmt) (string, error) {
 }
 
 // CompileTruncate renders a TRUNCATE TABLE statement. RESTART IDENTITY and
-// CASCADE, and truncating more than one table, are PostgreSQL features; SQLite
-// has no TRUNCATE. The unsupported combinations are rejected rather than
-// silently mis-rendered.
+// CASCADE, and truncating more than one table, are PostgreSQL features. The
+// unsupported combinations are rejected rather than silently mis-rendered.
 func (c *Compiler) CompileTruncate(s TruncateStmt) (string, error) {
 	if len(s.Tables) == 0 {
 		return "", fmt.Errorf("sqlkit/sql: TRUNCATE requires at least one table")
 	}
 	name := c.Dialect.Name()
-	if name == "sqlite" {
-		return "", fmt.Errorf("sqlkit/sql: SQLite has no TRUNCATE; use DELETE FROM instead")
-	}
 	if len(s.Tables) > 1 && name != "postgres" {
 		return "", fmt.Errorf("sqlkit/sql: the %s dialect cannot TRUNCATE multiple tables in one statement", name)
 	}

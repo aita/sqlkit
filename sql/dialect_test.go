@@ -44,9 +44,6 @@ func TestDialectNamesAndCapabilities(t *testing.T) {
 	if (MySQLDialect{}).Name() != "mysql" || (MySQLDialect{}).SupportsReturning() {
 		t.Fatal("mysql dialect metadata wrong")
 	}
-	if (SQLiteDialect{}).Name() != "sqlite" || !(SQLiteDialect{}).SupportsReturning() {
-		t.Fatal("sqlite dialect metadata wrong")
-	}
 	if (StandardSQLDialect{}).Name() != "standard" || (StandardSQLDialect{}).SupportsReturning() {
 		t.Fatal("standard dialect metadata wrong")
 	}
@@ -54,16 +51,6 @@ func TestDialectNamesAndCapabilities(t *testing.T) {
 		if got := d.MaxBindParams(); got != 65535 {
 			t.Fatalf("MaxBindParams() = %d, want 65535", got)
 		}
-	}
-}
-
-func TestSQLiteDialectQuoteAndPlaceholder(t *testing.T) {
-	d := SQLiteDialect{}
-	if got, want := d.QuoteIdent(`main.user"profiles`), `"main"."user""profiles"`; got != want {
-		t.Fatalf("QuoteIdent() = %q, want %q", got, want)
-	}
-	if got := d.Placeholder(3); got != "?" {
-		t.Fatalf("Placeholder(3) = %q, want ?", got)
 	}
 }
 
@@ -77,13 +64,7 @@ func TestStandardDialectQuoteAndPlaceholder(t *testing.T) {
 	}
 }
 
-func TestDialectByNameSQLiteAndStandard(t *testing.T) {
-	for _, name := range []string{"sqlite", "sqlite3"} {
-		d, err := DialectByName(name)
-		if err != nil || d.Name() != "sqlite" {
-			t.Fatalf("DialectByName(%q) = %v, %v", name, d, err)
-		}
-	}
+func TestDialectByNameStandard(t *testing.T) {
 	for _, name := range []string{"standard", "ansi", "sql"} {
 		d, err := DialectByName(name)
 		if err != nil || d.Name() != "standard" {
@@ -109,23 +90,17 @@ func TestFuncRemapNow(t *testing.T) {
 	if got, want := funcSQL(t, Now(), MySQLDialect{}), "SELECT NOW()"; got != want {
 		t.Errorf("mysql NOW = %q, want %q", got, want)
 	}
-	// SQLite and standard remap NOW to CURRENT_TIMESTAMP.
-	if got, want := funcSQL(t, Now(), SQLiteDialect{}), "SELECT CURRENT_TIMESTAMP"; got != want {
-		t.Errorf("sqlite NOW = %q, want %q", got, want)
-	}
+	// Standard remaps NOW to CURRENT_TIMESTAMP.
 	if got, want := funcSQL(t, Now(), StandardSQLDialect{}), "SELECT CURRENT_TIMESTAMP"; got != want {
 		t.Errorf("standard NOW = %q, want %q", got, want)
 	}
 }
 
 func TestFuncRemapLength(t *testing.T) {
-	// CHAR_LENGTH passes through on postgres; sqlite remaps to LENGTH; standard
-	// keeps the standard CHAR_LENGTH spelling.
+	// CHAR_LENGTH passes through on postgres; standard keeps the standard
+	// CHAR_LENGTH spelling.
 	if got, want := funcSQL(t, CharLength(Col("name")), PostgreSQLDialect{}), `SELECT CHAR_LENGTH("name")`; got != want {
 		t.Errorf("postgres CHAR_LENGTH = %q, want %q", got, want)
-	}
-	if got, want := funcSQL(t, CharLength(Col("name")), SQLiteDialect{}), `SELECT LENGTH("name")`; got != want {
-		t.Errorf("sqlite CHAR_LENGTH = %q, want %q", got, want)
 	}
 	if got, want := funcSQL(t, CharLength(Col("name")), StandardSQLDialect{}), `SELECT CHAR_LENGTH("name")`; got != want {
 		t.Errorf("standard CHAR_LENGTH = %q, want %q", got, want)
@@ -134,7 +109,7 @@ func TestFuncRemapLength(t *testing.T) {
 
 func TestFuncRemapUnknownPassThrough(t *testing.T) {
 	// A function the dialect does not remap passes through verbatim everywhere.
-	for _, d := range []Dialect{PostgreSQLDialect{}, MySQLDialect{}, SQLiteDialect{}, StandardSQLDialect{}} {
+	for _, d := range []Dialect{PostgreSQLDialect{}, MySQLDialect{}, StandardSQLDialect{}} {
 		got, _, err := Select(Func("my_custom_fn", Col("x"))).ToSQL(d)
 		if err != nil {
 			t.Fatalf("ToSQL(%s) error = %v", d.Name(), err)
@@ -151,8 +126,8 @@ func TestFuncRemapUnknownPassThrough(t *testing.T) {
 
 func TestFuncRemapCaseInsensitiveName(t *testing.T) {
 	// Canonical names are matched case-insensitively.
-	if got, want := funcSQL(t, Func("now"), SQLiteDialect{}), "SELECT CURRENT_TIMESTAMP"; got != want {
-		t.Errorf("sqlite now = %q, want %q", got, want)
+	if got, want := funcSQL(t, Func("now"), StandardSQLDialect{}), "SELECT CURRENT_TIMESTAMP"; got != want {
+		t.Errorf("standard now = %q, want %q", got, want)
 	}
 }
 
@@ -276,90 +251,6 @@ func TestMySQLRejectsReturning(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "LastInsertId") {
 		t.Fatalf("error should point at LastInsertId: %v", err)
-	}
-}
-
-func TestSQLiteSelect(t *testing.T) {
-	query := Select(Col("users.id"), Col("users.email")).
-		From(Table{Name: "users"}).
-		Where(And(Eq(Col("users.id"), Int(7)), Like(Col("users.email"), Val("%@x.com")))).
-		OrderBy(Desc(Col("users.id"))).
-		Limit(10)
-
-	assertSQLite(t, query,
-		`SELECT "users"."id", "users"."email" FROM "users" WHERE (("users"."id" = ?) AND ("users"."email" LIKE ?)) ORDER BY "users"."id" DESC LIMIT 10`,
-		[]any{7, "%@x.com"})
-}
-
-func TestSQLiteJSONAccess(t *testing.T) {
-	// SQLite uses the PostgreSQL-style -> / ->> operators (>= 3.38).
-	assertSQLite(t,
-		Select(As(JSONGet(Col("data"), "name"), "n")).From(Table{Name: "events"}),
-		`SELECT ("data" -> 'name') AS "n" FROM "events"`, nil)
-
-	assertSQLite(t,
-		Select(As(JSONGetText(Col("data"), "items", 0, "id"), "id")).From(Table{Name: "events"}),
-		`SELECT ((("data" -> 'items') -> 0) ->> 'id') AS "id" FROM "events"`, nil)
-}
-
-func TestSQLiteJSONObject(t *testing.T) {
-	// SQLite uses a flat json_object(key, value, ...) list (lowercase, no VALUE).
-	assertSQLite(t,
-		Select(As(JSONObject("id", Col("id"), "name", Col("name")), "j")).From(Table{Name: "users"}),
-		`SELECT json_object(?, "id", ?, "name") AS "j" FROM "users"`, []any{"id", "name"})
-
-	// The aggregate is json_group_object, not the standard JSON_OBJECTAGG.
-	assertSQLite(t,
-		Select(As(JSONObjectAgg(Col("k"), Col("v")), "obj")).From(Table{Name: "kv"}),
-		`SELECT json_group_object("k", "v") AS "obj" FROM "kv"`, nil)
-}
-
-func TestSQLiteILike(t *testing.T) {
-	// SQLite has no ILIKE operator: it falls back to the portable LOWER form.
-	assertSQLite(t,
-		Select(Col("id")).From(Table{Name: "users"}).Where(ILike(Col("email"), Val("%@EXAMPLE.com"))),
-		`SELECT "id" FROM "users" WHERE (LOWER("email") LIKE LOWER(?))`, []any{"%@EXAMPLE.com"})
-}
-
-func TestSQLiteUpsert(t *testing.T) {
-	// SQLite uses the PostgreSQL-style ON CONFLICT ... excluded.<col> syntax.
-	insert := InsertInto(Table{Name: "users"}).Columns("email", "name").Values("a@x.com", "Alice").
-		OnConflict("email").DoUpdate(Set("name", Excluded("name")))
-	assertSQLite(t, insert,
-		`INSERT INTO "users" ("email", "name") VALUES (?, ?) ON CONFLICT ("email") DO UPDATE SET "name" = excluded."name"`,
-		[]any{"a@x.com", "Alice"})
-
-	doNothing := InsertInto(Table{Name: "users"}).Columns("email").Values("a@x.com").
-		OnConflict("email").DoNothing()
-	assertSQLite(t, doNothing,
-		`INSERT INTO "users" ("email") VALUES (?) ON CONFLICT ("email") DO NOTHING`,
-		[]any{"a@x.com"})
-}
-
-func TestSQLiteReturning(t *testing.T) {
-	// SQLite >= 3.35 supports RETURNING.
-	insert := InsertInto(Table{Name: "users"}).Columns("email").Values("a@x.com").Returning(Col("id"))
-	assertSQLite(t, insert,
-		`INSERT INTO "users" ("email") VALUES (?) RETURNING "id"`, []any{"a@x.com"})
-}
-
-func TestSQLiteCreateTableAutoIncrement(t *testing.T) {
-	// INTEGER PRIMARY KEY AUTOINCREMENT declares the primary key inline, so no
-	// separate PRIMARY KEY constraint is emitted.
-	stmt := CreateTable(Table{Name: "items"}).
-		Column(ColumnDef{Name: "id", Type: EngineType{Name: "integer"}, NotNull: true, AutoIncrement: true}).
-		Column(ColumnDef{Name: "name", Type: EngineType{Name: "text"}}).
-		PrimaryKey("id")
-	got := mustDDL(t, stmt, "sqlite")
-	want := "CREATE TABLE \"items\" (\n" +
-		"    \"id\" INTEGER PRIMARY KEY AUTOINCREMENT,\n" +
-		"    \"name\" text\n" +
-		");"
-	if got != want {
-		t.Errorf("CreateTable(sqlite) =\n%s\nwant\n%s", got, want)
-	}
-	if strings.Contains(got, "PRIMARY KEY (") {
-		t.Errorf("CreateTable(sqlite) emitted a duplicate standalone PRIMARY KEY:\n%s", got)
 	}
 }
 

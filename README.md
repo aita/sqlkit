@@ -40,8 +40,7 @@ err := db.Select().From(appdb.Users).
 - **[Standalone builder](#standalone-builder)** — every chain also compiles to
   SQL text + args with `ToSQL(dialect)`, ready for pgx, sqlx, or `database/sql`.
 - **[Multiple databases](#multiple-databases)** — the same query builder,
-  schema, and migrations target both **PostgreSQL** and **MySQL**; portable
-  schema types also resolve for **SQLite**.
+  schema, and migrations target both **PostgreSQL** and **MySQL**.
 - **[Query routing](#query-routing)** — spread statements across named backends
   with a `Router` you write: read/write splitting, sharding, or any policy, with
   pinned sessions and per-call `WithRoute` hints.
@@ -587,7 +586,7 @@ var Posts = Public.Table("posts",
 Columns are NOT NULL unless marked `Nullable()` (nullable columns map to pointer
 types). Types are **portable** (`BigInt`, `Timestamp`, `VarChar(n)`, …): one
 canonical kind resolves to each engine's name, so a single catalog targets
-PostgreSQL, MySQL, and SQLite. Foreign keys name their target table
+PostgreSQL and MySQL. Foreign keys name their target table
 (`References("users", "id")`, or `"schema.users"` to cross schemas) and are
 resolved when the catalog `Build`s, so a table may reference one declared after
 it or itself; add referential actions with `OnDelete`/`OnUpdate`.
@@ -602,7 +601,7 @@ generated code. Because declarations are values, they compose.
 element's type (`[]string`, `[]int32`, and `[]T` for an element whose Go type is
 pinned). A slice is already nilable, so a nullable array stays a slice rather than
 a pointer. Arrays are a PostgreSQL feature; the column is unavailable when a
-catalog targets MySQL or SQLite.
+catalog targets MySQL.
 
 ### Generating bindings and DDL
 
@@ -925,8 +924,8 @@ PostgreSQL; override with `WithDialect`).
 
 Engine-specific gaps surface at compile time: since MySQL has no `RETURNING`,
 `Returning(...)` fails to compile on the MySQL dialect with a pointer to
-`Result.LastInsertId`. The portable `decl` types additionally resolve for
-SQLite, so a schema declared once can render DDL for all three.
+`Result.LastInsertId`. The portable `decl` types let a schema be declared once
+and render DDL for both engines.
 
 ---
 
