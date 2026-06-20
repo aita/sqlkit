@@ -6,11 +6,25 @@ import (
 
 	"github.com/aita/sqlkit/sql"
 	"github.com/aita/sqlkit/sqlparse/mysql"
+	"github.com/google/go-cmp/cmp"
 )
 
+// astCmpOpts compare two ASTs structurally, unexported fields included, but
+// ignore source positions: the parser records a byte offset (NodePos) on every
+// node it builds, while the builder-constructed want carries NoPos, so a
+// structural test must look past them. NodePos is a plain int, so it is ignored
+// by field name rather than by type. Positions have their own test (pos_test.go).
+var astCmpOpts = cmp.Options{
+	cmp.Exporter(func(reflect.Type) bool { return true }),
+	cmp.FilterPath(func(p cmp.Path) bool {
+		sf, ok := p.Last().(cmp.StructField)
+		return ok && sf.Name() == "NodePos"
+	}, cmp.Ignore()),
+}
+
 // assertRoundTrip parses input and checks it both ways, for maximum precision:
-//   - the parsed query is structurally identical to want (reflect.DeepEqual,
-//     unexported fields included), proving the parser builds the expected AST
+//   - the parsed query is structurally identical to want (every field but source
+//     positions, unexported included), proving the parser builds the expected AST
 //     nodes — not merely an SQL string that recompiles the same way;
 //   - that query compiles under MySQLDialect to wantSQL with wantArgs,
 //     documenting the output and guarding the sql-core rendering. Because sqlkit
@@ -21,8 +35,8 @@ func assertRoundTrip(t *testing.T, input string, want sql.Query, wantSQL string,
 	if err != nil {
 		t.Fatalf("ParseOne(%q) error = %v", input, err)
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("AST mismatch for %q\n got: %#v\nwant: %#v", input, got, want)
+	if diff := cmp.Diff(want, got, astCmpOpts...); diff != "" {
+		t.Fatalf("AST mismatch for %q (-want +got):\n%s", input, diff)
 	}
 	gotSQL, args, err := got.ToSQL(sql.MySQLDialect{})
 	if err != nil {
@@ -126,7 +140,7 @@ func TestParsedQueryExposesStmt(t *testing.T) {
 	if len(stmt.Columns) != 2 {
 		t.Fatalf("Columns = %d, want 2", len(stmt.Columns))
 	}
-	if table, ok := stmt.From.(sql.Table); !ok || table.Name != "users" {
+	if table, ok := stmt.From.(sql.Table); !ok || table.Name.String() != "users" {
 		t.Fatalf("From = %#v, want table users", stmt.From)
 	}
 	if stmt.Where == nil {

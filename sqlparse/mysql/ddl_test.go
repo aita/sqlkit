@@ -10,9 +10,9 @@ func TestCreateTable(t *testing.T) {
 	assertRoundTrip(t,
 		"CREATE TABLE users (id BIGINT AUTO_INCREMENT PRIMARY KEY, email VARCHAR(255) NOT NULL UNIQUE, age INT DEFAULT 0)",
 		sql.CreateTable(sql.Table{Name: sql.NewIdent("users")}).
-			Column(sql.ColumnDef{Name: "id", Type: sql.EngineType{Name: "bigint"}, AutoIncrement: true}).
-			Column(sql.ColumnDef{Name: "email", Type: sql.RawType("varchar(255)"), NotNull: true, Unique: true}).
-			Column(sql.ColumnDef{Name: "age", Type: sql.RawType("int(11)"), Default: sql.Raw("0")}).
+			Column(sql.ColumnDef{Name: sql.NewIdent("id"), Type: sql.EngineType{Name: "bigint"}, AutoIncrement: true}).
+			Column(sql.ColumnDef{Name: sql.NewIdent("email"), Type: sql.RawType("varchar(255)"), NotNull: true, Unique: true}).
+			Column(sql.ColumnDef{Name: sql.NewIdent("age"), Type: sql.RawType("int(11)"), Default: sql.Raw("0")}).
 			PrimaryKey("id"),
 		"CREATE TABLE `users` (\n"+
 			"    `id` bigint NOT NULL AUTO_INCREMENT,\n"+
@@ -26,7 +26,7 @@ func TestCreateTableIfNotExists(t *testing.T) {
 	assertRoundTrip(t,
 		"CREATE TABLE IF NOT EXISTS t (id INT)",
 		sql.CreateTable(sql.Table{Name: sql.NewIdent("t")}).IfNotExists().
-			Column(sql.ColumnDef{Name: "id", Type: sql.RawType("int(11)")}),
+			Column(sql.ColumnDef{Name: sql.NewIdent("id"), Type: sql.RawType("int(11)")}),
 		"CREATE TABLE IF NOT EXISTS `t` (\n    `id` int(11)\n);")
 }
 
@@ -35,11 +35,11 @@ func TestCreateTableForeignKey(t *testing.T) {
 		"CREATE TABLE posts (id INT PRIMARY KEY, uid INT, "+
 			"CONSTRAINT fk_user FOREIGN KEY (uid) REFERENCES users (id) ON DELETE CASCADE)",
 		sql.CreateTable(sql.Table{Name: sql.NewIdent("posts")}).
-			Column(sql.ColumnDef{Name: "id", Type: sql.RawType("int(11)")}).
-			Column(sql.ColumnDef{Name: "uid", Type: sql.RawType("int(11)")}).
+			Column(sql.ColumnDef{Name: sql.NewIdent("id"), Type: sql.RawType("int(11)")}).
+			Column(sql.ColumnDef{Name: sql.NewIdent("uid"), Type: sql.RawType("int(11)")}).
 			ForeignKey(sql.ForeignKeyConstraint{
-				Name: "fk_user", Columns: []string{"uid"},
-				RefTable: "users", RefColumns: []string{"id"}, OnDelete: "CASCADE",
+				Name: sql.NewIdent("fk_user"), Columns: sql.Idents("uid"),
+				RefTable: sql.NewIdent("users"), RefColumns: sql.Idents("id"), OnDelete: "CASCADE",
 			}).
 			PrimaryKey("id"),
 		"CREATE TABLE `posts` (\n"+
@@ -54,8 +54,8 @@ func TestCreateTableUniqueConstraint(t *testing.T) {
 	assertRoundTrip(t,
 		"CREATE TABLE t (a INT, b INT, CONSTRAINT uq UNIQUE (a, b))",
 		sql.CreateTable(sql.Table{Name: sql.NewIdent("t")}).
-			Column(sql.ColumnDef{Name: "a", Type: sql.RawType("int(11)")}).
-			Column(sql.ColumnDef{Name: "b", Type: sql.RawType("int(11)")}).
+			Column(sql.ColumnDef{Name: sql.NewIdent("a"), Type: sql.RawType("int(11)")}).
+			Column(sql.ColumnDef{Name: sql.NewIdent("b"), Type: sql.RawType("int(11)")}).
 			Unique("uq", "a", "b"),
 		"CREATE TABLE `t` (\n"+
 			"    `a` int(11),\n"+
@@ -68,7 +68,7 @@ func TestAlterTableAddColumn(t *testing.T) {
 	assertRoundTrip(t,
 		"ALTER TABLE users ADD COLUMN bio TEXT",
 		sql.AlterTable(sql.Table{Name: sql.NewIdent("users")}).
-			AddColumn(sql.ColumnDef{Name: "bio", Type: sql.RawType("text")}),
+			AddColumn(sql.ColumnDef{Name: sql.NewIdent("bio"), Type: sql.RawType("text")}),
 		"ALTER TABLE `users` ADD COLUMN `bio` text;")
 }
 
@@ -83,7 +83,7 @@ func TestAlterTableModifyColumn(t *testing.T) {
 	assertRoundTrip(t,
 		"ALTER TABLE users MODIFY COLUMN age BIGINT NOT NULL",
 		sql.AlterTable(sql.Table{Name: sql.NewIdent("users")}).
-			RestateColumn(sql.ColumnDef{Name: "age", Type: sql.RawType("bigint(20)"), NotNull: true}),
+			RestateColumn(sql.ColumnDef{Name: sql.NewIdent("age"), Type: sql.RawType("bigint(20)"), NotNull: true}),
 		"ALTER TABLE `users` MODIFY COLUMN `age` bigint(20) NOT NULL;")
 }
 
@@ -92,7 +92,7 @@ func TestAlterTableChangeColumnNoRename(t *testing.T) {
 	assertRoundTrip(t,
 		"ALTER TABLE users CHANGE COLUMN age age BIGINT",
 		sql.AlterTable(sql.Table{Name: sql.NewIdent("users")}).
-			RestateColumn(sql.ColumnDef{Name: "age", Type: sql.RawType("bigint(20)")}),
+			RestateColumn(sql.ColumnDef{Name: sql.NewIdent("age"), Type: sql.RawType("bigint(20)")}),
 		"ALTER TABLE `users` MODIFY COLUMN `age` bigint(20);")
 }
 
@@ -111,7 +111,7 @@ func TestCreateTemporaryTable(t *testing.T) {
 	assertRoundTrip(t,
 		"CREATE TEMPORARY TABLE tmp (id INT)",
 		sql.CreateTable(sql.Table{Name: sql.NewIdent("tmp")}).Temporary().
-			Column(sql.ColumnDef{Name: "id", Type: sql.RawType("int(11)")}),
+			Column(sql.ColumnDef{Name: sql.NewIdent("id"), Type: sql.RawType("int(11)")}),
 		"CREATE TEMPORARY TABLE `tmp` (\n    `id` int(11)\n);")
 }
 
@@ -140,7 +140,7 @@ func TestCreateTableWithIndex(t *testing.T) {
 	assertRoundTrip(t,
 		"CREATE TABLE t (name VARCHAR(20) COLLATE utf8mb4_bin, KEY idx_name (name))",
 		sql.CreateTable(sql.Table{Name: sql.NewIdent("t")}).
-			Column(sql.ColumnDef{Name: "name", Type: sql.RawType("varchar(20)"), Collate: "utf8mb4_bin"}).
+			Column(sql.ColumnDef{Name: sql.NewIdent("name"), Type: sql.RawType("varchar(20)"), Collate: sql.NewIdent("utf8mb4_bin")}).
 			Index("idx_name", "name"),
 		"CREATE TABLE `t` (\n"+
 			"    `name` varchar(20) COLLATE utf8mb4_bin,\n"+
@@ -152,9 +152,9 @@ func TestCreateTableGeneratedColumn(t *testing.T) {
 	assertRoundTrip(t,
 		"CREATE TABLE t (a INT, b INT, total INT GENERATED ALWAYS AS (a + b) STORED)",
 		sql.CreateTable(sql.Table{Name: sql.NewIdent("t")}).
-			Column(sql.ColumnDef{Name: "a", Type: sql.RawType("int(11)")}).
-			Column(sql.ColumnDef{Name: "b", Type: sql.RawType("int(11)")}).
-			Column(sql.ColumnDef{Name: "total", Type: sql.RawType("int(11)"), Generated: &sql.GeneratedColumn{
+			Column(sql.ColumnDef{Name: sql.NewIdent("a"), Type: sql.RawType("int(11)")}).
+			Column(sql.ColumnDef{Name: sql.NewIdent("b"), Type: sql.RawType("int(11)")}).
+			Column(sql.ColumnDef{Name: sql.NewIdent("total"), Type: sql.RawType("int(11)"), Generated: &sql.GeneratedColumn{
 				Expression: sql.BinaryExpression{Left: sql.Col("a"), Operator: "+", Right: sql.Col("b")},
 				Stored:     true,
 			}}),
@@ -169,8 +169,8 @@ func TestCreateTableOnUpdate(t *testing.T) {
 	assertRoundTrip(t,
 		"CREATE TABLE t (id INT, updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)",
 		sql.CreateTable(sql.Table{Name: sql.NewIdent("t")}).
-			Column(sql.ColumnDef{Name: "id", Type: sql.RawType("int(11)")}).
-			Column(sql.ColumnDef{Name: "updated", Type: sql.RawType("timestamp"),
+			Column(sql.ColumnDef{Name: sql.NewIdent("id"), Type: sql.RawType("int(11)")}).
+			Column(sql.ColumnDef{Name: sql.NewIdent("updated"), Type: sql.RawType("timestamp"),
 				Default:  sql.Func("CURRENT_TIMESTAMP"),
 				OnUpdate: sql.Func("CURRENT_TIMESTAMP"),
 			}),
