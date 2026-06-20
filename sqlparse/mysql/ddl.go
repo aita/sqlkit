@@ -39,7 +39,7 @@ func convertCreateTable(s *ast.CreateTableStmt) (sql.Query, error) {
 		}
 		ct = ct.Column(col)
 		if isPK {
-			primaryKey = append(primaryKey, col.Name)
+			primaryKey = append(primaryKey, col.Name.String())
 		}
 	}
 
@@ -89,7 +89,7 @@ func convertCreateTable(s *ast.CreateTableStmt) (sql.Query, error) {
 // convertColumnDef builds a ColumnDef and reports whether an inline PRIMARY KEY
 // option marks it as the table's primary key.
 func convertColumnDef(cd *ast.ColumnDef) (sql.ColumnDef, bool, error) {
-	def := sql.ColumnDef{Name: cd.Name.Name.O}
+	def := sql.ColumnDef{Name: sql.NewIdent(cd.Name.Name.O)}
 
 	var isPK, autoInc bool
 	for _, opt := range cd.Options {
@@ -123,7 +123,7 @@ func convertColumnDef(cd *ast.ColumnDef) (sql.ColumnDef, bool, error) {
 			}
 			def.References = ref
 		case ast.ColumnOptionCollate:
-			def.Collate = opt.StrValue
+			def.Collate = sql.NewIdent(opt.StrValue)
 		case ast.ColumnOptionOnUpdate:
 			expr, err := staticExpr(opt.Expr)
 			if err != nil {
@@ -179,15 +179,15 @@ func convertColumnReference(ref *ast.ReferenceDef) (*sql.ColumnReference, error)
 		return nil, err
 	}
 	out := &sql.ColumnReference{
-		Schema:   ref.Table.Schema.O,
-		Table:    ref.Table.Name.O,
+		Schema:   sql.NewIdent(ref.Table.Schema.O),
+		Table:    sql.NewIdent(ref.Table.Name.O),
 		OnDelete: deleteAction(ref.OnDelete),
 		OnUpdate: updateAction(ref.OnUpdate),
 	}
 	switch len(cols) {
 	case 0:
 	case 1:
-		out.Column = cols[0]
+		out.Column = sql.NewIdent(cols[0])
 	default:
 		return nil, sqlparse.Unsupported("multi-column column-level foreign key")
 	}
@@ -207,11 +207,11 @@ func convertForeignKey(con *ast.Constraint) (sql.ForeignKeyConstraint, error) {
 		return sql.ForeignKeyConstraint{}, err
 	}
 	return sql.ForeignKeyConstraint{
-		Name:       con.Name,
-		Columns:    columns,
-		RefSchema:  con.Refer.Table.Schema.O,
-		RefTable:   con.Refer.Table.Name.O,
-		RefColumns: refColumns,
+		Name:       sql.NewIdent(con.Name),
+		Columns:    sql.Idents(columns...),
+		RefSchema:  sql.NewIdent(con.Refer.Table.Schema.O),
+		RefTable:   sql.NewIdent(con.Refer.Table.Name.O),
+		RefColumns: sql.Idents(refColumns...),
 		OnDelete:   deleteAction(con.Refer.OnDelete),
 		OnUpdate:   updateAction(con.Refer.OnUpdate),
 	}, nil
@@ -293,7 +293,7 @@ func applyAlterSpec(at sql.AlterTableBuilder, spec *ast.AlterTableSpec) (sql.Alt
 		if err != nil {
 			return at, err
 		}
-		if spec.OldColumnName.Name.O != col.Name {
+		if spec.OldColumnName.Name.O != col.Name.String() {
 			return at, sqlparse.Unsupported("CHANGE COLUMN that renames a column")
 		}
 		return at.RestateColumn(col), nil
