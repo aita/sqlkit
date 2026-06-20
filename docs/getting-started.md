@@ -2,7 +2,7 @@
 
 This walkthrough takes you end to end: declare a schema in Go, generate typed
 bindings and DDL from it, apply it, and run typed queries. It mirrors the
-runnable [`examples/blog`](../examples/blog) program — read that for the complete,
+runnable [`examples/generated`](../examples/generated) program — read that for the complete,
 compiling version.
 
 ## 1. Install the toolkit

@@ -12,7 +12,7 @@ import (
 	querysql "github.com/aita/sqlkit/sql"
 )
 
-// blogCatalog mirrors examples/blog: users and the posts that reference them.
+// blogCatalog mirrors examples/generated: users and the posts that reference them.
 func blogCatalog() *decl.Catalog {
 	catalog := decl.NewCatalog()
 	public := catalog.Schema("public")

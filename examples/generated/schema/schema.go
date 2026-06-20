@@ -1,5 +1,5 @@
 // Package schema declares the blog schema as a decl.Catalog. It is the
-// source of truth: `go generate ./...` (from examples/blog) regenerates both
+// source of truth: `go generate ./...` (from examples/generated) regenerates both
 // the blogdb bindings and schema.sql from it via the sqlkit generate command.
 package schema
 

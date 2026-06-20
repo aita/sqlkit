@@ -1,9 +1,9 @@
 # build artifacts
-/basic
+/minimal
 /sqlkit
 /cmd/sqlkit/sqlkit
 *.test
-/blog
+/generated
 
 # throwaway program "sqlkit migrate" builds to run a project's migrations
 .sqlkit-migrate-*

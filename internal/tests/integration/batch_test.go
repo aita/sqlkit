@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit"
-	"github.com/aita/sqlkit/examples/blog/blogdb"
+	"github.com/aita/sqlkit/examples/generated/blogdb"
 )
 
 // These tests drive the auto-chunking feature end to end against the real
