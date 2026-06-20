@@ -348,7 +348,7 @@ func TestManagedPrimaryKeyChangeIsRejected(t *testing.T) {
 func TestNestedScopeUsesSavepoint(t *testing.T) {
 	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
-	err := db.WithSession(func(s *sqlkit.Session) error {
+	err := db.WithSession(ctx(), func(s *sqlkit.Session) error {
 		scope := uow.NewScope(s)
 		if err := scope.Add(newUsers(), userRow{Email: "root@x"}); err != nil {
 			return err
@@ -374,7 +374,7 @@ func TestNestedScopeUsesSavepoint(t *testing.T) {
 func TestNestedScopeRollback(t *testing.T) {
 	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
-	err := db.WithSession(func(s *sqlkit.Session) error {
+	err := db.WithSession(ctx(), func(s *sqlkit.Session) error {
 		child := uow.NewScope(s).NewScope()
 		if err := child.Add(newUsers(), userRow{Email: "child@x"}); err != nil {
 			return err

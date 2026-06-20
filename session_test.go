@@ -297,7 +297,7 @@ func TestWithSessionCommitsOnSuccess(t *testing.T) {
 	db := sqlkit.WrapDB(fake.DB())
 	ctx := context.Background()
 
-	err := db.WithSession(func(s *sqlkit.Session) error {
+	err := db.WithSession(ctx, func(s *sqlkit.Session) error {
 		_, err := s.Update(Users).Set(Users.Email.Set("x@example.com")).Where(Users.ID.Eq(1)).Exec(ctx)
 		return err
 	})
@@ -315,7 +315,7 @@ func TestWithSessionRollsBackOnError(t *testing.T) {
 	ctx := context.Background()
 
 	wantErr := errors.New("boom")
-	err := db.WithSession(func(s *sqlkit.Session) error {
+	err := db.WithSession(ctx, func(s *sqlkit.Session) error {
 		if _, err := s.Delete(Users).Where(Users.ID.Eq(1)).Exec(ctx); err != nil {
 			return err
 		}
@@ -342,7 +342,7 @@ func TestWithSessionRollsBackOnPanicAndRepanics(t *testing.T) {
 			t.Fatalf("commits = %d, want 0 after panic", fake.Commits())
 		}
 	}()
-	_ = db.WithSession(func(s *sqlkit.Session) error {
+	_ = db.WithSession(ctx, func(s *sqlkit.Session) error {
 		_, _ = s.Delete(Users).Where(Users.ID.Eq(1)).Exec(ctx)
 		panic("boom")
 	})
@@ -352,7 +352,7 @@ func TestWithSessionNoStatementsIsFree(t *testing.T) {
 	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 
-	if err := db.WithSession(func(*sqlkit.Session) error { return nil }); err != nil {
+	if err := db.WithSession(context.Background(), func(*sqlkit.Session) error { return nil }); err != nil {
 		t.Fatalf("WithSession() error = %v", err)
 	}
 	if fake.Begins() != 0 || fake.Commits() != 0 {

@@ -179,7 +179,7 @@ func TestWrapExecutorTxCommit(t *testing.T) {
 	term := &txExecutorStub{db: fake.DB()}
 	db := sqlkit.WrapExecutor(term)
 
-	err := db.WithSession(func(s *sqlkit.Session) error {
+	err := db.WithSession(context.Background(), func(s *sqlkit.Session) error {
 		_, err := s.Delete(Users).Where(Users.ID.Eq(1)).Exec(context.Background())
 		return err
 	})
@@ -199,7 +199,7 @@ func TestWrapExecutorTxRollback(t *testing.T) {
 	db := sqlkit.WrapExecutor(term)
 	sentinel := errors.New("boom")
 
-	err := db.WithSession(func(s *sqlkit.Session) error {
+	err := db.WithSession(context.Background(), func(s *sqlkit.Session) error {
 		if _, err := s.Delete(Users).Where(Users.ID.Eq(1)).Exec(context.Background()); err != nil {
 			return err
 		}

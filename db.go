@@ -356,7 +356,7 @@ func (d *Database) newSession(options sessionOptions) *Session {
 // error or panic it rolls back and the error (or panic) propagates. Thanks to
 // lazy transaction begin, a callback that runs no statements costs nothing.
 //
-//	err := db.WithSession(func(s *sqlkit.Session) error {
+//	err := db.WithSession(ctx, func(s *sqlkit.Session) error {
 //		if _, err := s.Insert(Users).Values(u).Exec(ctx); err != nil {
 //			return err
 //		}
@@ -365,8 +365,10 @@ func (d *Database) newSession(options sessionOptions) *Session {
 //	})
 //
 // Pass WithRetry to replay the whole callback in a fresh transaction on a
-// retryable failure (a serialization failure or deadlock by default).
-func (d *Database) WithSession(fn func(s *Session) error, opts ...SessionOption) error {
+// retryable failure (a serialization failure or deadlock by default); ctx then
+// also bounds the retry loop, cutting the backoff short and returning the last
+// error once it is cancelled.
+func (d *Database) WithSession(ctx context.Context, fn func(s *Session) error, opts ...SessionOption) error {
 	options := sessionOptions{}
 	for _, opt := range opts {
 		opt.applySession(&options)
@@ -377,7 +379,7 @@ func (d *Database) WithSession(fn func(s *Session) error, opts ...SessionOption)
 	if options.retry == nil {
 		return run()
 	}
-	return options.retry.run(run)
+	return options.retry.run(ctx, run)
 }
 
 // runSession runs fn in session, committing on success and rolling back on

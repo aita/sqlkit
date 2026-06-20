@@ -269,7 +269,7 @@ func TestSessionPinnedByWithRoute(t *testing.T) {
 	db, primary, replica := routedDB(t)
 	ctx := context.Background()
 
-	err := db.WithSession(func(s *sqlkit.Session) error {
+	err := db.WithSession(ctx, func(s *sqlkit.Session) error {
 		var users []User
 		if err := s.Select().From(Users).All(ctx).Scan(&users); err != nil {
 			return err
@@ -297,7 +297,7 @@ func TestReadOnlySessionRoutesToReplica(t *testing.T) {
 	db, primary, replica := routedDB(t)
 	ctx := context.Background()
 
-	err := db.WithSession(func(s *sqlkit.Session) error {
+	err := db.WithSession(ctx, func(s *sqlkit.Session) error {
 		var users []User
 		return s.Select().From(Users).All(ctx).Scan(&users)
 	}, sqlkit.WithTxOptions(sqlkit.TxOptions{ReadOnly: true}))
@@ -316,7 +316,7 @@ func TestSessionRouteConflictErrors(t *testing.T) {
 	ctx := context.Background()
 
 	// A write session pins to "default"; a statement asking for "replica" conflicts.
-	err := db.WithSession(func(s *sqlkit.Session) error {
+	err := db.WithSession(ctx, func(s *sqlkit.Session) error {
 		var users []User
 		return s.Select().From(Users).All(ctx, sqlkit.WithRoute("replica")).Scan(&users)
 	})
@@ -331,7 +331,7 @@ func TestSessionRedundantRouteAllowed(t *testing.T) {
 	db, _, replica := routedDB(t)
 	ctx := context.Background()
 
-	err := db.WithSession(func(s *sqlkit.Session) error {
+	err := db.WithSession(ctx, func(s *sqlkit.Session) error {
 		var users []User
 		return s.Select().From(Users).All(ctx, sqlkit.WithRoute("replica")).Scan(&users)
 	}, sqlkit.WithRoute("replica"))

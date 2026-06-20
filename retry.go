@@ -1,6 +1,7 @@
 package sqlkit
 
 import (
+	"context"
 	"errors"
 	"time"
 )
@@ -13,9 +14,11 @@ type retryConfig struct {
 }
 
 // run invokes attempt until it succeeds, the attempt budget is exhausted, or a
-// non-retryable error is returned, sleeping the configured backoff between
-// tries. It returns the last error.
-func (c *retryConfig) run(attempt func() error) error {
+// non-retryable error is returned, waiting the configured backoff between tries.
+// It returns the last error. A cancelled ctx cuts the backoff short and stops
+// the loop, returning that last error rather than ctx.Err so the underlying
+// failure (and its errors.Is matches) survives.
+func (c *retryConfig) run(ctx context.Context, attempt func() error) error {
 	for n := 1; ; n++ {
 		err := attempt()
 		if err == nil {
@@ -26,7 +29,13 @@ func (c *retryConfig) run(attempt func() error) error {
 		}
 		if c.backoff != nil {
 			if d := c.backoff(n); d > 0 {
-				time.Sleep(d)
+				timer := time.NewTimer(d)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return err
+				case <-timer.C:
+				}
 			}
 		}
 	}
@@ -46,7 +55,7 @@ type RetryOption func(*retryConfig)
 // (IsRetryable), waiting an exponential backoff between tries. Tune it with
 // MaxAttempts, RetryIf, and RetryBackoff:
 //
-//	err := db.WithSession(func(s *sqlkit.Session) error {
+//	err := db.WithSession(ctx, func(s *sqlkit.Session) error {
 //		// ... read, decide, write — all replayed on a serialization failure
 //		return nil
 //	}, sqlkit.WithRetry(sqlkit.MaxAttempts(5)))
