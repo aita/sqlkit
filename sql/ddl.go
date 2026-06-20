@@ -110,7 +110,8 @@ func (t RawType) RenderType(Dialect) (string, error) { return string(t), nil }
 // identity column (GENERATED ... AS IDENTITY). Generated, Identity, Default, and
 // AutoIncrement are mutually exclusive ways to populate a column.
 type ColumnDef struct {
-	Name          string
+	posField
+	Name          Ident
 	Type          ColumnType
 	NotNull       bool
 	Default       Expression
@@ -122,7 +123,7 @@ type ColumnDef struct {
 	Identity      IdentityKind
 	// Collate is an optional column collation rendered as COLLATE <name> after
 	// the type (empty for none).
-	Collate string
+	Collate Ident
 	// OnUpdate is an optional MySQL ON UPDATE clause (e.g. CURRENT_TIMESTAMP) for
 	// timestamp/datetime columns; it must bind no values. MySQL only.
 	OnUpdate Expression
@@ -131,9 +132,10 @@ type ColumnDef struct {
 // ColumnReference is a column-level foreign key: REFERENCES <schema.table>
 // (column) with optional referential actions. Schema is optional.
 type ColumnReference struct {
-	Schema   string
-	Table    string
-	Column   string
+	posField
+	Schema   Ident
+	Table    Ident
+	Column   Ident
 	OnDelete string
 	OnUpdate string
 }
@@ -143,6 +145,7 @@ type ColumnReference struct {
 // VIRTUAL when Stored is false. PostgreSQL supports only stored generated
 // columns (before version 17); MySQL supports both.
 type GeneratedColumn struct {
+	posField
 	Expression Expression
 	Stored     bool
 }
@@ -163,13 +166,15 @@ const (
 // TableUnique is a table-level UNIQUE constraint within a CREATE TABLE statement.
 // Name is optional (an unnamed UNIQUE (cols) constraint when empty).
 type TableUnique struct {
-	Name    string
-	Columns []string
+	posField
+	Name    Ident
+	Columns []Ident
 }
 
 // TableCheck is a named CHECK constraint within a CREATE TABLE statement.
 type TableCheck struct {
-	Name       string
+	posField
+	Name       Ident
 	Expression Expression
 }
 
@@ -178,11 +183,12 @@ type TableCheck struct {
 // (in RefSchema). OnDelete/OnUpdate are the referential-action clauses (e.g.
 // "CASCADE", "SET NULL"); an empty string renders nothing (the engine default).
 type ForeignKeyConstraint struct {
-	Name       string
-	Columns    []string
-	RefSchema  string
-	RefTable   string
-	RefColumns []string
+	posField
+	Name       Ident
+	Columns    []Ident
+	RefSchema  Ident
+	RefTable   Ident
+	RefColumns []Ident
 	OnDelete   string
 	OnUpdate   string
 }
@@ -191,7 +197,8 @@ type ForeignKeyConstraint struct {
 // schema is a database, CREATE SCHEMA is the engine's own synonym for CREATE
 // DATABASE, so the same node renders for both dialects.
 type CreateSchemaStmt struct {
-	Name        string
+	posField
+	Name        Ident
 	IfNotExists bool
 }
 
@@ -210,7 +217,7 @@ type CreateSchemaBuilder struct{ s CreateSchemaStmt }
 
 // CreateSchema starts a CREATE SCHEMA builder for a schema name.
 func CreateSchema(name string) CreateSchemaBuilder {
-	return CreateSchemaBuilder{s: CreateSchemaStmt{Name: name}}
+	return CreateSchemaBuilder{s: CreateSchemaStmt{Name: NewIdent(name)}}
 }
 
 // Stmt returns the built CREATE SCHEMA statement.
@@ -232,7 +239,8 @@ func (CreateSchemaBuilder) ddlStatement()                            {}
 // is a database, this drops the database and everything left in it; on PostgreSQL
 // a non-empty schema needs the tables dropped first (or Cascade).
 type DropSchemaStmt struct {
-	Name     string
+	posField
+	Name     Ident
 	IfExists bool
 	Cascade  bool
 }
@@ -252,7 +260,7 @@ type DropSchemaBuilder struct{ s DropSchemaStmt }
 
 // DropSchema starts a DROP SCHEMA builder for a schema name.
 func DropSchema(name string) DropSchemaBuilder {
-	return DropSchemaBuilder{s: DropSchemaStmt{Name: name}}
+	return DropSchemaBuilder{s: DropSchemaStmt{Name: NewIdent(name)}}
 }
 
 // Stmt returns the built DROP SCHEMA statement.
@@ -279,9 +287,10 @@ func (DropSchemaBuilder) ddlStatement()                            {}
 
 // CreateTableStmt is the AST for a CREATE TABLE statement.
 type CreateTableStmt struct {
+	posField
 	Table       Table
 	Columns     []ColumnDef
-	PrimaryKey  []string
+	PrimaryKey  []Ident
 	Checks      []TableCheck
 	Uniques     []TableUnique
 	ForeignKeys []ForeignKeyConstraint
@@ -295,8 +304,9 @@ type CreateTableStmt struct {
 // statement (MySQL's KEY/INDEX). Name is optional. Inline indexes are a MySQL
 // feature; other dialects declare indexes with a separate CREATE INDEX.
 type TableIndex struct {
-	Name    string
-	Columns []string
+	posField
+	Name    Ident
+	Columns []Ident
 }
 
 // ToSQL compiles the CREATE TABLE statement.
@@ -328,20 +338,20 @@ func (b CreateTableBuilder) Column(c ColumnDef) CreateTableBuilder {
 
 // PrimaryKey sets the primary-key columns. Call once with all key columns.
 func (b CreateTableBuilder) PrimaryKey(columns ...string) CreateTableBuilder {
-	b.s.PrimaryKey = columns
+	b.s.PrimaryKey = idents(columns)
 	return b
 }
 
 // Check appends a named CHECK constraint. expr must bind no values.
 func (b CreateTableBuilder) Check(name string, expr Expression) CreateTableBuilder {
-	b.s.Checks = append(append([]TableCheck(nil), b.s.Checks...), TableCheck{Name: name, Expression: expr})
+	b.s.Checks = append(append([]TableCheck(nil), b.s.Checks...), TableCheck{Name: NewIdent(name), Expression: expr})
 	return b
 }
 
 // Unique appends a table-level UNIQUE constraint over the columns. name is
 // optional (pass "" for an unnamed constraint).
 func (b CreateTableBuilder) Unique(name string, columns ...string) CreateTableBuilder {
-	b.s.Uniques = append(append([]TableUnique(nil), b.s.Uniques...), TableUnique{Name: name, Columns: columns})
+	b.s.Uniques = append(append([]TableUnique(nil), b.s.Uniques...), TableUnique{Name: NewIdent(name), Columns: idents(columns)})
 	return b
 }
 
@@ -355,7 +365,7 @@ func (b CreateTableBuilder) ForeignKey(fk ForeignKeyConstraint) CreateTableBuild
 // optional. Inline indexes render only on MySQL; other dialects reject them in
 // favor of a separate CreateIndex statement.
 func (b CreateTableBuilder) Index(name string, columns ...string) CreateTableBuilder {
-	b.s.Indexes = append(append([]TableIndex(nil), b.s.Indexes...), TableIndex{Name: name, Columns: columns})
+	b.s.Indexes = append(append([]TableIndex(nil), b.s.Indexes...), TableIndex{Name: NewIdent(name), Columns: idents(columns)})
 	return b
 }
 
@@ -389,6 +399,7 @@ func (CreateTableBuilder) ddlStatement()                            {}
 
 // DropTableStmt is the AST for a DROP TABLE statement over one or more tables.
 type DropTableStmt struct {
+	posField
 	Tables   []Table
 	IfExists bool
 }
@@ -431,9 +442,10 @@ func (DropTableBuilder) ddlStatement()                            {}
 // so the body must compile to plain SQL text — inline any literals with Raw
 // rather than as bound parameters.
 type CreateViewStmt struct {
+	posField
 	Table     Table
 	Query     Query
-	Columns   []string
+	Columns   []Ident
 	OrReplace bool
 }
 
@@ -468,7 +480,7 @@ func (b CreateViewBuilder) OrReplace() CreateViewBuilder {
 // Columns sets explicit view column names (CREATE VIEW v (a, b) AS ...),
 // overriding the names the body's select list would otherwise supply.
 func (b CreateViewBuilder) Columns(columns ...string) CreateViewBuilder {
-	b.s.Columns = columns
+	b.s.Columns = idents(columns)
 	return b
 }
 
@@ -479,6 +491,7 @@ func (CreateViewBuilder) ddlStatement()                            {}
 
 // DropViewStmt is the AST for a DROP VIEW statement.
 type DropViewStmt struct {
+	posField
 	Table    Table
 	IfExists bool
 	Cascade  bool
@@ -526,9 +539,10 @@ func (DropViewBuilder) ddlStatement()                            {}
 
 // CreateIndexStmt is the AST for a CREATE INDEX statement.
 type CreateIndexStmt struct {
-	Name        string
+	posField
+	Name        Ident
 	Table       Table
-	Columns     []string
+	Columns     []Ident
 	Unique      bool
 	IfNotExists bool
 }
@@ -548,7 +562,7 @@ type CreateIndexBuilder struct{ s CreateIndexStmt }
 
 // CreateIndex starts a CREATE INDEX builder for an index over columns of a table.
 func CreateIndex(name string, table Table, columns ...string) CreateIndexBuilder {
-	return CreateIndexBuilder{s: CreateIndexStmt{Name: name, Table: table, Columns: columns}}
+	return CreateIndexBuilder{s: CreateIndexStmt{Name: NewIdent(name), Table: table, Columns: idents(columns)}}
 }
 
 // Stmt returns the built CREATE INDEX statement.
@@ -574,14 +588,15 @@ func (CreateIndexBuilder) ddlStatement()                            {}
 // DropIndexStmt is the AST for a DROP INDEX statement. It has no options, so it
 // is constructed directly with DropIndex.
 type DropIndexStmt struct {
-	Name  string
+	posField
+	Name  Ident
 	Table Table
 }
 
 // DropIndex builds a DROP INDEX statement. The table is needed because MySQL
 // drops an index from its table.
 func DropIndex(name string, table Table) DropIndexStmt {
-	return DropIndexStmt{Name: name, Table: table}
+	return DropIndexStmt{Name: NewIdent(name), Table: table}
 }
 
 // ToSQL compiles the DROP INDEX statement.
@@ -601,6 +616,7 @@ func (DropIndexStmt) ddlStatement() {}
 // CASCADE), and truncating several tables at once is PostgreSQL-only — these are
 // reported as errors at compile time.
 type TruncateStmt struct {
+	posField
 	Tables          []Table
 	RestartIdentity bool
 	Cascade         bool
@@ -651,14 +667,15 @@ func (TruncateBuilder) ddlStatement()                            {}
 // constraint, using the dialect's syntax (PostgreSQL DROP CONSTRAINT, MySQL DROP
 // FOREIGN KEY). It has no options, so it is constructed directly.
 type DropForeignKeyStmt struct {
+	posField
 	Table Table
-	Name  string
+	Name  Ident
 }
 
 // DropForeignKey builds the statement that drops the named foreign-key
 // constraint from a table.
 func DropForeignKey(table Table, name string) DropForeignKeyStmt {
-	return DropForeignKeyStmt{Table: table, Name: name}
+	return DropForeignKeyStmt{Table: table, Name: NewIdent(name)}
 }
 
 // ToSQL compiles the drop-foreign-key statement.
@@ -675,6 +692,7 @@ func (DropForeignKeyStmt) ddlStatement() {}
 // COMMENT ON TABLE). It renders to "" on dialects that comment inline (MySQL).
 // It has no options, so it is constructed directly.
 type CommentOnTableStmt struct {
+	posField
 	Table   Table
 	Comment string
 }
@@ -698,14 +716,15 @@ func (CommentOnTableStmt) ddlStatement() {}
 // COMMENT ON COLUMN). It renders to "" on dialects that comment inline (MySQL).
 // It has no options, so it is constructed directly.
 type CommentOnColumnStmt struct {
+	posField
 	Table   Table
-	Column  string
+	Column  Ident
 	Comment string
 }
 
 // CommentOnColumn builds a standalone column comment.
 func CommentOnColumn(table Table, column, comment string) CommentOnColumnStmt {
-	return CommentOnColumnStmt{Table: table, Column: column, Comment: comment}
+	return CommentOnColumnStmt{Table: table, Column: NewIdent(column), Comment: comment}
 }
 
 // ToSQL compiles the comment statement ("" when the dialect comments inline).
@@ -760,10 +779,11 @@ const (
 // (see each AlterationKind). It is both the AST value carried by AlterTableStmt
 // and the unit the AlterTableBuilder methods append.
 type Alteration struct {
+	posField
 	Kind       AlterationKind
-	Name       string                // column or constraint name; rename's old column name
-	NewName    string                // rename target (column or table)
-	Columns    []string              // AddUnique / AddPrimaryKey columns
+	Name       Ident                 // column or constraint name; rename's old column name
+	NewName    Ident                 // rename target (column or table)
+	Columns    []Ident               // AddUnique / AddPrimaryKey columns
 	Column     *ColumnDef            // AddColumn / RestateColumn
 	Type       ColumnType            // AlterColumnType
 	Expression Expression            // AddCheck / SetDefault
@@ -774,6 +794,7 @@ type Alteration struct {
 // AlterTableStmt is the AST for an ALTER TABLE statement carrying one or more
 // ordered alterations, rendered as a single comma-separated statement.
 type AlterTableStmt struct {
+	posField
 	Table       Table
 	Alterations []Alteration
 }
@@ -811,7 +832,7 @@ func (b AlterTableBuilder) AddColumn(c ColumnDef) AlterTableBuilder {
 
 // DropColumn appends a DROP COLUMN action.
 func (b AlterTableBuilder) DropColumn(name string) AlterTableBuilder {
-	return b.with(Alteration{Kind: AlterDropColumn, Name: name})
+	return b.with(Alteration{Kind: AlterDropColumn, Name: NewIdent(name)})
 }
 
 // AddForeignKey appends an ADD CONSTRAINT ... FOREIGN KEY action.
@@ -821,46 +842,46 @@ func (b AlterTableBuilder) AddForeignKey(fk ForeignKeyConstraint) AlterTableBuil
 
 // AddCheck appends an ADD CONSTRAINT ... CHECK action. expr must bind no values.
 func (b AlterTableBuilder) AddCheck(name string, expr Expression) AlterTableBuilder {
-	return b.with(Alteration{Kind: AlterAddCheck, Name: name, Expression: expr})
+	return b.with(Alteration{Kind: AlterAddCheck, Name: NewIdent(name), Expression: expr})
 }
 
 // AddUnique appends an ADD CONSTRAINT ... UNIQUE action over the columns. name is
 // optional (pass "" for an unnamed constraint).
 func (b AlterTableBuilder) AddUnique(name string, columns ...string) AlterTableBuilder {
-	return b.with(Alteration{Kind: AlterAddUnique, Name: name, Columns: columns})
+	return b.with(Alteration{Kind: AlterAddUnique, Name: NewIdent(name), Columns: idents(columns)})
 }
 
 // DropConstraint appends a DROP CONSTRAINT action (for CHECK / UNIQUE /
 // primary-key constraints; use DropForeignKey for foreign keys, which differ by
 // dialect).
 func (b AlterTableBuilder) DropConstraint(name string) AlterTableBuilder {
-	return b.with(Alteration{Kind: AlterDropConstraint, Name: name})
+	return b.with(Alteration{Kind: AlterDropConstraint, Name: NewIdent(name)})
 }
 
 // AlterColumnType appends an action that changes a column's type (PostgreSQL).
 func (b AlterTableBuilder) AlterColumnType(name string, t ColumnType) AlterTableBuilder {
-	return b.with(Alteration{Kind: AlterColumnType, Name: name, Type: t})
+	return b.with(Alteration{Kind: AlterColumnType, Name: NewIdent(name), Type: t})
 }
 
 // SetNotNull appends an action adding a NOT NULL constraint to a column (PostgreSQL).
 func (b AlterTableBuilder) SetNotNull(name string) AlterTableBuilder {
-	return b.with(Alteration{Kind: AlterSetNotNull, Name: name, NotNull: true})
+	return b.with(Alteration{Kind: AlterSetNotNull, Name: NewIdent(name), NotNull: true})
 }
 
 // DropNotNull appends an action dropping a column's NOT NULL constraint (PostgreSQL).
 func (b AlterTableBuilder) DropNotNull(name string) AlterTableBuilder {
-	return b.with(Alteration{Kind: AlterDropNotNull, Name: name})
+	return b.with(Alteration{Kind: AlterDropNotNull, Name: NewIdent(name)})
 }
 
 // SetDefault appends an action setting a column's default (PostgreSQL). expr
 // must bind no values.
 func (b AlterTableBuilder) SetDefault(name string, expr Expression) AlterTableBuilder {
-	return b.with(Alteration{Kind: AlterSetDefault, Name: name, Expression: expr})
+	return b.with(Alteration{Kind: AlterSetDefault, Name: NewIdent(name), Expression: expr})
 }
 
 // DropDefault appends an action dropping a column's default (PostgreSQL).
 func (b AlterTableBuilder) DropDefault(name string) AlterTableBuilder {
-	return b.with(Alteration{Kind: AlterDropDefault, Name: name})
+	return b.with(Alteration{Kind: AlterDropDefault, Name: NewIdent(name)})
 }
 
 // RestateColumn appends an action that restates a column's full definition
@@ -874,7 +895,7 @@ func (b AlterTableBuilder) RestateColumn(c ColumnDef) AlterTableBuilder {
 
 // AddPrimaryKey appends an ADD PRIMARY KEY action over the columns.
 func (b AlterTableBuilder) AddPrimaryKey(columns ...string) AlterTableBuilder {
-	return b.with(Alteration{Kind: AlterAddPrimaryKey, Columns: columns})
+	return b.with(Alteration{Kind: AlterAddPrimaryKey, Columns: idents(columns)})
 }
 
 // DropPrimaryKey appends a DROP PRIMARY KEY action. MySQL spells it
@@ -886,12 +907,12 @@ func (b AlterTableBuilder) DropPrimaryKey() AlterTableBuilder {
 
 // RenameColumn appends a RENAME COLUMN action.
 func (b AlterTableBuilder) RenameColumn(from, to string) AlterTableBuilder {
-	return b.with(Alteration{Kind: AlterRenameColumn, Name: from, NewName: to})
+	return b.with(Alteration{Kind: AlterRenameColumn, Name: NewIdent(from), NewName: NewIdent(to)})
 }
 
 // RenameTo appends a RENAME TO action (rename the table).
 func (b AlterTableBuilder) RenameTo(name string) AlterTableBuilder {
-	return b.with(Alteration{Kind: AlterRenameTable, NewName: name})
+	return b.with(Alteration{Kind: AlterRenameTable, NewName: NewIdent(name)})
 }
 
 // ToSQL compiles the building ALTER TABLE statement.

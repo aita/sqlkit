@@ -82,8 +82,8 @@ func Resolve(q sql.Query) []Resolution {
 // their own traversal.
 func ResolveColumn(scope []SourceRef, col ColumnRef) Resolution {
 	res := Resolution{Column: col, Status: Unknown}
-	if col.Qualifier != "" {
-		if s, ok := matchQualifier(scope, col.Qualifier); ok && s.Table != "" {
+	if !col.Qualifier.IsZero() {
+		if s, ok := matchQualifier(scope, col.Qualifier); ok && !s.Table.IsZero() {
 			res.Schema, res.Table, res.Status = s.Schema, s.Table, Resolved
 		}
 		return res
@@ -93,7 +93,7 @@ func ResolveColumn(scope []SourceRef, col ColumnRef) Resolution {
 	var match *SourceRef
 	for i := range scope {
 		s := &scope[i]
-		if s.Table == "" {
+		if s.Table.IsZero() {
 			continue // a derived (subquery/VALUES) source names no base table here
 		}
 		if match != nil && !sameTable(*match, *s) {
@@ -113,16 +113,16 @@ func ResolveColumn(scope []SourceRef, col ColumnRef) Resolution {
 // name (bare or schema-qualified) matches.
 func matchQualifier(scope []SourceRef, qualifier sql.Ident) (SourceRef, bool) {
 	for _, s := range scope {
-		if s.Alias != "" {
+		if !s.Alias.IsZero() {
 			if s.Alias.Equal(qualifier) {
 				return s, true
 			}
 			continue
 		}
-		if s.Table == "" {
+		if s.Table.IsZero() {
 			continue
 		}
-		if s.Table.Equal(qualifier) || (s.Schema + "." + s.Table).Equal(qualifier) {
+		if s.Table.Equal(qualifier) || sql.NewIdent(s.Schema.Name+"."+s.Table.Name).Equal(qualifier) {
 			return s, true
 		}
 	}

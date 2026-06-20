@@ -617,7 +617,7 @@ func (s *Scope) execValuesUpdate(ctx context.Context, ts *tableState, pkCol sqlk
 	for i, p := range group {
 		byCol := make(map[string]sql.Expression, len(p.assignments))
 		for _, a := range p.assignments {
-			byCol[a.Column] = a.Value
+			byCol[a.Column.String()] = a.Value
 		}
 		row := make([]sql.Expression, 0, len(valueCols))
 		row = append(row, sql.Val(p.pk[0]))
@@ -813,7 +813,7 @@ func groupBySignature(pending []pendingUpdate) (groups map[string][]pendingUpdat
 func assignmentColumns(assignments []sql.Assignment) []string {
 	cols := make([]string, len(assignments))
 	for i, a := range assignments {
-		cols[i] = a.Column
+		cols[i] = a.Column.String()
 	}
 	return cols
 }

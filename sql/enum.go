@@ -8,14 +8,15 @@ import (
 // CreateEnumStmt is the AST for a CREATE TYPE ... AS ENUM statement (PostgreSQL).
 // It has no options, so it is constructed directly with CreateEnum.
 type CreateEnumStmt struct {
-	Name   string
+	posField
+	Name   Ident
 	Values []string
 }
 
 // CreateEnum builds a CREATE TYPE name AS ENUM (values...) statement. The name
 // may be schema-qualified.
 func CreateEnum(name string, values ...string) CreateEnumStmt {
-	return CreateEnumStmt{Name: name, Values: values}
+	return CreateEnumStmt{Name: NewIdent(name), Values: values}
 }
 
 // ToSQL compiles the CREATE TYPE ... AS ENUM statement.
@@ -24,12 +25,12 @@ func (s CreateEnumStmt) ToSQL(d Dialect) (string, []any, error) {
 	return out, nil, err
 }
 func (s CreateEnumStmt) compileDDL(c *Compiler) (string, error) {
-	if s.Name == "" {
+	if s.Name.IsZero() {
 		return "", fmt.Errorf("sqlkit/sql: CREATE TYPE requires a name")
 	}
 	var sb strings.Builder
 	sb.WriteString("CREATE TYPE ")
-	sb.WriteString(c.Dialect.QuoteIdent(s.Name))
+	sb.WriteString(c.Dialect.QuoteIdent(s.Name.String()))
 	sb.WriteString(" AS ENUM (")
 	for i, value := range s.Values {
 		if i > 0 {
@@ -44,7 +45,8 @@ func (CreateEnumStmt) ddlStatement() {}
 
 // DropTypeStmt is the AST for a DROP TYPE statement (PostgreSQL).
 type DropTypeStmt struct {
-	Names    []string
+	posField
+	Names    []Ident
 	IfExists bool
 	Cascade  bool
 }
@@ -67,7 +69,7 @@ func (s DropTypeStmt) compileDDL(c *Compiler) (string, error) {
 		if i > 0 {
 			sb.WriteString(", ")
 		}
-		sb.WriteString(c.Dialect.QuoteIdent(name))
+		sb.WriteString(c.Dialect.QuoteIdent(name.String()))
 	}
 	if s.Cascade {
 		sb.WriteString(" CASCADE")
@@ -83,7 +85,7 @@ type DropTypeBuilder struct{ s DropTypeStmt }
 // DropType starts a DROP TYPE builder for one or more (possibly
 // schema-qualified) type names.
 func DropType(names ...string) DropTypeBuilder {
-	return DropTypeBuilder{s: DropTypeStmt{Names: names}}
+	return DropTypeBuilder{s: DropTypeStmt{Names: idents(names)}}
 }
 
 // Stmt returns the built DROP TYPE statement.
@@ -110,7 +112,8 @@ func (DropTypeBuilder) ddlStatement()                            {}
 // adding a label to an enum type (PostgreSQL). At most one of Before/After is
 // set. It is a DDL Statement.
 type AlterTypeAddValueStmt struct {
-	Name        string
+	posField
+	Name        Ident
 	Value       string
 	IfNotExists bool
 	Before      string
@@ -123,12 +126,12 @@ func (s AlterTypeAddValueStmt) ToSQL(d Dialect) (string, []any, error) {
 	return out, nil, err
 }
 func (s AlterTypeAddValueStmt) compileDDL(c *Compiler) (string, error) {
-	if s.Name == "" || s.Value == "" {
+	if s.Name.IsZero() || s.Value == "" {
 		return "", fmt.Errorf("sqlkit/sql: ALTER TYPE ADD VALUE requires a type name and a value")
 	}
 	var sb strings.Builder
 	sb.WriteString("ALTER TYPE ")
-	sb.WriteString(c.Dialect.QuoteIdent(s.Name))
+	sb.WriteString(c.Dialect.QuoteIdent(s.Name.String()))
 	sb.WriteString(" ADD VALUE ")
 	if s.IfNotExists {
 		sb.WriteString("IF NOT EXISTS ")
@@ -150,7 +153,7 @@ type AlterTypeAddValueBuilder struct{ s AlterTypeAddValueStmt }
 
 // AlterTypeAddValue starts a builder that adds value to an enum type.
 func AlterTypeAddValue(name, value string) AlterTypeAddValueBuilder {
-	return AlterTypeAddValueBuilder{s: AlterTypeAddValueStmt{Name: name, Value: value}}
+	return AlterTypeAddValueBuilder{s: AlterTypeAddValueStmt{Name: NewIdent(name), Value: value}}
 }
 
 // Stmt returns the built ALTER TYPE ... ADD VALUE statement.
@@ -182,14 +185,15 @@ func (AlterTypeAddValueBuilder) ddlStatement()                            {}
 // AlterTypeRenameValueStmt is the AST for an ALTER TYPE ... RENAME VALUE
 // statement. It has no options, so it is constructed directly.
 type AlterTypeRenameValueStmt struct {
-	Name     string
+	posField
+	Name     Ident
 	OldValue string
 	NewValue string
 }
 
 // AlterTypeRenameValue builds a statement that renames an enum label.
 func AlterTypeRenameValue(name, oldValue, newValue string) AlterTypeRenameValueStmt {
-	return AlterTypeRenameValueStmt{Name: name, OldValue: oldValue, NewValue: newValue}
+	return AlterTypeRenameValueStmt{Name: NewIdent(name), OldValue: oldValue, NewValue: newValue}
 }
 
 // ToSQL compiles the ALTER TYPE ... RENAME VALUE statement.
@@ -198,10 +202,10 @@ func (s AlterTypeRenameValueStmt) ToSQL(d Dialect) (string, []any, error) {
 	return out, nil, err
 }
 func (s AlterTypeRenameValueStmt) compileDDL(c *Compiler) (string, error) {
-	if s.Name == "" || s.OldValue == "" || s.NewValue == "" {
+	if s.Name.IsZero() || s.OldValue == "" || s.NewValue == "" {
 		return "", fmt.Errorf("sqlkit/sql: ALTER TYPE RENAME VALUE requires a type name and both values")
 	}
-	return "ALTER TYPE " + c.Dialect.QuoteIdent(s.Name) + " RENAME VALUE " +
+	return "ALTER TYPE " + c.Dialect.QuoteIdent(s.Name.String()) + " RENAME VALUE " +
 		literal(s.OldValue) + " TO " + literal(s.NewValue) + ";", nil
 }
 func (AlterTypeRenameValueStmt) ddlStatement() {}

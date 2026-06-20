@@ -26,13 +26,13 @@ func TestColumnReferenceQualifiesByAlias(t *testing.T) {
 
 func TestTableInfoSQLSourceAlias(t *testing.T) {
 	base := sqlkit.TableInfo{Schema: "public", Name: "employees"}
-	if src := base.SQLSource(); src.Alias != "" || src.Name != "public.employees" {
+	if src := base.SQLSource(); !src.Alias.IsZero() || src.Name.String() != "public.employees" {
 		t.Fatalf("base SQLSource() = %#v, want Name=public.employees Alias empty", src)
 	}
 
 	aliased := base.WithAlias("manager")
 	src := aliased.SQLSource()
-	if src.Name != "public.employees" || src.Alias != "manager" {
+	if src.Name.String() != "public.employees" || src.Alias.String() != "manager" {
 		t.Fatalf("aliased SQLSource() = %#v, want Name=public.employees Alias=manager", src)
 	}
 	// QualifiedName stays the real name so statement targets are unaffected.

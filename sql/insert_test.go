@@ -6,7 +6,7 @@ import (
 )
 
 func TestOnConflictExpressionCompile(t *testing.T) {
-	q := InsertInto(Table{Name: "users"}).Columns("email").Values("a@x").
+	q := InsertInto(Table{Name: NewIdent("users")}).Columns("email").Values("a@x").
 		OnConflictExpr(Func("lower", Col("email"))).
 		DoUpdate(Set("seen", Col("now()")))
 	got, args, err := q.ToSQL(PostgreSQLDialect{})
@@ -25,7 +25,7 @@ func TestOnConflictExpressionCompile(t *testing.T) {
 // Each conflict-target setter replaces any earlier target, so the last one wins
 // (the fluent API cannot express a mixed column/expression target).
 func TestOnConflictTargetLastWins(t *testing.T) {
-	q := InsertInto(Table{Name: "t"}).Columns("a").Values(1).
+	q := InsertInto(Table{Name: NewIdent("t")}).Columns("a").Values(1).
 		OnConflict("a").OnConflictExpr(Col("b")).DoNothing()
 	got, _, err := q.ToSQL(PostgreSQLDialect{})
 	if err != nil {
@@ -38,15 +38,15 @@ func TestOnConflictTargetLastWins(t *testing.T) {
 }
 
 func TestUpdateFromAndDeleteUsing(t *testing.T) {
-	upd := Update(Table{Name: "users"}).
+	upd := Update(Table{Name: NewIdent("users")}).
 		Set(Set("name", Col("o.name"))).
-		From(SourceAlias(Table{Name: "orgs"}, "o")).
+		From(SourceAlias(Table{Name: NewIdent("orgs")}, "o")).
 		Where(Eq(Col("users.org_id"), Col("o.id")))
 	assertSQL(t, upd,
 		`UPDATE "users" SET "name" = "o"."name" FROM "orgs" AS "o" WHERE ("users"."org_id" = "o"."id")`, nil)
 
-	del := DeleteFrom(Table{Name: "users"}).
-		Using(SourceAlias(Table{Name: "orgs"}, "o")).
+	del := DeleteFrom(Table{Name: NewIdent("users")}).
+		Using(SourceAlias(Table{Name: NewIdent("orgs")}, "o")).
 		Where(And(Eq(Col("users.org_id"), Col("o.id")), Eq(Col("o.active"), Val(false))))
 	assertSQL(t, del,
 		`DELETE FROM "users" USING "orgs" AS "o" WHERE (("users"."org_id" = "o"."id") AND ("o"."active" = $1))`,
@@ -55,7 +55,7 @@ func TestUpdateFromAndDeleteUsing(t *testing.T) {
 
 func TestInsertFromSelectSQL(t *testing.T) {
 	source := Select(Col("email"), Col("name")).
-		From(Table{Name: "old_users"}).
+		From(Table{Name: NewIdent("old_users")}).
 		Where(Eq(Col("active"), Val(true)))
 
 	query := InsertInto(users).Columns("email", "name").FromSelect(source)
@@ -66,7 +66,7 @@ func TestInsertFromSelectSQL(t *testing.T) {
 }
 
 func TestInsertFromSelectWithoutColumnsSQL(t *testing.T) {
-	query := InsertInto(users).FromSelect(Select(Col("id")).From(Table{Name: "old_users"}))
+	query := InsertInto(users).FromSelect(Select(Col("id")).From(Table{Name: NewIdent("old_users")}))
 
 	assertSQL(t, query,
 		`INSERT INTO "public"."users" SELECT "id" FROM "old_users"`,
@@ -76,7 +76,7 @@ func TestInsertFromSelectWithoutColumnsSQL(t *testing.T) {
 func TestInsertFromSelectReturning(t *testing.T) {
 	query := InsertInto(users).
 		Columns("email").
-		FromSelect(Select(Col("email")).From(Table{Name: "old_users"})).
+		FromSelect(Select(Col("email")).From(Table{Name: NewIdent("old_users")})).
 		Returning(Col("id"))
 
 	assertSQL(t, query,
@@ -86,7 +86,7 @@ func TestInsertFromSelectReturning(t *testing.T) {
 
 func TestInsertFromSelectSharesPlaceholderNumbering(t *testing.T) {
 	source := Select(Col("email")).
-		From(Table{Name: "old_users"}).
+		From(Table{Name: NewIdent("old_users")}).
 		Where(And(Eq(Col("a"), Int(1)), Eq(Col("b"), Int(2))))
 
 	query := InsertInto(users).Columns("email").FromSelect(source)
@@ -97,8 +97,8 @@ func TestInsertFromSelectSharesPlaceholderNumbering(t *testing.T) {
 }
 
 func TestInsertFromCompoundQuery(t *testing.T) {
-	a := Select(Col("email")).From(Table{Name: "a"})
-	b := Select(Col("email")).From(Table{Name: "b"})
+	a := Select(Col("email")).From(Table{Name: NewIdent("a")})
+	b := Select(Col("email")).From(Table{Name: NewIdent("b")})
 
 	query := InsertInto(users).Columns("email").FromSelect(a.Union(b))
 
@@ -111,7 +111,7 @@ func TestInsertRejectsValuesAndSelectSource(t *testing.T) {
 	query := InsertInto(users).
 		Columns("email").
 		Values("a@example.com").
-		FromSelect(Select(Col("email")).From(Table{Name: "old_users"}))
+		FromSelect(Select(Col("email")).From(Table{Name: NewIdent("old_users")}))
 
 	if _, _, err := query.ToSQL(PostgreSQLDialect{}); err == nil {
 		t.Fatal("INSERT with both VALUES and SELECT compiled, want error")
@@ -328,12 +328,12 @@ func TestDeleteLeftJoinRejectedOnPostgres(t *testing.T) {
 }
 
 func TestInsertStmtConflict(t *testing.T) {
-	users := Table{Name: "users"}
+	users := Table{Name: NewIdent("users")}
 	c := InsertInto(users).Columns("id").Values(1).
 		OnConflict("id").DoUpdate(Set("id", Val(2))).
 		Stmt()
 
-	if c.Table.Name != "users" {
+	if c.Table.Name.String() != "users" {
 		t.Errorf("Table = %q, want users", c.Table.Name)
 	}
 	if c.Conflict == nil || !c.Conflict.DoUpdate || len(c.Conflict.Sets) != 1 {

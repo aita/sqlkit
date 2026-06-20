@@ -28,8 +28,8 @@ func TestPositionIsCarriedAndIgnoredByCompiler(t *testing.T) {
 
 	val := Val(1)
 	val.NodePos = 26
-	positioned := Select(col).From(Table{Name: "users"}).Where(Eq(col, val))
-	built := Select(Col("id")).From(Table{Name: "users"}).Where(Eq(Col("id"), Val(1)))
+	positioned := Select(col).From(Table{Name: NewIdent("users")}).Where(Eq(col, val))
+	built := Select(Col("id")).From(Table{Name: NewIdent("users")}).Where(Eq(Col("id"), Val(1)))
 
 	ps, pa, err := positioned.ToSQL(PostgreSQLDialect{})
 	if err != nil {

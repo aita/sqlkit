@@ -56,14 +56,14 @@ type Option func(*Migrator)
 
 // WithTableName overrides the tracking table name (default "schema_migrations").
 func WithTableName(name string) Option {
-	return func(m *Migrator) { m.table.Name = name }
+	return func(m *Migrator) { m.table.Name = sql.NewIdent(name) }
 }
 
 // WithSchema sets the schema for both the tracking table and the tables a
 // migration's operations create or alter.
 func WithSchema(schema string) Option {
 	return func(m *Migrator) {
-		m.table.Schema = schema
+		m.table.Schema = sql.NewIdent(schema)
 		m.schema = schema
 	}
 }
@@ -76,7 +76,7 @@ func New(db *sqlkit.Database, migrations []Migration, opts ...Option) *Migrator 
 	order, byRev, err := plan(migrations)
 	m := &Migrator{
 		db:      db,
-		table:   sql.Table{Name: defaultTableName},
+		table:   sql.Table{Name: sql.NewIdent(defaultTableName)},
 		order:   order,
 		byRev:   byRev,
 		planErr: err,
@@ -710,11 +710,11 @@ func (m *Migrator) ensureTable(ctx context.Context) error {
 // is its most recent event. The timestamp type is resolved for the dialect.
 func (m *Migrator) createTableStmt() sql.CreateTableStmt {
 	return sql.CreateTable(m.table).
-		Column(sql.ColumnDef{Name: "id", Type: autoIncrIDType(m.db.Dialect()), NotNull: true, AutoIncrement: true}).
-		Column(sql.ColumnDef{Name: "revision", Type: sql.EngineType{Name: "varchar", Length: 255}, NotNull: true}).
-		Column(sql.ColumnDef{Name: "name", Type: sql.EngineType{Name: "varchar", Length: 255}, NotNull: true}).
-		Column(sql.ColumnDef{Name: "direction", Type: sql.EngineType{Name: "varchar", Length: 4}, NotNull: true}).
-		Column(sql.ColumnDef{Name: "applied_at", Type: timestampType(m.db.Dialect()), NotNull: true, Default: sql.Raw("CURRENT_TIMESTAMP")}).
+		Column(sql.ColumnDef{Name: sql.NewIdent("id"), Type: autoIncrIDType(m.db.Dialect()), NotNull: true, AutoIncrement: true}).
+		Column(sql.ColumnDef{Name: sql.NewIdent("revision"), Type: sql.EngineType{Name: "varchar", Length: 255}, NotNull: true}).
+		Column(sql.ColumnDef{Name: sql.NewIdent("name"), Type: sql.EngineType{Name: "varchar", Length: 255}, NotNull: true}).
+		Column(sql.ColumnDef{Name: sql.NewIdent("direction"), Type: sql.EngineType{Name: "varchar", Length: 4}, NotNull: true}).
+		Column(sql.ColumnDef{Name: sql.NewIdent("applied_at"), Type: timestampType(m.db.Dialect()), NotNull: true, Default: sql.Raw("CURRENT_TIMESTAMP")}).
 		PrimaryKey("id").
 		IfNotExists().
 		Stmt()

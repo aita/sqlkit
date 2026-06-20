@@ -117,19 +117,19 @@ func (fakeParser) Parse(text string) ([]sql.Query, error) {
 		}
 		return []sql.Query{q}, nil
 	case strings.HasPrefix(up, "UPDATE"):
-		q := sql.Update(sql.Table{Name: tableAfter(up, s, "UPDATE")}).Set(sql.Set("name", sql.Expr("x")))
+		q := sql.Update(sql.Table{Name: sql.NewIdent(tableAfter(up, s, "UPDATE"))}).Set(sql.Set("name", sql.Expr("x")))
 		if hasWhere {
 			q = q.Where(sql.Eq(sql.Col("id"), sql.Expr(1)))
 		}
 		return []sql.Query{q}, nil
 	case strings.HasPrefix(up, "DELETE"):
-		q := sql.DeleteFrom(sql.Table{Name: tableAfter(up, s, "FROM")})
+		q := sql.DeleteFrom(sql.Table{Name: sql.NewIdent(tableAfter(up, s, "FROM"))})
 		if hasWhere {
 			q = q.Where(sql.Eq(sql.Col("id"), sql.Expr(1)))
 		}
 		return []sql.Query{q}, nil
 	case strings.HasPrefix(up, "INSERT"):
-		q := sql.InsertInto(sql.Table{Name: tableAfter(up, s, "INTO")}).Columns("name").Values("x")
+		q := sql.InsertInto(sql.Table{Name: sql.NewIdent(tableAfter(up, s, "INTO"))}).Columns("name").Values("x")
 		return []sql.Query{q}, nil
 	}
 	return nil, fmt.Errorf("fakeParser: cannot parse %q", text)

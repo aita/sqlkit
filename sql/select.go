@@ -41,8 +41,9 @@ type SelectStmt struct {
 // UPDATE / KEY SHARE), an optional OF table list, and an optional wait mode
 // (NOWAIT / SKIP LOCKED).
 type lockClause struct {
+	posField
 	strength string
-	of       []string
+	of       []Ident
 	wait     string
 }
 
@@ -52,10 +53,11 @@ type lockClause struct {
 // equally named column implicitly (in which case On and Using are empty). A
 // CROSS JOIN carries none of them.
 type JoinClause struct {
+	posField
 	Kind    string
 	Source  Source
 	On      Expression
-	Using   []string
+	Using   []Ident
 	Natural bool
 }
 
@@ -143,13 +145,13 @@ func (b SelectBuilder) CrossJoin(source Source) SelectBuilder {
 // JoinUsing adds an INNER JOIN ... USING (columns) clause, matching rows on the
 // equally named columns (which collapse to a single output column each).
 func (b SelectBuilder) JoinUsing(source Source, columns ...string) SelectBuilder {
-	b.s.Joins = appendJoin(b.s.Joins, JoinClause{Kind: "JOIN", Source: source, Using: columns})
+	b.s.Joins = appendJoin(b.s.Joins, JoinClause{Kind: "JOIN", Source: source, Using: idents(columns)})
 	return b
 }
 
 // LeftJoinUsing adds a LEFT JOIN ... USING (columns) clause.
 func (b SelectBuilder) LeftJoinUsing(source Source, columns ...string) SelectBuilder {
-	b.s.Joins = appendJoin(b.s.Joins, JoinClause{Kind: "LEFT JOIN", Source: source, Using: columns})
+	b.s.Joins = appendJoin(b.s.Joins, JoinClause{Kind: "LEFT JOIN", Source: source, Using: idents(columns)})
 	return b
 }
 
@@ -231,7 +233,7 @@ func NoWait() LockOption { return func(l *lockClause) { l.wait = "NOWAIT" } }
 // LockOf restricts the lock to rows from the named tables/aliases
 // (FOR UPDATE OF t), for a join that should lock only some of its inputs.
 func LockOf(tables ...string) LockOption {
-	return func(l *lockClause) { l.of = append(l.of, tables...) }
+	return func(l *lockClause) { l.of = append(l.of, idents(tables)...) }
 }
 
 // ForUpdate adds a FOR UPDATE row-locking clause, locking the selected rows

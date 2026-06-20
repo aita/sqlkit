@@ -20,8 +20,8 @@ func args(t *testing.T, q sql.Query) []any {
 }
 
 func TestApplyMasksSensitiveLiterals(t *testing.T) {
-	users := sql.Table{Schema: "public", Name: "users"}
-	accounts := sql.Table{Schema: "public", Name: "accounts"}
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	accounts := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("accounts")}
 	m := redact.New(redact.Columns("users.name"))
 
 	tests := []struct {
@@ -89,7 +89,7 @@ func TestApplyMasksSensitiveLiterals(t *testing.T) {
 // TestApplyDoesNotMutateInput checks Apply rebuilds on copies: the original query
 // still carries its real values after masking.
 func TestApplyDoesNotMutateInput(t *testing.T) {
-	users := sql.Table{Schema: "public", Name: "users"}
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
 	m := redact.New(redact.Columns("users.name"))
 	q := sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Val("taro")))
 
@@ -101,8 +101,8 @@ func TestApplyDoesNotMutateInput(t *testing.T) {
 
 // TestApplyMasksSubquery checks a literal inside a subquery's own scope is masked.
 func TestApplyMasksSubquery(t *testing.T) {
-	users := sql.Table{Schema: "public", Name: "users"}
-	accounts := sql.Table{Schema: "public", Name: "accounts"}
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	accounts := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("accounts")}
 	m := redact.New(redact.Columns("users.name"))
 
 	q := sql.Select(sql.Star()).From(accounts).
@@ -114,7 +114,7 @@ func TestApplyMasksSubquery(t *testing.T) {
 
 // TestNumbersAndPlaceholdersNotMasked pins that only string literals are masked.
 func TestNumbersAndPlaceholdersNotMasked(t *testing.T) {
-	users := sql.Table{Schema: "public", Name: "users"}
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
 	m := redact.New(redact.Columns("users.id"))
 	// id is PII here, but compared to a number: the number is not a string literal.
 	q := sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("id"), sql.Val(42)))
@@ -130,7 +130,7 @@ func TestPolicyFromCommentMarker(t *testing.T) {
 		Columns: []meta.Column{{Name: "id"}, {Name: "name", Comment: "the user's PII name"}, {Name: "email"}},
 	}}}
 	m := redact.New(redact.CommentMarker(md, "pii"))
-	users := sql.Table{Schema: "public", Name: "users"}
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
 	q := sql.Select(sql.Star()).From(users).Where(sql.And(
 		sql.Eq(sql.Col("name"), sql.Val("taro")),
 		sql.Eq(sql.Col("email"), sql.Val("x@y.z")),
@@ -141,7 +141,7 @@ func TestPolicyFromCommentMarker(t *testing.T) {
 }
 
 func TestApplyEmptyPolicyPassesThrough(t *testing.T) {
-	users := sql.Table{Schema: "public", Name: "users"}
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
 	m := redact.New(redact.Columns())
 	q := sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Val("taro")))
 	if got := args(t, m.Apply(q)); !reflect.DeepEqual(got, []any{"taro"}) {
@@ -150,7 +150,7 @@ func TestApplyEmptyPolicyPassesThrough(t *testing.T) {
 }
 
 func TestWithMaskCustomValue(t *testing.T) {
-	users := sql.Table{Schema: "public", Name: "users"}
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
 	m := redact.New(redact.Columns("users.name"), redact.WithMask("REDACTED"))
 	q := sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Val("taro")))
 	if got := args(t, m.Apply(q)); !reflect.DeepEqual(got, []any{"REDACTED"}) {

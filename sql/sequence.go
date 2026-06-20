@@ -11,6 +11,7 @@ import (
 // engine default); Cycle is nil when neither CYCLE nor NO CYCLE was set. OwnedBy
 // is "", "NONE", or "table.column".
 type CreateSequenceStmt struct {
+	posField
 	Sequence    Table
 	IfNotExists bool
 	Increment   *int64
@@ -21,7 +22,7 @@ type CreateSequenceStmt struct {
 	Start       *int64
 	Cache       *int64
 	Cycle       *bool
-	OwnedBy     string
+	OwnedBy     Ident
 }
 
 // ToSQL compiles the CREATE SEQUENCE statement.
@@ -30,7 +31,7 @@ func (s CreateSequenceStmt) ToSQL(d Dialect) (string, []any, error) {
 	return out, nil, err
 }
 func (s CreateSequenceStmt) compileDDL(c *Compiler) (string, error) {
-	if s.Sequence.Name == "" {
+	if s.Sequence.Name.IsZero() {
 		return "", fmt.Errorf("sqlkit/sql: CREATE SEQUENCE requires a name")
 	}
 	var sb strings.Builder
@@ -67,11 +68,11 @@ func (s CreateSequenceStmt) compileDDL(c *Compiler) (string, error) {
 			sb.WriteString(" NO CYCLE")
 		}
 	}
-	if s.OwnedBy != "" {
-		if s.OwnedBy == "NONE" {
+	if !s.OwnedBy.IsZero() {
+		if s.OwnedBy.String() == "NONE" {
 			sb.WriteString(" OWNED BY NONE")
 		} else {
-			sb.WriteString(" OWNED BY " + c.Dialect.QuoteIdent(s.OwnedBy))
+			sb.WriteString(" OWNED BY " + c.Dialect.QuoteIdent(s.OwnedBy.String()))
 		}
 	}
 	sb.WriteString(";")
@@ -130,7 +131,7 @@ func (b CreateSequenceBuilder) NoCycle() CreateSequenceBuilder {
 
 // OwnedBy sets OWNED BY a "table.column", or "NONE" to detach the sequence.
 func (b CreateSequenceBuilder) OwnedBy(column string) CreateSequenceBuilder {
-	b.s.OwnedBy = column
+	b.s.OwnedBy = NewIdent(column)
 	return b
 }
 
@@ -141,7 +142,8 @@ func (CreateSequenceBuilder) ddlStatement()                            {}
 
 // DropSequenceStmt is the AST for a DROP SEQUENCE statement.
 type DropSequenceStmt struct {
-	Names    []string
+	posField
+	Names    []Ident
 	IfExists bool
 	Cascade  bool
 }
@@ -164,7 +166,7 @@ func (s DropSequenceStmt) compileDDL(c *Compiler) (string, error) {
 		if i > 0 {
 			sb.WriteString(", ")
 		}
-		sb.WriteString(c.Dialect.QuoteIdent(name))
+		sb.WriteString(c.Dialect.QuoteIdent(name.String()))
 	}
 	if s.Cascade {
 		sb.WriteString(" CASCADE")
@@ -180,7 +182,7 @@ type DropSequenceBuilder struct{ s DropSequenceStmt }
 // DropSequence starts a DROP SEQUENCE builder for one or more (possibly
 // schema-qualified) sequence names.
 func DropSequence(names ...string) DropSequenceBuilder {
-	return DropSequenceBuilder{s: DropSequenceStmt{Names: names}}
+	return DropSequenceBuilder{s: DropSequenceStmt{Names: idents(names)}}
 }
 
 // Stmt returns the built DROP SEQUENCE statement.

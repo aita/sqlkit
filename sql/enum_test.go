@@ -3,7 +3,7 @@ package sql
 import "testing"
 
 func TestCreateEnumStmt(t *testing.T) {
-	if e := CreateEnum("mood", "sad", "ok"); e.Name != "mood" || len(e.Values) != 2 {
+	if e := CreateEnum("mood", "sad", "ok"); e.Name.String() != "mood" || len(e.Values) != 2 {
 		t.Errorf("CreateEnumStmt = %+v", e)
 	}
 }

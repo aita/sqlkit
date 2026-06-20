@@ -8,8 +8,8 @@ import (
 )
 
 func TestKindOf(t *testing.T) {
-	users := sql.Table{Name: "users"}
-	orders := sql.Table{Name: "orders"}
+	users := sql.Table{Name: sql.NewIdent("users")}
+	orders := sql.Table{Name: sql.NewIdent("orders")}
 
 	tests := []struct {
 		name     string

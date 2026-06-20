@@ -8,7 +8,7 @@ import (
 )
 
 func TestHasWhere(t *testing.T) {
-	users := sql.Table{Name: "users"}
+	users := sql.Table{Name: sql.NewIdent("users")}
 	tests := []struct {
 		name  string
 		query sql.Query
@@ -32,8 +32,8 @@ func TestHasWhere(t *testing.T) {
 // TestHasWhereIsNodeLocal pins that HasWhere describes only the top-level node: a
 // WHERE inside a CTE body or a UNION arm is that nested query's, not the outer's.
 func TestHasWhereIsNodeLocal(t *testing.T) {
-	users := sql.Table{Name: "users"}
-	orders := sql.Table{Name: "orders"}
+	users := sql.Table{Name: sql.NewIdent("users")}
+	orders := sql.Table{Name: sql.NewIdent("orders")}
 
 	body := sql.Select(sql.Col("id")).From(users).Where(sql.Eq(sql.Col("active"), sql.Val(true)))
 	cte := body.CTE("c")
@@ -50,8 +50,8 @@ func TestHasWhereIsNodeLocal(t *testing.T) {
 }
 
 func TestHasJoin(t *testing.T) {
-	users := sql.Table{Name: "users"}
-	orders := sql.Table{Name: "orders"}
+	users := sql.Table{Name: sql.NewIdent("users")}
+	orders := sql.Table{Name: sql.NewIdent("orders")}
 	tests := []struct {
 		name  string
 		query sql.Query
@@ -71,7 +71,7 @@ func TestHasJoin(t *testing.T) {
 }
 
 func TestSelectsStar(t *testing.T) {
-	users := sql.Table{Name: "users"}
+	users := sql.Table{Name: sql.NewIdent("users")}
 	tests := []struct {
 		name  string
 		query sql.Query

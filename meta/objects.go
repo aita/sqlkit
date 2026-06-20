@@ -73,7 +73,7 @@ func (s Sequence) QualifiedName() string { return qualify(s.Schema, s.Name) }
 // CreateStatement builds the CREATE SEQUENCE DDL node, applying only the options
 // the model carries.
 func (s Sequence) CreateStatement() sql.CreateSequenceStmt {
-	st := sql.CreateSequence(sql.Table{Schema: s.Schema, Name: s.Name})
+	st := sql.CreateSequence(sql.Table{Schema: sql.NewIdent(s.Schema), Name: sql.NewIdent(s.Name)})
 	if s.Increment != nil {
 		st = st.Increment(*s.Increment)
 	}
@@ -158,7 +158,9 @@ type MaterializedView struct {
 }
 
 // sqlTable returns the sql-package table reference for the view.
-func (v MaterializedView) sqlTable() sql.Table { return sql.Table{Schema: v.Schema, Name: v.Name} }
+func (v MaterializedView) sqlTable() sql.Table {
+	return sql.Table{Schema: sql.NewIdent(v.Schema), Name: sql.NewIdent(v.Name)}
+}
 
 // QualifiedName returns the view name with an optional schema prefix.
 func (v MaterializedView) QualifiedName() string { return qualify(v.Schema, v.Name) }

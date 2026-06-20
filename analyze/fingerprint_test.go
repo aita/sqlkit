@@ -12,7 +12,7 @@ import (
 // renders every bind as "?", so queries differing only in their values (or
 // placeholder numbering) share a fingerprint with no numbered placeholder left.
 func TestFingerprintUnifiesPlaceholders(t *testing.T) {
-	users := sql.Table{Name: "users"}
+	users := sql.Table{Name: sql.NewIdent("users")}
 	q1 := sql.Select(sql.Col("id")).From(users).
 		Where(sql.And(sql.Eq(sql.Col("id"), sql.Val(1)), sql.Eq(sql.Col("name"), sql.Val("a"))))
 	q2 := sql.Select(sql.Col("id")).From(users).

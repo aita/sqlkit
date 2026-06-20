@@ -133,7 +133,7 @@ func TestDatabaseExec(t *testing.T) {
 	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 
-	stmt := sql.Update(sql.Table{Schema: "public", Name: "users"}).Set(sql.Set("email", sql.Val("x@x")))
+	stmt := sql.Update(sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}).Set(sql.Set("email", sql.Val("x@x")))
 	if _, err := db.Exec(context.Background(), stmt); err != nil {
 		t.Fatalf("Exec() error = %v", err)
 	}

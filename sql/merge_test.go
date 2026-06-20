@@ -3,14 +3,14 @@ package sql
 import "testing"
 
 func TestMergeStmt(t *testing.T) {
-	p := MergeInto(Table{Name: "accounts"}).As("t").
-		Using(SourceAlias(Table{Name: "staging"}, "s")).
+	p := MergeInto(Table{Name: NewIdent("accounts")}).As("t").
+		Using(SourceAlias(Table{Name: NewIdent("staging")}, "s")).
 		On(Eq(Col("t.id"), Col("s.id"))).
 		When(WhenMatched().ThenUpdate(Set("balance", Col("s.balance")))).
 		When(WhenNotMatched().ThenInsert([]string{"id"}, Col("s.id"))).
 		Stmt()
 
-	if p.Target.Name != "accounts" || p.TargetAlias != "t" {
+	if p.Target.Name.String() != "accounts" || p.TargetAlias.String() != "t" {
 		t.Errorf("Target/alias = %q/%q, want accounts/t", p.Target.Name, p.TargetAlias)
 	}
 	if p.Using == nil || p.On == nil {
@@ -30,8 +30,8 @@ func TestMergeStmt(t *testing.T) {
 
 // Walk descends into a MERGE's USING subquery.
 func TestMergeWalk(t *testing.T) {
-	using := Select(Col("id"), Col("balance")).From(Table{Name: "staging"})
-	q := MergeInto(Table{Name: "accounts"}).
+	using := Select(Col("id"), Col("balance")).From(Table{Name: NewIdent("staging")})
+	q := MergeInto(Table{Name: NewIdent("accounts")}).
 		Using(Alias(using, "s")).
 		On(Eq(Col("accounts.id"), Col("s.id"))).
 		When(WhenMatched().ThenDelete())
@@ -44,8 +44,8 @@ func TestMergeWalk(t *testing.T) {
 }
 
 func TestMergeCompile(t *testing.T) {
-	q := MergeInto(Table{Name: "accounts"}).As("t").
-		Using(SourceAlias(Table{Name: "staging"}, "s")).
+	q := MergeInto(Table{Name: NewIdent("accounts")}).As("t").
+		Using(SourceAlias(Table{Name: NewIdent("staging")}, "s")).
 		On(Eq(Col("t.id"), Col("s.id"))).
 		When(WhenMatched().ThenUpdate(Set("balance", Col("s.balance")))).
 		When(WhenNotMatched().ThenInsert([]string{"id", "balance"}, Col("s.id"), Col("s.balance")))
@@ -66,8 +66,8 @@ func TestMergeCompile(t *testing.T) {
 }
 
 func TestMergeConditionAndDeleteDoNothing(t *testing.T) {
-	q := MergeInto(Table{Name: "t"}).
-		Using(SourceAlias(Table{Name: "src"}, "s")).
+	q := MergeInto(Table{Name: NewIdent("t")}).
+		Using(SourceAlias(Table{Name: NewIdent("src")}, "s")).
 		On(Eq(Col("t.k"), Col("s.k"))).
 		When(WhenMatched().And(Gt(Col("s.n"), 0)).ThenDelete()).
 		When(WhenMatched().ThenDoNothing()).
@@ -90,8 +90,8 @@ func TestMergeConditionAndDeleteDoNothing(t *testing.T) {
 }
 
 func TestMergeUnsupportedDialect(t *testing.T) {
-	q := MergeInto(Table{Name: "t"}).
-		Using(Table{Name: "s"}).
+	q := MergeInto(Table{Name: NewIdent("t")}).
+		Using(Table{Name: NewIdent("s")}).
 		On(Eq(Col("t.id"), Col("s.id"))).
 		When(WhenMatched().ThenDelete())
 	if _, _, err := q.ToSQL(MySQLDialect{}); err == nil {
@@ -100,14 +100,14 @@ func TestMergeUnsupportedDialect(t *testing.T) {
 }
 
 func TestMergeValidation(t *testing.T) {
-	base := MergeInto(Table{Name: "t"}).Using(Table{Name: "s"}).On(Eq(Col("t.id"), Col("s.id")))
+	base := MergeInto(Table{Name: NewIdent("t")}).Using(Table{Name: NewIdent("s")}).On(Eq(Col("t.id"), Col("s.id")))
 	if _, _, err := base.When(WhenNotMatched().ThenUpdate(Set("x", 1))).ToSQL(PostgreSQLDialect{}); err == nil {
 		t.Fatal("WHEN NOT MATCHED ... UPDATE succeeded, want error")
 	}
 	if _, _, err := base.When(WhenMatched().ThenInsert([]string{"x"}, 1)).ToSQL(PostgreSQLDialect{}); err == nil {
 		t.Fatal("WHEN MATCHED ... INSERT succeeded, want error")
 	}
-	if _, _, err := MergeInto(Table{Name: "t"}).ToSQL(PostgreSQLDialect{}); err == nil {
+	if _, _, err := MergeInto(Table{Name: NewIdent("t")}).ToSQL(PostgreSQLDialect{}); err == nil {
 		t.Fatal("MERGE without USING/ON/WHEN succeeded, want error")
 	}
 }

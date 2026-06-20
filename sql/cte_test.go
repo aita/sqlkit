@@ -7,7 +7,7 @@ import (
 
 func TestSelectWithCTE(t *testing.T) {
 	active := Select(Col("users.id")).
-		From(Table{Name: "users"}).
+		From(Table{Name: NewIdent("users")}).
 		Where(Eq(Col("users.active"), true)).
 		CTE("active")
 	query := Select(active.Col("id")).From(active).WithCTE(active)
@@ -19,7 +19,7 @@ func TestSelectWithCTE(t *testing.T) {
 
 func TestSelectWithCTEColumnList(t *testing.T) {
 	totals := Select(Col("org_id"), Count(Col("id"))).
-		From(Table{Name: "users"}).
+		From(Table{Name: NewIdent("users")}).
 		GroupBy(Col("org_id")).
 		CTE("t", Columns("org_id", "n"))
 	query := Select(totals.Col("org_id"), totals.Col("n")).From(totals).WithCTE(totals)
@@ -32,8 +32,8 @@ func TestSelectWithCTEColumnList(t *testing.T) {
 // Multiple CTEs are emitted in the order passed to WithCTE, and their bodies
 // receive the leading placeholder ordinals.
 func TestSelectWithMultipleCTEsShareNumbering(t *testing.T) {
-	a := Select(Col("id"), Col("flag")).From(Table{Name: "users"}).Where(Eq(Col("kind"), Int(1))).CTE("a")
-	b := Select(Col("id")).From(Table{Name: "orgs"}).Where(Eq(Col("kind"), Int(2))).CTE("b")
+	a := Select(Col("id"), Col("flag")).From(Table{Name: NewIdent("users")}).Where(Eq(Col("kind"), Int(1))).CTE("a")
+	b := Select(Col("id")).From(Table{Name: NewIdent("orgs")}).Where(Eq(Col("kind"), Int(2))).CTE("b")
 	query := Select(CountAll()).
 		From(a).
 		Join(b, Eq(a.Col("id"), b.Col("id"))).
@@ -47,7 +47,7 @@ func TestSelectWithMultipleCTEsShareNumbering(t *testing.T) {
 
 func TestSelectWithRecursiveCTE(t *testing.T) {
 	base := Select(Col("id"), Col("parent_id")).
-		From(Table{Name: "nodes"}).
+		From(Table{Name: NewIdent("nodes")}).
 		Where(IsNull(Col("parent_id")))
 	step := Select(Col("nodes.id"), Col("nodes.parent_id")).
 		From(Tbl("nodes")).
@@ -62,8 +62,8 @@ func TestSelectWithRecursiveCTE(t *testing.T) {
 
 // A CTE referenced through a WHERE subquery works because WithCTE is explicit.
 func TestUpdateWithCTE(t *testing.T) {
-	stale := Select(Col("id")).From(Table{Name: "sessions"}).Where(Eq(Col("expired"), true)).CTE("stale")
-	query := Update(Table{Name: "users"}).
+	stale := Select(Col("id")).From(Table{Name: NewIdent("sessions")}).Where(Eq(Col("expired"), true)).CTE("stale")
+	query := Update(Table{Name: NewIdent("users")}).
 		WithCTE(stale).
 		Set(Set("active", false)).
 		Where(InQuery(Col("id"), Select(stale.Col("id")).From(stale)))
@@ -74,8 +74,8 @@ func TestUpdateWithCTE(t *testing.T) {
 }
 
 func TestDeleteWithCTE(t *testing.T) {
-	doomed := Select(Col("id")).From(Table{Name: "orgs"}).Where(Eq(Col("closed"), true)).CTE("doomed")
-	query := DeleteFrom(Table{Name: "users"}).
+	doomed := Select(Col("id")).From(Table{Name: NewIdent("orgs")}).Where(Eq(Col("closed"), true)).CTE("doomed")
+	query := DeleteFrom(Table{Name: NewIdent("users")}).
 		WithCTE(doomed).
 		Where(InQuery(Col("org_id"), Select(doomed.Col("id")).From(doomed)))
 
@@ -86,7 +86,7 @@ func TestDeleteWithCTE(t *testing.T) {
 
 // CTEs are emitted in the order given; list a dependency before its dependent.
 func TestNestedCTEDependencyOrder(t *testing.T) {
-	base := Select(Col("id")).From(Table{Name: "users"}).CTE("base")
+	base := Select(Col("id")).From(Table{Name: NewIdent("users")}).CTE("base")
 	derived := Select(base.Col("id")).From(base).Where(Eq(base.Col("id"), Int(1))).CTE("derived")
 	query := Select(derived.Col("id")).From(derived).WithCTE(base, derived)
 
@@ -96,7 +96,7 @@ func TestNestedCTEDependencyOrder(t *testing.T) {
 }
 
 func TestWithEmptyCTENameFails(t *testing.T) {
-	cte := Select(Col("id")).From(Table{Name: "u"}).CTE("")
+	cte := Select(Col("id")).From(Table{Name: NewIdent("u")}).CTE("")
 	q := Select(Col("id")).From(cte).WithCTE(cte)
 	if _, _, err := q.ToSQL(PostgreSQLDialect{}); err == nil {
 		t.Fatal("empty CTE name compiled, want error")
@@ -104,7 +104,7 @@ func TestWithEmptyCTENameFails(t *testing.T) {
 }
 
 func TestCTEAccessors(t *testing.T) {
-	users := Table{Name: "users"}
+	users := Table{Name: NewIdent("users")}
 	cte := Select(Col("id")).From(users).CTE("active", Columns("id"))
 	if cte.Name() != "active" {
 		t.Errorf("Name() = %q, want active", cte.Name())

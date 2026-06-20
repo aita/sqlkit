@@ -10,7 +10,7 @@ func TestInsertOnConflictExpression(t *testing.T) {
 	assertRoundTrip(t,
 		"INSERT INTO users (email, name) VALUES ('a', 'b') "+
 			"ON CONFLICT ((lower(email))) DO UPDATE SET name = excluded.name",
-		sql.InsertInto(sql.Table{Name: "users"}).Columns("email", "name").Values("a", "b").
+		sql.InsertInto(sql.Table{Name: sql.NewIdent("users")}).Columns("email", "name").Values("a", "b").
 			OnConflictExpr(sql.Func("lower", sql.Col("email"))).
 			DoUpdate(sql.Set("name", sql.Excluded("name"))),
 		`INSERT INTO "users" ("email", "name") VALUES ($1, $2) `+
@@ -21,7 +21,7 @@ func TestInsertOnConflictExpression(t *testing.T) {
 func TestUpdateSubscriptAssignment(t *testing.T) {
 	assertRoundTrip(t,
 		"UPDATE t SET tags[1] = 'x' WHERE id = 5",
-		sql.Update(sql.Table{Name: "t"}).
+		sql.Update(sql.Table{Name: sql.NewIdent("t")}).
 			Set(sql.SetAt(sql.Subscript(sql.Col("tags"), 1), "x")).
 			Where(sql.Eq(sql.Col("id"), 5)),
 		`UPDATE "t" SET "tags"[$1] = $2 WHERE ("id" = $3)`,

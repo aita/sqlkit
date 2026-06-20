@@ -104,7 +104,7 @@ func TestOperatorCreateAndDropView(t *testing.T) {
 	cap := newCapture()
 	op := newOperator(context.Background(), cap, "public")
 	body := sql.Select(sql.Col("id"), sql.Col("email")).
-		From(sql.Table{Schema: "public", Name: "users"}).
+		From(sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}).
 		Where(sql.Raw("active"))
 	op.CreateView("active_users", body, OrReplace())
 	op.DropView("active_users")

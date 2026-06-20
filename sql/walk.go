@@ -205,7 +205,7 @@ func queryChildren(q Query, onCTEName func(string), onName func(string), onQuery
 			return
 		}
 		e := s.SQLSource()
-		onName(e.Name)
+		onName(e.Name.String())
 		if e.Query != nil {
 			onQuery(e.Query)
 		}
@@ -214,7 +214,7 @@ func queryChildren(q Query, onCTEName func(string), onName func(string), onQuery
 	sel := func(s Selection) { WalkSelectionSubqueries(s, onQuery) }
 	ctes := func(cs []CTE) {
 		for _, c := range cs {
-			onCTEName(c.name)
+			onCTEName(c.name.String())
 			if c.query != nil {
 				onQuery(c.query)
 			}

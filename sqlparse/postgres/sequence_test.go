@@ -9,14 +9,14 @@ import (
 func TestCreateSequenceBare(t *testing.T) {
 	assertRoundTrip(t,
 		"CREATE SEQUENCE IF NOT EXISTS order_id_seq",
-		sql.CreateSequence(sql.Table{Name: "order_id_seq"}).IfNotExists(),
+		sql.CreateSequence(sql.Table{Name: sql.NewIdent("order_id_seq")}).IfNotExists(),
 		`CREATE SEQUENCE IF NOT EXISTS "order_id_seq";`)
 }
 
 func TestCreateSequenceOptions(t *testing.T) {
 	assertRoundTrip(t,
 		"CREATE SEQUENCE s INCREMENT BY 2 MINVALUE 1 NO MAXVALUE START WITH 5 CACHE 10 CYCLE OWNED BY t.id",
-		sql.CreateSequence(sql.Table{Name: "s"}).
+		sql.CreateSequence(sql.Table{Name: sql.NewIdent("s")}).
 			Increment(2).MinValue(1).NoMaxValue().Start(5).Cache(10).Cycle().OwnedBy("t.id"),
 		`CREATE SEQUENCE "s" INCREMENT BY 2 MINVALUE 1 NO MAXVALUE START WITH 5 CACHE 10 CYCLE OWNED BY "t"."id";`)
 }

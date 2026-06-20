@@ -4,7 +4,7 @@ import "testing"
 
 func usersDef() TableDef {
 	return TableDef{
-		Table:      Table{Schema: "public", Name: "users"},
+		Table:      Table{Schema: NewIdent("public"), Name: NewIdent("users")},
 		Columns:    []string{"id", "email", "name"},
 		PrimaryKey: []string{"id"},
 		Defaulted:  []string{"id"},

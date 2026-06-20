@@ -9,7 +9,7 @@ import (
 func TestCreateTable(t *testing.T) {
 	assertRoundTrip(t,
 		"CREATE TABLE users (id BIGINT AUTO_INCREMENT PRIMARY KEY, email VARCHAR(255) NOT NULL UNIQUE, age INT DEFAULT 0)",
-		sql.CreateTable(sql.Table{Name: "users"}).
+		sql.CreateTable(sql.Table{Name: sql.NewIdent("users")}).
 			Column(sql.ColumnDef{Name: "id", Type: sql.EngineType{Name: "bigint"}, AutoIncrement: true}).
 			Column(sql.ColumnDef{Name: "email", Type: sql.RawType("varchar(255)"), NotNull: true, Unique: true}).
 			Column(sql.ColumnDef{Name: "age", Type: sql.RawType("int(11)"), Default: sql.Raw("0")}).
@@ -25,7 +25,7 @@ func TestCreateTable(t *testing.T) {
 func TestCreateTableIfNotExists(t *testing.T) {
 	assertRoundTrip(t,
 		"CREATE TABLE IF NOT EXISTS t (id INT)",
-		sql.CreateTable(sql.Table{Name: "t"}).IfNotExists().
+		sql.CreateTable(sql.Table{Name: sql.NewIdent("t")}).IfNotExists().
 			Column(sql.ColumnDef{Name: "id", Type: sql.RawType("int(11)")}),
 		"CREATE TABLE IF NOT EXISTS `t` (\n    `id` int(11)\n);")
 }
@@ -34,7 +34,7 @@ func TestCreateTableForeignKey(t *testing.T) {
 	assertRoundTrip(t,
 		"CREATE TABLE posts (id INT PRIMARY KEY, uid INT, "+
 			"CONSTRAINT fk_user FOREIGN KEY (uid) REFERENCES users (id) ON DELETE CASCADE)",
-		sql.CreateTable(sql.Table{Name: "posts"}).
+		sql.CreateTable(sql.Table{Name: sql.NewIdent("posts")}).
 			Column(sql.ColumnDef{Name: "id", Type: sql.RawType("int(11)")}).
 			Column(sql.ColumnDef{Name: "uid", Type: sql.RawType("int(11)")}).
 			ForeignKey(sql.ForeignKeyConstraint{
@@ -53,7 +53,7 @@ func TestCreateTableForeignKey(t *testing.T) {
 func TestCreateTableUniqueConstraint(t *testing.T) {
 	assertRoundTrip(t,
 		"CREATE TABLE t (a INT, b INT, CONSTRAINT uq UNIQUE (a, b))",
-		sql.CreateTable(sql.Table{Name: "t"}).
+		sql.CreateTable(sql.Table{Name: sql.NewIdent("t")}).
 			Column(sql.ColumnDef{Name: "a", Type: sql.RawType("int(11)")}).
 			Column(sql.ColumnDef{Name: "b", Type: sql.RawType("int(11)")}).
 			Unique("uq", "a", "b"),
@@ -67,7 +67,7 @@ func TestCreateTableUniqueConstraint(t *testing.T) {
 func TestAlterTableAddColumn(t *testing.T) {
 	assertRoundTrip(t,
 		"ALTER TABLE users ADD COLUMN bio TEXT",
-		sql.AlterTable(sql.Table{Name: "users"}).
+		sql.AlterTable(sql.Table{Name: sql.NewIdent("users")}).
 			AddColumn(sql.ColumnDef{Name: "bio", Type: sql.RawType("text")}),
 		"ALTER TABLE `users` ADD COLUMN `bio` text;")
 }
@@ -75,14 +75,14 @@ func TestAlterTableAddColumn(t *testing.T) {
 func TestAlterTableDropColumn(t *testing.T) {
 	assertRoundTrip(t,
 		"ALTER TABLE users DROP COLUMN bio",
-		sql.AlterTable(sql.Table{Name: "users"}).DropColumn("bio"),
+		sql.AlterTable(sql.Table{Name: sql.NewIdent("users")}).DropColumn("bio"),
 		"ALTER TABLE `users` DROP COLUMN `bio`;")
 }
 
 func TestAlterTableModifyColumn(t *testing.T) {
 	assertRoundTrip(t,
 		"ALTER TABLE users MODIFY COLUMN age BIGINT NOT NULL",
-		sql.AlterTable(sql.Table{Name: "users"}).
+		sql.AlterTable(sql.Table{Name: sql.NewIdent("users")}).
 			RestateColumn(sql.ColumnDef{Name: "age", Type: sql.RawType("bigint(20)"), NotNull: true}),
 		"ALTER TABLE `users` MODIFY COLUMN `age` bigint(20) NOT NULL;")
 }
@@ -91,7 +91,7 @@ func TestAlterTableChangeColumnNoRename(t *testing.T) {
 	// CHANGE COLUMN with the same name is a plain restate (MODIFY COLUMN).
 	assertRoundTrip(t,
 		"ALTER TABLE users CHANGE COLUMN age age BIGINT",
-		sql.AlterTable(sql.Table{Name: "users"}).
+		sql.AlterTable(sql.Table{Name: sql.NewIdent("users")}).
 			RestateColumn(sql.ColumnDef{Name: "age", Type: sql.RawType("bigint(20)")}),
 		"ALTER TABLE `users` MODIFY COLUMN `age` bigint(20);")
 }
@@ -103,14 +103,14 @@ func TestAlterTableChangeColumnRenameFallsBackToRaw(t *testing.T) {
 func TestAlterTableRenameColumn(t *testing.T) {
 	assertRoundTrip(t,
 		"ALTER TABLE users RENAME COLUMN a TO b",
-		sql.AlterTable(sql.Table{Name: "users"}).RenameColumn("a", "b"),
+		sql.AlterTable(sql.Table{Name: sql.NewIdent("users")}).RenameColumn("a", "b"),
 		"ALTER TABLE `users` RENAME COLUMN `a` TO `b`;")
 }
 
 func TestCreateTemporaryTable(t *testing.T) {
 	assertRoundTrip(t,
 		"CREATE TEMPORARY TABLE tmp (id INT)",
-		sql.CreateTable(sql.Table{Name: "tmp"}).Temporary().
+		sql.CreateTable(sql.Table{Name: sql.NewIdent("tmp")}).Temporary().
 			Column(sql.ColumnDef{Name: "id", Type: sql.RawType("int(11)")}),
 		"CREATE TEMPORARY TABLE `tmp` (\n    `id` int(11)\n);")
 }
@@ -118,14 +118,14 @@ func TestCreateTemporaryTable(t *testing.T) {
 func TestDropTable(t *testing.T) {
 	assertRoundTrip(t,
 		"DROP TABLE IF EXISTS users, sessions",
-		sql.DropTable(sql.Table{Name: "users"}, sql.Table{Name: "sessions"}).IfExists(),
+		sql.DropTable(sql.Table{Name: sql.NewIdent("users")}, sql.Table{Name: sql.NewIdent("sessions")}).IfExists(),
 		"DROP TABLE IF EXISTS `users`, `sessions`;")
 }
 
 func TestTruncate(t *testing.T) {
 	assertRoundTrip(t,
 		"TRUNCATE TABLE logs",
-		sql.Truncate(sql.Table{Name: "logs"}),
+		sql.Truncate(sql.Table{Name: sql.NewIdent("logs")}),
 		"TRUNCATE TABLE `logs`;")
 }
 
@@ -139,7 +139,7 @@ func TestCreateDatabase(t *testing.T) {
 func TestCreateTableWithIndex(t *testing.T) {
 	assertRoundTrip(t,
 		"CREATE TABLE t (name VARCHAR(20) COLLATE utf8mb4_bin, KEY idx_name (name))",
-		sql.CreateTable(sql.Table{Name: "t"}).
+		sql.CreateTable(sql.Table{Name: sql.NewIdent("t")}).
 			Column(sql.ColumnDef{Name: "name", Type: sql.RawType("varchar(20)"), Collate: "utf8mb4_bin"}).
 			Index("idx_name", "name"),
 		"CREATE TABLE `t` (\n"+
@@ -151,7 +151,7 @@ func TestCreateTableWithIndex(t *testing.T) {
 func TestCreateTableGeneratedColumn(t *testing.T) {
 	assertRoundTrip(t,
 		"CREATE TABLE t (a INT, b INT, total INT GENERATED ALWAYS AS (a + b) STORED)",
-		sql.CreateTable(sql.Table{Name: "t"}).
+		sql.CreateTable(sql.Table{Name: sql.NewIdent("t")}).
 			Column(sql.ColumnDef{Name: "a", Type: sql.RawType("int(11)")}).
 			Column(sql.ColumnDef{Name: "b", Type: sql.RawType("int(11)")}).
 			Column(sql.ColumnDef{Name: "total", Type: sql.RawType("int(11)"), Generated: &sql.GeneratedColumn{
@@ -168,7 +168,7 @@ func TestCreateTableGeneratedColumn(t *testing.T) {
 func TestCreateTableOnUpdate(t *testing.T) {
 	assertRoundTrip(t,
 		"CREATE TABLE t (id INT, updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)",
-		sql.CreateTable(sql.Table{Name: "t"}).
+		sql.CreateTable(sql.Table{Name: sql.NewIdent("t")}).
 			Column(sql.ColumnDef{Name: "id", Type: sql.RawType("int(11)")}).
 			Column(sql.ColumnDef{Name: "updated", Type: sql.RawType("timestamp"),
 				Default:  sql.Func("CURRENT_TIMESTAMP"),
@@ -183,49 +183,49 @@ func TestCreateTableOnUpdate(t *testing.T) {
 func TestDropView(t *testing.T) {
 	assertRoundTrip(t,
 		"DROP VIEW IF EXISTS active_users",
-		sql.DropView(sql.Table{Name: "active_users"}).IfExists(),
+		sql.DropView(sql.Table{Name: sql.NewIdent("active_users")}).IfExists(),
 		"DROP VIEW IF EXISTS `active_users`;")
 }
 
 func TestCreateIndex(t *testing.T) {
 	assertRoundTrip(t,
 		"CREATE INDEX idx_email ON users (email)",
-		sql.CreateIndex("idx_email", sql.Table{Name: "users"}, "email"),
+		sql.CreateIndex("idx_email", sql.Table{Name: sql.NewIdent("users")}, "email"),
 		"CREATE INDEX `idx_email` ON `users` (`email`);")
 }
 
 func TestCreateUniqueIndex(t *testing.T) {
 	assertRoundTrip(t,
 		"CREATE UNIQUE INDEX uq_ab ON t (a, b)",
-		sql.CreateIndex("uq_ab", sql.Table{Name: "t"}, "a", "b").Unique(),
+		sql.CreateIndex("uq_ab", sql.Table{Name: sql.NewIdent("t")}, "a", "b").Unique(),
 		"CREATE UNIQUE INDEX `uq_ab` ON `t` (`a`, `b`);")
 }
 
 func TestDropIndex(t *testing.T) {
 	assertRoundTrip(t,
 		"DROP INDEX idx_email ON users",
-		sql.DropIndex("idx_email", sql.Table{Name: "users"}),
+		sql.DropIndex("idx_email", sql.Table{Name: sql.NewIdent("users")}),
 		"DROP INDEX `idx_email` ON `users`;")
 }
 
 func TestRenameTable(t *testing.T) {
 	assertRoundTrip(t,
 		"RENAME TABLE old_users TO users",
-		sql.RenameTable(sql.Table{Name: "old_users"}, "users"),
+		sql.RenameTable(sql.Table{Name: sql.NewIdent("old_users")}, "users"),
 		"ALTER TABLE `old_users` RENAME TO `users`;")
 }
 
 func TestAlterTableDropForeignKey(t *testing.T) {
 	assertRoundTrip(t,
 		"ALTER TABLE posts DROP FOREIGN KEY fk_user",
-		sql.DropForeignKey(sql.Table{Name: "posts"}, "fk_user"),
+		sql.DropForeignKey(sql.Table{Name: sql.NewIdent("posts")}, "fk_user"),
 		"ALTER TABLE `posts` DROP FOREIGN KEY `fk_user`;")
 }
 
 func TestAlterTableDropIndex(t *testing.T) {
 	assertRoundTrip(t,
 		"ALTER TABLE users DROP INDEX idx_email",
-		sql.DropIndex("idx_email", sql.Table{Name: "users"}),
+		sql.DropIndex("idx_email", sql.Table{Name: sql.NewIdent("users")}),
 		"DROP INDEX `idx_email` ON `users`;")
 }
 

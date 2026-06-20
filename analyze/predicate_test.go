@@ -10,7 +10,7 @@ import (
 )
 
 func TestFilterColumns(t *testing.T) {
-	users := sql.Table{Name: "users"}
+	users := sql.Table{Name: sql.NewIdent("users")}
 	tests := []struct {
 		name  string
 		query sql.Query
@@ -61,7 +61,7 @@ func TestFilterColumns(t *testing.T) {
 // TestWherePredicates checks the single-pass WherePredicates returns exactly what
 // FilterColumns and MaxInList report separately.
 func TestWherePredicates(t *testing.T) {
-	users := sql.Table{Name: "users"}
+	users := sql.Table{Name: sql.NewIdent("users")}
 	queries := []sql.Query{
 		sql.Select(sql.Col("id")).From(users).Where(sql.And(
 			sql.Eq(sql.Col("tenant_id"), sql.Expr(1)),
@@ -83,8 +83,8 @@ func TestWherePredicates(t *testing.T) {
 }
 
 func TestMaxInList(t *testing.T) {
-	users := sql.Table{Name: "users"}
-	sub := sql.Select(sql.Col("id")).From(sql.Table{Name: "banned"})
+	users := sql.Table{Name: sql.NewIdent("users")}
+	sub := sql.Select(sql.Col("id")).From(sql.Table{Name: sql.NewIdent("banned")})
 	tests := []struct {
 		name  string
 		query sql.Query

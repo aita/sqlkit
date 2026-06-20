@@ -3,9 +3,9 @@ package sql
 import "testing"
 
 func TestWalk(t *testing.T) {
-	users := Table{Name: "users"}
-	orders := Table{Name: "orders"}
-	posts := Table{Name: "posts"}
+	users := Table{Name: NewIdent("users")}
+	orders := Table{Name: NewIdent("orders")}
+	posts := Table{Name: NewIdent("posts")}
 
 	// A query with a FROM subquery, a correlated scalar subquery in the SELECT
 	// list, and a WHERE IN subquery — four queries in total.

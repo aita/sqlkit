@@ -3,9 +3,9 @@ package sql
 import "testing"
 
 func TestSetOpPrecedenceMixed(t *testing.T) {
-	a := Select(Col("id")).From(Table{Name: "a"})
-	b := Select(Col("id")).From(Table{Name: "b"})
-	cq := Select(Col("id")).From(Table{Name: "c"})
+	a := Select(Col("id")).From(Table{Name: NewIdent("a")})
+	b := Select(Col("id")).From(Table{Name: NewIdent("b")})
+	cq := Select(Col("id")).From(Table{Name: NewIdent("c")})
 
 	// (a UNION b) INTERSECT c must keep the UNION grouped, since INTERSECT binds
 	// tighter; without parens PostgreSQL would read a UNION (b INTERSECT c).
@@ -18,8 +18,8 @@ func TestSetOpPrecedenceMixed(t *testing.T) {
 }
 
 func TestUnion(t *testing.T) {
-	a := Select(Col("id")).From(Table{Name: "users"}).Where(Eq(Col("active"), Val(true)))
-	b := Select(Col("id")).From(Table{Name: "admins"})
+	a := Select(Col("id")).From(Table{Name: NewIdent("users")}).Where(Eq(Col("active"), Val(true)))
+	b := Select(Col("id")).From(Table{Name: NewIdent("admins")})
 
 	query := a.Union(b).OrderBy(Asc(Col("id"))).Limit(10).Offset(5)
 
@@ -29,9 +29,9 @@ func TestUnion(t *testing.T) {
 }
 
 func TestUnionAllChained(t *testing.T) {
-	a := Select(Col("id")).From(Table{Name: "a"})
-	b := Select(Col("id")).From(Table{Name: "b"})
-	c := Select(Col("id")).From(Table{Name: "c"})
+	a := Select(Col("id")).From(Table{Name: NewIdent("a")})
+	b := Select(Col("id")).From(Table{Name: NewIdent("b")})
+	c := Select(Col("id")).From(Table{Name: NewIdent("c")})
 
 	query := a.UnionAll(b).UnionAll(c)
 
@@ -41,25 +41,25 @@ func TestUnionAllChained(t *testing.T) {
 }
 
 func TestIntersectAndExcept(t *testing.T) {
-	a := Select(Col("id")).From(Table{Name: "a"})
-	b := Select(Col("id")).From(Table{Name: "b"})
+	a := Select(Col("id")).From(Table{Name: NewIdent("a")})
+	b := Select(Col("id")).From(Table{Name: NewIdent("b")})
 
 	assertSQL(t, a.Intersect(b), `(SELECT "id" FROM "a") INTERSECT (SELECT "id" FROM "b")`, nil)
 	assertSQL(t, a.Except(b), `(SELECT "id" FROM "a") EXCEPT (SELECT "id" FROM "b")`, nil)
 }
 
 func TestIntersectAndExceptAll(t *testing.T) {
-	a := Select(Col("id")).From(Table{Name: "a"})
-	b := Select(Col("id")).From(Table{Name: "b"})
+	a := Select(Col("id")).From(Table{Name: NewIdent("a")})
+	b := Select(Col("id")).From(Table{Name: NewIdent("b")})
 
 	assertSQL(t, a.IntersectAll(b), `(SELECT "id" FROM "a") INTERSECT ALL (SELECT "id" FROM "b")`, nil)
 	assertSQL(t, a.ExceptAll(b), `(SELECT "id" FROM "a") EXCEPT ALL (SELECT "id" FROM "b")`, nil)
 }
 
 func TestIntersectAndExceptChained(t *testing.T) {
-	a := Select(Col("id")).From(Table{Name: "a"})
-	b := Select(Col("id")).From(Table{Name: "b"})
-	c := Select(Col("id")).From(Table{Name: "c"})
+	a := Select(Col("id")).From(Table{Name: NewIdent("a")})
+	b := Select(Col("id")).From(Table{Name: NewIdent("b")})
+	c := Select(Col("id")).From(Table{Name: NewIdent("c")})
 
 	assertSQL(t, a.Intersect(b).Intersect(c),
 		`(SELECT "id" FROM "a") INTERSECT (SELECT "id" FROM "b") INTERSECT (SELECT "id" FROM "c")`, nil)
@@ -68,8 +68,8 @@ func TestIntersectAndExceptChained(t *testing.T) {
 }
 
 func TestUnionAsSubquery(t *testing.T) {
-	a := Select(Col("id")).From(Table{Name: "a"})
-	b := Select(Col("id")).From(Table{Name: "b"})
+	a := Select(Col("id")).From(Table{Name: NewIdent("a")})
+	b := Select(Col("id")).From(Table{Name: NewIdent("b")})
 
 	query := Select(CountAll()).From(Alias(a.Union(b), "u"))
 
@@ -79,8 +79,8 @@ func TestUnionAsSubquery(t *testing.T) {
 }
 
 func TestUnionPlaceholderNumbering(t *testing.T) {
-	a := Select(Col("id")).From(Table{Name: "a"}).Where(Eq(Col("x"), Int(1)))
-	b := Select(Col("id")).From(Table{Name: "b"}).Where(Eq(Col("y"), Int(2)))
+	a := Select(Col("id")).From(Table{Name: NewIdent("a")}).Where(Eq(Col("x"), Int(1)))
+	b := Select(Col("id")).From(Table{Name: NewIdent("b")}).Where(Eq(Col("y"), Int(2)))
 
 	assertSQL(t, a.Union(b),
 		`(SELECT "id" FROM "a" WHERE ("x" = $1)) UNION (SELECT "id" FROM "b" WHERE ("y" = $2))`,

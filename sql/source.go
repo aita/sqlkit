@@ -7,10 +7,11 @@ type Source interface {
 
 // SourceExpression is the compiled representation of a FROM/JOIN source.
 type SourceExpression struct {
-	Name    string
+	posField
+	Name    Ident
 	Query   Query
 	Values  *ValuesClause
-	Alias   string
+	Alias   Ident
 	Lateral bool
 }
 
@@ -20,8 +21,9 @@ func (s SourceExpression) SQLSource() SourceExpression { return s }
 // ValuesClause is an inline VALUES row constructor — a list of value rows with an
 // optional column-name list — used as a derived-table source via ValuesSource.
 type ValuesClause struct {
+	posField
 	Rows    [][]Expression
-	Columns []string
+	Columns []Ident
 }
 
 // ValuesSource builds a derived-table FROM/JOIN source from inline VALUES rows,
@@ -30,41 +32,44 @@ type ValuesClause struct {
 // equivalent UNION ALL of SELECTs whose first arm names the columns. Each row
 // must hold one value per column. It backs bulk UPDATE ... FROM (VALUES ...).
 func ValuesSource(rows [][]Expression, alias string, columns ...string) SourceExpression {
-	return SourceExpression{Values: &ValuesClause{Rows: rows, Columns: columns}, Alias: alias}
+	return SourceExpression{Values: &ValuesClause{Rows: rows, Columns: idents(columns)}, Alias: NewIdent(alias)}
 }
 
 // Table is a table reference usable in FROM/JOIN clauses.
 type Table struct {
-	Schema string
-	Name   string
+	posField
+	Schema Ident
+	Name   Ident
 }
 
 // QualifiedName returns the table name with an optional schema prefix.
 func (t Table) QualifiedName() string {
-	if t.Schema == "" {
-		return t.Name
+	if t.Schema.IsZero() {
+		return t.Name.String()
 	}
-	return t.Schema + "." + t.Name
+	return t.Schema.String() + "." + t.Name.String()
 }
 
 // SQLSource marks Table as a Source.
-func (t Table) SQLSource() SourceExpression { return SourceExpression{Name: t.QualifiedName()} }
+func (t Table) SQLSource() SourceExpression {
+	return SourceExpression{Name: NewIdent(t.QualifiedName())}
+}
 
 // Tbl creates a FROM/JOIN source that refers to a table or CTE by name, the
-// source-side counterpart to Col. It is shorthand for Table{Name: name} — handy
-// for referencing a recursive CTE by name from its own body, e.g.
+// source-side counterpart to Col. It is shorthand for Table{Name: NewIdent(name)} —
+// handy for referencing a recursive CTE by name from its own body, e.g.
 // Join(Tbl("tree"), Eq(Col("nodes.parent_id"), Col("tree.id"))).
-func Tbl(name string) Table { return Table{Name: name} }
+func Tbl(name string) Table { return Table{Name: NewIdent(name)} }
 
 // Alias creates a subquery source from a query and alias.
 func Alias(query Query, alias string) SourceExpression {
-	return SourceExpression{Query: query, Alias: alias}
+	return SourceExpression{Query: query, Alias: NewIdent(alias)}
 }
 
 // SourceAlias applies an alias to a table or other source.
 func SourceAlias(source Source, alias string) SourceExpression {
 	expr := source.SQLSource()
-	expr.Alias = alias
+	expr.Alias = NewIdent(alias)
 	return expr
 }
 

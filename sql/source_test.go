@@ -6,11 +6,11 @@ import (
 )
 
 func TestLateralJoin(t *testing.T) {
-	recent := Select(Col("p.id")).From(SourceAlias(Table{Name: "posts"}, "p")).
+	recent := Select(Col("p.id")).From(SourceAlias(Table{Name: NewIdent("posts")}, "p")).
 		Where(Eq(Col("p.user_id"), Col("u.id"))).Limit(1)
 
 	q := Select(Col("u.id"), Col("r.id")).
-		From(SourceAlias(Table{Name: "users"}, "u")).
+		From(SourceAlias(Table{Name: NewIdent("users")}, "u")).
 		Join(Lateral(Alias(recent, "r")), Raw("true"))
 
 	assertSQL(t, q,

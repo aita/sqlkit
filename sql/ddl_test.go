@@ -6,12 +6,12 @@ import (
 )
 
 func TestCreateTableInlineConstraints(t *testing.T) {
-	stmt := CreateTable(Table{Name: "posts"}).
-		Column(ColumnDef{Name: "id", Type: EngineType{Name: "int8"}, Identity: IdentityAlways, NotNull: true}).
-		Column(ColumnDef{Name: "slug", Type: EngineType{Name: "text"}, NotNull: true, Unique: true}).
-		Column(ColumnDef{Name: "author_id", Type: EngineType{Name: "int8"}, NotNull: true,
-			References: &ColumnReference{Table: "users", Column: "id", OnDelete: "CASCADE"}}).
-		Column(ColumnDef{Name: "search", Type: EngineType{Name: "text"},
+	stmt := CreateTable(Table{Name: NewIdent("posts")}).
+		Column(ColumnDef{Name: NewIdent("id"), Type: EngineType{Name: "int8"}, Identity: IdentityAlways, NotNull: true}).
+		Column(ColumnDef{Name: NewIdent("slug"), Type: EngineType{Name: "text"}, NotNull: true, Unique: true}).
+		Column(ColumnDef{Name: NewIdent("author_id"), Type: EngineType{Name: "int8"}, NotNull: true,
+			References: &ColumnReference{Table: NewIdent("users"), Column: NewIdent("id"), OnDelete: "CASCADE"}}).
+		Column(ColumnDef{Name: NewIdent("search"), Type: EngineType{Name: "text"},
 			Generated: &GeneratedColumn{Expression: Raw("lower(slug)"), Stored: true}}).
 		PrimaryKey("id")
 
@@ -29,13 +29,13 @@ func TestCreateTableInlineConstraints(t *testing.T) {
 }
 
 func TestCreateTableTableLevelUniqueAndForeignKey(t *testing.T) {
-	stmt := CreateTable(Table{Schema: "public", Name: "memberships"}).
-		Column(ColumnDef{Name: "user_id", Type: EngineType{Name: "int8"}, NotNull: true}).
-		Column(ColumnDef{Name: "team_id", Type: EngineType{Name: "int8"}, NotNull: true}).
+	stmt := CreateTable(Table{Schema: NewIdent("public"), Name: NewIdent("memberships")}).
+		Column(ColumnDef{Name: NewIdent("user_id"), Type: EngineType{Name: "int8"}, NotNull: true}).
+		Column(ColumnDef{Name: NewIdent("team_id"), Type: EngineType{Name: "int8"}, NotNull: true}).
 		Unique("uq_membership", "user_id", "team_id").
 		ForeignKey(ForeignKeyConstraint{
-			Name: "fk_user", Columns: []string{"user_id"},
-			RefSchema: "public", RefTable: "users", RefColumns: []string{"id"}, OnDelete: "CASCADE",
+			Name: NewIdent("fk_user"), Columns: Idents("user_id"),
+			RefSchema: NewIdent("public"), RefTable: NewIdent("users"), RefColumns: Idents("id"), OnDelete: "CASCADE",
 		})
 
 	got := mustDDL(t, stmt, "postgres")
@@ -51,8 +51,8 @@ func TestCreateTableTableLevelUniqueAndForeignKey(t *testing.T) {
 }
 
 func TestCreateTableUnnamedUnique(t *testing.T) {
-	stmt := CreateTable(Table{Name: "t"}).
-		Column(ColumnDef{Name: "a", Type: EngineType{Name: "int8"}}).
+	stmt := CreateTable(Table{Name: NewIdent("t")}).
+		Column(ColumnDef{Name: NewIdent("a"), Type: EngineType{Name: "int8"}}).
 		Unique("", "a")
 	got := mustDDL(t, stmt, "postgres")
 	if !strings.Contains(got, `    UNIQUE ("a")`) {
@@ -61,15 +61,15 @@ func TestCreateTableUnnamedUnique(t *testing.T) {
 }
 
 func TestIdentityRejectedOnMySQL(t *testing.T) {
-	stmt := CreateTable(Table{Name: "t"}).
-		Column(ColumnDef{Name: "id", Type: EngineType{Name: "bigint"}, Identity: IdentityAlways})
+	stmt := CreateTable(Table{Name: NewIdent("t")}).
+		Column(ColumnDef{Name: NewIdent("id"), Type: EngineType{Name: "bigint"}, Identity: IdentityAlways})
 	if _, _, err := stmt.ToSQL(mustDialect(t, "mysql")); err == nil || !strings.Contains(err.Error(), "IDENTITY") {
 		t.Fatalf("ToSQL(mysql) error = %v, want IDENTITY rejection", err)
 	}
 }
 
 func TestAlterTableAddUnique(t *testing.T) {
-	stmt := AlterTable(Table{Name: "users"}).AddUnique("uq_email", "email")
+	stmt := AlterTable(Table{Name: NewIdent("users")}).AddUnique("uq_email", "email")
 	got := mustDDL(t, stmt, "postgres")
 	if want := `ALTER TABLE "users" ADD CONSTRAINT "uq_email" UNIQUE ("email");`; got != want {
 		t.Errorf("AddUnique() = %q, want %q", got, want)
@@ -77,9 +77,9 @@ func TestAlterTableAddUnique(t *testing.T) {
 }
 
 func TestGeneratedColumnMySQL(t *testing.T) {
-	stmt := CreateTable(Table{Name: "t"}).
-		Column(ColumnDef{Name: "a", Type: EngineType{Name: "int"}, NotNull: true}).
-		Column(ColumnDef{Name: "b", Type: EngineType{Name: "int"},
+	stmt := CreateTable(Table{Name: NewIdent("t")}).
+		Column(ColumnDef{Name: NewIdent("a"), Type: EngineType{Name: "int"}, NotNull: true}).
+		Column(ColumnDef{Name: NewIdent("b"), Type: EngineType{Name: "int"},
 			Generated: &GeneratedColumn{Expression: Raw("a * 2")}})
 	got := mustDDL(t, stmt, "mysql")
 	if !strings.Contains(got, "`b` int GENERATED ALWAYS AS (a * 2) VIRTUAL") {
@@ -134,12 +134,12 @@ func TestSchemaStmtRequiresName(t *testing.T) {
 }
 
 func TestCreateTablePostgres(t *testing.T) {
-	stmt := CreateTable(Table{Schema: "public", Name: "users"}).
-		Column(ColumnDef{Name: "id", Type: EngineType{Name: "int8"}, NotNull: true, AutoIncrement: true}).
-		Column(ColumnDef{Name: "email", Type: EngineType{Name: "varchar", Length: 255}, NotNull: true, Comment: "Unique login address"}).
-		Column(ColumnDef{Name: "name", Type: EngineType{Name: "text"}}).
-		Column(ColumnDef{Name: "balance", Type: EngineType{Name: "numeric", Precision: 10, Scale: 2}, NotNull: true}).
-		Column(ColumnDef{Name: "created_at", Type: EngineType{Name: "timestamptz"}, NotNull: true, Default: Raw("now()")}).
+	stmt := CreateTable(Table{Schema: NewIdent("public"), Name: NewIdent("users")}).
+		Column(ColumnDef{Name: NewIdent("id"), Type: EngineType{Name: "int8"}, NotNull: true, AutoIncrement: true}).
+		Column(ColumnDef{Name: NewIdent("email"), Type: EngineType{Name: "varchar", Length: 255}, NotNull: true, Comment: "Unique login address"}).
+		Column(ColumnDef{Name: NewIdent("name"), Type: EngineType{Name: "text"}}).
+		Column(ColumnDef{Name: NewIdent("balance"), Type: EngineType{Name: "numeric", Precision: 10, Scale: 2}, NotNull: true}).
+		Column(ColumnDef{Name: NewIdent("created_at"), Type: EngineType{Name: "timestamptz"}, NotNull: true, Default: Raw("now()")}).
 		PrimaryKey("id").
 		Check("ck_users_1", Raw("balance >= 0")).
 		Comment("Registered blog authors")
@@ -160,9 +160,9 @@ func TestCreateTablePostgres(t *testing.T) {
 }
 
 func TestCreateTableMySQL(t *testing.T) {
-	stmt := CreateTable(Table{Schema: "public", Name: "users"}).
-		Column(ColumnDef{Name: "id", Type: EngineType{Name: "bigint"}, NotNull: true, AutoIncrement: true}).
-		Column(ColumnDef{Name: "email", Type: EngineType{Name: "varchar", Length: 255}, NotNull: true, Comment: "Unique login address"}).
+	stmt := CreateTable(Table{Schema: NewIdent("public"), Name: NewIdent("users")}).
+		Column(ColumnDef{Name: NewIdent("id"), Type: EngineType{Name: "bigint"}, NotNull: true, AutoIncrement: true}).
+		Column(ColumnDef{Name: NewIdent("email"), Type: EngineType{Name: "varchar", Length: 255}, NotNull: true, Comment: "Unique login address"}).
 		PrimaryKey("id").
 		Comment("Registered blog authors")
 
@@ -178,8 +178,8 @@ func TestCreateTableMySQL(t *testing.T) {
 }
 
 func TestCreateTableUnqualifiedAndIfNotExists(t *testing.T) {
-	stmt := CreateTable(Table{Name: "items"}).
-		Column(ColumnDef{Name: "id", Type: RawType("bigserial")}).
+	stmt := CreateTable(Table{Name: NewIdent("items")}).
+		Column(ColumnDef{Name: NewIdent("id"), Type: RawType("bigserial")}).
 		PrimaryKey("id").
 		IfNotExists()
 	got := mustDDL(t, stmt, "postgres")
@@ -193,8 +193,8 @@ func TestCreateTableUnqualifiedAndIfNotExists(t *testing.T) {
 }
 
 func TestCreateTableDottedNameQuotedAsOne(t *testing.T) {
-	stmt := CreateTable(Table{Name: "v1.users"}).
-		Column(ColumnDef{Name: "id", Type: RawType("bigint")})
+	stmt := CreateTable(Table{Name: NewIdent("v1.users")}).
+		Column(ColumnDef{Name: NewIdent("id"), Type: RawType("bigint")})
 	got := mustDDL(t, stmt, "postgres")
 	if want := `CREATE TABLE "v1.users" (`; got[:len(want)] != want {
 		t.Errorf("dotted name should be one quoted identifier:\n%s", got)
@@ -202,7 +202,7 @@ func TestCreateTableDottedNameQuotedAsOne(t *testing.T) {
 }
 
 func TestDropTable(t *testing.T) {
-	got := mustDDL(t, DropTable(Table{Schema: "public", Name: "users"}).IfExists(), "postgres")
+	got := mustDDL(t, DropTable(Table{Schema: NewIdent("public"), Name: NewIdent("users")}).IfExists(), "postgres")
 	if want := `DROP TABLE IF EXISTS "public"."users";`; got != want {
 		t.Errorf("DropTable() = %q, want %q", got, want)
 	}
@@ -210,8 +210,8 @@ func TestDropTable(t *testing.T) {
 
 func TestDropTableMultiple(t *testing.T) {
 	stmt := DropTable(
-		Table{Schema: "public", Name: "users"},
-		Table{Schema: "public", Name: "posts"},
+		Table{Schema: NewIdent("public"), Name: NewIdent("users")},
+		Table{Schema: NewIdent("public"), Name: NewIdent("posts")},
 	).IfExists()
 	got := mustDDL(t, stmt, "postgres")
 	if want := `DROP TABLE IF EXISTS "public"."users", "public"."posts";`; got != want {
@@ -220,7 +220,7 @@ func TestDropTableMultiple(t *testing.T) {
 }
 
 func TestCreateIndex(t *testing.T) {
-	users := Table{Schema: "public", Name: "users"}
+	users := Table{Schema: NewIdent("public"), Name: NewIdent("users")}
 	got := mustDDL(t, CreateIndex("uq_users_email", users, "email").Unique(), "postgres")
 	if want := `CREATE UNIQUE INDEX "uq_users_email" ON "public"."users" ("email");`; got != want {
 		t.Errorf("CreateIndex() = %q, want %q", got, want)
@@ -232,7 +232,7 @@ func TestCreateIndex(t *testing.T) {
 }
 
 func TestDropIndex(t *testing.T) {
-	users := Table{Schema: "public", Name: "users"}
+	users := Table{Schema: NewIdent("public"), Name: NewIdent("users")}
 	if got, want := mustDDL(t, DropIndex("uq_users_email", users), "postgres"),
 		`DROP INDEX IF EXISTS "public"."uq_users_email";`; got != want {
 		t.Errorf("DropIndex(postgres) = %q, want %q", got, want)
@@ -244,10 +244,10 @@ func TestDropIndex(t *testing.T) {
 }
 
 func TestAlterTableAddForeignKey(t *testing.T) {
-	stmt := AlterTable(Table{Schema: "public", Name: "posts"}).
+	stmt := AlterTable(Table{Schema: NewIdent("public"), Name: NewIdent("posts")}).
 		AddForeignKey(ForeignKeyConstraint{
-			Name: "fk_posts_user_id", Columns: []string{"user_id"},
-			RefSchema: "public", RefTable: "users", RefColumns: []string{"id"},
+			Name: NewIdent("fk_posts_user_id"), Columns: Idents("user_id"),
+			RefSchema: NewIdent("public"), RefTable: NewIdent("users"), RefColumns: Idents("id"),
 		})
 	got := mustDDL(t, stmt, "postgres")
 	want := `ALTER TABLE "public"."posts" ADD CONSTRAINT "fk_posts_user_id" FOREIGN KEY ("user_id") REFERENCES "public"."users" ("id");`
@@ -257,7 +257,7 @@ func TestAlterTableAddForeignKey(t *testing.T) {
 }
 
 func TestDropForeignKey(t *testing.T) {
-	posts := Table{Schema: "public", Name: "posts"}
+	posts := Table{Schema: NewIdent("public"), Name: NewIdent("posts")}
 	if got, want := mustDDL(t, DropForeignKey(posts, "fk_posts_user_id"), "postgres"),
 		`ALTER TABLE "public"."posts" DROP CONSTRAINT IF EXISTS "fk_posts_user_id";`; got != want {
 		t.Errorf("DropForeignKey(postgres) = %q, want %q", got, want)
@@ -269,13 +269,13 @@ func TestDropForeignKey(t *testing.T) {
 }
 
 func TestAlterTableColumnOps(t *testing.T) {
-	users := Table{Schema: "public", Name: "users"}
+	users := Table{Schema: NewIdent("public"), Name: NewIdent("users")}
 	cases := []struct {
 		name string
 		stmt Statement
 		want string
 	}{
-		{"add column", AlterTable(users).AddColumn(ColumnDef{Name: "age", Type: EngineType{Name: "int4"}, NotNull: true}),
+		{"add column", AlterTable(users).AddColumn(ColumnDef{Name: NewIdent("age"), Type: EngineType{Name: "int4"}, NotNull: true}),
 			`ALTER TABLE "public"."users" ADD COLUMN "age" integer NOT NULL;`},
 		{"drop column", AlterTable(users).DropColumn("age"),
 			`ALTER TABLE "public"."users" DROP COLUMN "age";`},
@@ -293,7 +293,7 @@ func TestAlterTableColumnOps(t *testing.T) {
 			`ALTER TABLE "public"."users" RENAME COLUMN "name" TO "full_name";`},
 		{"rename table", AlterTable(users).RenameTo("accounts"),
 			`ALTER TABLE "public"."users" RENAME TO "accounts";`},
-		{"multi action", AlterTable(users).AddColumn(ColumnDef{Name: "a", Type: RawType("int")}).DropColumn("b"),
+		{"multi action", AlterTable(users).AddColumn(ColumnDef{Name: NewIdent("a"), Type: RawType("int")}).DropColumn("b"),
 			`ALTER TABLE "public"."users" ADD COLUMN "a" int, DROP COLUMN "b";`},
 	}
 	for _, tc := range cases {
@@ -306,14 +306,14 @@ func TestAlterTableColumnOps(t *testing.T) {
 }
 
 func TestAlterTableColumnModifyMySQLRejected(t *testing.T) {
-	stmt := AlterTable(Table{Name: "users"}).SetNotNull("name")
+	stmt := AlterTable(Table{Name: NewIdent("users")}).SetNotNull("name")
 	if _, _, err := stmt.ToSQL(mustDialect(t, "mysql")); err == nil {
 		t.Error("expected error for column modify on mysql")
 	}
 }
 
 func TestCommentStatements(t *testing.T) {
-	users := Table{Schema: "public", Name: "users"}
+	users := Table{Schema: NewIdent("public"), Name: NewIdent("users")}
 	if got, want := mustDDL(t, CommentOnTable(users, "Registered authors"), "postgres"),
 		`COMMENT ON TABLE "public"."users" IS 'Registered authors';`; got != want {
 		t.Errorf("CommentOnTable = %q, want %q", got, want)
@@ -329,9 +329,9 @@ func TestCommentStatements(t *testing.T) {
 }
 
 func TestStatementsRender(t *testing.T) {
-	users := Table{Schema: "public", Name: "users"}
+	users := Table{Schema: NewIdent("public"), Name: NewIdent("users")}
 	stmts := Statements{
-		CreateTable(users).Column(ColumnDef{Name: "id", Type: RawType("bigserial")}).PrimaryKey("id"),
+		CreateTable(users).Column(ColumnDef{Name: NewIdent("id"), Type: RawType("bigserial")}).PrimaryKey("id"),
 		CreateIndex("idx_users_id", users, "id"),
 		CommentOnTable(users, "x"), // empty on mysql, skipped
 	}
@@ -350,10 +350,10 @@ func TestStatementsRender(t *testing.T) {
 }
 
 func TestForeignKeyWithActions(t *testing.T) {
-	stmt := AlterTable(Table{Schema: "public", Name: "posts"}).
+	stmt := AlterTable(Table{Schema: NewIdent("public"), Name: NewIdent("posts")}).
 		AddForeignKey(ForeignKeyConstraint{
-			Name: "fk_posts_user_id", Columns: []string{"user_id"},
-			RefSchema: "public", RefTable: "users", RefColumns: []string{"id"},
+			Name: NewIdent("fk_posts_user_id"), Columns: Idents("user_id"),
+			RefSchema: NewIdent("public"), RefTable: NewIdent("users"), RefColumns: Idents("id"),
 			OnDelete: "CASCADE", OnUpdate: "RESTRICT",
 		})
 	got := mustDDL(t, stmt, "postgres")
@@ -364,8 +364,8 @@ func TestForeignKeyWithActions(t *testing.T) {
 }
 
 func TestRestateColumn(t *testing.T) {
-	col := ColumnDef{Name: "name", Type: EngineType{Name: "text"}, Default: Raw("''")}
-	stmt := AlterTable(Table{Name: "users"}).RestateColumn(col)
+	col := ColumnDef{Name: NewIdent("name"), Type: EngineType{Name: "text"}, Default: Raw("''")}
+	stmt := AlterTable(Table{Name: NewIdent("users")}).RestateColumn(col)
 
 	if got, want := mustDDL(t, stmt, "mysql"), "ALTER TABLE `users` MODIFY COLUMN `name` text DEFAULT '';"; got != want {
 		t.Errorf("RestateColumn(mysql) =\n%s\nwant\n%s", got, want)
@@ -378,8 +378,8 @@ func TestRestateColumn(t *testing.T) {
 }
 
 func TestCreateTableTemporary(t *testing.T) {
-	stmt := CreateTable(Table{Name: "scratch"}).
-		Column(ColumnDef{Name: "id", Type: RawType("bigint")}).
+	stmt := CreateTable(Table{Name: NewIdent("scratch")}).
+		Column(ColumnDef{Name: NewIdent("id"), Type: RawType("bigint")}).
 		Temporary()
 	got := mustDDL(t, stmt, "postgres")
 	want := `CREATE TEMPORARY TABLE "scratch" (
@@ -397,10 +397,10 @@ func TestCreateTableTemporary(t *testing.T) {
 
 func TestCreateView(t *testing.T) {
 	body := Select(Col("id"), Col("email")).
-		From(Table{Schema: "public", Name: "users"}).
+		From(Table{Schema: NewIdent("public"), Name: NewIdent("users")}).
 		Where(Raw("active"))
 
-	got := mustDDL(t, CreateView(Table{Schema: "public", Name: "active_users"}, body), "postgres")
+	got := mustDDL(t, CreateView(Table{Schema: NewIdent("public"), Name: NewIdent("active_users")}, body), "postgres")
 	want := "CREATE VIEW \"public\".\"active_users\" AS\n" +
 		`SELECT "id", "email" FROM "public"."users" WHERE active;`
 	if got != want {
@@ -408,7 +408,7 @@ func TestCreateView(t *testing.T) {
 	}
 
 	// OR REPLACE and explicit column names.
-	got = mustDDL(t, CreateView(Table{Name: "v"}, body).OrReplace().Columns("a", "b"), "mysql")
+	got = mustDDL(t, CreateView(Table{Name: NewIdent("v")}, body).OrReplace().Columns("a", "b"), "mysql")
 	want = "CREATE OR REPLACE VIEW `v` (`a`, `b`) AS\n" +
 		"SELECT `id`, `email` FROM `public`.`users` WHERE active;"
 	if got != want {
@@ -419,14 +419,14 @@ func TestCreateView(t *testing.T) {
 func TestCreateViewRejectsBoundValues(t *testing.T) {
 	// A view body that binds a value cannot be a DDL statement (no bind args);
 	// the literal must be inlined with Raw.
-	body := Select(Star()).From(Table{Name: "t"}).Where(Eq(Col("x"), Int(5)))
-	if _, _, err := CreateView(Table{Name: "v"}, body).ToSQL(mustDialect(t, "postgres")); err == nil {
+	body := Select(Star()).From(Table{Name: NewIdent("t")}).Where(Eq(Col("x"), Int(5)))
+	if _, _, err := CreateView(Table{Name: NewIdent("v")}, body).ToSQL(mustDialect(t, "postgres")); err == nil {
 		t.Error("CreateView with a value-binding body: expected error")
 	}
 }
 
 func TestDropView(t *testing.T) {
-	v := Table{Schema: "public", Name: "active_users"}
+	v := Table{Schema: NewIdent("public"), Name: NewIdent("active_users")}
 	if got, want := mustDDL(t, DropView(v).IfExists(), "postgres"),
 		`DROP VIEW IF EXISTS "public"."active_users";`; got != want {
 		t.Errorf("DropView().IfExists(postgres) = %q, want %q", got, want)
@@ -443,11 +443,11 @@ func TestDropView(t *testing.T) {
 }
 
 func TestPrimaryKeyAlterations(t *testing.T) {
-	add := AlterTable(Table{Name: "t"}).AddPrimaryKey("a", "b")
+	add := AlterTable(Table{Name: NewIdent("t")}).AddPrimaryKey("a", "b")
 	if got, want := mustDDL(t, add, "postgres"), `ALTER TABLE "t" ADD PRIMARY KEY ("a", "b");`; got != want {
 		t.Errorf("AddPrimaryKey =\n%s\nwant\n%s", got, want)
 	}
-	drop := AlterTable(Table{Name: "t"}).DropPrimaryKey()
+	drop := AlterTable(Table{Name: NewIdent("t")}).DropPrimaryKey()
 	if got, want := mustDDL(t, drop, "mysql"), "ALTER TABLE `t` DROP PRIMARY KEY;"; got != want {
 		t.Errorf("DropPrimaryKey(mysql) =\n%s\nwant\n%s", got, want)
 	}
@@ -460,8 +460,8 @@ func TestPrimaryKeyAlterations(t *testing.T) {
 // a foreign key with the standard DROP CONSTRAINT and an index without the
 // vendor-specific IF EXISTS / ON table clauses, and has no COMMENT syntax.
 func TestStandardSQLDDL(t *testing.T) {
-	users := Table{Schema: "public", Name: "users"}
-	posts := Table{Schema: "public", Name: "posts"}
+	users := Table{Schema: NewIdent("public"), Name: NewIdent("users")}
+	posts := Table{Schema: NewIdent("public"), Name: NewIdent("posts")}
 
 	if got, want := mustDDL(t, DropTable(users).IfExists(), "standard"),
 		`DROP TABLE IF EXISTS "public"."users";`; got != want {
@@ -487,7 +487,7 @@ func TestStandardSQLDDL(t *testing.T) {
 // statements rendering empty: MySQL carries comments inline in the column/table
 // definition, so CommentOnTable/CommentOnColumn produce no separate statement.
 func TestMySQLCommentStatementsAreInline(t *testing.T) {
-	users := Table{Schema: "public", Name: "users"}
+	users := Table{Schema: NewIdent("public"), Name: NewIdent("users")}
 	if got := mustDDL(t, CommentOnTable(users, "hi"), "mysql"); got != "" {
 		t.Errorf("CommentOnTable(mysql) = %q, want empty (comments are inline)", got)
 	}
@@ -506,8 +506,8 @@ func TestMigrationDDLCompile(t *testing.T) {
 		{DropExtension("a", "b").IfExists(), `DROP EXTENSION IF EXISTS "a", "b";`},
 		{CreateEnum("mood", "sad", "happy"), `CREATE TYPE "mood" AS ENUM ('sad', 'happy');`},
 		{DropType("mood").IfExists().Cascade(), `DROP TYPE IF EXISTS "mood" CASCADE;`},
-		{RenameTable(Table{Schema: "app", Name: "users"}, "people"), `ALTER TABLE "app"."users" RENAME TO "people";`},
-		{RenameColumn(Table{Name: "users"}, "email", "addr"), `ALTER TABLE "users" RENAME COLUMN "email" TO "addr";`},
+		{RenameTable(Table{Schema: NewIdent("app"), Name: NewIdent("users")}, "people"), `ALTER TABLE "app"."users" RENAME TO "people";`},
+		{RenameColumn(Table{Name: NewIdent("users")}, "email", "addr"), `ALTER TABLE "users" RENAME COLUMN "email" TO "addr";`},
 	}
 	for _, tc := range cases {
 		got, args, err := tc.stmt.ToSQL(PostgreSQLDialect{})
@@ -527,13 +527,13 @@ func TestMigrationDDLValidation(t *testing.T) {
 	if _, _, err := CreateExtension("").ToSQL(PostgreSQLDialect{}); err == nil {
 		t.Fatal("CREATE EXTENSION without a name succeeded, want error")
 	}
-	if _, _, err := RenameColumn(Table{Name: "t"}, "a", "").ToSQL(PostgreSQLDialect{}); err == nil {
+	if _, _, err := RenameColumn(Table{Name: NewIdent("t")}, "a", "").ToSQL(PostgreSQLDialect{}); err == nil {
 		t.Fatal("RENAME COLUMN without a new name succeeded, want error")
 	}
 }
 
 func TestTruncate(t *testing.T) {
-	users := Table{Schema: "public", Name: "users"}
+	users := Table{Schema: NewIdent("public"), Name: NewIdent("users")}
 
 	if got, want := mustDDL(t, Truncate(users), "postgres"), `TRUNCATE TABLE "public"."users";`; got != want {
 		t.Fatalf("TRUNCATE = %q, want %q", got, want)
@@ -545,8 +545,8 @@ func TestTruncate(t *testing.T) {
 }
 
 func TestTruncateOptions(t *testing.T) {
-	users := Table{Name: "users"}
-	logs := Table{Name: "logs"}
+	users := Table{Name: NewIdent("users")}
+	logs := Table{Name: NewIdent("logs")}
 
 	got := mustDDL(t, Truncate(users, logs).RestartIdentity().Cascade(), "postgres")
 	want := `TRUNCATE TABLE "users", "logs" RESTART IDENTITY CASCADE;`
@@ -561,8 +561,8 @@ func TestTruncateOptions(t *testing.T) {
 }
 
 func TestTruncateRejections(t *testing.T) {
-	users := Table{Name: "users"}
-	logs := Table{Name: "logs"}
+	users := Table{Name: NewIdent("users")}
+	logs := Table{Name: NewIdent("logs")}
 
 	cases := []struct {
 		name    string
@@ -584,32 +584,32 @@ func TestTruncateRejections(t *testing.T) {
 }
 
 func TestDDLStmt(t *testing.T) {
-	users := Table{Name: "users"}
-	orders := Table{Name: "orders"}
+	users := Table{Name: NewIdent("users")}
+	orders := Table{Name: NewIdent("orders")}
 
 	alter := AlterTable(users).DropColumn("x").RenameColumn("a", "b").Stmt()
-	if alter.Table.Name != "users" {
+	if alter.Table.Name.String() != "users" {
 		t.Errorf("AlterTable Table = %q, want users", alter.Table.Name)
 	}
 	if len(alter.Alterations) != 2 {
 		t.Fatalf("Alterations = %d, want 2", len(alter.Alterations))
 	}
-	if alter.Alterations[0].Kind != AlterDropColumn || alter.Alterations[0].Name != "x" {
+	if alter.Alterations[0].Kind != AlterDropColumn || alter.Alterations[0].Name.String() != "x" {
 		t.Errorf("first alteration = %+v, want DROP COLUMN x", alter.Alterations[0])
 	}
-	if a := alter.Alterations[1]; a.Kind != AlterRenameColumn || a.Name != "a" || a.NewName != "b" {
+	if a := alter.Alterations[1]; a.Kind != AlterRenameColumn || a.Name.String() != "a" || a.NewName.String() != "b" {
 		t.Errorf("second alteration = %+v, want RENAME COLUMN a -> b", a)
 	}
 
 	dropped := DropTable(users, orders).Stmt().Tables
-	if len(dropped) != 2 || dropped[0].Name != "users" || dropped[1].Name != "orders" {
+	if len(dropped) != 2 || dropped[0].Name.String() != "users" || dropped[1].Name.String() != "orders" {
 		t.Errorf("DropTable Tables = %v, want [users orders]", dropped)
 	}
 
 	created := CreateTable(users).
-		Column(ColumnDef{Name: "id", Type: RawType("int")}).
+		Column(ColumnDef{Name: NewIdent("id"), Type: RawType("int")}).
 		PrimaryKey("id").Stmt()
-	if created.Table.Name != "users" || len(created.Columns) != 1 || len(created.PrimaryKey) != 1 {
+	if created.Table.Name.String() != "users" || len(created.Columns) != 1 || len(created.PrimaryKey) != 1 {
 		t.Errorf("CreateTable parts = %+v, want one column and a primary key", created)
 	}
 }

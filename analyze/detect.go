@@ -68,7 +68,7 @@ func SourcesOf(q sql.Query) []SourceRef {
 			add(j.Source)
 		}
 	case sql.UpdateStmt:
-		out = append(out, tableRef(v.Table, ""))
+		out = append(out, tableRef(v.Table, sql.Ident{}))
 		for _, s := range v.From {
 			add(s)
 		}
@@ -76,7 +76,7 @@ func SourcesOf(q sql.Query) []SourceRef {
 			add(j.Source)
 		}
 	case sql.DeleteStmt:
-		out = append(out, tableRef(v.Table, ""))
+		out = append(out, tableRef(v.Table, sql.Ident{}))
 		for _, s := range v.Using {
 			add(s)
 		}
@@ -84,7 +84,7 @@ func SourcesOf(q sql.Query) []SourceRef {
 			add(j.Source)
 		}
 	case sql.InsertStmt:
-		out = append(out, tableRef(v.Table, ""))
+		out = append(out, tableRef(v.Table, sql.Ident{}))
 	case sql.MergeStmt:
 		out = append(out, tableRef(v.Target, v.TargetAlias))
 		add(v.Using)
@@ -187,23 +187,23 @@ type ColumnUse struct {
 // the conversion the column-walking passes share, so a caller that already holds a
 // ColumnExpression (a rewrite pass) resolves it the same way WalkColumns does.
 func ColumnRefOf(c sql.ColumnExpression) ColumnRef {
-	qualifier, name := splitColumn(sql.Ident(c.Name))
+	qualifier, name := splitColumn(c.Name)
 	return ColumnRef{Qualifier: qualifier, Name: name, SrcPos: c.Pos()}
 }
 
 // NamedColumn returns an unqualified column reference for a column named directly
-// by string rather than by an expression node — a USING column, an INSERT/MERGE
-// column-list entry, or a SET target. The AST carries these as bare names, so the
-// reference has no source position.
-func NamedColumn(name string) ColumnRef {
-	return ColumnRef{Name: sql.Ident(name), SrcPos: sql.NoPos}
+// by an Ident rather than by an expression node — a USING column, an INSERT/MERGE
+// column-list entry, or a SET target. These idents carry whatever position the
+// parser recorded for them (NoPos for a built statement).
+func NamedColumn(name sql.Ident) ColumnRef {
+	return ColumnRef{Name: name, SrcPos: name.Pos()}
 }
 
 // TargetScope is the single-source scope of a statement's target table — the scope
 // to resolve the columns an INSERT/UPDATE/MERGE assigns against, since they always
 // belong to the target, never a joined source.
 func TargetScope(t sql.Table) []SourceRef {
-	return []SourceRef{tableRef(t, "")}
+	return []SourceRef{tableRef(t, sql.Ident{})}
 }
 
 // Columns returns the column uses in q's own clauses, deduplicated in first-seen
@@ -235,8 +235,8 @@ func WalkColumns(q sql.Query, visit func(ColumnUse)) {
 			}
 		})
 	}
-	named := func(clause Clause, access Access, n string) {
-		if n != "" {
+	named := func(clause Clause, access Access, n sql.Ident) {
+		if !n.IsZero() {
 			visit(ColumnUse{Column: NamedColumn(n), Clause: clause, Access: access})
 		}
 	}
@@ -339,37 +339,39 @@ func sourceRef(src sql.Source) (SourceRef, bool) {
 	e := src.SQLSource()
 	switch {
 	case e.Query != nil:
-		return SourceRef{Alias: sql.Ident(e.Alias), Subquery: e.Query}, true
+		return SourceRef{Alias: e.Alias, Subquery: e.Query}, true
 	case e.Values != nil:
-		return SourceRef{Alias: sql.Ident(e.Alias)}, true
+		return SourceRef{Alias: e.Alias}, true
 	default:
-		schema, table := splitTable(sql.Ident(e.Name))
-		return SourceRef{Schema: schema, Table: table, Alias: sql.Ident(e.Alias)}, true
+		schema, table := splitTable(e.Name)
+		return SourceRef{Schema: schema, Table: table, Alias: e.Alias}, true
 	}
 }
 
 // tableRef builds a base-table SourceRef from a statement's target table.
-func tableRef(t sql.Table, alias string) SourceRef {
-	return SourceRef{Schema: sql.Ident(t.Schema), Table: sql.Ident(t.Name), Alias: sql.Ident(alias)}
+func tableRef(t sql.Table, alias sql.Ident) SourceRef {
+	return SourceRef{Schema: t.Schema, Table: t.Name, Alias: alias}
 }
 
 // splitTable splits a possibly schema-qualified table name into its schema and
-// bare table name; the schema is "" when the name is unqualified.
+// bare table name; the schema is empty when the name is unqualified. Both parts
+// inherit the source position of the whole name.
 func splitTable(name sql.Ident) (schema, table sql.Ident) {
-	if i := strings.LastIndexByte(string(name), '.'); i >= 0 {
-		return name[:i], name[i+1:]
+	if i := strings.LastIndexByte(name.Name, '.'); i >= 0 {
+		return sql.NewIdentAt(name.Name[:i], name.Pos()), sql.NewIdentAt(name.Name[i+1:], name.Pos())
 	}
-	return "", name
+	return sql.Ident{}, name
 }
 
 // splitColumn splits a possibly qualified column reference into the qualifier
-// (everything before the final dot) and the bare column name; the qualifier is ""
-// when the reference is unqualified.
+// (everything before the final dot) and the bare column name; the qualifier is
+// empty when the reference is unqualified. Both parts inherit the source position
+// of the whole reference.
 func splitColumn(name sql.Ident) (qualifier, bare sql.Ident) {
-	if i := strings.LastIndexByte(string(name), '.'); i >= 0 {
-		return name[:i], name[i+1:]
+	if i := strings.LastIndexByte(name.Name, '.'); i >= 0 {
+		return sql.NewIdentAt(name.Name[:i], name.Pos()), sql.NewIdentAt(name.Name[i+1:], name.Pos())
 	}
-	return "", name
+	return sql.Ident{}, name
 }
 
 // dedupeUses removes duplicate uses (same column reference, clause, and access)
@@ -381,14 +383,14 @@ func dedupeUses(uses []ColumnUse) []ColumnUse {
 		return nil
 	}
 	type key struct {
-		qualifier, name sql.Ident
+		qualifier, name string
 		clause          Clause
 		access          Access
 	}
 	seen := make(map[key]struct{}, len(uses))
 	out := uses[:0]
 	for _, u := range uses {
-		k := key{u.Column.Qualifier, u.Column.Name, u.Clause, u.Access}
+		k := key{u.Column.Qualifier.Name, u.Column.Name.Name, u.Clause, u.Access}
 		if _, dup := seen[k]; dup {
 			continue
 		}

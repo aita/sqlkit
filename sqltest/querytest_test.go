@@ -522,19 +522,19 @@ func (fakeParser) Parse(text string) ([]sqlpkg.Query, error) {
 		}
 		return []sqlpkg.Query{q}, nil
 	case strings.HasPrefix(up, "UPDATE"):
-		q := sqlpkg.Update(sqlpkg.Table{Name: tableAfter(up, s, "UPDATE")}).Set(sqlpkg.Set("name", sqlpkg.Expr("x")))
+		q := sqlpkg.Update(sqlpkg.Table{Name: sqlpkg.NewIdent(tableAfter(up, s, "UPDATE"))}).Set(sqlpkg.Set("name", sqlpkg.Expr("x")))
 		if hasWhere {
 			q = q.Where(sqlpkg.Eq(sqlpkg.Col("id"), sqlpkg.Expr(1)))
 		}
 		return []sqlpkg.Query{q}, nil
 	case strings.HasPrefix(up, "DELETE"):
-		q := sqlpkg.DeleteFrom(sqlpkg.Table{Name: tableAfter(up, s, "FROM")})
+		q := sqlpkg.DeleteFrom(sqlpkg.Table{Name: sqlpkg.NewIdent(tableAfter(up, s, "FROM"))})
 		if hasWhere {
 			q = q.Where(sqlpkg.Eq(sqlpkg.Col("id"), sqlpkg.Expr(1)))
 		}
 		return []sqlpkg.Query{q}, nil
 	case strings.HasPrefix(up, "INSERT"):
-		q := sqlpkg.InsertInto(sqlpkg.Table{Name: tableAfter(up, s, "INTO")}).Columns("name").Values("x")
+		q := sqlpkg.InsertInto(sqlpkg.Table{Name: sqlpkg.NewIdent(tableAfter(up, s, "INTO"))}).Columns("name").Values("x")
 		return []sqlpkg.Query{q}, nil
 	}
 	return nil, fmt.Errorf("fakeParser: cannot parse %q", text)

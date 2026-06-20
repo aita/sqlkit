@@ -8,15 +8,16 @@ package sql
 //	active := Select(Col("id")).From(users).Where(...).CTE("active")
 //	Select(active.Col("id")).From(active).WithCTE(active)
 type CTE struct {
-	name      string
-	columns   []string // optional explicit output column list
+	posField
+	name      Ident
+	columns   []Ident // optional explicit output column list
 	query     Query
 	recursive bool
 }
 
 // cteOptions accumulates the optional settings applied by CTEOption.
 type cteOptions struct {
-	columns   []string
+	columns   []Ident
 	recursive bool
 }
 
@@ -34,7 +35,7 @@ func Recursive() CTEOption {
 // Columns declares an explicit output column list for the CTE,
 // e.g. q.CTE("totals", Columns("org_id", "n")).
 func Columns(names ...string) CTEOption {
-	return func(o *cteOptions) { o.columns = names }
+	return func(o *cteOptions) { o.columns = idents(names) }
 }
 
 // CTE wraps this SELECT as a common table expression named name.
@@ -53,12 +54,12 @@ func newCTE(name string, query Query, opts []CTEOption) CTE {
 	for _, opt := range opts {
 		opt(&o)
 	}
-	return CTE{name: name, columns: o.columns, query: query, recursive: o.recursive}
+	return CTE{name: NewIdent(name), columns: o.columns, query: query, recursive: o.recursive}
 }
 
 // Col references one of the CTE's output columns, qualified by the CTE name.
 func (c CTE) Col(name string) ColumnExpression {
-	return ColumnExpression{Name: c.name + "." + name}
+	return ColumnExpression{Name: NewIdent(c.name.String() + "." + name)}
 }
 
 // SQLSource lets a CTE be used as a FROM/JOIN source, referenced by name.

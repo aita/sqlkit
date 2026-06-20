@@ -44,13 +44,13 @@ func TestDropTypeIfExistsCascade(t *testing.T) {
 func TestRenameTable(t *testing.T) {
 	assertRoundTrip(t,
 		"ALTER TABLE users RENAME TO people",
-		sql.RenameTable(sql.Table{Name: "users"}, "people"),
+		sql.RenameTable(sql.Table{Name: sql.NewIdent("users")}, "people"),
 		`ALTER TABLE "users" RENAME TO "people";`)
 }
 
 func TestRenameColumn(t *testing.T) {
 	assertRoundTrip(t,
 		"ALTER TABLE users RENAME COLUMN email TO email_address",
-		sql.RenameColumn(sql.Table{Name: "users"}, "email", "email_address"),
+		sql.RenameColumn(sql.Table{Name: sql.NewIdent("users")}, "email", "email_address"),
 		`ALTER TABLE "users" RENAME COLUMN "email" TO "email_address";`)
 }
