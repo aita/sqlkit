@@ -73,6 +73,6 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/aita/sqlkit => ../..
+replace github.com/aita/sqlkit => ../../..
 
-replace github.com/aita/sqlkit/examples => ../../examples
+replace github.com/aita/sqlkit/examples => ../../../examples

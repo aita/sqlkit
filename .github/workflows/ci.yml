@@ -57,7 +57,7 @@ jobs:
           go test -race ./...
 
       - name: Build & vet integration module
-        working-directory: internal/integration
+        working-directory: internal/tests/integration
         run: |
           go build ./...
           go vet ./...
@@ -138,7 +138,7 @@ jobs:
           # .golangci.yml while examples/ (and examples/querytrace) use the
           # stricter examples/.golangci.yml. Keep going on failure so every
           # module's findings surface in one run.
-          for dir in . cmd/sqlkit examples examples/querytrace internal/integration internal/tests/roundtrip querytrace/otelquery sqlparse/postgres sqlparse/mysql; do
+          for dir in . cmd/sqlkit examples examples/querytrace internal/tests/integration internal/tests/roundtrip querytrace/otelquery sqlparse/postgres sqlparse/mysql; do
             echo "::group::golangci-lint $dir"
             (cd "$dir" && golangci-lint run ./...) || status=1
             echo "::endgroup::"
@@ -230,5 +230,5 @@ jobs:
           go-version: '1.25.x'
 
       - name: Integration tests
-        working-directory: internal/integration
+        working-directory: internal/tests/integration
         run: go test -v ./...
