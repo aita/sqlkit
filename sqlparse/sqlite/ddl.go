@@ -25,7 +25,7 @@ func convertCreateTable(s *rsql.CreateTableStatement) (sql.Query, error) {
 		}
 		b = b.Column(col)
 		if pk {
-			primaryKey = append(primaryKey, col.Name)
+			primaryKey = append(primaryKey, col.Name.String())
 		}
 	}
 
@@ -50,7 +50,10 @@ func convertColumnDef(cd *rsql.ColumnDefinition) (sql.ColumnDef, bool, error) {
 	if cd.Type == nil {
 		return sql.ColumnDef{}, false, sqlparse.Unsupported("column without a type")
 	}
-	col := sql.ColumnDef{Name: cd.Name.Name, Type: sql.RawType(cd.Type.String())}
+	col := sql.ColumnDef{
+		Name: sql.NewIdentAt(cd.Name.Name, offsetOf(cd.Name.NamePos)),
+		Type: sql.RawType(cd.Type.String()),
+	}
 
 	primaryKey := false
 	for _, c := range cd.Constraints {
@@ -58,15 +61,14 @@ func convertColumnDef(cd *rsql.ColumnDefinition) (sql.ColumnDef, bool, error) {
 		case *rsql.NotNullConstraint:
 			col.NotNull = true
 		case *rsql.PrimaryKeyConstraint:
+			// A column-level PRIMARY KEY joins the table's primary-key list so it
+			// renders as an explicit constraint.
+			primaryKey = true
 			if con.Autoincrement.IsValid() {
 				col.AutoIncrement = true
 				// AUTOINCREMENT renders through the dialect, which only acts on an
-				// EngineType (RawType is opaque). The SQLite auto-increment clause
-				// inlines the PRIMARY KEY, so the column is not added to the table's
-				// primary-key list.
+				// EngineType (RawType is opaque to it).
 				col.Type = sql.EngineType{Name: cd.Type.Name.Name}
-			} else {
-				primaryKey = true
 			}
 		case *rsql.UniqueConstraint:
 			col.Unique = true

@@ -11,4 +11,6 @@ require (
 	github.com/rqlite/sql v0.0.0-20260224021119-1b2524a41372
 )
 
+require github.com/google/go-cmp v0.7.0
+
 replace github.com/aita/sqlkit => ../..

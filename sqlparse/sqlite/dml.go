@@ -8,11 +8,17 @@ import (
 	rsql "github.com/rqlite/sql"
 )
 
-// tableName builds a sql.Table from an optional schema and a name identifier.
+// tableName builds a sql.Table from an optional schema and a name identifier,
+// recording each identifier's source position (on the Table node and inside its
+// Ident fields), so a parsed table reference reports where it was written.
 func tableName(schema *rsql.Ident, name *rsql.Ident) sql.Table {
-	t := sql.Table{Name: name.Name}
+	t := sql.Table{Name: sql.NewIdent(name.Name)}
+	t.NodePos = offsetOf(name.NamePos)
+	t.Name.NodePos = offsetOf(name.NamePos)
 	if schema != nil {
-		t.Schema = schema.Name
+		t.Schema = sql.NewIdent(schema.Name)
+		t.Schema.NodePos = offsetOf(schema.NamePos)
+		t.NodePos = offsetOf(schema.NamePos)
 	}
 	return t
 }

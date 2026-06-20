@@ -277,9 +277,9 @@ func applyJoin(b sql.SelectBuilder, j sql.JoinClause) sql.SelectBuilder {
 	case j.Natural:
 		return b.NaturalJoin(j.Source)
 	case j.Using != nil && j.Kind == "LEFT JOIN":
-		return b.LeftJoinUsing(j.Source, j.Using...)
+		return b.LeftJoinUsing(j.Source, sql.IdentNames(j.Using)...)
 	case j.Using != nil:
-		return b.JoinUsing(j.Source, j.Using...)
+		return b.JoinUsing(j.Source, sql.IdentNames(j.Using)...)
 	}
 	switch j.Kind {
 	case "LEFT JOIN":

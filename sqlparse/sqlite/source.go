@@ -52,10 +52,7 @@ func convertLeafSource(src rsql.Source) (sql.Source, error) {
 }
 
 func convertTableName(t *rsql.QualifiedTableName) sql.Source {
-	table := sql.Table{Name: t.Name.Name}
-	if t.Schema != nil {
-		table.Schema = t.Schema.Name
-	}
+	table := tableName(t.Schema, t.Name)
 	if t.Alias != nil {
 		return sql.SourceAlias(table, t.Alias.Name)
 	}
@@ -124,7 +121,7 @@ func joinClauseFor(j *rsql.JoinClause, right sql.Source) (sql.JoinClause, error)
 		for _, col := range c.Columns {
 			names = append(names, col.Name)
 		}
-		return sql.JoinClause{Kind: kind, Source: right, Using: names}, nil
+		return sql.JoinClause{Kind: kind, Source: right, Using: sql.Idents(names...)}, nil
 	case nil:
 		if natural {
 			if kind != "JOIN" && kind != "LEFT JOIN" {
