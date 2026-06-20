@@ -83,7 +83,7 @@ type Event struct {
 // the facts derived from the SQL itself (kind, tables, clause shape, fingerprint),
 // owned and produced by the analyze framework — and the runtime details querytrace
 // captures around execution (raw text, parameters, transaction). The Analysis
-// fields are promoted, so qi.Kind, qi.Tables, qi.HasWhere, and the rest read
+// fields are promoted, so qi.Kind, qi.Tables, qi.HasTopLevelWhere, and the rest read
 // directly. Raw SQL and argument values are kept only when configuration allows;
 // the static fields are always safe to keep.
 type QueryInfo struct {

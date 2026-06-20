@@ -52,7 +52,7 @@
 //		NoNPlusOne().
 //		Query(sqltest.Select(), sqltest.Table("users")).Times(1)
 //
-// Match values (Select, Table, Fingerprint, SqlContains, Caller, HasWhere, …)
+// Match values (Select, Table, Fingerprint, SqlContains, Caller, HasTopLevelWhere, …)
 // select the statements an assertion applies to; pass several and they must all
 // hold. All, Any, and Not compose them. Count and Events expose the same matching
 // without a testing.TB, for inspecting a Trace directly.

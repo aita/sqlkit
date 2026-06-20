@@ -102,7 +102,7 @@ type config struct {
 // WithConfig sets the querytrace.Config the mock DB records with. The default is
 // NewConfig(WithVerboseCapture()): the PostgreSQL dialect, no parser, raw SQL and
 // callers captured so every matcher works; supply your own (for example with a
-// parser wired in) to enable the structural matchers Table, HasWhere, and
+// parser wired in) to enable the structural matchers Table, HasTopLevelWhere, and
 // Fingerprint.
 func WithConfig(cfg querytrace.Config) Option {
 	return func(c *config) { c.cfg = cfg }

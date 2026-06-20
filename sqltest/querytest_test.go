@@ -15,7 +15,7 @@ import (
 )
 
 // debugConfig is a verbose NewConfig with a small parser wired in, so the
-// structural matchers (Table, Fingerprint, HasWhere) and raw-SQL matchers work
+// structural matchers (Table, Fingerprint, HasTopLevelWhere) and raw-SQL matchers work
 // without a real sqlparse frontend.
 func debugConfig() querytrace.Config {
 	return querytrace.NewConfig(querytrace.WithParser(fakeParser{}), querytrace.WithVerboseCapture())
@@ -61,7 +61,7 @@ func TestMockReturnsRows(t *testing.T) {
 		Reads(1).
 		NoWrites().
 		NoWarnings().
-		Query(sqltest.Select(), sqltest.Table("users"), sqltest.HasWhere()).Times(1)
+		Query(sqltest.Select(), sqltest.Table("users"), sqltest.HasTopLevelWhere()).Times(1)
 }
 
 func TestMockReturnsResult(t *testing.T) {

@@ -1,8 +1,8 @@
 // Package analyze is a small, read-only analysis framework over the sqlkit SQL
 // AST. It is a toolbox of focused functions that turn a parsed sql.Query into
 // individual structural facts — the statement kind (KindOf), the base tables it
-// touches (Tables), whether the top-level node has a WHERE (HasWhere) or projects
-// "*" (SelectsStar), the columns its WHERE filters on (FilterColumns) and the
+// touches (Tables), whether the top-level node has a WHERE (HasTopLevelWhere) or
+// projects "*" (SelectsStar), the columns its WHERE filters on (FilterColumns) and the
 // largest IN list (MaxInList) — and
 // normalizes a statement into a value-independent fingerprint (Fingerprint), all
 // without recompiling or mutating the query.
