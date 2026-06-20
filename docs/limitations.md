@@ -7,6 +7,14 @@ workarounds, so you can tell ahead of time what the builder will and won't do.
 Most engine gaps surface **at compile time of the SQL** (when `ToSQL`/`Exec`
 runs against a dialect), as a descriptive error rather than malformed SQL.
 
+Each limitation is tagged with its nature, so you can tell a permanent constraint
+from a gap that may close:
+
+- 🔒 **Inherent** — a database-engine constraint or a deliberate design choice.
+  Treat it as permanent and design around it.
+- 🚧 **Not yet** — a current implementation gap, not a fundamental one; a future
+  release could lift it.
+
 ## Dialect support
 
 | Engine | Status |
@@ -34,7 +42,7 @@ PostgreSQL); override with `WithDialect`.
 | Row locks `ForUpdate` / `ForShare` | ✅ | ✅ | MySQL 8.0+. Refine with `SkipLocked`/`NoWait`/`LockOf`. |
 | `ForKeyShare` / `ForNoKeyUpdate` | ✅ | ❌ | Extra PostgreSQL lock strengths. |
 | Arrays — `sql.Array`, `EqAny`/`NeAll`, `decl.Array` | ✅ | ❌ | MySQL has no array type. |
-| JSON path access — `sql.JSONGet` / `JSONGetText` | ✅ | ❌ | The `json`/`jsonb` struct-tag round-trip (whole-value marshal) works on both. |
+| JSON path access — `sql.JSONGet` / `JSONGetText` | ✅ | ❌ | 🚧 MySQL has JSON path functions; sqlkit just doesn't map to them yet. The `json`/`jsonb` struct-tag round-trip (whole-value marshal) works on both. |
 | Full-text search — `sqlkit.Match` | ✅ | ⚠️ | MySQL: the columns need a `FULLTEXT` index. Boolean mode / a text-search config needs the `sql` package (below). |
 | Regex match — `~` / `~*` | ✅ | ❌ | MySQL can't express a case-insensitive regex inline (collation-dependent). |
 | `SIMILAR TO` / `NOT SIMILAR TO` | ✅ | ❌ | SQL-standard pattern matching. |
@@ -43,6 +51,9 @@ PostgreSQL); override with `WithDialect`.
 | Aliased `VALUES` derived-table source | ✅ | ⚠️ | MySQL can't alias `VALUES` columns, so sqlkit renders it as a `UNION ALL` of `SELECT`s (equivalent result, different SQL text). |
 | Schema introspection — `introspect.Schema` | ✅ | ✅ | Constructs the `meta` model can't represent are skipped on import. |
 | Transactional (atomic) migrations | ✅ | ❌ | MySQL commits DDL implicitly and can't roll a partly-applied migration back — see [Migrations](#migrations). |
+
+The matrix records engine *capabilities*, so a ❌/⚠️ cell is 🔒 inherent (the
+target engine can't express it) unless its Notes say 🚧.
 
 The **standard** dialect is a minimal reference target and rejects most of the
 engine-specific features above. **SQLite** is not currently available (see the
@@ -58,7 +69,8 @@ A few features have an escape hatch for what the portable helper can't reach:
 ## Auto-splitting and batching
 
 Splitting keeps a single statement under the driver's bind-parameter limit
-(65535 for PostgreSQL and MySQL). The rules:
+(65535 for PostgreSQL and MySQL). These rules are all 🔒 **by design** — they
+trade convenience for correctness:
 
 - **Off by default.** Bulk-insert auto-splitting needs `WithAutoChunk(true)` on
   the `Database`; otherwise split by hand with `BatchSize(n)`. `ToSQL` always
@@ -78,21 +90,21 @@ Splitting keeps a single statement under the driver's bind-parameter limit
 
 ## Preload
 
-- **Single-column foreign keys only.** Preloading a relation backed by a
+- 🚧 **Single-column foreign keys only.** Preloading a relation backed by a
   composite key errors ("composite-key relations are not supported yet").
-- A **to-many** destination field must be a **slice**; a to-one fills a struct or
-  pointer. The field is matched by relation name or a `preload:"…"` tag and must
-  map to the target key column.
+- 🔒 A **to-many** destination field must be a **slice**; a to-one fills a struct
+  or pointer. The field is matched by relation name or a `preload:"…"` tag and
+  must map to the target key column.
 
 ## Migrations
 
-- **MySQL migrations are not atomic.** MySQL commits DDL implicitly and cannot
+- 🔒 **MySQL migrations are not atomic.** MySQL commits DDL implicitly and cannot
   roll a partly-applied migration back; treat each migration as non-atomic.
   PostgreSQL DDL is transactional and rolls back cleanly on failure.
-- **`DisableTx`** is required for statements a transaction rejects — e.g.
+- 🔒 **`DisableTx`** is required for statements a transaction rejects — e.g.
   PostgreSQL `CREATE INDEX CONCURRENTLY`, or a sequence with `OWNED BY` that
   cannot run in the same transaction block before it is used.
-- **Autogenerate is best-effort.** The diff orders operations for safety and
+- 🔒 **Autogenerate is best-effort.** The diff orders operations for safety and
   suggests possible renames, but data backfills and risky renames still need a
   human — **review the result before applying.** A column with no resolved type
   on the target dialect, or a default expression that cannot be parsed, makes the
@@ -100,27 +112,27 @@ Splitting keeps a single statement under the driver's bind-parameter limit
 
 ## Code generation
 
-- **Every SQL type needs a Go mapping.** A column whose database type has no
+- 🔒 **Every SQL type needs a Go mapping.** A column whose database type has no
   built-in mapping is a generation error. Supply a `TypeMapperConfig.Overrides`
   (by type name) or `ColumnOverrides` (by `table.column`), or pin a Go type on
   the `decl` column.
-- **Exact numerics default to `shopspring/decimal`.** `decimal`/`numeric` columns
-  map to `github.com/shopspring/decimal` because `float64` cannot scan them
-  without losing precision; the import lands in *your* generated package (the
+- 🔒 **Exact numerics default to `shopspring/decimal`.** `decimal`/`numeric`
+  columns map to `github.com/shopspring/decimal` because `float64` cannot scan
+  them without losing precision; the import lands in *your* generated package (the
   root sqlkit module stays dependency-free). Override the type to opt out.
-- **Foreign keys outside the catalog** are emitted only as a comment — declare
-  cross-catalog references by hand.
+- 🚧 **Foreign keys outside the catalog** are emitted only as a comment — declare
+  cross-catalog references by hand for now.
 
 ## SQL parser (sqlparse)
 
 `sqlparse` inverts the build-then-compile flow, turning SQL text back into
 `sql` AST nodes. Two facts shape its limits:
 
-- **Two backends, two modules.** `sqlparse/postgres` (real PostgreSQL grammar via
-  `pg_query_go`, cgo) and `sqlparse/mysql` (the TiDB parser, pure Go) are
+- 🔒 **Two backends, two modules.** `sqlparse/postgres` (real PostgreSQL grammar
+  via `pg_query_go`, cgo) and `sqlparse/mysql` (the TiDB parser, pure Go) are
   **separate modules** so their heavy dependency trees never reach the root
   module that library consumers import.
-- **Not every construct round-trips.** Each backend recognizes the full grammar
+- 🚧 **Not every construct round-trips.** Each backend recognizes the full grammar
   but only maps the constructs the `sql` AST can model; anything else either
   falls back to a raw passthrough node or returns an `UnsupportedError` naming the
   construct. Examples that do not model to typed nodes include partial/`INCLUDE`/
@@ -131,21 +143,22 @@ Splitting keeps a single statement under the driver's bind-parameter limit
 
 ## Introspection
 
-`introspect.Schema` reads **PostgreSQL and MySQL** live schemas. Constructs the
-`meta` metadata model has no type for are skipped on import — introspection
-yields a faithful but not byte-exact model of the database.
+🚧 `introspect.Schema` reads **PostgreSQL and MySQL** live schemas. Constructs
+the `meta` metadata model has no type for are skipped on import — introspection
+yields a faithful but not byte-exact model of the database. (Coverage grows as
+the `meta` model gains types.)
 
 ## Other
 
-- **Keyset pagination needs a unique tail key.** End a `Paginator`'s sort keys
+- 🔒 **Keyset pagination needs a unique tail key.** End a `Paginator`'s sort keys
   with a unique column (typically the primary key) so the order is total and a
   cursor lands on exactly one row.
-- **Filter terms** support `Eq`/`Ne`/`Lt`/`Le`/`Gt`/`Ge`/`In`/`FilterLike`/
+- 🔒 **Filter terms** support `Eq`/`Ne`/`Lt`/`Le`/`Gt`/`Ge`/`In`/`FilterLike`/
   `FilterIsNull` or a raw `Predicate`; other `FilterTerm` values error.
-- **`decl` targets PostgreSQL and MySQL** only; other dialects ("oracle", …)
+- 🚧 **`decl` targets PostgreSQL and MySQL** only; other dialects ("oracle", …)
   error.
-- **A primary-key column cannot be nullable** in a `decl` catalog.
-- **Unit of Work nesting requires a transaction.** Nested `uow.Scope`s are
+- 🔒 **A primary-key column cannot be nullable** in a `decl` catalog.
+- 🔒 **Unit of Work nesting requires a transaction.** Nested `uow.Scope`s are
   savepoint-backed, so a nested flush over a non-transactional executor returns
   `ErrNestingRequiresTx` — open a `*sqlkit.Session` first.
 
