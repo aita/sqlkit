@@ -42,10 +42,55 @@ func TestParsePositions(t *testing.T) {
 	} else if src[got:got+len("name")] != "name" {
 		t.Errorf("column offset %d does not point at \"name\"", got)
 	}
+	// The position also lives on the column's identifier, not only on the node.
+	if got, want := col.Name.Pos(), strings.Index(src, "name"); got != want {
+		t.Errorf("column name Ident offset = %d, want %d", got, want)
+	}
 	if got, want := val.Pos(), strings.Index(src, "'taro'"); got != want {
 		t.Errorf("literal offset = %d, want %d", got, want)
 	} else if !strings.HasPrefix(src[got:], "'taro'") {
 		t.Errorf("literal offset %d does not point at \"'taro'\"", got)
+	}
+}
+
+// TestParseQualifiedColumnIdentPosition checks a table-qualified column reference
+// records its position on the column Ident, the qualifier included.
+func TestParseQualifiedColumnIdentPosition(t *testing.T) {
+	src := "SELECT u.id FROM users AS u WHERE u.name = 'taro'"
+	q, err := mysql.ParseOne(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := sql.Unwrap(q).(sql.SelectStmt)
+	bin, ok := sel.Where.(sql.BinaryExpression)
+	if !ok {
+		t.Fatalf("WHERE is not a comparison: %T", sel.Where)
+	}
+	col, ok := bin.Left.(sql.ColumnExpression)
+	if !ok {
+		t.Fatalf("left operand is not a column: %T", bin.Left)
+	}
+	if got, want := col.Name.Pos(), strings.Index(src, "u.name"); got != want {
+		t.Errorf("qualified column Ident offset = %d, want %d", got, want)
+	}
+}
+
+// TestParseTableIdentUnpositioned pins a known limitation of the TiDB frontend:
+// it records offsets on expression nodes but not on table-name nodes, so a parsed
+// relation's Ident carries NoPos. The identAt helper deliberately leaves it
+// unpositioned rather than reporting a false offset; if the upstream parser starts
+// recording table offsets, this test flips and the position flows through for free.
+func TestParseTableIdentUnpositioned(t *testing.T) {
+	q, err := mysql.ParseOne("SELECT id FROM users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tbl, ok := sql.Unwrap(q).(sql.SelectStmt).From.(sql.Table)
+	if !ok {
+		t.Fatalf("FROM source is not a Table: %T", sql.Unwrap(q).(sql.SelectStmt).From)
+	}
+	if got := tbl.Name.Pos(); got != sql.NoPos {
+		t.Errorf("table name Ident offset = %d, want NoPos (TiDB records no table offset)", got)
 	}
 }
 

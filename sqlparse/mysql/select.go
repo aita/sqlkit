@@ -353,6 +353,7 @@ func convertSelectionExpr(node ast.ExprNode) (sql.Selection, error) {
 	if col, ok := node.(*ast.ColumnNameExpr); ok {
 		c := sql.Col(columnRefName(col.Name))
 		c.NodePos = offsetOf(col)
+		c.Name = identAt(c.Name.Name, col)
 		return c, nil
 	}
 	// A bare literal (SELECT 1, SELECT 'x') is not a sqlkit Selection as a bound

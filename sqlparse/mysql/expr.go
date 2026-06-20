@@ -36,7 +36,11 @@ func convertExpr(node ast.ExprNode) (sql.Expression, error) {
 func convertExprNode(node ast.ExprNode) (sql.Expression, error) {
 	switch e := node.(type) {
 	case *ast.ColumnNameExpr:
-		return sql.Col(columnRefName(e.Name)), nil
+		// The column's identifier shares the reference's position, so a qualified or
+		// bare column name reports where it was written, not just the node.
+		c := sql.Col(columnRefName(e.Name))
+		c.Name = identAt(c.Name.Name, e)
+		return c, nil
 	case ast.ParamMarkerExpr:
 		// A positional placeholder (?). sqlkit numbers its own placeholders from
 		// bound values, so there is no native placeholder node; pass the MySQL

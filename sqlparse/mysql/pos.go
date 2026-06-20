@@ -17,6 +17,18 @@ func offsetOf(node ast.Node) int {
 	return pos + 1
 }
 
+// identAt builds an Ident for name carrying node's source offset, or an
+// unpositioned Ident when the offset is not recorded. The TiDB parser leaves the
+// offset at zero on identifier-only nodes it does not reduce as expressions
+// (column names in DDL, for instance); since no identifier in a valid statement
+// begins at byte 0, a zero offset means "unset" and the Ident stays position-free.
+func identAt(name string, node ast.Node) sql.Ident {
+	if pos := node.OriginTextPosition(); pos > 0 {
+		return sql.NewIdentAt(name, pos)
+	}
+	return sql.NewIdent(name)
+}
+
 // positioned records node's source offset on e when e is a node that carries a
 // position, returning it unchanged otherwise (a RawExpression, a passthrough). It
 // lets a convert wrap a result built through a constructor that returns the

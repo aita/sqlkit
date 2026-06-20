@@ -140,7 +140,7 @@ func TestParsedQueryExposesStmt(t *testing.T) {
 	if len(stmt.Columns) != 2 {
 		t.Fatalf("Columns = %d, want 2", len(stmt.Columns))
 	}
-	if table, ok := stmt.From.(sql.Table); !ok || table.Name != "users" {
+	if table, ok := stmt.From.(sql.Table); !ok || table.Name.String() != "users" {
 		t.Fatalf("From = %#v, want table users", stmt.From)
 	}
 	if stmt.Where == nil {
