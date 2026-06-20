@@ -32,49 +32,23 @@ func (p posField) Pos() int { return p.NodePos - 1 }
 // PostgreSQL records that offset on the RawStmt wrapper, not on the statement
 // node, and the builders keep their statement in an unexported field, so it
 // cannot be set from outside the package. A query kind that carries no position
-// (a DDL builder, a raw passthrough) is returned unchanged.
+// (a raw passthrough) is returned unchanged.
 func SetPos(q Query, pos int) Query {
-	switch b := q.(type) {
-	case SelectBuilder:
-		b.s.NodePos = pos
-		return b
-	case CompoundBuilder:
-		b.s.NodePos = pos
-		return b
-	case InsertBuilder:
-		b.s.NodePos = pos
-		return b
-	case UpdateBuilder:
-		b.s.NodePos = pos
-		return b
-	case DeleteBuilder:
-		b.s.NodePos = pos
-		return b
-	case MergeBuilder:
-		b.s.NodePos = pos
-		return b
-	case ValuesQuery:
-		b.NodePos = pos
-		return b
-	case SelectStmt:
-		b.NodePos = pos
-		return b
-	case CompoundStmt:
-		b.NodePos = pos
-		return b
-	case InsertStmt:
-		b.NodePos = pos
-		return b
-	case UpdateStmt:
-		b.NodePos = pos
-		return b
-	case DeleteStmt:
-		b.NodePos = pos
-		return b
-	case MergeStmt:
-		b.NodePos = pos
-		return b
-	default:
-		return q
+	if s, ok := q.(posSetter); ok {
+		return s.setPos(pos)
 	}
+	return q
+}
+
+// posSetter is implemented by every statement node and its fluent builder: a
+// value that can record a top-level source position and return itself. A
+// builder sets the offset on the statement it wraps (its unexported field), a
+// statement value on its own embedded posField. SetPos uses it to attach a
+// parsed statement's offset uniformly, without enumerating every concrete kind
+// at the call site or knowing which one it holds. Each statement and builder
+// implements setPos beside its own definition, not here, so a type's methods stay
+// grouped together.
+type posSetter interface {
+	Query
+	setPos(pos int) Query
 }

@@ -52,6 +52,8 @@ func (s CreateMaterializedViewStmt) compileDDL(c *Compiler) (string, error) {
 }
 func (CreateMaterializedViewStmt) ddlStatement() {}
 
+func (s CreateMaterializedViewStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+
 // CreateMaterializedViewBuilder is the fluent constructor for a
 // CreateMaterializedViewStmt.
 type CreateMaterializedViewBuilder struct{ s CreateMaterializedViewStmt }
@@ -90,6 +92,8 @@ func (b CreateMaterializedViewBuilder) ToSQL(d Dialect) (string, []any, error) {
 func (b CreateMaterializedViewBuilder) buildStmt() Query { return b.s }
 func (CreateMaterializedViewBuilder) ddlStatement()      {}
 
+func (b CreateMaterializedViewBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
+
 // DropMaterializedViewStmt is the AST for a DROP MATERIALIZED VIEW statement.
 type DropMaterializedViewStmt struct {
 	posField
@@ -117,6 +121,8 @@ func (s DropMaterializedViewStmt) compileDDL(c *Compiler) (string, error) {
 	return sb.String(), nil
 }
 func (DropMaterializedViewStmt) ddlStatement() {}
+
+func (s DropMaterializedViewStmt) setPos(pos int) Query { s.NodePos = pos; return s }
 
 // DropMaterializedViewBuilder is the fluent constructor for a
 // DropMaterializedViewStmt.
@@ -146,6 +152,8 @@ func (b DropMaterializedViewBuilder) Cascade() DropMaterializedViewBuilder {
 func (b DropMaterializedViewBuilder) ToSQL(d Dialect) (string, []any, error) { return b.s.ToSQL(d) }
 func (b DropMaterializedViewBuilder) buildStmt() Query                       { return b.s }
 func (DropMaterializedViewBuilder) ddlStatement()                            {}
+
+func (b DropMaterializedViewBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
 
 // RefreshMaterializedViewStmt is the AST for a REFRESH MATERIALIZED VIEW
 // statement.
@@ -179,6 +187,8 @@ func (s RefreshMaterializedViewStmt) compileDDL(c *Compiler) (string, error) {
 }
 func (RefreshMaterializedViewStmt) ddlStatement() {}
 
+func (s RefreshMaterializedViewStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+
 // RefreshMaterializedViewBuilder is the fluent constructor for a
 // RefreshMaterializedViewStmt.
 type RefreshMaterializedViewBuilder struct{ s RefreshMaterializedViewStmt }
@@ -209,3 +219,5 @@ func (b RefreshMaterializedViewBuilder) ToSQL(d Dialect) (string, []any, error) 
 }
 func (b RefreshMaterializedViewBuilder) buildStmt() Query { return b.s }
 func (RefreshMaterializedViewBuilder) ddlStatement()      {}
+
+func (b RefreshMaterializedViewBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }

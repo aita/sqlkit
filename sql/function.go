@@ -39,6 +39,8 @@ func (s CreateFunctionStmt) compileDDL(c *Compiler) (string, error) {
 }
 func (CreateFunctionStmt) ddlStatement() {}
 
+func (s CreateFunctionStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+
 // CreateFunctionBuilder is the fluent constructor for a CreateFunctionStmt.
 type CreateFunctionBuilder struct{ s CreateFunctionStmt }
 
@@ -99,6 +101,8 @@ func (b CreateFunctionBuilder) Body(body string) CreateFunctionBuilder {
 func (b CreateFunctionBuilder) ToSQL(d Dialect) (string, []any, error) { return b.s.ToSQL(d) }
 func (b CreateFunctionBuilder) buildStmt() Query                       { return b.s }
 func (CreateFunctionBuilder) ddlStatement()                            {}
+
+func (b CreateFunctionBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
 
 // CompileCreateFunction compiles a CREATE FUNCTION statement.
 func (c *Compiler) CompileCreateFunction(s CreateFunctionStmt) (string, error) {
@@ -181,6 +185,8 @@ func (s DropFunctionStmt) compileDDL(c *Compiler) (string, error) {
 }
 func (DropFunctionStmt) ddlStatement() {}
 
+func (s DropFunctionStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+
 // DropFunctionBuilder is the fluent constructor for a DropFunctionStmt.
 type DropFunctionBuilder struct{ s DropFunctionStmt }
 
@@ -222,6 +228,8 @@ func (b DropFunctionBuilder) Restrict() DropFunctionBuilder {
 func (b DropFunctionBuilder) ToSQL(d Dialect) (string, []any, error) { return b.s.ToSQL(d) }
 func (b DropFunctionBuilder) buildStmt() Query                       { return b.s }
 func (DropFunctionBuilder) ddlStatement()                            {}
+
+func (b DropFunctionBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
 
 // CompileDropFunction compiles a DROP FUNCTION statement.
 func (c *Compiler) CompileDropFunction(s DropFunctionStmt) (string, error) {

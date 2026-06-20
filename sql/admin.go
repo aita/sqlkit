@@ -31,6 +31,8 @@ func (s UseStmt) compile(c *Compiler) (string, []any, error) {
 	return "USE " + c.Dialect.QuoteName(s.DB.String()) + ";", nil, nil
 }
 
+func (s UseStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+
 // TableLockMode is the lock a LOCK TABLES entry requests.
 type TableLockMode string
 
@@ -82,6 +84,8 @@ func (s LockTablesStmt) compile(c *Compiler) (string, []any, error) {
 	return sb.String(), nil, nil
 }
 
+func (s LockTablesStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+
 // UnlockTablesStmt releases all of the session's table locks (UNLOCK TABLES).
 type UnlockTablesStmt struct{ posField }
 
@@ -94,6 +98,8 @@ func (s UnlockTablesStmt) ToSQL(d Dialect) (string, []any, error) { return s.com
 func (UnlockTablesStmt) compile(*Compiler) (string, []any, error) {
 	return "UNLOCK TABLES;", nil, nil
 }
+
+func (s UnlockTablesStmt) setPos(pos int) Query { s.NodePos = pos; return s }
 
 // SetVar is one assignment in a SET statement. Value must bind no values (it is
 // rendered inline). Scope is "", "GLOBAL", or "SESSION" for a system variable;
@@ -154,3 +160,5 @@ func (s SetStmt) compile(c *Compiler) (string, []any, error) {
 	sb.WriteString(";")
 	return sb.String(), nil, nil
 }
+
+func (s SetStmt) setPos(pos int) Query { s.NodePos = pos; return s }

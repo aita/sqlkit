@@ -38,6 +38,8 @@ func (s CreateExtensionStmt) compileDDL(c *Compiler) (string, error) {
 }
 func (CreateExtensionStmt) ddlStatement() {}
 
+func (s CreateExtensionStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+
 // CreateExtensionBuilder is the fluent constructor for a CreateExtensionStmt.
 type CreateExtensionBuilder struct{ s CreateExtensionStmt }
 
@@ -65,6 +67,8 @@ func (b CreateExtensionBuilder) Schema(schema string) CreateExtensionBuilder {
 func (b CreateExtensionBuilder) ToSQL(d Dialect) (string, []any, error) { return b.s.ToSQL(d) }
 func (b CreateExtensionBuilder) buildStmt() Query                       { return b.s }
 func (CreateExtensionBuilder) ddlStatement()                            {}
+
+func (b CreateExtensionBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
 
 // DropExtensionStmt is the AST for a DROP EXTENSION statement.
 type DropExtensionStmt struct {
@@ -102,6 +106,8 @@ func (s DropExtensionStmt) compileDDL(c *Compiler) (string, error) {
 }
 func (DropExtensionStmt) ddlStatement() {}
 
+func (s DropExtensionStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+
 // DropExtensionBuilder is the fluent constructor for a DropExtensionStmt.
 type DropExtensionBuilder struct{ s DropExtensionStmt }
 
@@ -129,3 +135,5 @@ func (b DropExtensionBuilder) Cascade() DropExtensionBuilder {
 func (b DropExtensionBuilder) ToSQL(d Dialect) (string, []any, error) { return b.s.ToSQL(d) }
 func (b DropExtensionBuilder) buildStmt() Query                       { return b.s }
 func (DropExtensionBuilder) ddlStatement()                            {}
+
+func (b DropExtensionBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }

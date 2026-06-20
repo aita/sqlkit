@@ -28,6 +28,8 @@ func (s RenameTableStmt) compileDDL(c *Compiler) (string, error) {
 }
 func (RenameTableStmt) ddlStatement() {}
 
+func (s RenameTableStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+
 // RenameColumnStmt is the AST for an ALTER TABLE ... RENAME COLUMN ... TO
 // statement. It has no options, so it is constructed directly.
 type RenameColumnStmt struct {
@@ -55,3 +57,5 @@ func (s RenameColumnStmt) compileDDL(c *Compiler) (string, error) {
 		c.Dialect.QuoteName(s.OldName.String()) + " TO " + c.Dialect.QuoteName(s.NewName.String()) + ";", nil
 }
 func (RenameColumnStmt) ddlStatement() {}
+
+func (s RenameColumnStmt) setPos(pos int) Query { s.NodePos = pos; return s }

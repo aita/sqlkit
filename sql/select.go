@@ -73,6 +73,8 @@ func (q SelectStmt) compile(c *Compiler) (string, []any, error) {
 	return c.CompileSelect(q)
 }
 
+func (q SelectStmt) setPos(pos int) Query { q.NodePos = pos; return q }
+
 // SelectBuilder is the fluent constructor for a SelectStmt. It is a separate
 // type from the AST because the exported field SelectStmt.Where and a same-named
 // builder method cannot coexist in Go; construction lives here and the data on
@@ -277,6 +279,8 @@ func (b SelectBuilder) ToSQL(dialect Dialect) (string, []any, error) { return b.
 func (b SelectBuilder) compile(c *Compiler) (string, []any, error) { return b.s.compile(c) }
 
 func (b SelectBuilder) buildStmt() Query { return b.s }
+
+func (b SelectBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
 
 // appendJoin returns joins with j appended to a fresh backing array, so chaining
 // from a shared builder value never disturbs a sibling chain.

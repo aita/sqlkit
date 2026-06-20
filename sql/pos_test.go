@@ -16,6 +16,39 @@ func TestBuiltNodesHaveNoPos(t *testing.T) {
 	}
 }
 
+// TestSetPosDDL pins that SetPos reaches DDL statements and their builders, so a
+// parser can attach a DDL statement's source offset the same way it does for DML.
+// A builder records the offset on the statement it wraps; a statement value on
+// itself. A query kind SetPos does not know (a raw passthrough) is returned
+// unchanged with NoPos.
+func TestSetPosDDL(t *testing.T) {
+	// SetPos stores the offset+1 the parser passes (so byte offset 0 stays a real
+	// position), and Pos() reports the byte offset back.
+
+	// A fluent builder carries the position through to the statement it wraps
+	// (the builder itself is not a Node; Unwrap yields its statement).
+	b := SetPos(CreateTable(Table{Name: NewIdent("users")}), 6)
+	if got := Unwrap(b).(Node).Pos(); got != 5 {
+		t.Errorf("built CreateTableStmt Pos() = %d, want 5", got)
+	}
+	if got := b.(CreateTableBuilder).Stmt().Pos(); got != 5 {
+		t.Errorf("CreateTableBuilder.Stmt() Pos() = %d, want 5", got)
+	}
+
+	// A statement value with no builder carries it too.
+	s := SetPos(DropIndex("idx", Table{Name: NewIdent("users")}), 10)
+	if got := s.(Node).Pos(); got != 9 {
+		t.Errorf("DropIndexStmt Pos() = %d, want 9", got)
+	}
+
+	// A query kind SetPos does not handle (a raw passthrough carries no position)
+	// is returned unchanged.
+	got := SetPos(RawSQL("VACUUM"), 3)
+	if rq, ok := got.(RawQuery); !ok || rq.SQL() != "VACUUM" {
+		t.Errorf("raw passthrough = %#v, want the RawQuery returned unchanged", got)
+	}
+}
+
 // TestPositionIsCarriedAndIgnoredByCompiler pins that NodePos is readable through
 // Pos() and that positions are metadata: a positioned node and a built one compile
 // to the same SQL and args.

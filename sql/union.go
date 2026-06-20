@@ -33,6 +33,8 @@ func (q CompoundStmt) compile(c *Compiler) (string, []any, error) {
 	return c.CompileCompound(q)
 }
 
+func (q CompoundStmt) setPos(pos int) Query { q.NodePos = pos; return q }
+
 // Union combines this query with another using UNION.
 func (b SelectBuilder) Union(other Query) CompoundBuilder { return compound(b.s, "UNION", other) }
 
@@ -128,6 +130,8 @@ func (b CompoundBuilder) ToSQL(dialect Dialect) (string, []any, error) { return 
 func (b CompoundBuilder) compile(c *Compiler) (string, []any, error) { return b.s.compile(c) }
 
 func (b CompoundBuilder) buildStmt() Query { return b.s }
+
+func (b CompoundBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
 
 // CompileCompound compiles a set-operation query.
 func (c *Compiler) CompileCompound(q CompoundStmt) (string, []any, error) {
