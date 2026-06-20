@@ -104,7 +104,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer db.Close()
+	defer db.Close() //nolint:errcheck // best-effort close
 
 	if err := seed(context.Background(), db); err != nil {
 		log.Fatal(err)
@@ -245,14 +245,14 @@ func (s *server) demoUsers(out io.Writer, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // best-effort close
 	for rows.Next() {
 		var id, count int64
 		var name string
 		if err := rows.Scan(&id, &name, &count); err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "user %d %-7s %d posts\n", id, name, count)
+		fmt.Fprintf(out, "user %d %-7s %d posts\n", id, name, count) //nolint:errcheck // best-effort write to response
 	}
 	return rows.Err()
 }
@@ -274,7 +274,7 @@ func (s *server) demoNPlusOne(out io.Writer, r *http.Request) error {
 			`SELECT COUNT(*) FROM posts WHERE user_id = $1`, u.id).Scan(&count); err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "user %d %-7s %d posts\n", u.id, u.name, count)
+		fmt.Fprintf(out, "user %d %-7s %d posts\n", u.id, u.name, count) //nolint:errcheck // best-effort write to response
 	}
 	return nil
 }
@@ -289,7 +289,7 @@ func (s *server) demoReports(out io.Writer, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback() // never commit — this is a demonstration of bad SQL
+	defer tx.Rollback() //nolint:errcheck // never commit — this is a demonstration of bad SQL
 
 	if _, err := tx.ExecContext(ctx, `UPDATE posts SET published = 1`); err != nil {
 		return err
@@ -297,7 +297,7 @@ func (s *server) demoReports(out io.Writer, r *http.Request) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM posts`); err != nil {
 		return err
 	}
-	fmt.Fprintln(out, "ran a table-wide UPDATE and DELETE (rolled back)")
+	fmt.Fprintln(out, "ran a table-wide UPDATE and DELETE (rolled back)") //nolint:errcheck // best-effort write to response
 	return nil
 }
 
@@ -323,7 +323,7 @@ func (s *server) demoCache(out io.Writer, r *http.Request) error {
 		`UPDATE users SET email = email WHERE id = $1`, id); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "loaded user %d %q (and wrote under a read-only context)\n", id, name)
+	fmt.Fprintf(out, "loaded user %d %q (and wrote under a read-only context)\n", id, name) //nolint:errcheck // best-effort write to response
 	return nil
 }
 
@@ -351,10 +351,10 @@ func (s *server) demoSearch(out io.Writer, r *http.Request) error {
 		if err := rows.Scan(&id, &name); err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "first user: %d %s\n", id, name)
+		fmt.Fprintf(out, "first user: %d %s\n", id, name) //nolint:errcheck // best-effort write to response
 	}
 	// Intentionally NOT calling rows.Close().
-	fmt.Fprintln(out, "ran a fan-out of lookups and leaked a cursor")
+	fmt.Fprintln(out, "ran a fan-out of lookups and leaked a cursor") //nolint:errcheck // best-effort write to response
 	return nil
 }
 
@@ -377,7 +377,7 @@ func (s *server) demoBulk(out io.Writer, r *http.Request) error {
 	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "matched %d users with a %d-parameter IN list\n", count, n)
+	fmt.Fprintf(out, "matched %d users with a %d-parameter IN list\n", count, n) //nolint:errcheck // best-effort write to response
 	return nil
 }
 
@@ -391,7 +391,7 @@ func (s *server) listUsers(ctx context.Context) ([]user, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck // best-effort close
 	var users []user
 	for rows.Next() {
 		var u user
