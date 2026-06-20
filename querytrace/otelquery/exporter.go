@@ -77,7 +77,7 @@ type Exporter struct {
 type Option func(*Exporter)
 
 // WithDBSystem sets the db.system.name attribute on every statement span, such
-// as "postgresql", "mysql", or "sqlite". querytrace does not record the dialect
+// as "postgresql" or "mysql". querytrace does not record the dialect
 // on a Trace, so the system is supplied here. It is omitted when unset.
 func WithDBSystem(name string) Option {
 	return func(e *Exporter) { e.dbSystem = name }

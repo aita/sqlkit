@@ -97,9 +97,6 @@ func TestMergeUnsupportedDialect(t *testing.T) {
 	if _, _, err := q.ToSQL(MySQLDialect{}); err == nil {
 		t.Fatal("MERGE on MySQL succeeded, want unsupported error")
 	}
-	if _, _, err := q.ToSQL(SQLiteDialect{}); err == nil {
-		t.Fatal("MERGE on SQLite succeeded, want unsupported error")
-	}
 }
 
 func TestMergeValidation(t *testing.T) {

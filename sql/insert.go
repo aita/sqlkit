@@ -111,7 +111,7 @@ func (b InsertBuilder) OnConflict(columns ...string) InsertBuilder {
 }
 
 // OnConflictConstraint starts an upsert clause targeting a named constraint
-// (PostgreSQL ON CONFLICT ON CONSTRAINT). PostgreSQL/SQLite only.
+// (PostgreSQL ON CONFLICT ON CONSTRAINT). PostgreSQL only.
 func (b InsertBuilder) OnConflictConstraint(name string) InsertBuilder {
 	return b.withConflict(func(c *ConflictClause) {
 		c.TargetConstraint, c.Target, c.TargetExprs = name, nil, nil
@@ -126,8 +126,8 @@ func (b InsertBuilder) OnConflictExpr(exprs ...Expression) InsertBuilder {
 	})
 }
 
-// DoNothing makes the upsert skip conflicting rows (DO NOTHING). PostgreSQL and
-// SQLite only — MySQL has no DO NOTHING form.
+// DoNothing makes the upsert skip conflicting rows (DO NOTHING). PostgreSQL
+// only — MySQL has no DO NOTHING form.
 func (b InsertBuilder) DoNothing() InsertBuilder {
 	return b.withConflict(func(c *ConflictClause) { c.DoUpdate = false })
 }

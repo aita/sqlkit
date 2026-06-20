@@ -49,8 +49,8 @@
 //	sqlText, err := md.CreateSQL(d)
 //
 // Tables declared with Catalog.Table live in the unnamed default schema and
-// generate unqualified names (use this for schemaless engines like MySQL or
-// SQLite); Catalog.Schema("public").Table(...) qualifies them. Columns are NOT
+// generate unqualified names (use this for schemaless engines like MySQL);
+// Catalog.Schema("public").Table(...) qualifies them. Columns are NOT
 // NULL unless marked Nullable. Mistakes — duplicate names, dangling foreign
 // keys — are collected and reported by Build.
 package decl

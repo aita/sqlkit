@@ -134,7 +134,7 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		if nse, ok := c.Dialect.(NullSafeEqualityDialect); ok {
 			return nse.IsDistinctFrom(leftSQL, rightSQL, e.Negate), args, nil
 		}
-		// SQL standard IS [NOT] DISTINCT FROM (PostgreSQL, SQLite, the standard
+		// SQL standard IS [NOT] DISTINCT FROM (PostgreSQL, the standard
 		// target); MySQL overrides via NullSafeEqualityDialect with <=>.
 		operator := "IS DISTINCT FROM"
 		if e.Negate {

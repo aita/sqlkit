@@ -6,19 +6,11 @@ import (
 	"github.com/aita/sqlkit"
 )
 
-func TestDialectForDriverSQLite(t *testing.T) {
-	for _, name := range []string{"sqlite", "sqlite3"} {
-		if got := sqlkit.DialectForDriver(name).Name(); got != "sqlite" {
-			t.Fatalf("DialectForDriver(%q) = %q, want sqlite", name, got)
-		}
-	}
-}
-
 func TestRegisterDriverDialect(t *testing.T) {
 	// A custom driver name can be pointed at an existing dialect.
-	sqlkit.RegisterDriverDialect("sqlite-custom", sqlkit.SQLiteDialect{})
-	if got := sqlkit.DialectForDriver("sqlite-custom").Name(); got != "sqlite" {
-		t.Fatalf("DialectForDriver(sqlite-custom) = %q, want sqlite", got)
+	sqlkit.RegisterDriverDialect("mysql-custom", sqlkit.MySQLDialect{})
+	if got := sqlkit.DialectForDriver("mysql-custom").Name(); got != "mysql" {
+		t.Fatalf("DialectForDriver(mysql-custom) = %q, want mysql", got)
 	}
 }
 

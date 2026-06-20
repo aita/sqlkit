@@ -326,7 +326,7 @@ func TestBlankDefaultIsAbsent(t *testing.T) {
 	}
 }
 
-// TestSchemalessDatabase covers MySQL/SQLite-style databases without a schema
+// TestSchemalessDatabase covers MySQL-style databases without a schema
 // namespace: Catalog.Table declares into the unnamed default schema, so tables
 // carry an empty schema and generate unqualified DDL.
 func TestSchemalessDatabase(t *testing.T) {
@@ -632,7 +632,7 @@ func TestTypeUnavailableOnDialect(t *testing.T) {
 
 // TestArrayColumns: Array(elem) declares a PostgreSQL array column. Its engine
 // resolves to the element type flagged as an array on PostgreSQL (so DDL renders
-// "elem[]"), is unavailable on MySQL/SQLite, and codegen maps it to a Go slice.
+// "elem[]"), is unavailable on MySQL, and codegen maps it to a Go slice.
 func TestArrayColumns(t *testing.T) {
 	tags := decl.Array(decl.Text)
 	eng, ok := tags.Engine("postgres")
@@ -641,9 +641,6 @@ func TestArrayColumns(t *testing.T) {
 	}
 	if _, ok := tags.Engine("mysql"); ok {
 		t.Error("Array(Text).Engine(mysql) should be unavailable")
-	}
-	if _, ok := tags.Engine("sqlite"); ok {
-		t.Error("Array(Text).Engine(sqlite) should be unavailable")
 	}
 
 	c := decl.NewCatalog()
@@ -770,51 +767,26 @@ func TestDataTypeGoForPerDialect(t *testing.T) {
 	}
 }
 
-// TestRegisterTypeAndDialects: a custom kind registered for postgres/mysql/sqlite
+// TestRegisterTypeAndDialects: a custom kind registered for postgres/mysql
 // resolves per dialect, and registering can extend a built-in kind with a new
 // dialect.
 func TestRegisterTypeAndDialects(t *testing.T) {
 	decl.RegisterType("geometry", map[string]string{
-		"postgres": "geometry", "mysql": "geometry", "sqlite": "blob",
+		"postgres": "geometry", "mysql": "geometry",
 	})
 	geo := decl.Type("geometry")
-	for dialect, want := range map[string]string{"postgres": "geometry", "mysql": "geometry", "sqlite": "blob"} {
+	for dialect, want := range map[string]string{"postgres": "geometry", "mysql": "geometry"} {
 		if eng, ok := geo.Engine(dialect); !ok || eng.Name != want {
 			t.Errorf("geometry Engine(%s) = %q (ok=%v), want %q", dialect, eng.Name, ok, want)
 		}
 	}
 
-	// Built-in BigInt resolves sqlite from the default registration.
-	if eng, ok := decl.BigInt.Engine("sqlite"); !ok || eng.Name != "integer" {
-		t.Errorf("BigInt Engine(sqlite) = %q (ok=%v), want integer", eng.Name, ok)
+	// Built-in BigInt resolves mysql from the default registration.
+	if eng, ok := decl.BigInt.Engine("mysql"); !ok || eng.Name != "bigint" {
+		t.Errorf("BigInt Engine(mysql) = %q (ok=%v), want bigint", eng.Name, ok)
 	}
 	// A dialect not registered for a kind is unavailable.
 	if _, ok := geo.Engine("oracle"); ok {
 		t.Errorf("geometry should be unavailable on an unregistered dialect")
-	}
-}
-
-// TestSQLiteEndToEnd: a catalog of built-in types generates SQLite bindings.
-func TestSQLiteEndToEnd(t *testing.T) {
-	c := decl.NewCatalog()
-	c.Table("items",
-		decl.Column("id", decl.BigInt, decl.PrimaryKey()),
-		decl.Column("label", decl.Text),
-		decl.Column("active", decl.Bool),
-	)
-	md := buildCatalog(t, c)
-	files, err := codegen.Generate(md, codegen.Options{PackageName: "x", Dialect: "sqlite"})
-	if err != nil {
-		t.Fatalf("Generate(sqlite) error = %v", err)
-	}
-	body := string(files[0].Content)
-	for _, want := range []string{
-		`sqlkit.NewColumn[int64](info, "id")`,
-		`sqlkit.NewColumn[string](info, "label")`,
-		`sqlkit.NewColumn[bool](info, "active")`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("SQLite end-to-end missing %q:\n%s", want, body)
-		}
 	}
 }

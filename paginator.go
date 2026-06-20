@@ -370,8 +370,8 @@ type seekKey struct {
 //
 // with each ">" flipped to "<" for a descending key (and all of them flipped
 // again for a backward page). The OR form, rather than a row-value comparison
-// (k0, k1) > (v0, v1), is used because it is portable across PostgreSQL, MySQL,
-// and SQLite and handles mixed key directions.
+// (k0, k1) > (v0, v1), is used because it is portable across PostgreSQL and
+// MySQL and handles mixed key directions.
 func seekPredicate(keys []seekKey, before bool) Predicate {
 	ors := make([]sql.Expression, len(keys))
 	for i := range keys {

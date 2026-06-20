@@ -11,7 +11,7 @@ import (
 // canonical type kind (e.g. "bigint", "varchar") plus any length/precision
 // modifiers; the per-dialect engine type name is resolved through the type
 // registry when a generator picks a dialect, so meta stays dialect-free and new
-// dialects (sqlite, ...) are added by registering, not by changing this type.
+// dialects are added by registering, not by changing this type.
 //
 // A DataType fixes the DB type — Type names a registered kind (or, for an
 // unregistered name, one used verbatim on every dialect) and TypeFor pins a
@@ -53,13 +53,13 @@ var (
 // RegisterType registers (or extends) the engine type names a type kind resolves
 // to per dialect, so a custom type or a new dialect is added in one place rather
 // than by changing the DSL. names is keyed by dialect ("postgres", "mysql",
-// "sqlite", ...); entries merge into any existing registration for the kind, so
-// a later call can add a dialect to a built-in kind. After registering, declare
-// columns of the kind with Type(kind):
+// ...); entries merge into any existing registration for the kind, so a later
+// call can add a dialect to a built-in kind. After registering, declare columns
+// of the kind with Type(kind):
 //
-//	decl.RegisterType("uuid", map[string]string{"sqlite": "text"})
+//	decl.RegisterType("uuid", map[string]string{"mysql": "char"})
 //	decl.RegisterType("geometry", map[string]string{
-//		"postgres": "geometry", "mysql": "geometry", "sqlite": "blob",
+//		"postgres": "geometry", "mysql": "geometry",
 //	})
 //	decl.Column("shape", decl.Type("geometry"))
 func RegisterType(kind string, names map[string]string) {
@@ -85,22 +85,22 @@ func lookupDBType(kind string) (map[string]string, bool) {
 
 func init() {
 	for kind, names := range map[string]map[string]string{
-		"bool":      {"postgres": "bool", "mysql": "boolean", "sqlite": "boolean"},
-		"smallint":  {"postgres": "int2", "mysql": "smallint", "sqlite": "integer"},
-		"int":       {"postgres": "int4", "mysql": "int", "sqlite": "integer"},
-		"bigint":    {"postgres": "int8", "mysql": "bigint", "sqlite": "integer"},
-		"float":     {"postgres": "float4", "mysql": "float", "sqlite": "real"},
-		"double":    {"postgres": "float8", "mysql": "double", "sqlite": "real"},
-		"text":      {"postgres": "text", "mysql": "text", "sqlite": "text"},
-		"bytes":     {"postgres": "bytea", "mysql": "blob", "sqlite": "blob"},
-		"json":      {"postgres": "jsonb", "mysql": "json", "sqlite": "text"},
-		"uuid":      {"postgres": "uuid", "mysql": "char", "sqlite": "text"},
-		"date":      {"postgres": "date", "mysql": "date", "sqlite": "text"},
-		"time":      {"postgres": "time", "mysql": "time", "sqlite": "text"},
-		"timestamp": {"postgres": "timestamptz", "mysql": "datetime", "sqlite": "datetime"},
-		"varchar":   {"postgres": "varchar", "mysql": "varchar", "sqlite": "text"},
-		"char":      {"postgres": "bpchar", "mysql": "char", "sqlite": "text"},
-		"decimal":   {"postgres": "numeric", "mysql": "decimal", "sqlite": "numeric"},
+		"bool":      {"postgres": "bool", "mysql": "boolean"},
+		"smallint":  {"postgres": "int2", "mysql": "smallint"},
+		"int":       {"postgres": "int4", "mysql": "int"},
+		"bigint":    {"postgres": "int8", "mysql": "bigint"},
+		"float":     {"postgres": "float4", "mysql": "float"},
+		"double":    {"postgres": "float8", "mysql": "double"},
+		"text":      {"postgres": "text", "mysql": "text"},
+		"bytes":     {"postgres": "bytea", "mysql": "blob"},
+		"json":      {"postgres": "jsonb", "mysql": "json"},
+		"uuid":      {"postgres": "uuid", "mysql": "char"},
+		"date":      {"postgres": "date", "mysql": "date"},
+		"time":      {"postgres": "time", "mysql": "time"},
+		"timestamp": {"postgres": "timestamptz", "mysql": "datetime"},
+		"varchar":   {"postgres": "varchar", "mysql": "varchar"},
+		"char":      {"postgres": "bpchar", "mysql": "char"},
+		"decimal":   {"postgres": "numeric", "mysql": "decimal"},
 	} {
 		RegisterType(kind, names)
 	}
@@ -266,7 +266,7 @@ func Type(name string) DataType {
 }
 
 // TypeFor declares a column type with a distinct, fixed engine type name per
-// dialect inline, keyed by dialect name ("postgres", "mysql", "sqlite", ...). A
+// dialect inline, keyed by dialect name ("postgres", "mysql", ...). A
 // dialect absent from names makes the type unavailable there, which the
 // generators report as an error when targeting it. For a reusable type, prefer
 // RegisterType plus Type. Chain Go/GoFor to also pin the Go type.

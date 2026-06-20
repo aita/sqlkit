@@ -300,17 +300,6 @@ func TestRegexpMySQL(t *testing.T) {
 	}
 }
 
-func TestRegexpSQLite(t *testing.T) {
-	q := Select(Col("id")).From(Table{Name: "t"}).Where(Regexp(Col("name"), Val("^a")))
-	got, _, err := q.ToSQL(SQLiteDialect{})
-	if err != nil {
-		t.Fatalf("ToSQL() error = %v", err)
-	}
-	if want := `SELECT "id" FROM "t" WHERE ("name" REGEXP ?)`; got != want {
-		t.Errorf("ToSQL() = %q, want %q", got, want)
-	}
-}
-
 func TestRegexpStandard(t *testing.T) {
 	cases := []struct {
 		expr Expression
