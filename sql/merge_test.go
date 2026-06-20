@@ -36,8 +36,13 @@ func TestMergeWalk(t *testing.T) {
 		On(Eq(Col("accounts.id"), Col("s.id"))).
 		When(WhenMatched().ThenDelete())
 
-	var visited int
-	Walk(q, func(Query) bool { visited++; return true })
+	visited := 0
+	Inspect(Unwrap(q).(Node), func(n Node) bool {
+		if _, ok := n.(Query); ok {
+			visited++
+		}
+		return true
+	})
 	if visited != 2 {
 		t.Errorf("Walk over MERGE visited %d queries, want 2 (merge + USING subquery)", visited)
 	}

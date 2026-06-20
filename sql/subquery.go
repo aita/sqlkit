@@ -10,6 +10,7 @@ package sql
 //
 // emits SELECT "sub"."id" FROM (SELECT "id" FROM "users" WHERE ...) AS "sub".
 type DerivedTable struct {
+	posField
 	alias string
 	query Query
 }

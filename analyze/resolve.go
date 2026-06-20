@@ -62,9 +62,17 @@ type Resolution struct {
 // resolved against the inner node's own sources only, so it comes out Unknown.
 func Resolve(q sql.Query) []Resolution {
 	var out []Resolution
-	sql.Walk(q, func(node sql.Query) bool {
-		scope := SourcesOf(node)
-		WalkColumns(node, func(u ColumnUse) {
+	root, ok := sql.Unwrap(q).(sql.Node)
+	if !ok {
+		return nil
+	}
+	sql.Inspect(root, func(node sql.Node) bool {
+		query, ok := node.(sql.Query)
+		if !ok {
+			return true
+		}
+		scope := SourcesOf(query)
+		WalkColumns(query, func(u ColumnUse) {
 			res := ResolveColumn(scope, u.Column)
 			res.Clause, res.Access = u.Clause, u.Access
 			out = append(out, res)

@@ -9,6 +9,7 @@ package sql
 // a typed query, deparsing the parse tree back to SQL so that every statement a
 // frontend's grammar accepts still yields a usable Query.
 type RawQuery struct {
+	posField
 	text string
 	args []any
 }

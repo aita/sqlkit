@@ -22,6 +22,10 @@ type RawExpression string
 func (RawExpression) SQLExpression() {}
 func (RawExpression) SQLSelection()  {}
 
+// Pos reports NoPos: a raw fragment is a bare string, so unlike the other
+// expression nodes it embeds no posField and carries no parsed position.
+func (RawExpression) Pos() int { return NoPos }
+
 // Raw creates a raw SQL fragment expression.
 func Raw(fragment string) RawExpression { return RawExpression(fragment) }
 
