@@ -95,3 +95,42 @@ func BareColumn(name string) string {
 	}
 	return strings.ToLower(strings.TrimSpace(name))
 }
+
+// NullEqualityPredicate reports whether the statement's top-level WHERE compares
+// a value against a NULL literal with = or <> (x = NULL / x <> NULL). SQL
+// evaluates such a comparison to unknown rather than matching NULL, so the
+// predicate silently drops every row; IS NULL / IS NOT NULL is meant. It walks
+// the top-level WHERE only, like the other predicate facts, with sql.WalkExpr
+// (which does not descend into subqueries), and is best-effort: a NULL written as
+// a non-literal expression is not detected. It backs the eq_null check.
+func NullEqualityPredicate(q sql.Query) bool {
+	where := TopLevelWhere(q)
+	if where == nil {
+		return false
+	}
+	found := false
+	sql.WalkExpr(where, func(e sql.Expression) {
+		if b, ok := e.(sql.BinaryExpression); ok && isNullEquality(b) {
+			found = true
+		}
+	})
+	return found
+}
+
+// isNullEquality reports whether b compares an operand against a NULL literal
+// with = or <>, the mistake that should be IS NULL / IS NOT NULL.
+func isNullEquality(b sql.BinaryExpression) bool {
+	switch b.Operator {
+	case "=", "<>", "!=":
+		return isNullLiteral(b.Left) || isNullLiteral(b.Right)
+	default:
+		return false
+	}
+}
+
+// isNullLiteral reports whether e is a bound NULL value, the form a parsed NULL
+// constant takes.
+func isNullLiteral(e sql.Expression) bool {
+	v, ok := e.(sql.ValueExpression)
+	return ok && v.Value == nil
+}
