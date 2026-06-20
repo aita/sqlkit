@@ -227,7 +227,7 @@ func TestHooksPropagateToSession(t *testing.T) {
 	}))
 	ctx := context.Background()
 	session := db.NewSession()
-	defer session.Close()
+	defer session.Close() //nolint:errcheck // best-effort close
 
 	if _, err := session.Delete(Users).Where(Users.ID.Eq(1)).Exec(ctx); err != nil {
 		t.Fatalf("Exec() error = %v", err)
@@ -245,7 +245,7 @@ func TestSavepointBypassesHooks(t *testing.T) {
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithHooks(cap.hooks()))
 	ctx := context.Background()
 	session := db.NewSession()
-	defer session.Close()
+	defer session.Close() //nolint:errcheck // best-effort close
 
 	if _, err := session.Savepoint(ctx); err != nil {
 		t.Fatalf("Savepoint() error = %v", err)
@@ -398,7 +398,7 @@ func TestAfterQueryInheritedBySession(t *testing.T) {
 	obs := &captureResults{}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithHooks(obs.hooks()))
 	session := db.NewSession()
-	defer session.Close()
+	defer session.Close() //nolint:errcheck // best-effort close
 
 	var users []User
 	if err := session.Select().From(Users).All(context.Background()).Scan(&users); err != nil {

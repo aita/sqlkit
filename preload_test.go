@@ -433,7 +433,7 @@ func TestPreloadThroughSessionUsesItsChunkSize(t *testing.T) {
 	}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true), sqlkit.WithPreloadBatchSize(2))
 	session := db.NewSession()
-	defer session.Close()
+	defer session.Close() //nolint:errcheck // best-effort close
 
 	var users []preUser
 	if err := session.Select(Users.ID).From(Users).Preload(Posts).All(context.Background()).Scan(&users); err != nil {

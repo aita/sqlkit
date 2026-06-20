@@ -212,7 +212,7 @@ func (c *statusCmd) Run(r *Runner) error {
 		if s.Applied {
 			mark = "applied " + s.AppliedAt.Format("2006-01-02 15:04:05")
 		}
-		fmt.Fprintf(r.m.output(), "%-12s %-20s %s\n", s.Revision, s.Name, mark)
+		fmt.Fprintf(r.m.output(), "%-12s %-20s %s\n", s.Revision, s.Name, mark) //nolint:errcheck // best-effort write to command output
 	}
 	return nil
 }
@@ -225,7 +225,7 @@ func (c *pendingCmd) Run(r *Runner) error {
 		return err
 	}
 	for _, mig := range pending {
-		fmt.Fprintf(r.m.output(), "%-12s %s\n", mig.Revision, mig.Name)
+		fmt.Fprintf(r.m.output(), "%-12s %s\n", mig.Revision, mig.Name) //nolint:errcheck // best-effort write to command output
 	}
 	return nil
 }
@@ -238,7 +238,7 @@ func (c *currentCmd) Run(r *Runner) error {
 		return err
 	}
 	for _, rev := range cur {
-		fmt.Fprintln(r.m.output(), rev)
+		fmt.Fprintln(r.m.output(), rev) //nolint:errcheck // best-effort write to command output
 	}
 	return nil
 }
@@ -247,7 +247,7 @@ type headsCmd struct{}
 
 func (c *headsCmd) Run(r *Runner) error {
 	for _, h := range r.m.Heads() {
-		fmt.Fprintln(r.m.output(), h)
+		fmt.Fprintln(r.m.output(), h) //nolint:errcheck // best-effort write to command output
 	}
 	return r.m.planErr
 }
@@ -260,7 +260,7 @@ func (c *historyCmd) Run(r *Runner) error {
 		return err
 	}
 	for _, e := range events {
-		fmt.Fprintf(r.m.output(), "%-4s %-12s %-20s %s\n",
+		fmt.Fprintf(r.m.output(), "%-4s %-12s %-20s %s\n", //nolint:errcheck // best-effort write to command output
 			e.Direction, e.Revision, e.Name, e.AppliedAt.Format("2006-01-02 15:04:05"))
 	}
 	return nil
@@ -288,7 +288,7 @@ func (c *sqlCmd) Run(r *Runner) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(r.m.output(), script)
+	fmt.Fprintln(r.m.output(), script) //nolint:errcheck // best-effort write to command output
 	return nil
 }
 
@@ -312,7 +312,7 @@ func (c *newCmd) Run(r *Runner) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(r.m.output(), "created %s (revision %s)\n", path, revision)
+	fmt.Fprintf(r.m.output(), "created %s (revision %s)\n", path, revision) //nolint:errcheck // best-effort write to command output
 	return nil
 }
 

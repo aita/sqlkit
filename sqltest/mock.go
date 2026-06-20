@@ -145,7 +145,7 @@ func NewDB(t testing.TB, opts ...Option) (*sql.DB, *Mock) {
 	db := sql.OpenDB(qtdriver.WrapConnector(&mockConnector{mock: m}, c.cfg))
 	t.Cleanup(func() {
 		m.Verify(t)
-		db.Close()
+		db.Close() //nolint:errcheck // best-effort close
 	})
 	return db, m
 }

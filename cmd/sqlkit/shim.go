@@ -113,7 +113,7 @@ func runShimInDir(moduleDir string, src []byte, desc string, out io.Writer) erro
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(shimDir)
+	defer os.RemoveAll(shimDir) //nolint:errcheck // best-effort temp cleanup
 
 	if err := os.WriteFile(filepath.Join(shimDir, "main.go"), src, 0o644); err != nil {
 		return err

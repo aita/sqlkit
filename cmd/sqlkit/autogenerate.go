@@ -96,7 +96,7 @@ func (c *autogenerateCmd) Run() error {
 		return err
 	}
 	if result.Empty() {
-		fmt.Fprintln(os.Stdout, "no schema changes: the source already matches the catalog")
+		fmt.Fprintln(os.Stdout, "no schema changes: the source already matches the catalog") //nolint:errcheck // best-effort write to stdout
 		return nil
 	}
 
@@ -135,7 +135,7 @@ func (c *autogenerateCmd) Run() error {
 	if err := os.WriteFile(path, file.content, 0o644); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stdout, "created %s\nReview it before applying; auto-generated migrations can need adjustment.\n", path)
+	fmt.Fprintf(os.Stdout, "created %s\nReview it before applying; auto-generated migrations can need adjustment.\n", path) //nolint:errcheck // best-effort write to stdout
 	return nil
 }
 
@@ -164,7 +164,7 @@ func (c *autogenerateCmd) sourceMetadata(ctx context.Context, importPath, dialec
 		if err != nil {
 			return meta.Metadata{}, err
 		}
-		defer db.Close()
+		defer db.Close() //nolint:errcheck // best-effort close
 		return introspect.Schema(ctx, db, dialect, c.Schema)
 	}
 
@@ -185,11 +185,11 @@ func (c *autogenerateCmd) gitSnapshot(importPath, ref, dialect string) (autogen.
 	if err != nil {
 		return autogen.Snapshot{}, err
 	}
-	defer os.RemoveAll(worktree)
+	defer os.RemoveAll(worktree) //nolint:errcheck // best-effort temp cleanup
 	if out, err := exec.Command("git", "worktree", "add", "--detach", worktree, ref).CombinedOutput(); err != nil {
 		return autogen.Snapshot{}, fmt.Errorf("git worktree add %s: %v: %s", ref, err, strings.TrimSpace(string(out)))
 	}
-	defer func() { _ = exec.Command("git", "worktree", "remove", "--force", worktree).Run() }()
+	defer exec.Command("git", "worktree", "remove", "--force", worktree).Run() //nolint:errcheck // best-effort cleanup
 
 	src, err := renderTemplate(snapshotShimTmpl, snapshotData{ImportPath: importPath, Var: c.Var, Dialect: dialect})
 	if err != nil {

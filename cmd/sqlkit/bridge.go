@@ -73,7 +73,7 @@ func (f *bridgeFlags) run(args ...string) error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(tmpDir)
+	defer os.RemoveAll(tmpDir) //nolint:errcheck // best-effort temp cleanup
 	if err := os.WriteFile(filepath.Join(tmpDir, "main.go"), src, 0o644); err != nil {
 		return err
 	}
@@ -110,7 +110,7 @@ func (f *bridgeFlags) run(args ...string) error {
 	if errors.As(err, &exitErr) {
 		// The compiled program already reported the real error on stderr; mirror
 		// its exit code rather than wrapping it in a second "exit status" line.
-		os.RemoveAll(tmpDir) // os.Exit skips the deferred cleanup
+		os.RemoveAll(tmpDir) //nolint:errcheck // os.Exit skips the deferred cleanup; best-effort
 		os.Exit(exitErr.ExitCode())
 	}
 	return err

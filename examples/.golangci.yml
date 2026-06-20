@@ -10,3 +10,9 @@ version: "2"
 linters:
   # errcheck, govet, ineffassign, staticcheck, unused.
   default: standard
+
+issues:
+  # Report every finding rather than truncating repeated ones (see the root
+  # config for the rationale).
+  max-same-issues: 0
+  max-issues-per-linter: 0

@@ -37,7 +37,7 @@ func (c *inspectCmd) Run() error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer db.Close() //nolint:errcheck // best-effort close
 
 	inspected, err := introspect.Schema(ctx, db, dialect, c.Schema)
 	if err != nil {

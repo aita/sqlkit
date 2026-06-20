@@ -16,19 +16,23 @@ linters:
 
   settings:
     errcheck:
-      # Don't flag the well-known fire-and-forget calls. These either write to
-      # an in-memory/stdout writer or release a resource on a deferred cleanup
-      # path where there is nothing useful to do with the error. Calls whose
-      # error genuinely matters (exec.Cmd.Run, conn.ExecContext, ...) are left
-      # checked and handled in code instead.
+      # The exclusion list is kept to the two cases that are fire-and-forget by
+      # construction, everywhere they appear:
+      #   - io.WriteString: every call site writes to a hash.Hash, whose Write is
+      #     documented to never return an error — there is provably nothing to check.
+      #   - (*database/sql.Rows).Close: a deferred Close on a read cursor that has
+      #     already been drained; iteration errors are surfaced via rows.Err(), and
+      #     the Close error afterwards is not actionable.
+      # Every other fire-and-forget call (Session/DB/Stmt/Conn Close, Fprintf to an
+      # output writer, RemoveAll cleanup, ...) is suppressed individually at the
+      # call site with a //nolint:errcheck directive, keeping this list honest.
       exclude-functions:
-        - fmt.Fprint
-        - fmt.Fprintf
-        - fmt.Fprintln
         - io.WriteString
-        - os.RemoveAll
         - (*database/sql.Rows).Close
-        - (*database/sql.DB).Close
-        - (*database/sql.Stmt).Close
-        - (*database/sql.Conn).Close
-        - (*github.com/aita/sqlkit.Session).Close
+
+issues:
+  # Report every finding. The defaults (max-same-issues: 3,
+  # max-issues-per-linter: 50) silently truncate repeated findings, which would
+  # let a newly-introduced unhandled error hide behind already-known ones.
+  max-same-issues: 0
+  max-issues-per-linter: 0

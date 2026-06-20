@@ -412,7 +412,7 @@ func TestSavepointControlWithoutTransactionErrors(t *testing.T) {
 	rec := &recordingExecutor{db: fake.DB()} // implements only Executor, not TxExecutor
 	db := sqlkit.WrapExecutor(rec)
 	session := db.NewSession()
-	defer session.Close()
+	defer session.Close() //nolint:errcheck // best-effort close
 	ctx := context.Background()
 
 	if err := session.RollbackTo(ctx, "sp_1"); err == nil {
@@ -451,7 +451,7 @@ func TestSessionDialect(t *testing.T) {
 	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithDialect(sqlkit.MySQLDialect{}))
 	session := db.NewSession()
-	defer session.Close()
+	defer session.Close() //nolint:errcheck // best-effort close
 	if session.Dialect().Name() != "mysql" {
 		t.Fatalf("Session.Dialect() = %q, want mysql", session.Dialect().Name())
 	}

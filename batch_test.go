@@ -230,7 +230,7 @@ func TestWithSessionAutoChunkDisablesPerSession(t *testing.T) {
 	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true)) // database: auto-chunk on
 	s := db.NewSession(sqlkit.WithSessionAutoChunk(false))
-	defer s.Close()
+	defer s.Close() //nolint:errcheck // best-effort close
 
 	rows := []User{{Email: "a"}, {Email: "b"}, {Email: "c"}, {Email: "d"}, {Email: "e"}}
 	if _, err := s.Insert(Users).Values(rows).Exec(context.Background()); err != nil {
@@ -251,7 +251,7 @@ func TestWithSessionAutoChunkEnablesOverDisabledDatabase(t *testing.T) {
 	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(false))
 	s := db.NewSession(sqlkit.WithSessionAutoChunk(true))
-	defer s.Close()
+	defer s.Close() //nolint:errcheck // best-effort close
 
 	rows := []User{{Email: "a"}, {Email: "b"}, {Email: "c"}, {Email: "d"}, {Email: "e"}}
 	if _, err := s.Insert(Users).Values(rows).AutoChunk(sqlkit.ChunkSize(2)).Exec(context.Background()); err != nil {
