@@ -173,7 +173,7 @@ func (s Schema) DropStatement() sql.DropSchemaStmt {
 
 // SQLTable returns the sql-package table reference for the table.
 func (t Table) SQLTable() sql.Table {
-	return sql.Table{Schema: t.Schema.Name, Name: t.Name}
+	return sql.Table{Schema: sql.NewIdent(t.Schema.Name), Name: sql.NewIdent(t.Name)}
 }
 
 // columnType adapts a portable meta.Type to an sql.ColumnType, resolving the
@@ -219,7 +219,7 @@ func (ct columnType) RenderAutoIncrement(d sql.Dialect) (string, bool) {
 // resolves when the statement is compiled for a dialect.
 func (c Column) ColumnDef() sql.ColumnDef {
 	return sql.ColumnDef{
-		Name:          c.Name,
+		Name:          sql.NewIdent(c.Name),
 		Type:          columnType{name: c.Name, typ: c.Type},
 		NotNull:       !c.Nullable,
 		Default:       c.DefaultExpr,
@@ -311,11 +311,11 @@ func (ix Index) DropSQL(table Table, d sql.Dialect) string {
 // foreign key to its table.
 func (fk ForeignKey) AddStatement(table Table) sql.AlterTableStmt {
 	return sql.AlterTable(table.SQLTable()).AddForeignKey(sql.ForeignKeyConstraint{
-		Name:       fk.Name,
-		Columns:    fk.Columns,
-		RefSchema:  fk.RefSchema.Name,
-		RefTable:   fk.RefTable,
-		RefColumns: fk.RefColumns,
+		Name:       sql.NewIdent(fk.Name),
+		Columns:    sql.Idents(fk.Columns...),
+		RefSchema:  sql.NewIdent(fk.RefSchema.Name),
+		RefTable:   sql.NewIdent(fk.RefTable),
+		RefColumns: sql.Idents(fk.RefColumns...),
 		OnDelete:   string(fk.OnDelete),
 		OnUpdate:   string(fk.OnUpdate),
 	}).Stmt()

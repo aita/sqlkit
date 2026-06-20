@@ -6,26 +6,26 @@ import (
 )
 
 func TestOuterAndCrossJoins(t *testing.T) {
-	base := Select(Col("u.id")).From(SourceAlias(Table{Name: "users"}, "u"))
+	base := Select(Col("u.id")).From(SourceAlias(Table{Name: NewIdent("users")}, "u"))
 
-	assertSQL(t, base.RightJoin(SourceAlias(Table{Name: "orgs"}, "o"), Eq(Col("u.org_id"), Col("o.id"))),
+	assertSQL(t, base.RightJoin(SourceAlias(Table{Name: NewIdent("orgs")}, "o"), Eq(Col("u.org_id"), Col("o.id"))),
 		`SELECT "u"."id" FROM "users" AS "u" RIGHT JOIN "orgs" AS "o" ON ("u"."org_id" = "o"."id")`, nil)
 
-	assertSQL(t, base.FullJoin(SourceAlias(Table{Name: "orgs"}, "o"), Eq(Col("u.org_id"), Col("o.id"))),
+	assertSQL(t, base.FullJoin(SourceAlias(Table{Name: NewIdent("orgs")}, "o"), Eq(Col("u.org_id"), Col("o.id"))),
 		`SELECT "u"."id" FROM "users" AS "u" FULL JOIN "orgs" AS "o" ON ("u"."org_id" = "o"."id")`, nil)
 
-	assertSQL(t, base.CrossJoin(SourceAlias(Table{Name: "orgs"}, "o")),
+	assertSQL(t, base.CrossJoin(SourceAlias(Table{Name: NewIdent("orgs")}, "o")),
 		`SELECT "u"."id" FROM "users" AS "u" CROSS JOIN "orgs" AS "o"`, nil)
 }
 
 func TestSelectDistinct(t *testing.T) {
-	query := Select(Col("email")).Distinct().From(Table{Name: "users"})
+	query := Select(Col("email")).Distinct().From(Table{Name: NewIdent("users")})
 
 	assertSQL(t, query, `SELECT DISTINCT "email" FROM "users"`, nil)
 }
 
 func TestForUpdateAndShare(t *testing.T) {
-	base := Select(Col("id")).From(Table{Name: "jobs"})
+	base := Select(Col("id")).From(Table{Name: NewIdent("jobs")})
 
 	assertSQL(t, base.ForUpdate(), `SELECT "id" FROM "jobs" FOR UPDATE`, nil)
 	assertSQL(t, base.ForShare(), `SELECT "id" FROM "jobs" FOR SHARE`, nil)
@@ -34,7 +34,7 @@ func TestForUpdateAndShare(t *testing.T) {
 }
 
 func TestLockWaitModifiers(t *testing.T) {
-	base := Select(Col("id")).From(Table{Name: "jobs"})
+	base := Select(Col("id")).From(Table{Name: NewIdent("jobs")})
 
 	assertSQL(t, base.ForUpdate(SkipLocked()),
 		`SELECT "id" FROM "jobs" FOR UPDATE SKIP LOCKED`, nil)
@@ -43,8 +43,8 @@ func TestLockWaitModifiers(t *testing.T) {
 }
 
 func TestLockOf(t *testing.T) {
-	q := Select(Col("jobs.id")).From(Table{Name: "jobs"}).
-		Join(Table{Name: "queues"}, Eq(Col("jobs.queue_id"), Col("queues.id"))).
+	q := Select(Col("jobs.id")).From(Table{Name: NewIdent("jobs")}).
+		Join(Table{Name: NewIdent("queues")}, Eq(Col("jobs.queue_id"), Col("queues.id"))).
 		ForUpdate(LockOf("jobs"), SkipLocked())
 	assertSQL(t, q,
 		`SELECT "jobs"."id" FROM "jobs" JOIN "queues" ON ("jobs"."queue_id" = "queues"."id") FOR UPDATE OF "jobs" SKIP LOCKED`,
@@ -52,27 +52,27 @@ func TestLockOf(t *testing.T) {
 }
 
 func TestLockComesAfterLimitOffset(t *testing.T) {
-	q := Select(Col("id")).From(Table{Name: "jobs"}).
+	q := Select(Col("id")).From(Table{Name: NewIdent("jobs")}).
 		OrderBy(Asc(Col("id"))).Limit(10).Offset(5).ForUpdate(SkipLocked())
 	assertSQL(t, q,
 		`SELECT "id" FROM "jobs" ORDER BY "id" LIMIT 10 OFFSET 5 FOR UPDATE SKIP LOCKED`, nil)
 }
 
 func TestLockMySQL(t *testing.T) {
-	assertMySQL(t, Select(Col("id")).From(Table{Name: "jobs"}).ForUpdate(SkipLocked()),
+	assertMySQL(t, Select(Col("id")).From(Table{Name: NewIdent("jobs")}).ForUpdate(SkipLocked()),
 		"SELECT `id` FROM `jobs` FOR UPDATE SKIP LOCKED", nil)
-	assertMySQL(t, Select(Col("id")).From(Table{Name: "jobs"}).ForShare(),
+	assertMySQL(t, Select(Col("id")).From(Table{Name: NewIdent("jobs")}).ForShare(),
 		"SELECT `id` FROM `jobs` FOR SHARE", nil)
 
 	// MySQL has no NO KEY UPDATE / KEY SHARE.
-	if _, _, err := Select(Col("id")).From(Table{Name: "jobs"}).ForKeyShare().ToSQL(MySQLDialect{}); err == nil ||
+	if _, _, err := Select(Col("id")).From(Table{Name: NewIdent("jobs")}).ForKeyShare().ToSQL(MySQLDialect{}); err == nil ||
 		!strings.Contains(err.Error(), "FOR UPDATE and FOR SHARE") {
 		t.Fatalf("ToSQL(mysql) error = %v, want strength rejection", err)
 	}
 }
 
 func TestLockRejectedOnStandard(t *testing.T) {
-	q := Select(Col("id")).From(Table{Name: "jobs"}).ForUpdate()
+	q := Select(Col("id")).From(Table{Name: NewIdent("jobs")}).ForUpdate()
 	d := StandardSQLDialect{}
 	if _, _, err := q.ToSQL(d); err == nil || !strings.Contains(err.Error(), "row-locking") {
 		t.Fatalf("ToSQL(%s) error = %v, want row-locking rejection", d.Name(), err)
@@ -96,7 +96,7 @@ func TestSelectQueryAcceptsAggregateSelection(t *testing.T) {
 
 func TestSelectQueryAcceptsJoin(t *testing.T) {
 	query := Select(Col("users.email"), Col("orgs.name")).
-		From(Table{Name: "users"}).
+		From(Table{Name: NewIdent("users")}).
 		Join(orgs, Eq(Col("users.org_id"), Col("orgs.id")))
 
 	assertSQL(t, query,
@@ -112,7 +112,7 @@ func TestNameSourceHelper(t *testing.T) {
 }
 
 func TestSelectQueryAcceptsSubqueryFrom(t *testing.T) {
-	subquery := Select(Col("users.id")).From(Table{Name: "users"}).Where(Eq(Col("users.id"), Int(7)))
+	subquery := Select(Col("users.id")).From(Table{Name: NewIdent("users")}).Where(Eq(Col("users.id"), Int(7)))
 	query := Select(Col("active_users.id")).From(Alias(subquery, "active_users"))
 
 	assertSQL(t, query,
@@ -121,14 +121,14 @@ func TestSelectQueryAcceptsSubqueryFrom(t *testing.T) {
 }
 
 func TestSelectQueryAcceptsSubqueryDirectly(t *testing.T) {
-	subquery := Select(Col("users.id")).From(Table{Name: "users"})
+	subquery := Select(Col("users.id")).From(Table{Name: NewIdent("users")})
 	query := Select(CountAll()).From(subquery)
 
 	assertSQL(t, query, `SELECT COUNT(*) FROM (SELECT "users"."id" FROM "users")`, nil)
 }
 
 func TestSubqueryPlaceholdersShareNumbering(t *testing.T) {
-	subquery := Select(Col("users.id")).From(Table{Name: "users"}).Where(Eq(Col("users.org_id"), Int(7)))
+	subquery := Select(Col("users.id")).From(Table{Name: NewIdent("users")}).Where(Eq(Col("users.org_id"), Int(7)))
 	query := Select(CountAll()).
 		From(Alias(subquery, "u")).
 		Where(Eq(Col("u.id"), Int(42)))
@@ -140,7 +140,7 @@ func TestSubqueryPlaceholdersShareNumbering(t *testing.T) {
 
 func TestSelectQueryClauses(t *testing.T) {
 	query := Select(Col("users.org_id")).
-		From(Table{Name: "users"}).
+		From(Table{Name: NewIdent("users")}).
 		Where(IsNotNull(Col("users.email"))).
 		GroupBy(Col("users.org_id")).
 		Having(Gt(Raw("COUNT(*)"), Int(10))).
@@ -155,7 +155,7 @@ func TestSelectQueryClauses(t *testing.T) {
 
 func TestLogicalOperators(t *testing.T) {
 	query := Select(Col("id")).
-		From(Table{Name: "users"}).
+		From(Table{Name: NewIdent("users")}).
 		Where(And(
 			Or(Eq(Col("a"), Int(1)), Eq(Col("b"), Int(2))),
 			Not(In(Col("c"), Int(3), Int(4))),
@@ -169,7 +169,7 @@ func TestLogicalOperators(t *testing.T) {
 
 func TestRepeatedWhereCombinesWithAnd(t *testing.T) {
 	query := Select(Col("id")).
-		From(Table{Name: "users"}).
+		From(Table{Name: NewIdent("users")}).
 		Where(Eq(Col("a"), Int(1))).
 		Where(Eq(Col("b"), Int(2)))
 
@@ -206,7 +206,7 @@ func TestSelectStarWithoutSourceFails(t *testing.T) {
 }
 
 func TestJoinWithoutSourceFails(t *testing.T) {
-	query := Select(Col("id")).Join(Table{Name: "users"}, Eq(Col("a"), Col("b")))
+	query := Select(Col("id")).Join(Table{Name: NewIdent("users")}, Eq(Col("a"), Col("b")))
 	if _, _, err := query.ToSQL(PostgreSQLDialect{}); err == nil {
 		t.Fatal("JOIN without FROM compiled, want error")
 	}
@@ -214,23 +214,23 @@ func TestJoinWithoutSourceFails(t *testing.T) {
 
 func TestJoinUsing(t *testing.T) {
 	assertSQL(t,
-		Select(Col("id")).From(Table{Name: "users"}).
-			JoinUsing(Table{Name: "accounts"}, "user_id", "tenant_id"),
+		Select(Col("id")).From(Table{Name: NewIdent("users")}).
+			JoinUsing(Table{Name: NewIdent("accounts")}, "user_id", "tenant_id"),
 		`SELECT "id" FROM "users" JOIN "accounts" USING ("user_id", "tenant_id")`, nil)
 
 	assertSQL(t,
-		Select(Col("id")).From(Table{Name: "users"}).
-			LeftJoinUsing(Table{Name: "accounts"}, "user_id"),
+		Select(Col("id")).From(Table{Name: NewIdent("users")}).
+			LeftJoinUsing(Table{Name: NewIdent("accounts")}, "user_id"),
 		`SELECT "id" FROM "users" LEFT JOIN "accounts" USING ("user_id")`, nil)
 }
 
 func TestNaturalJoin(t *testing.T) {
 	assertSQL(t,
-		Select(Col("id")).From(Table{Name: "users"}).NaturalJoin(Table{Name: "accounts"}),
+		Select(Col("id")).From(Table{Name: NewIdent("users")}).NaturalJoin(Table{Name: NewIdent("accounts")}),
 		`SELECT "id" FROM "users" NATURAL JOIN "accounts"`, nil)
 
 	assertSQL(t,
-		Select(Col("id")).From(Table{Name: "users"}).NaturalLeftJoin(Table{Name: "accounts"}),
+		Select(Col("id")).From(Table{Name: NewIdent("users")}).NaturalLeftJoin(Table{Name: NewIdent("accounts")}),
 		`SELECT "id" FROM "users" NATURAL LEFT JOIN "accounts"`, nil)
 }
 
@@ -238,13 +238,13 @@ func TestJoinRejectsConflictingConditions(t *testing.T) {
 	c := NewCompiler(PostgreSQLDialect{})
 
 	// A NATURAL join carrying USING is contradictory.
-	natural := JoinClause{Kind: "JOIN", Source: Table{Name: "b"}, Natural: true, Using: []string{"id"}}
+	natural := JoinClause{Kind: "JOIN", Source: Table{Name: NewIdent("b")}, Natural: true, Using: Idents("id")}
 	if _, _, err := c.CompileJoin(natural); err == nil || !strings.Contains(err.Error(), "NATURAL") {
 		t.Fatalf("CompileJoin(NATURAL+USING) error = %v, want NATURAL rejection", err)
 	}
 
 	// ON and USING are mutually exclusive.
-	both := JoinClause{Kind: "JOIN", Source: Table{Name: "b"}, On: Eq(Col("a.id"), Col("b.id")), Using: []string{"id"}}
+	both := JoinClause{Kind: "JOIN", Source: Table{Name: NewIdent("b")}, On: Eq(Col("a.id"), Col("b.id")), Using: Idents("id")}
 	if _, _, err := c.CompileJoin(both); err == nil || !strings.Contains(err.Error(), "ON and USING") {
 		t.Fatalf("CompileJoin(ON+USING) error = %v, want ON/USING rejection", err)
 	}
@@ -252,7 +252,7 @@ func TestJoinRejectsConflictingConditions(t *testing.T) {
 
 func TestDistinctOn(t *testing.T) {
 	assertSQL(t,
-		Select(Col("user_id"), Col("amount")).From(Table{Name: "orders"}).
+		Select(Col("user_id"), Col("amount")).From(Table{Name: NewIdent("orders")}).
 			DistinctOn(Col("user_id")).
 			OrderBy(Asc(Col("user_id")), Desc(Col("created_at"))),
 		`SELECT DISTINCT ON ("user_id") "user_id", "amount" FROM "orders" ORDER BY "user_id", "created_at" DESC`,
@@ -260,15 +260,15 @@ func TestDistinctOn(t *testing.T) {
 }
 
 func TestDistinctOnRejectedOnMySQL(t *testing.T) {
-	q := Select(Col("user_id")).From(Table{Name: "orders"}).DistinctOn(Col("user_id"))
+	q := Select(Col("user_id")).From(Table{Name: NewIdent("orders")}).DistinctOn(Col("user_id"))
 	if _, _, err := q.ToSQL(MySQLDialect{}); err == nil || !strings.Contains(err.Error(), "DISTINCT ON") {
 		t.Fatalf("ToSQL(mysql) error = %v, want DISTINCT ON rejection", err)
 	}
 }
 
 func TestSelectStmtFields(t *testing.T) {
-	users := Table{Name: "users"}
-	orders := Table{Name: "orders"}
+	users := Table{Name: NewIdent("users")}
+	orders := Table{Name: NewIdent("orders")}
 
 	// Build with the fluent builder, then read the pure AST directly — the
 	// statement's exported fields are the public, zero-copy introspection seam.
@@ -279,7 +279,7 @@ func TestSelectStmtFields(t *testing.T) {
 		Limit(10).
 		Stmt()
 
-	if c.From == nil || c.From.SQLSource().Name != "users" {
+	if c.From == nil || c.From.SQLSource().Name.String() != "users" {
 		t.Errorf("From = %v, want users", c.From)
 	}
 	if len(c.Joins) != 1 {

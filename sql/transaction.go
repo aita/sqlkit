@@ -7,8 +7,9 @@ import "fmt"
 // It binds no values and compiles the same on every dialect. Build one with
 // Begin, Commit, Rollback, Savepoint, ReleaseSavepoint, or RollbackTo.
 type TransactionStmt struct {
+	posField
 	Kind      string
-	Savepoint string
+	Savepoint Ident
 }
 
 // Begin starts a transaction (BEGIN).
@@ -22,17 +23,17 @@ func Rollback() TransactionStmt { return TransactionStmt{Kind: "ROLLBACK"} }
 
 // Savepoint establishes a named savepoint (SAVEPOINT name).
 func Savepoint(name string) TransactionStmt {
-	return TransactionStmt{Kind: "SAVEPOINT", Savepoint: name}
+	return TransactionStmt{Kind: "SAVEPOINT", Savepoint: NewIdent(name)}
 }
 
 // ReleaseSavepoint destroys a named savepoint (RELEASE SAVEPOINT name).
 func ReleaseSavepoint(name string) TransactionStmt {
-	return TransactionStmt{Kind: "RELEASE SAVEPOINT", Savepoint: name}
+	return TransactionStmt{Kind: "RELEASE SAVEPOINT", Savepoint: NewIdent(name)}
 }
 
 // RollbackTo rolls back to a named savepoint (ROLLBACK TO SAVEPOINT name).
 func RollbackTo(name string) TransactionStmt {
-	return TransactionStmt{Kind: "ROLLBACK TO SAVEPOINT", Savepoint: name}
+	return TransactionStmt{Kind: "ROLLBACK TO SAVEPOINT", Savepoint: NewIdent(name)}
 }
 
 // ToSQL compiles the transaction-control statement.
@@ -45,10 +46,10 @@ func (s TransactionStmt) compile(c *Compiler) (string, []any, error) {
 	case "BEGIN", "COMMIT", "ROLLBACK":
 		return s.Kind + ";", nil, nil
 	case "SAVEPOINT", "RELEASE SAVEPOINT", "ROLLBACK TO SAVEPOINT":
-		if s.Savepoint == "" {
+		if s.Savepoint.IsZero() {
 			return "", nil, fmt.Errorf("sqlkit/sql: %s requires a savepoint name", s.Kind)
 		}
-		return s.Kind + " " + c.Dialect.QuoteName(s.Savepoint) + ";", nil, nil
+		return s.Kind + " " + c.Dialect.QuoteName(s.Savepoint.String()) + ";", nil, nil
 	default:
 		return "", nil, fmt.Errorf("sqlkit/sql: unknown transaction statement %q", s.Kind)
 	}

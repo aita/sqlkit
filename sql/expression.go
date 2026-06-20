@@ -28,17 +28,17 @@ func Raw(fragment string) RawExpression { return RawExpression(fragment) }
 // ColumnExpression references a column name.
 type ColumnExpression struct {
 	posField
-	Name string
+	Name Ident
 }
 
 func (ColumnExpression) SQLExpression() {}
 func (ColumnExpression) SQLSelection()  {}
 
 // Reference returns the SQL column reference.
-func (e ColumnExpression) Reference() string { return e.Name }
+func (e ColumnExpression) Reference() string { return e.Name.String() }
 
 // Col creates a column reference expression.
-func Col(name string) ColumnExpression { return ColumnExpression{Name: name} }
+func Col(name string) ColumnExpression { return ColumnExpression{Name: NewIdent(name)} }
 
 // StarSelection is a "*" select-list item, optionally qualified by a table name
 // or alias to project every column of one source ("users.*"). Unlike a column
@@ -47,7 +47,7 @@ func Col(name string) ColumnExpression { return ColumnExpression{Name: name} }
 // alone in the select list and is not a value operand.
 type StarSelection struct {
 	posField
-	Qualifier string
+	Qualifier Ident
 }
 
 func (StarSelection) SQLSelection() {}
@@ -59,7 +59,7 @@ func Star() StarSelection { return StarSelection{} }
 // StarOf creates a qualified "qualifier.*" select-list item, projecting every
 // column of the table or alias named by qualifier — for selecting one source
 // whole alongside individual columns of others (SELECT users.*, profiles.bio).
-func StarOf(qualifier string) StarSelection { return StarSelection{Qualifier: qualifier} }
+func StarOf(qualifier string) StarSelection { return StarSelection{Qualifier: NewIdent(qualifier)} }
 
 // ValueExpression binds a value as a SQL argument.
 type ValueExpression struct {
@@ -534,14 +534,14 @@ func All(left any, operator string, query Query) QuantifiedExpression {
 // PostgreSQL's excluded.<col> and MySQL's VALUES(<col>).
 type ExcludedExpression struct {
 	posField
-	Column string
+	Column Ident
 }
 
 func (ExcludedExpression) SQLExpression() {}
 
 // Excluded references the proposed value for column in an OnConflict DoUpdate
 // assignment, e.g. Set("name", Excluded("name")) to overwrite with the new row.
-func Excluded(column string) ExcludedExpression { return ExcludedExpression{Column: column} }
+func Excluded(column string) ExcludedExpression { return ExcludedExpression{Column: NewIdent(column)} }
 
 // NullPredicate tests an expression for IS NULL / IS NOT NULL.
 type NullPredicate struct {
@@ -564,18 +564,19 @@ func IsNotNull(operand any) NullPredicate {
 type AliasedSelection struct {
 	posField
 	Selection Selection
-	Alias     string
+	Alias     Ident
 }
 
 func (AliasedSelection) SQLSelection() {}
 
 // As attaches an alias to a SELECT-list item.
 func As(selection Selection, alias string) AliasedSelection {
-	return AliasedSelection{Selection: selection, Alias: alias}
+	return AliasedSelection{Selection: selection, Alias: NewIdent(alias)}
 }
 
 // OrderTerm is one ORDER BY term.
 type OrderTerm struct {
+	posField
 	Expr  Expression
 	Desc  bool
 	Nulls string // "", "FIRST", or "LAST" (PostgreSQL NULLS ordering)
@@ -598,14 +599,15 @@ func (t OrderTerm) NullsLast() OrderTerm { t.Nulls = "LAST"; return t }
 // Target, when non-nil, is the assignment's left-hand side (e.g. a subscripted
 // column col[i]); otherwise Column names the assigned column.
 type Assignment struct {
-	Column string
+	posField
+	Column Ident
 	Target Expression
 	Value  Expression
 }
 
 // Set creates an assignment. A non-expression value becomes a bind value.
 func Set(column string, value any) Assignment {
-	return Assignment{Column: column, Value: Expr(value)}
+	return Assignment{Column: NewIdent(column), Value: Expr(value)}
 }
 
 // SetAt creates an assignment to a subscripted (or otherwise indirected) target,
@@ -625,6 +627,7 @@ func Expr(value any) Expression {
 
 // WhenClause is one WHEN ... THEN ... arm of a CASE expression.
 type WhenClause struct {
+	posField
 	Condition Expression
 	Result    Expression
 }
@@ -679,7 +682,7 @@ func If(condition, then, els any) CaseExpression {
 type WindowExpression struct {
 	posField
 	Fn           Expression
-	Name         string
+	Name         Ident
 	Partitions   []Expression
 	OrderByTerms []OrderTerm
 	FrameClause  string
@@ -695,7 +698,7 @@ func Over(fn Expression) WindowExpression { return WindowExpression{Fn: fn} }
 // Sum(Col("x")).Over().Named("w") for "SUM(x) OVER w". Adding PartitionBy /
 // OrderBy / Frame on top extends that base window (PostgreSQL "OVER (w ...)").
 func (e WindowExpression) Named(name string) WindowExpression {
-	e.Name = name
+	e.Name = NewIdent(name)
 	return e
 }
 
@@ -703,7 +706,8 @@ func (e WindowExpression) Named(name string) WindowExpression {
 // from an OVER clause by name (WindowExpression.Named). It renders as
 // "name AS (PARTITION BY ... ORDER BY ... frame)".
 type NamedWindow struct {
-	Name         string
+	posField
+	Name         Ident
 	Partitions   []Expression
 	OrderByTerms []OrderTerm
 	FrameClause  string
@@ -711,7 +715,7 @@ type NamedWindow struct {
 
 // WindowDef starts a named window definition for a SELECT's WINDOW clause; chain
 // PartitionBy / OrderBy / Frame to build it.
-func WindowDef(name string) NamedWindow { return NamedWindow{Name: name} }
+func WindowDef(name string) NamedWindow { return NamedWindow{Name: NewIdent(name)} }
 
 // PartitionBy adds PARTITION BY expressions to the window definition.
 func (w NamedWindow) PartitionBy(exprs ...Expression) NamedWindow {

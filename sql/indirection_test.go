@@ -3,7 +3,7 @@ package sql
 import "testing"
 
 func TestUpdateSubscriptAssignmentCompile(t *testing.T) {
-	q := Update(Table{Name: "t"}).Set(SetAt(Subscript(Col("tags"), 1), "x")).Where(Eq(Col("id"), 5))
+	q := Update(Table{Name: NewIdent("t")}).Set(SetAt(Subscript(Col("tags"), 1), "x")).Where(Eq(Col("id"), 5))
 	got, args, err := q.ToSQL(PostgreSQLDialect{})
 	if err != nil {
 		t.Fatalf("ToSQL() error = %v", err)

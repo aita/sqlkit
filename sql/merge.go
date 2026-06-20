@@ -35,7 +35,7 @@ type MergeWhen struct {
 	condition     Expression
 	action        mergeAction
 	sets          []Assignment
-	insertColumns []string
+	insertColumns []Ident
 	insertValues  []Expression
 	insertDefault bool
 }
@@ -84,7 +84,7 @@ func (w MergeWhen) ThenDoNothing() MergeWhen {
 // values; pass no columns and no values for INSERT DEFAULT VALUES.
 func (w MergeWhen) ThenInsert(columns []string, values ...any) MergeWhen {
 	w.action = mergeInsert
-	w.insertColumns = columns
+	w.insertColumns = idents(columns)
 	w.insertValues = make([]Expression, len(values))
 	for i, value := range values {
 		w.insertValues[i] = Expr(value)
@@ -101,7 +101,7 @@ type MergeStmt struct {
 	posField
 	With        []CTE
 	Target      Table
-	TargetAlias string
+	TargetAlias Ident
 	Using       Source
 	On          Expression
 	When        []MergeWhenClause
@@ -130,7 +130,7 @@ func (b MergeBuilder) Stmt() MergeStmt { return b.s }
 
 // As sets an alias for the target table (MERGE INTO target AS alias).
 func (b MergeBuilder) As(alias string) MergeBuilder {
-	b.s.TargetAlias = alias
+	b.s.TargetAlias = NewIdent(alias)
 	return b
 }
 
@@ -182,7 +182,7 @@ func (c *Compiler) CompileMerge(q MergeStmt) (string, []any, error) {
 	if d, ok := c.Dialect.(MergeDialect); !ok || !d.SupportsMerge() {
 		return "", nil, fmt.Errorf("sqlkit/sql: dialect %s does not support MERGE", c.Dialect.Name())
 	}
-	if q.Target.Name == "" {
+	if q.Target.Name.IsZero() {
 		return "", nil, fmt.Errorf("sqlkit/sql: MERGE requires a target table")
 	}
 	if q.Using == nil {
@@ -206,9 +206,9 @@ func (c *Compiler) CompileMerge(q MergeStmt) (string, []any, error) {
 
 	sb.WriteString("MERGE INTO ")
 	sb.WriteString(c.Dialect.QuoteIdent(q.Target.QualifiedName()))
-	if q.TargetAlias != "" {
+	if !q.TargetAlias.IsZero() {
 		sb.WriteString(" AS ")
-		sb.WriteString(c.Dialect.QuoteIdent(q.TargetAlias))
+		sb.WriteString(c.Dialect.QuoteIdent(q.TargetAlias.String()))
 	}
 
 	usingSQL, usingArgs, err := c.CompileSource(q.Using)
@@ -323,7 +323,7 @@ func (c *Compiler) writeMergeInsert(sb *strings.Builder, args *[]any, w MergeWhe
 			if i > 0 {
 				sb.WriteString(", ")
 			}
-			sb.WriteString(c.Dialect.QuoteIdent(column))
+			sb.WriteString(c.Dialect.QuoteIdent(column.String()))
 		}
 		sb.WriteString(")")
 	}

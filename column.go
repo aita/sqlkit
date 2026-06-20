@@ -97,9 +97,9 @@ func (t TableInfo) refName() string {
 // when aliased.
 func (t TableInfo) SQLSource() SourceExpression {
 	if t.Alias != "" {
-		return SourceExpression{Name: t.QualifiedName(), Alias: t.Alias}
+		return SourceExpression{Name: sql.NewIdent(t.QualifiedName()), Alias: sql.NewIdent(t.Alias)}
 	}
-	return SourceExpression{Name: t.QualifiedName()}
+	return SourceExpression{Name: sql.NewIdent(t.QualifiedName())}
 }
 
 // WithAlias returns a copy of the table identity aliased as alias.
@@ -108,7 +108,9 @@ func (t TableInfo) WithAlias(alias string) TableInfo {
 	return t
 }
 
-func (t TableInfo) sqlTable() sql.Table { return sql.Table{Schema: t.Schema, Name: t.Name} }
+func (t TableInfo) sqlTable() sql.Table {
+	return sql.Table{Schema: sql.NewIdent(t.Schema), Name: sql.NewIdent(t.Name)}
+}
 
 // Column is a typed reference to a database column. T is the Go type rows
 // scan into, so predicates and assignments built from the column are

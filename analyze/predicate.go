@@ -36,7 +36,7 @@ func FilterColumns(q sql.Query) []string {
 	var names []string
 	WalkExpr(where, func(e sql.Expression) {
 		if c, ok := e.(sql.ColumnExpression); ok {
-			names = append(names, BareColumn(c.Name))
+			names = append(names, BareColumn(c.Name.String()))
 		}
 	})
 	return dedupe(names)
@@ -76,7 +76,7 @@ func WherePredicates(q sql.Query) (filterColumns []string, maxInList int) {
 	WalkExpr(where, func(e sql.Expression) {
 		switch x := e.(type) {
 		case sql.ColumnExpression:
-			names = append(names, BareColumn(x.Name))
+			names = append(names, BareColumn(x.Name.String()))
 		case sql.InExpression:
 			if x.Subquery == nil && len(x.Items) > maxInList {
 				maxInList = len(x.Items)

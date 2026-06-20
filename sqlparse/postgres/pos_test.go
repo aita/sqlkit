@@ -49,6 +49,53 @@ func TestParsePositions(t *testing.T) {
 	}
 }
 
+// TestParseTableIdentPosition checks the parser records a relation's byte offset
+// into the table Name identifier, so a caller can map the table name back to its
+// place in the source. Positions now live inside sql.Ident, not only on the
+// surrounding node.
+func TestParseTableIdentPosition(t *testing.T) {
+	src := "SELECT id FROM users WHERE name = 'taro'"
+	q, err := postgres.ParseOne(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := sql.Unwrap(q).(sql.SelectStmt)
+	if sel.From == nil {
+		t.Fatal("SELECT has no FROM source")
+	}
+	tbl, ok := sel.From.(sql.Table)
+	if !ok {
+		t.Fatalf("FROM source is not a Table: %T", sel.From)
+	}
+	if got, want := tbl.Name.Pos(), strings.Index(src, "users"); got != want {
+		t.Errorf("table name Ident offset = %d, want %d", got, want)
+	} else if !strings.HasPrefix(src[got:], "users") {
+		t.Errorf("table name offset %d does not point at \"users\"", got)
+	}
+}
+
+// TestParseQualifiedColumnIdentPosition checks a schema/table-qualified column
+// reference still records its position on the column Ident.
+func TestParseQualifiedColumnIdentPosition(t *testing.T) {
+	src := "SELECT u.id FROM users AS u WHERE u.name = 'taro'"
+	q, err := postgres.ParseOne(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel := sql.Unwrap(q).(sql.SelectStmt)
+	bin, ok := sel.Where.(sql.BinaryExpression)
+	if !ok {
+		t.Fatalf("WHERE is not a comparison: %T", sel.Where)
+	}
+	col, ok := bin.Left.(sql.ColumnExpression)
+	if !ok {
+		t.Fatalf("left operand is not a column: %T", bin.Left)
+	}
+	if got, want := col.Name.Pos(), strings.Index(src, "u.name"); got != want {
+		t.Errorf("qualified column Ident offset = %d, want %d", got, want)
+	}
+}
+
 // TestParseCompositePositions checks the parser records positions on composite
 // expression nodes too, not only the leaves: the WHERE's AND and each of its
 // operands (an IN list and a LIKE comparison) report a position.

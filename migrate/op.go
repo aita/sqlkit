@@ -58,7 +58,7 @@ func (o *Operator) emit(stmt sql.Statement) {
 
 // table returns the schema-qualified table reference.
 func (o *Operator) table(name string) sql.Table {
-	return sql.Table{Schema: o.schema, Name: name}
+	return sql.Table{Schema: sql.NewIdent(o.schema), Name: sql.NewIdent(name)}
 }
 
 // CreateTable creates a table declared with decl elements (Column, Index,
@@ -222,11 +222,11 @@ func (o *Operator) DropIndex(name, table string) {
 // referential actions.
 func (o *Operator) CreateForeignKey(name, table string, columns []string, refTable string, refColumns []string, opts ...ForeignKeyOption) {
 	fk := sql.ForeignKeyConstraint{
-		Name:       name,
-		Columns:    columns,
-		RefSchema:  o.schema,
-		RefTable:   refTable,
-		RefColumns: refColumns,
+		Name:       sql.NewIdent(name),
+		Columns:    sql.Idents(columns...),
+		RefSchema:  sql.NewIdent(o.schema),
+		RefTable:   sql.NewIdent(refTable),
+		RefColumns: sql.Idents(refColumns...),
 	}
 	for _, opt := range opts {
 		opt(&fk)

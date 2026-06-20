@@ -185,7 +185,7 @@ func (m *Masker) rewriteMerge(v sql.MergeStmt, scope []analyze.SourceRef) sql.Qu
 
 // rewriteInsertValues masks the values whose paired InsertColumns are sensitive
 // (the MERGE ... WHEN NOT MATCHED THEN INSERT form), recursing through the rest.
-func (m *Masker) rewriteInsertValues(columns []string, values []sql.Expression, scope []analyze.SourceRef) []sql.Expression {
+func (m *Masker) rewriteInsertValues(columns []sql.Ident, values []sql.Expression, scope []analyze.SourceRef) []sql.Expression {
 	if len(values) == 0 {
 		return values
 	}
@@ -210,7 +210,7 @@ func (m *Masker) rewriteAssignments(as []sql.Assignment, scope []analyze.SourceR
 	for i := range out {
 		out[i].Target = m.rewriteExpr(out[i].Target, scope)
 		out[i].Value = m.rewriteExpr(out[i].Value, scope)
-		if out[i].Column != "" && m.isSensitive(scope, analyze.NamedColumn(out[i].Column)) {
+		if !out[i].Column.IsZero() && m.isSensitive(scope, analyze.NamedColumn(out[i].Column)) {
 			out[i].Value = m.maskValue(out[i].Value)
 		}
 	}

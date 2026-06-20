@@ -10,10 +10,11 @@ import (
 // object type defaults to TABLE. It is a DDL Statement, so it compiles with no
 // bind values.
 type GrantStmt struct {
+	posField
 	Privileges      []string
 	ObjectType      string
-	Objects         []string
-	Grantees        []string
+	Objects         []Ident
+	Grantees        []Ident
 	WithGrantOption bool
 }
 
@@ -42,7 +43,7 @@ func (b GrantBuilder) Stmt() GrantStmt { return b.s }
 // On sets the objects the privileges apply to, with the default object type
 // TABLE (GRANT ... ON TABLE objects ...).
 func (b GrantBuilder) On(objects ...string) GrantBuilder {
-	b.s.Objects = objects
+	b.s.Objects = idents(objects)
 	return b
 }
 
@@ -50,13 +51,13 @@ func (b GrantBuilder) On(objects ...string) GrantBuilder {
 // and the objects the privileges apply to.
 func (b GrantBuilder) OnType(objectType string, objects ...string) GrantBuilder {
 	b.s.ObjectType = objectType
-	b.s.Objects = objects
+	b.s.Objects = idents(objects)
 	return b
 }
 
 // To sets the grantee roles. Use "PUBLIC" for the PUBLIC pseudo-role.
 func (b GrantBuilder) To(grantees ...string) GrantBuilder {
-	b.s.Grantees = grantees
+	b.s.Grantees = idents(grantees)
 	return b
 }
 
@@ -76,11 +77,12 @@ func (GrantBuilder) ddlStatement()                            {}
 // objects from roles. It mirrors GrantStmt and is likewise a DDL Statement.
 // Behavior is "", "CASCADE", or "RESTRICT".
 type RevokeStmt struct {
+	posField
 	GrantOptionFor bool
 	Privileges     []string
 	ObjectType     string
-	Objects        []string
-	Grantees       []string
+	Objects        []Ident
+	Grantees       []Ident
 	Behavior       string
 }
 
@@ -115,20 +117,20 @@ func (b RevokeBuilder) GrantOptionFor() RevokeBuilder {
 
 // On sets the objects to revoke from, with the default object type TABLE.
 func (b RevokeBuilder) On(objects ...string) RevokeBuilder {
-	b.s.Objects = objects
+	b.s.Objects = idents(objects)
 	return b
 }
 
 // OnType sets the object type keyword and the objects to revoke from.
 func (b RevokeBuilder) OnType(objectType string, objects ...string) RevokeBuilder {
 	b.s.ObjectType = objectType
-	b.s.Objects = objects
+	b.s.Objects = idents(objects)
 	return b
 }
 
 // From sets the roles to revoke from. Use "PUBLIC" for the PUBLIC pseudo-role.
 func (b RevokeBuilder) From(grantees ...string) RevokeBuilder {
-	b.s.Grantees = grantees
+	b.s.Grantees = idents(grantees)
 	return b
 }
 
@@ -188,7 +190,7 @@ func (c *Compiler) CompileRevoke(s RevokeStmt) (string, error) {
 
 // grantBody renders "<privileges> ON <type> <objects> TO <grantees>", shared by
 // GRANT and REVOKE (REVOKE rewrites TO to FROM).
-func (c *Compiler) grantBody(privileges []string, objectType string, objects, grantees []string) (string, error) {
+func (c *Compiler) grantBody(privileges []string, objectType string, objects, grantees []Ident) (string, error) {
 	if len(objects) == 0 {
 		return "", fmt.Errorf("sqlkit/sql: GRANT/REVOKE requires at least one object")
 	}
@@ -211,18 +213,18 @@ func (c *Compiler) grantBody(privileges []string, objectType string, objects, gr
 		if i > 0 {
 			sb.WriteString(", ")
 		}
-		sb.WriteString(c.Dialect.QuoteIdent(object))
+		sb.WriteString(c.Dialect.QuoteIdent(object.String()))
 	}
 	sb.WriteString(" TO ")
 	for i, grantee := range grantees {
 		if i > 0 {
 			sb.WriteString(", ")
 		}
-		if grantee == "PUBLIC" {
+		if grantee.String() == "PUBLIC" {
 			sb.WriteString("PUBLIC")
 			continue
 		}
-		sb.WriteString(c.Dialect.QuoteName(grantee))
+		sb.WriteString(c.Dialect.QuoteName(grantee.String()))
 	}
 	return sb.String(), nil
 }

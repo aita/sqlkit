@@ -126,7 +126,7 @@ func TestInsertFromSelectUnwrapsUnionQuery(t *testing.T) {
 }
 
 func TestInsertFromSelectAcceptsRawSQLQuery(t *testing.T) {
-	source := sql.Select(sql.Col("email")).From(sql.Table{Name: "old_users"})
+	source := sql.Select(sql.Col("email")).From(sql.Table{Name: sql.NewIdent("old_users")})
 
 	insert := sqlkit.Insert(Users).Columns(Users.Email).FromSelect(source)
 	assertToSQL(t, insert,

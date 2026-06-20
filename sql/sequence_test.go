@@ -3,7 +3,7 @@ package sql
 import "testing"
 
 func TestCreateSequenceStmt(t *testing.T) {
-	seq := CreateSequence(Table{Name: "s"}).Start(5).NoMaxValue().Cycle().Stmt()
+	seq := CreateSequence(Table{Name: NewIdent("s")}).Start(5).NoMaxValue().Cycle().Stmt()
 	if seq.Start == nil || *seq.Start != 5 {
 		t.Errorf("CreateSequenceStmt.Start = %v, want 5", seq.Start)
 	}
@@ -17,10 +17,10 @@ func TestSequenceCompile(t *testing.T) {
 		stmt Statement
 		want string
 	}{
-		{CreateSequence(Table{Name: "s"}), `CREATE SEQUENCE "s";`},
-		{CreateSequence(Table{Name: "s"}).IfNotExists().Start(5).Increment(2),
+		{CreateSequence(Table{Name: NewIdent("s")}), `CREATE SEQUENCE "s";`},
+		{CreateSequence(Table{Name: NewIdent("s")}).IfNotExists().Start(5).Increment(2),
 			`CREATE SEQUENCE IF NOT EXISTS "s" INCREMENT BY 2 START WITH 5;`},
-		{CreateSequence(Table{Name: "s"}).NoMinValue().NoCycle().OwnedBy("NONE"),
+		{CreateSequence(Table{Name: NewIdent("s")}).NoMinValue().NoCycle().OwnedBy("NONE"),
 			`CREATE SEQUENCE "s" NO MINVALUE NO CYCLE OWNED BY NONE;`},
 		{DropSequence("s").IfExists(), `DROP SEQUENCE IF EXISTS "s";`},
 	}

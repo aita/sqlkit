@@ -188,7 +188,7 @@ func (m *Masker) isSensitive(scope []analyze.SourceRef, col analyze.ColumnRef) b
 	// column sensitive. Under executable SQL an unqualified column belongs to a
 	// single in-scope table, so this masks the right one without over-masking.
 	for _, s := range scope {
-		if s.Table != "" && m.policy.IsSensitive(s.Schema.String(), s.Table.String(), col.Name.String()) {
+		if !s.Table.IsZero() && m.policy.IsSensitive(s.Schema.String(), s.Table.String(), col.Name.String()) {
 			return true
 		}
 	}

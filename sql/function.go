@@ -19,7 +19,8 @@ type FunctionArg struct {
 // types, return type, language, options, and body are rendered verbatim, so they
 // must already be valid for the target engine. It is a DDL Statement.
 type CreateFunctionStmt struct {
-	Name      string
+	posField
+	Name      Ident
 	OrReplace bool
 	Args      []FunctionArg
 	Returns   string
@@ -44,7 +45,7 @@ type CreateFunctionBuilder struct{ s CreateFunctionStmt }
 // CreateFunction starts a CREATE FUNCTION builder for a (optionally
 // schema-qualified) function name.
 func CreateFunction(name string) CreateFunctionBuilder {
-	return CreateFunctionBuilder{s: CreateFunctionStmt{Name: name}}
+	return CreateFunctionBuilder{s: CreateFunctionStmt{Name: NewIdent(name)}}
 }
 
 // Stmt returns the built CREATE FUNCTION statement.
@@ -101,7 +102,7 @@ func (CreateFunctionBuilder) ddlStatement()                            {}
 
 // CompileCreateFunction compiles a CREATE FUNCTION statement.
 func (c *Compiler) CompileCreateFunction(s CreateFunctionStmt) (string, error) {
-	if s.Name == "" {
+	if s.Name.IsZero() {
 		return "", fmt.Errorf("sqlkit/sql: CREATE FUNCTION requires a name")
 	}
 	if s.Language == "" {
@@ -116,7 +117,7 @@ func (c *Compiler) CompileCreateFunction(s CreateFunctionStmt) (string, error) {
 		sb.WriteString("OR REPLACE ")
 	}
 	sb.WriteString("FUNCTION ")
-	sb.WriteString(c.Dialect.QuoteIdent(s.Name))
+	sb.WriteString(c.Dialect.QuoteIdent(s.Name.String()))
 	sb.WriteString("(")
 	for i, arg := range s.Args {
 		if i > 0 {
@@ -162,7 +163,8 @@ func renderFunctionArg(arg FunctionArg) string {
 // reports whether an argument-type list was given (an empty list still renders
 // "()"). Behavior is "", "CASCADE", or "RESTRICT". It is a DDL Statement.
 type DropFunctionStmt struct {
-	Name     string
+	posField
+	Name     Ident
 	IfExists bool
 	ArgTypes []string
 	HasArgs  bool
@@ -184,7 +186,7 @@ type DropFunctionBuilder struct{ s DropFunctionStmt }
 
 // DropFunction starts a DROP FUNCTION builder for a function name.
 func DropFunction(name string) DropFunctionBuilder {
-	return DropFunctionBuilder{s: DropFunctionStmt{Name: name}}
+	return DropFunctionBuilder{s: DropFunctionStmt{Name: NewIdent(name)}}
 }
 
 // Stmt returns the built DROP FUNCTION statement.
@@ -223,7 +225,7 @@ func (DropFunctionBuilder) ddlStatement()                            {}
 
 // CompileDropFunction compiles a DROP FUNCTION statement.
 func (c *Compiler) CompileDropFunction(s DropFunctionStmt) (string, error) {
-	if s.Name == "" {
+	if s.Name.IsZero() {
 		return "", fmt.Errorf("sqlkit/sql: DROP FUNCTION requires a name")
 	}
 	var sb strings.Builder
@@ -231,7 +233,7 @@ func (c *Compiler) CompileDropFunction(s DropFunctionStmt) (string, error) {
 	if s.IfExists {
 		sb.WriteString("IF EXISTS ")
 	}
-	sb.WriteString(c.Dialect.QuoteIdent(s.Name))
+	sb.WriteString(c.Dialect.QuoteIdent(s.Name.String()))
 	if s.HasArgs {
 		sb.WriteString("(")
 		sb.WriteString(strings.Join(s.ArgTypes, ", "))

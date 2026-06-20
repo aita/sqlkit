@@ -133,7 +133,7 @@ func TestAnalyzeWiresAdvancedFacts(t *testing.T) {
 type analyzerTestParser struct{}
 
 func (analyzerTestParser) Parse(string) ([]sql.Query, error) {
-	q := sql.Select(sql.Star()).From(sql.Table{Name: "users"}).
+	q := sql.Select(sql.Star()).From(sql.Table{Name: sql.NewIdent("users")}).
 		Where(sql.In(sql.Col("tenant_id"), 1, 2, 3))
 	return []sql.Query{q}, nil
 }

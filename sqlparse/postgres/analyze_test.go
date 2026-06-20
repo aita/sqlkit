@@ -20,7 +20,7 @@ func TestColumnRefCarriesSourcePosition(t *testing.T) {
 
 	pos := -1
 	for _, u := range analyze.Columns(q) {
-		if u.Column.Name == "email" {
+		if u.Column.Name.String() == "email" {
 			pos = u.Column.SrcPos
 		}
 	}

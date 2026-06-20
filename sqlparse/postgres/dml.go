@@ -7,9 +7,15 @@ import (
 )
 
 // tableFromRangeVar builds a target Table (schema-qualified, ignoring any alias)
-// for a statement that writes to a single relation.
+// for a statement that writes to a single relation. The table and its name
+// identifier record the relation's source position; pg_query locates the
+// RangeVar but not its schema, so the schema identifier carries no position.
 func tableFromRangeVar(rv *pg.RangeVar) sql.Table {
-	return sql.Table{Schema: rv.GetSchemaname(), Name: rv.GetRelname()}
+	pos := offsetOf(rv.GetLocation())
+	t := sql.Table{Schema: sql.NewIdent(rv.GetSchemaname()), Name: sql.NewIdent(rv.GetRelname())}
+	t.NodePos = pos
+	t.Name.NodePos = pos
+	return t
 }
 
 func convertInsert(s *pg.InsertStmt) (sql.Query, error) {

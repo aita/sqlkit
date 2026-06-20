@@ -209,7 +209,7 @@ func (t *tableCollector) source(src sql.Source) {
 		return
 	}
 	e := src.SQLSource()
-	t.add(e.Name)
+	t.add(e.Name.String())
 	if e.Query != nil {
 		t.query(e.Query)
 	}

@@ -4,7 +4,7 @@ import "testing"
 
 func TestSubqueryAsFromSource(t *testing.T) {
 	sub := Select(Col("users.id")).
-		From(Table{Name: "users"}).
+		From(Table{Name: NewIdent("users")}).
 		Where(Gt(Col("users.id"), Int(10))).
 		As("sub")
 	query := Select(sub.Col("id")).From(sub)
@@ -15,9 +15,9 @@ func TestSubqueryAsFromSource(t *testing.T) {
 }
 
 func TestSubqueryAsJoinSource(t *testing.T) {
-	sub := Select(Col("posts.user_id")).From(Table{Name: "posts"}).As("p")
+	sub := Select(Col("posts.user_id")).From(Table{Name: NewIdent("posts")}).As("p")
 	query := Select(Col("users.id"), sub.Col("user_id")).
-		From(Table{Name: "users"}).
+		From(Table{Name: NewIdent("users")}).
 		Join(sub, Eq(Col("users.id"), sub.Col("user_id")))
 
 	assertSQL(t, query,
@@ -26,8 +26,8 @@ func TestSubqueryAsJoinSource(t *testing.T) {
 }
 
 func TestCompoundQueryAs(t *testing.T) {
-	sub := Select(Col("id")).From(Table{Name: "users"}).
-		UnionAll(Select(Col("id")).From(Table{Name: "admins"})).
+	sub := Select(Col("id")).From(Table{Name: NewIdent("users")}).
+		UnionAll(Select(Col("id")).From(Table{Name: NewIdent("admins")})).
 		As("ids")
 	query := Select(sub.Col("id")).From(sub)
 

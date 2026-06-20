@@ -11,7 +11,7 @@ import (
 
 func convertCreateTable(s *pg.CreateStmt) (sql.Query, error) {
 	rv := s.GetRelation()
-	ct := sql.CreateTable(sql.Table{Schema: rv.GetSchemaname(), Name: rv.GetRelname()})
+	ct := sql.CreateTable(sql.Table{Schema: sql.NewIdent(rv.GetSchemaname()), Name: sql.NewIdent(rv.GetRelname())})
 	if s.GetIfNotExists() {
 		ct = ct.IfNotExists()
 	}
@@ -26,7 +26,7 @@ func convertCreateTable(s *pg.CreateStmt) (sql.Query, error) {
 			}
 			ct = ct.Column(col)
 			if isPK {
-				primaryKey = append(primaryKey, col.Name)
+				primaryKey = append(primaryKey, col.Name.String())
 			}
 		case elt.GetConstraint() != nil:
 			con := elt.GetConstraint()
@@ -75,7 +75,7 @@ func convertColumnDef(cd *pg.ColumnDef) (sql.ColumnDef, bool, error) {
 	if err != nil {
 		return sql.ColumnDef{}, false, err
 	}
-	def := sql.ColumnDef{Name: cd.GetColname(), Type: sql.RawType(typeName)}
+	def := sql.ColumnDef{Name: sql.NewIdentAt(cd.GetColname(), int(cd.GetLocation())), Type: sql.RawType(typeName)}
 
 	var isPK bool
 	for _, c := range cd.GetConstraints() {
@@ -124,7 +124,7 @@ func constraintKeys(con *pg.Constraint) ([]string, error) {
 
 func convertAlterTable(s *pg.AlterTableStmt) (sql.Query, error) {
 	rv := s.GetRelation()
-	at := sql.AlterTable(sql.Table{Schema: rv.GetSchemaname(), Name: rv.GetRelname()})
+	at := sql.AlterTable(sql.Table{Schema: sql.NewIdent(rv.GetSchemaname()), Name: sql.NewIdent(rv.GetRelname())})
 
 	for _, cmdNode := range s.GetCmds() {
 		cmd := cmdNode.GetAlterTableCmd()
@@ -238,7 +238,7 @@ func convertDrop(s *pg.DropStmt) (sql.Query, error) {
 		if err != nil {
 			return nil, err
 		}
-		return sql.DropIndex(index.Name, sql.Table{Schema: index.Schema}), nil
+		return sql.DropIndex(index.Name.String(), sql.Table{Schema: index.Schema}), nil
 	case pg.ObjectType_OBJECT_TYPE:
 		names, err := dropObjectNames(s.GetObjects())
 		if err != nil {
@@ -314,7 +314,7 @@ func convertTruncate(s *pg.TruncateStmt) (sql.Query, error) {
 		if rv == nil {
 			return nil, sqlparse.Unsupportedf("TRUNCATE relation %T", rel.GetNode())
 		}
-		tables = append(tables, sql.Table{Schema: rv.GetSchemaname(), Name: rv.GetRelname()})
+		tables = append(tables, sql.Table{Schema: sql.NewIdent(rv.GetSchemaname()), Name: sql.NewIdent(rv.GetRelname())})
 	}
 	stmt := sql.Truncate(tables...)
 	if s.GetRestartSeqs() {
@@ -364,8 +364,8 @@ func convertColumnReference(con *pg.Constraint) (*sql.ColumnReference, error) {
 		return nil, sqlparse.Unsupported("foreign key without referenced table")
 	}
 	ref := &sql.ColumnReference{
-		Schema:   pk.GetSchemaname(),
-		Table:    pk.GetRelname(),
+		Schema:   sql.NewIdent(pk.GetSchemaname()),
+		Table:    sql.NewIdentAt(pk.GetRelname(), int(pk.GetLocation())),
 		OnDelete: fkAction(con.GetFkDelAction()),
 		OnUpdate: fkAction(con.GetFkUpdAction()),
 	}
@@ -374,7 +374,7 @@ func convertColumnReference(con *pg.Constraint) (*sql.ColumnReference, error) {
 		return nil, err
 	}
 	if len(cols) == 1 {
-		ref.Column = cols[0]
+		ref.Column = sql.NewIdent(cols[0])
 	} else if len(cols) > 1 {
 		return nil, sqlparse.Unsupported("multi-column column-level foreign key")
 	}
@@ -396,11 +396,11 @@ func convertForeignKey(con *pg.Constraint) (sql.ForeignKeyConstraint, error) {
 		return sql.ForeignKeyConstraint{}, err
 	}
 	return sql.ForeignKeyConstraint{
-		Name:       con.GetConname(),
-		Columns:    columns,
-		RefSchema:  pk.GetSchemaname(),
-		RefTable:   pk.GetRelname(),
-		RefColumns: refColumns,
+		Name:       sql.NewIdent(con.GetConname()),
+		Columns:    sql.Idents(columns...),
+		RefSchema:  sql.NewIdent(pk.GetSchemaname()),
+		RefTable:   sql.NewIdentAt(pk.GetRelname(), int(pk.GetLocation())),
+		RefColumns: sql.Idents(refColumns...),
 		OnDelete:   fkAction(con.GetFkDelAction()),
 		OnUpdate:   fkAction(con.GetFkUpdAction()),
 	}, nil
@@ -450,9 +450,9 @@ func tableFromNameList(node *pg.Node) (sql.Table, error) {
 	}
 	switch len(parts) {
 	case 1:
-		return sql.Table{Name: parts[0]}, nil
+		return sql.Table{Name: sql.NewIdent(parts[0])}, nil
 	case 2:
-		return sql.Table{Schema: parts[0], Name: parts[1]}, nil
+		return sql.Table{Schema: sql.NewIdent(parts[0]), Name: sql.NewIdent(parts[1])}, nil
 	default:
 		return sql.Table{}, sqlparse.Unsupportedf("qualified table name %q", strings.Join(parts, "."))
 	}

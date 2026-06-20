@@ -29,11 +29,11 @@ func (d DerivedTable) Alias() string { return d.alias }
 
 // Col references one of the derived table's output columns, qualified by its alias.
 func (d DerivedTable) Col(name string) ColumnExpression {
-	return ColumnExpression{Name: d.alias + "." + name}
+	return ColumnExpression{Name: NewIdent(d.alias + "." + name)}
 }
 
 // SQLSource lets a DerivedTable be used as a FROM/JOIN source, emitting the
 // parenthesized query followed by AS alias.
 func (d DerivedTable) SQLSource() SourceExpression {
-	return SourceExpression{Query: d.query, Alias: d.alias}
+	return SourceExpression{Query: d.query, Alias: NewIdent(d.alias)}
 }

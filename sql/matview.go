@@ -9,9 +9,10 @@ import (
 // (PostgreSQL). Like a view its body must compile to plain SQL with no bind
 // values; inline literals with Raw. It is a DDL Statement.
 type CreateMaterializedViewStmt struct {
+	posField
 	Table       Table
 	Query       Query
-	Columns     []string
+	Columns     []Ident
 	IfNotExists bool
 	WithNoData  bool
 }
@@ -72,7 +73,7 @@ func (b CreateMaterializedViewBuilder) IfNotExists() CreateMaterializedViewBuild
 
 // Columns sets explicit column names.
 func (b CreateMaterializedViewBuilder) Columns(columns ...string) CreateMaterializedViewBuilder {
-	b.s.Columns = columns
+	b.s.Columns = idents(columns)
 	return b
 }
 
@@ -91,6 +92,7 @@ func (CreateMaterializedViewBuilder) ddlStatement()      {}
 
 // DropMaterializedViewStmt is the AST for a DROP MATERIALIZED VIEW statement.
 type DropMaterializedViewStmt struct {
+	posField
 	Table    Table
 	IfExists bool
 	Cascade  bool
@@ -148,6 +150,7 @@ func (DropMaterializedViewBuilder) ddlStatement()                            {}
 // RefreshMaterializedViewStmt is the AST for a REFRESH MATERIALIZED VIEW
 // statement.
 type RefreshMaterializedViewStmt struct {
+	posField
 	Table        Table
 	Concurrently bool
 	WithNoData   bool
@@ -159,7 +162,7 @@ func (s RefreshMaterializedViewStmt) ToSQL(d Dialect) (string, []any, error) {
 	return out, nil, err
 }
 func (s RefreshMaterializedViewStmt) compileDDL(c *Compiler) (string, error) {
-	if s.Table.Name == "" {
+	if s.Table.Name.IsZero() {
 		return "", fmt.Errorf("sqlkit/sql: REFRESH MATERIALIZED VIEW requires a name")
 	}
 	var sb strings.Builder

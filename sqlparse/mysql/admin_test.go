@@ -16,8 +16,8 @@ func TestLockTables(t *testing.T) {
 	assertRoundTrip(t,
 		"LOCK TABLES users READ, orders WRITE",
 		sql.LockTables(
-			sql.TableLock{Table: sql.Table{Name: "users"}, Mode: sql.LockRead},
-			sql.TableLock{Table: sql.Table{Name: "orders"}, Mode: sql.LockWrite},
+			sql.TableLock{Table: sql.Table{Name: sql.NewIdent("users")}, Mode: sql.LockRead},
+			sql.TableLock{Table: sql.Table{Name: sql.NewIdent("orders")}, Mode: sql.LockWrite},
 		),
 		"LOCK TABLES `users` READ, `orders` WRITE;")
 }

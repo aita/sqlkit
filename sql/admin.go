@@ -13,19 +13,22 @@ import (
 
 // UseStmt selects the session's default database (USE db). It is produced by the
 // MySQL frontend; the same text is valid on MariaDB.
-type UseStmt struct{ DB string }
+type UseStmt struct {
+	posField
+	DB Ident
+}
 
 // Use builds a USE statement selecting the default database.
-func Use(db string) UseStmt { return UseStmt{DB: db} }
+func Use(db string) UseStmt { return UseStmt{DB: NewIdent(db)} }
 
 // ToSQL compiles the USE statement.
 func (s UseStmt) ToSQL(d Dialect) (string, []any, error) { return s.compile(NewCompiler(d)) }
 
 func (s UseStmt) compile(c *Compiler) (string, []any, error) {
-	if s.DB == "" {
+	if s.DB.IsZero() {
 		return "", nil, fmt.Errorf("sqlkit/sql: USE requires a database name")
 	}
-	return "USE " + c.Dialect.QuoteName(s.DB) + ";", nil, nil
+	return "USE " + c.Dialect.QuoteName(s.DB.String()) + ";", nil, nil
 }
 
 // TableLockMode is the lock a LOCK TABLES entry requests.
@@ -40,13 +43,17 @@ const (
 
 // TableLock pairs a table with the mode to lock it in within a LockTablesStmt.
 type TableLock struct {
+	posField
 	Table Table
 	Mode  TableLockMode
 }
 
 // LockTablesStmt acquires session table locks (MySQL LOCK TABLES t READ, u
 // WRITE). It is a MySQL utility statement.
-type LockTablesStmt struct{ Locks []TableLock }
+type LockTablesStmt struct {
+	posField
+	Locks []TableLock
+}
 
 // LockTables builds a LOCK TABLES statement over the given table locks.
 func LockTables(locks ...TableLock) LockTablesStmt { return LockTablesStmt{Locks: locks} }
@@ -76,7 +83,7 @@ func (s LockTablesStmt) compile(c *Compiler) (string, []any, error) {
 }
 
 // UnlockTablesStmt releases all of the session's table locks (UNLOCK TABLES).
-type UnlockTablesStmt struct{}
+type UnlockTablesStmt struct{ posField }
 
 // UnlockTables builds an UNLOCK TABLES statement.
 func UnlockTables() UnlockTablesStmt { return UnlockTablesStmt{} }
@@ -92,6 +99,7 @@ func (UnlockTablesStmt) compile(*Compiler) (string, []any, error) {
 // rendered inline). Scope is "", "GLOBAL", or "SESSION" for a system variable;
 // User marks a user variable (@name).
 type SetVar struct {
+	posField
 	Name  string
 	Value Expression
 	Scope string
@@ -101,7 +109,10 @@ type SetVar struct {
 // SetStmt assigns one or more variables (SET ...). It is produced by the MySQL
 // frontend for the system/user-variable forms; SET NAMES and other special
 // forms are not modeled here.
-type SetStmt struct{ Vars []SetVar }
+type SetStmt struct {
+	posField
+	Vars []SetVar
+}
 
 // SetVariables builds a SET statement over the given variable assignments.
 func SetVariables(vars ...SetVar) SetStmt { return SetStmt{Vars: vars} }

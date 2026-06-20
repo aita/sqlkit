@@ -8,7 +8,7 @@ import (
 
 // sel builds SELECT id FROM t WHERE <where> for the common expression case.
 func selWhere(where sql.Expression) sql.Query {
-	return sql.Select(sql.Col("id")).From(sql.Table{Name: "t"}).Where(where)
+	return sql.Select(sql.Col("id")).From(sql.Table{Name: sql.NewIdent("t")}).Where(where)
 }
 
 func TestExprComparisons(t *testing.T) {
@@ -159,24 +159,24 @@ func TestExprNullTest(t *testing.T) {
 func TestExprInSubquery(t *testing.T) {
 	assertRoundTrip(t,
 		"SELECT id FROM users WHERE id IN (SELECT uid FROM orders)",
-		sql.Select(sql.Col("id")).From(sql.Table{Name: "users"}).
-			Where(sql.InQuery(sql.Col("id"), sql.Select(sql.Col("uid")).From(sql.Table{Name: "orders"}))),
+		sql.Select(sql.Col("id")).From(sql.Table{Name: sql.NewIdent("users")}).
+			Where(sql.InQuery(sql.Col("id"), sql.Select(sql.Col("uid")).From(sql.Table{Name: sql.NewIdent("orders")}))),
 		`SELECT "id" FROM "users" WHERE ("id" IN (SELECT "uid" FROM "orders"))`)
 }
 
 func TestExprAnyQuantified(t *testing.T) {
 	assertRoundTrip(t,
 		"SELECT id FROM users WHERE id > ANY (SELECT uid FROM orders)",
-		sql.Select(sql.Col("id")).From(sql.Table{Name: "users"}).
-			Where(sql.Any(sql.Col("id"), ">", sql.Select(sql.Col("uid")).From(sql.Table{Name: "orders"}))),
+		sql.Select(sql.Col("id")).From(sql.Table{Name: sql.NewIdent("users")}).
+			Where(sql.Any(sql.Col("id"), ">", sql.Select(sql.Col("uid")).From(sql.Table{Name: sql.NewIdent("orders")}))),
 		`SELECT "id" FROM "users" WHERE ("id" > ANY (SELECT "uid" FROM "orders"))`)
 }
 
 func TestExprExists(t *testing.T) {
 	assertRoundTrip(t,
 		"SELECT id FROM users u WHERE EXISTS (SELECT 1 FROM orders o WHERE o.uid = u.id)",
-		sql.Select(sql.Col("id")).From(sql.SourceAlias(sql.Table{Name: "users"}, "u")).
-			Where(sql.Exists(sql.Select(sql.Raw("1")).From(sql.SourceAlias(sql.Table{Name: "orders"}, "o")).
+		sql.Select(sql.Col("id")).From(sql.SourceAlias(sql.Table{Name: sql.NewIdent("users")}, "u")).
+			Where(sql.Exists(sql.Select(sql.Raw("1")).From(sql.SourceAlias(sql.Table{Name: sql.NewIdent("orders")}, "o")).
 				Where(sql.Eq(sql.Col("o.uid"), sql.Col("u.id"))))),
 		`SELECT "id" FROM "users" AS "u" WHERE EXISTS (SELECT 1 FROM "orders" AS "o" WHERE ("o"."uid" = "u"."id"))`)
 }
@@ -184,7 +184,7 @@ func TestExprExists(t *testing.T) {
 func TestExprCaseSearched(t *testing.T) {
 	assertRoundTrip(t,
 		"SELECT CASE WHEN a > 0 THEN 'pos' ELSE 'neg' END FROM t",
-		sql.Select(sql.Case().When(sql.Gt(sql.Col("a"), 0), "pos").Else("neg")).From(sql.Table{Name: "t"}),
+		sql.Select(sql.Case().When(sql.Gt(sql.Col("a"), 0), "pos").Else("neg")).From(sql.Table{Name: sql.NewIdent("t")}),
 		`SELECT CASE WHEN ("a" > $1) THEN $2 ELSE $3 END FROM "t"`,
 		0, "pos", "neg")
 }
@@ -192,7 +192,7 @@ func TestExprCaseSearched(t *testing.T) {
 func TestExprCast(t *testing.T) {
 	assertRoundTrip(t,
 		"SELECT CAST(a AS integer), b::text FROM t",
-		sql.Select(sql.Cast(sql.Col("a"), "integer"), sql.Cast(sql.Col("b"), "text")).From(sql.Table{Name: "t"}),
+		sql.Select(sql.Cast(sql.Col("a"), "integer"), sql.Cast(sql.Col("b"), "text")).From(sql.Table{Name: sql.NewIdent("t")}),
 		`SELECT CAST("a" AS integer), CAST("b" AS text) FROM "t"`)
 }
 
@@ -200,7 +200,7 @@ func TestExprFunctionCall(t *testing.T) {
 	assertRoundTrip(t,
 		"SELECT coalesce(a, b), lower(name) FROM t",
 		sql.Select(sql.Func("coalesce", sql.Col("a"), sql.Col("b")), sql.Func("lower", sql.Col("name"))).
-			From(sql.Table{Name: "t"}),
+			From(sql.Table{Name: sql.NewIdent("t")}),
 		`SELECT coalesce("a", "b"), lower("name") FROM "t"`)
 }
 
@@ -223,7 +223,7 @@ func TestExprNegativeNumber(t *testing.T) {
 func TestExprSimpleCase(t *testing.T) {
 	assertRoundTrip(t,
 		"SELECT CASE status WHEN 'a' THEN 1 ELSE 0 END FROM t",
-		sql.Select(sql.CaseOf(sql.Col("status")).When("a", 1).Else(0)).From(sql.Table{Name: "t"}),
+		sql.Select(sql.CaseOf(sql.Col("status")).When("a", 1).Else(0)).From(sql.Table{Name: sql.NewIdent("t")}),
 		`SELECT CASE "status" WHEN $1 THEN $2 ELSE $3 END FROM "t"`,
 		"a", 1, 0)
 }
@@ -232,7 +232,7 @@ func TestExprDistinctAggregates(t *testing.T) {
 	assertRoundTrip(t,
 		"SELECT COUNT(DISTINCT uid), SUM(DISTINCT amount) FROM orders",
 		sql.Select(sql.CountDistinct(sql.Col("uid")), sql.DistinctFunc("sum", sql.Col("amount"))).
-			From(sql.Table{Name: "orders"}),
+			From(sql.Table{Name: sql.NewIdent("orders")}),
 		`SELECT COUNT(DISTINCT "uid"), sum(DISTINCT "amount") FROM "orders"`)
 }
 

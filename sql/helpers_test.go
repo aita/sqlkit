@@ -29,8 +29,8 @@ func assertMySQL(t *testing.T, query Query, wantSQL string, wantArgs []any) {
 }
 
 var (
-	users = Table{Schema: "public", Name: "users"}
-	orgs  = Table{Name: "orgs"}
+	users = Table{Schema: NewIdent("public"), Name: NewIdent("users")}
+	orgs  = Table{Name: NewIdent("orgs")}
 )
 
 func assertSQL(t *testing.T, query Query, wantSQL string, wantArgs []any) {

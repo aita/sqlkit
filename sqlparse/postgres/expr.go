@@ -220,6 +220,9 @@ func positioned(e sql.Expression, location int32) sql.Expression {
 func colAt(name string, location int32) sql.ColumnExpression {
 	e := sql.Col(name)
 	e.NodePos = offsetOf(location)
+	// The column's identifier shares the reference's position, so a qualified or
+	// bare column name reports where it was written, not just the node.
+	e.Name.NodePos = offsetOf(location)
 	return e
 }
 

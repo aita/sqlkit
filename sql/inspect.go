@@ -19,9 +19,10 @@ package sql
 // TargetConstraint is set. DoUpdate distinguishes DO UPDATE (with Sets and an
 // optional Where) from DO NOTHING.
 type ConflictClause struct {
-	Target           []string
+	posField
+	Target           []Ident
 	TargetExprs      []Expression
-	TargetConstraint string
+	TargetConstraint Ident
 	DoUpdate         bool
 	Sets             []Assignment
 	Where            Expression
@@ -32,11 +33,12 @@ type ConflictClause struct {
 // "DELETE", "INSERT", "DO NOTHING", or "" when none was set. Sets applies to
 // UPDATE; InsertColumns/InsertValues (or InsertDefault) to INSERT.
 type MergeWhenClause struct {
+	posField
 	Match         string
 	Condition     Expression
 	Action        string
 	Sets          []Assignment
-	InsertColumns []string
+	InsertColumns []Ident
 	InsertValues  []Expression
 	InsertDefault bool
 }
@@ -66,14 +68,14 @@ func mergeWhenView(w MergeWhen) MergeWhenClause {
 }
 
 // Name returns the CTE's name, the identifier other clauses reference it by.
-func (c CTE) Name() string { return c.name }
+func (c CTE) Name() string { return c.name.String() }
 
 // Body returns the query the CTE wraps.
 func (c CTE) Body() Query { return c.query }
 
 // OutputColumns returns the CTE's explicit output column list, or nil when none
 // was declared.
-func (c CTE) OutputColumns() []string { return cloneSlice(c.columns) }
+func (c CTE) OutputColumns() []string { return identNames(c.columns) }
 
 // IsRecursive reports whether the CTE was declared recursive.
 func (c CTE) IsRecursive() bool { return c.recursive }

@@ -431,9 +431,9 @@ func tableColumnFromNameList(node *pg.Node) (sql.Table, string, error) {
 	}
 	switch len(parts) {
 	case 2:
-		return sql.Table{Name: parts[0]}, parts[1], nil
+		return sql.Table{Name: sql.NewIdent(parts[0])}, parts[1], nil
 	case 3:
-		return sql.Table{Schema: parts[0], Name: parts[1]}, parts[2], nil
+		return sql.Table{Schema: sql.NewIdent(parts[0]), Name: sql.NewIdent(parts[1])}, parts[2], nil
 	default:
 		return sql.Table{}, "", sqlparse.Unsupported("qualified column name")
 	}

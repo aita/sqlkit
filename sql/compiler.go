@@ -79,13 +79,13 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		if err != nil {
 			return "", nil, err
 		}
-		return "(" + operandSQL + ")." + c.Dialect.QuoteName(e.Field), args, nil
+		return "(" + operandSQL + ")." + c.Dialect.QuoteName(e.Field.String()), args, nil
 	case CollateExpression:
 		operandSQL, args, err := c.CompileExpression(e.Operand)
 		if err != nil {
 			return "", nil, err
 		}
-		return operandSQL + " COLLATE " + c.Dialect.QuoteIdent(e.Collation), args, nil
+		return operandSQL + " COLLATE " + c.Dialect.QuoteIdent(e.Collation.String()), args, nil
 	case BinaryExpression:
 		leftSQL, leftArgs, err := c.CompileExpression(e.Left)
 		if err != nil {
@@ -327,13 +327,13 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		args = append(args, arrayArgs...)
 		return "(" + leftSQL + " " + e.Operator + " " + e.Quantifier + "(" + arraySQL + "))", args, nil
 	case ExcludedExpression:
-		if e.Column == "" {
+		if e.Column.IsZero() {
 			return "", nil, fmt.Errorf("sqlkit/sql: Excluded requires a column name")
 		}
 		if r, ok := c.Dialect.(ExcludedRenderer); ok {
-			return r.Excluded(e.Column), nil, nil
+			return r.Excluded(e.Column.String()), nil, nil
 		}
-		return "excluded." + c.Dialect.QuoteName(e.Column), nil, nil
+		return "excluded." + c.Dialect.QuoteName(e.Column.String()), nil, nil
 	case ConcatExpression:
 		if len(e.Operands) == 0 {
 			return "", nil, fmt.Errorf("sqlkit/sql: CONCAT requires at least one operand")
@@ -553,13 +553,13 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		}
 		args = append(args, bodyArgs...)
 		// A bare reference to a named window: "fn OVER w".
-		if e.Name != "" && body == "" {
-			return fnSQL + " OVER " + c.Dialect.QuoteName(e.Name), args, nil
+		if !e.Name.IsZero() && body == "" {
+			return fnSQL + " OVER " + c.Dialect.QuoteName(e.Name.String()), args, nil
 		}
 		inner := body
-		if e.Name != "" {
+		if !e.Name.IsZero() {
 			// Extending a named window with further clauses: "fn OVER (w ...)".
-			inner = c.Dialect.QuoteName(e.Name)
+			inner = c.Dialect.QuoteName(e.Name.String())
 			if body != "" {
 				inner += " " + body
 			}
@@ -582,16 +582,16 @@ func (c *Compiler) CompileSelection(selection Selection) (string, []any, error) 
 	case ColumnExpression:
 		return c.Dialect.QuoteIdent(s.Reference()), nil, nil
 	case StarSelection:
-		if s.Qualifier == "" {
+		if s.Qualifier.IsZero() {
 			return "*", nil, nil
 		}
-		return c.Dialect.QuoteIdent(s.Qualifier) + ".*", nil, nil
+		return c.Dialect.QuoteIdent(s.Qualifier.String()) + ".*", nil, nil
 	case AliasedSelection:
 		inner, args, err := c.CompileSelection(s.Selection)
 		if err != nil {
 			return "", nil, err
 		}
-		return inner + " AS " + c.Dialect.QuoteIdent(s.Alias), args, nil
+		return inner + " AS " + c.Dialect.QuoteIdent(s.Alias.String()), args, nil
 	case interface{ Reference() string }:
 		return c.Dialect.QuoteIdent(s.Reference()), nil, nil
 	case interface{ UnwrapSelection() Selection }:
@@ -626,17 +626,17 @@ func (c *Compiler) CompileSource(source Source) (string, []any, error) {
 			return "", nil, err
 		}
 		compiled := lateral + "(" + sql + ")"
-		if s.Alias != "" {
-			compiled += " AS " + c.Dialect.QuoteIdent(s.Alias)
+		if !s.Alias.IsZero() {
+			compiled += " AS " + c.Dialect.QuoteIdent(s.Alias.String())
 		}
 		return compiled, args, nil
 	}
-	if s.Name == "" {
+	if s.Name.IsZero() {
 		return "", nil, fmt.Errorf("sqlkit/sql: missing source name")
 	}
-	compiled := lateral + c.Dialect.QuoteIdent(s.Name)
-	if s.Alias != "" {
-		compiled += " AS " + c.Dialect.QuoteIdent(s.Alias)
+	compiled := lateral + c.Dialect.QuoteIdent(s.Name.String())
+	if !s.Alias.IsZero() {
+		compiled += " AS " + c.Dialect.QuoteIdent(s.Alias.String())
 	}
 	return compiled, nil, nil
 }
@@ -707,7 +707,7 @@ func (c *Compiler) compileValuesSource(s SourceExpression) (string, []any, error
 			// Only the first UNION arm names the columns; the rest inherit them.
 			if union && ri == 0 {
 				sb.WriteString(" AS ")
-				sb.WriteString(c.Dialect.QuoteIdent(v.Columns[ci]))
+				sb.WriteString(c.Dialect.QuoteIdent(v.Columns[ci].String()))
 			}
 			args = append(args, valueArgs...)
 		}
@@ -716,16 +716,16 @@ func (c *Compiler) compileValuesSource(s SourceExpression) (string, []any, error
 		}
 	}
 	sb.WriteString(")")
-	if s.Alias != "" {
+	if !s.Alias.IsZero() {
 		sb.WriteString(" AS ")
-		sb.WriteString(c.Dialect.QuoteIdent(s.Alias))
+		sb.WriteString(c.Dialect.QuoteIdent(s.Alias.String()))
 		if !union && len(v.Columns) == width {
 			sb.WriteString("(")
 			for ci, col := range v.Columns {
 				if ci > 0 {
 					sb.WriteString(", ")
 				}
-				sb.WriteString(c.Dialect.QuoteIdent(col))
+				sb.WriteString(c.Dialect.QuoteIdent(col.String()))
 			}
 			sb.WriteString(")")
 		}
@@ -764,7 +764,7 @@ func (c *Compiler) CompileJoin(join JoinClause) (string, []any, error) {
 	case len(join.Using) > 0:
 		columns := make([]string, len(join.Using))
 		for i, column := range join.Using {
-			columns[i] = c.Dialect.QuoteName(column)
+			columns[i] = c.Dialect.QuoteName(column.String())
 		}
 		compiled += " USING (" + strings.Join(columns, ", ") + ")"
 	case join.On != nil:
@@ -803,20 +803,20 @@ func (c *Compiler) compileWith(ctes []CTE) (string, []any, error) {
 		if i > 0 {
 			sb.WriteString(", ")
 		}
-		if cte.name == "" {
+		if cte.name.IsZero() {
 			return "", nil, fmt.Errorf("sqlkit/sql: CTE requires a name")
 		}
 		if cte.query == nil {
 			return "", nil, fmt.Errorf("sqlkit/sql: CTE %q requires a query", cte.name)
 		}
-		sb.WriteString(c.Dialect.QuoteName(cte.name))
+		sb.WriteString(c.Dialect.QuoteName(cte.name.String()))
 		if len(cte.columns) > 0 {
 			sb.WriteString(" (")
 			for j, col := range cte.columns {
 				if j > 0 {
 					sb.WriteString(", ")
 				}
-				sb.WriteString(c.Dialect.QuoteName(col))
+				sb.WriteString(c.Dialect.QuoteName(col.String()))
 			}
 			sb.WriteString(")")
 		}
@@ -942,14 +942,14 @@ func (c *Compiler) CompileSelect(q SelectStmt) (string, []any, error) {
 			if i > 0 {
 				sb.WriteString(", ")
 			}
-			if w.Name == "" {
+			if w.Name.IsZero() {
 				return "", nil, fmt.Errorf("sqlkit/sql: WINDOW definition requires a name")
 			}
 			body, bodyArgs, err := c.compileWindowParts(w.Partitions, w.OrderByTerms, w.FrameClause)
 			if err != nil {
 				return "", nil, err
 			}
-			sb.WriteString(c.Dialect.QuoteName(w.Name))
+			sb.WriteString(c.Dialect.QuoteName(w.Name.String()))
 			sb.WriteString(" AS (")
 			sb.WriteString(body)
 			sb.WriteString(")")
@@ -986,7 +986,7 @@ func (c *Compiler) CompileSelect(q SelectStmt) (string, []any, error) {
 		}
 		of := make([]string, len(q.Lock.of))
 		for i, table := range q.Lock.of {
-			of[i] = c.Dialect.QuoteIdent(table)
+			of[i] = c.Dialect.QuoteIdent(table.String())
 		}
 		frag, err := locker.LockClause(q.Lock.strength, strings.Join(of, ", "), q.Lock.wait)
 		if err != nil {
@@ -999,7 +999,7 @@ func (c *Compiler) CompileSelect(q SelectStmt) (string, []any, error) {
 
 // CompileInsert compiles an INSERT statement.
 func (c *Compiler) CompileInsert(q InsertStmt) (string, []any, error) {
-	if q.Table.Name == "" {
+	if q.Table.Name.IsZero() {
 		return "", nil, fmt.Errorf("sqlkit/sql: INSERT requires a table")
 	}
 	if q.Select != nil && len(q.Rows) > 0 {
@@ -1038,7 +1038,7 @@ func (c *Compiler) CompileInsert(q InsertStmt) (string, []any, error) {
 			if i > 0 {
 				sb.WriteString(", ")
 			}
-			sb.WriteString(c.Dialect.QuoteIdent(column))
+			sb.WriteString(c.Dialect.QuoteIdent(column.String()))
 		}
 		sb.WriteString(")")
 	}
@@ -1110,7 +1110,7 @@ func (c *Compiler) writeUpsert(sb *strings.Builder, args *[]any, conflict *Confl
 	if len(conflict.TargetExprs) > 0 {
 		targets++
 	}
-	if conflict.TargetConstraint != "" {
+	if !conflict.TargetConstraint.IsZero() {
 		targets++
 	}
 	if targets > 1 {
@@ -1132,12 +1132,12 @@ func (c *Compiler) writeUpsert(sb *strings.Builder, args *[]any, conflict *Confl
 	} else {
 		target = make([]string, len(conflict.Target))
 		for i, col := range conflict.Target {
-			target[i] = c.Dialect.QuoteName(col)
+			target[i] = c.Dialect.QuoteName(col.String())
 		}
 	}
 	targetConstraint := ""
-	if conflict.TargetConstraint != "" {
-		targetConstraint = c.Dialect.QuoteName(conflict.TargetConstraint)
+	if !conflict.TargetConstraint.IsZero() {
+		targetConstraint = c.Dialect.QuoteName(conflict.TargetConstraint.String())
 	}
 	assignments := make([]string, 0, len(conflict.Sets))
 	for _, assignment := range conflict.Sets {
@@ -1206,7 +1206,7 @@ func (c *Compiler) writeCommaSources(sb *strings.Builder, args *[]any, sources [
 // as a trailing FROM list on PostgreSQL (UPDATE t SET ... FROM j WHERE ...),
 // where join ON predicates fold into the WHERE since FROM has no ON.
 func (c *Compiler) CompileUpdate(q UpdateStmt) (string, []any, error) {
-	if q.Table.Name == "" {
+	if q.Table.Name.IsZero() {
 		return "", nil, fmt.Errorf("sqlkit/sql: UPDATE requires a table")
 	}
 	if len(q.Sets) == 0 {
@@ -1302,7 +1302,7 @@ func (c *Compiler) CompileUpdate(q UpdateStmt) (string, []any, error) {
 // renders as MySQL's DELETE t FROM t JOIN j ON ... and as PostgreSQL's
 // DELETE FROM t USING j WHERE ..., where join ON predicates fold into the WHERE.
 func (c *Compiler) CompileDelete(q DeleteStmt) (string, []any, error) {
-	if q.Table.Name == "" {
+	if q.Table.Name.IsZero() {
 		return "", nil, fmt.Errorf("sqlkit/sql: DELETE requires a table")
 	}
 	inline := c.usesInlineJoins()
@@ -1446,7 +1446,7 @@ func (c *Compiler) assignmentLHS(a Assignment) (string, []any, error) {
 	if a.Target != nil {
 		return c.CompileExpression(a.Target)
 	}
-	return c.Dialect.QuoteIdent(a.Column), nil, nil
+	return c.Dialect.QuoteIdent(a.Column.String()), nil, nil
 }
 
 // compileExprList compiles a comma-separated list of expressions.

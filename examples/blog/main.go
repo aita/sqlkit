@@ -124,8 +124,8 @@ func run(ctx context.Context, db *sqlkit.Database) error {
 			sql.As(sql.Count(sql.Col("p.id")), "post_count"),
 			sql.As(sql.Rank().Over().OrderBy(sql.Desc(sql.Raw("COUNT(p.id)"))), "rank"),
 		).
-			From(sql.SourceAlias(sql.Table{Name: "users"}, "u")).
-			LeftJoin(sql.SourceAlias(sql.Table{Name: "posts"}, "p"), sql.Eq(sql.Col("p.user_id"), sql.Col("u.id"))).
+			From(sql.SourceAlias(sql.Table{Name: sql.NewIdent("users")}, "u")).
+			LeftJoin(sql.SourceAlias(sql.Table{Name: sql.NewIdent("posts")}, "p"), sql.Eq(sql.Col("p.user_id"), sql.Col("u.id"))).
 			GroupBy(sql.Col("u.email")).
 			Having(sql.Ge(sql.CountAll(), sql.Int(0)))
 		if err := session.RawSQL(ctx, query).Scan(&stats); err != nil {

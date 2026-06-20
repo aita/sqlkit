@@ -130,7 +130,7 @@ func convertSource(node *pg.Node) (sql.Source, error) {
 }
 
 func convertRangeVar(rv *pg.RangeVar) sql.Source {
-	table := sql.Table{Schema: rv.GetSchemaname(), Name: rv.GetRelname()}
+	table := tableFromRangeVar(rv)
 	if alias := rv.GetAlias(); alias != nil && alias.GetAliasname() != "" {
 		return sql.SourceAlias(table, alias.GetAliasname())
 	}

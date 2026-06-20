@@ -8,7 +8,7 @@ import (
 )
 
 func TestAnalyzerDelegates(t *testing.T) {
-	users := sql.Table{Name: "users"}
+	users := sql.Table{Name: sql.NewIdent("users")}
 	q := sql.Select(sql.Star()).From(users).Where(sql.In(sql.Col("tenant_id"), 1, 2, 3))
 	a := analyze.New()
 
@@ -25,7 +25,7 @@ func TestAnalyzerDelegates(t *testing.T) {
 }
 
 func TestAnalyzerFingerprintNeedsDialect(t *testing.T) {
-	q := sql.Select(sql.Col("id")).From(sql.Table{Name: "users"}).Where(sql.Eq(sql.Col("id"), sql.Val(1)))
+	q := sql.Select(sql.Col("id")).From(sql.Table{Name: sql.NewIdent("users")}).Where(sql.Eq(sql.Col("id"), sql.Val(1)))
 
 	// Without a dialect, Fingerprint cannot recompile and reports ok=false.
 	if _, ok := analyze.New().Fingerprint(q); ok {

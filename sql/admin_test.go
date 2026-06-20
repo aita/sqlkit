@@ -6,7 +6,7 @@ import (
 )
 
 func TestMySQLReplaceInto(t *testing.T) {
-	replace := ReplaceInto(Table{Name: "users"}).Columns("id", "name").Values(1, "Alice")
+	replace := ReplaceInto(Table{Name: NewIdent("users")}).Columns("id", "name").Values(1, "Alice")
 	assertMySQL(t, replace, "REPLACE INTO `users` (`id`, `name`) VALUES (?, ?)", []any{1, "Alice"})
 
 	if _, _, err := replace.ToSQL(PostgreSQLDialect{}); err == nil ||
@@ -16,10 +16,10 @@ func TestMySQLReplaceInto(t *testing.T) {
 }
 
 func TestMySQLUpdateDeleteOrderLimit(t *testing.T) {
-	update := Update(Table{Name: "t"}).Set(Set("a", 1)).OrderBy(Asc(Col("id"))).Limit(5)
+	update := Update(Table{Name: NewIdent("t")}).Set(Set("a", 1)).OrderBy(Asc(Col("id"))).Limit(5)
 	assertMySQL(t, update, "UPDATE `t` SET `a` = ? ORDER BY `id` LIMIT 5", []any{1})
 
-	del := DeleteFrom(Table{Name: "t"}).OrderBy(Desc(Col("id"))).Limit(3)
+	del := DeleteFrom(Table{Name: NewIdent("t")}).OrderBy(Desc(Col("id"))).Limit(3)
 	assertMySQL(t, del, "DELETE FROM `t` ORDER BY `id` DESC LIMIT 3", nil)
 
 	if _, _, err := del.ToSQL(PostgreSQLDialect{}); err == nil ||
@@ -29,8 +29,8 @@ func TestMySQLUpdateDeleteOrderLimit(t *testing.T) {
 }
 
 func TestMySQLCreateTableIndexAndCollate(t *testing.T) {
-	ct := CreateTable(Table{Name: "t"}).
-		Column(ColumnDef{Name: "name", Type: RawType("varchar(20)"), Collate: "utf8mb4_bin"}).
+	ct := CreateTable(Table{Name: NewIdent("t")}).
+		Column(ColumnDef{Name: NewIdent("name"), Type: RawType("varchar(20)"), Collate: NewIdent("utf8mb4_bin")}).
 		Index("idx_name", "name")
 	want := "CREATE TABLE `t` (\n" +
 		"    `name` varchar(20) COLLATE utf8mb4_bin,\n" +
@@ -48,8 +48,8 @@ func TestMySQLAdminStatements(t *testing.T) {
 	assertMySQL(t, Use("shop"), "USE `shop`;", nil)
 
 	assertMySQL(t, LockTables(
-		TableLock{Table: Table{Name: "users"}, Mode: LockRead},
-		TableLock{Table: Table{Name: "orders"}, Mode: LockWrite},
+		TableLock{Table: Table{Name: NewIdent("users")}, Mode: LockRead},
+		TableLock{Table: Table{Name: NewIdent("orders")}, Mode: LockWrite},
 	), "LOCK TABLES `users` READ, `orders` WRITE;", nil)
 
 	assertMySQL(t, UnlockTables(), "UNLOCK TABLES;", nil)

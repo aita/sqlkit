@@ -9,22 +9,22 @@ import (
 func TestCreateMaterializedView(t *testing.T) {
 	assertRoundTrip(t,
 		"CREATE MATERIALIZED VIEW totals AS SELECT id FROM orders WITH NO DATA",
-		sql.CreateMaterializedView(sql.Table{Name: "totals"},
-			sql.Select(sql.Col("id")).From(sql.Table{Name: "orders"})).WithNoData(),
+		sql.CreateMaterializedView(sql.Table{Name: sql.NewIdent("totals")},
+			sql.Select(sql.Col("id")).From(sql.Table{Name: sql.NewIdent("orders")})).WithNoData(),
 		"CREATE MATERIALIZED VIEW \"totals\" AS\nSELECT \"id\" FROM \"orders\" WITH NO DATA;")
 }
 
 func TestDropMaterializedView(t *testing.T) {
 	assertRoundTrip(t,
 		"DROP MATERIALIZED VIEW IF EXISTS reporting.totals CASCADE",
-		sql.DropMaterializedView(sql.Table{Schema: "reporting", Name: "totals"}).IfExists().Cascade(),
+		sql.DropMaterializedView(sql.Table{Schema: sql.NewIdent("reporting"), Name: sql.NewIdent("totals")}).IfExists().Cascade(),
 		`DROP MATERIALIZED VIEW IF EXISTS "reporting"."totals" CASCADE;`)
 }
 
 func TestRefreshMaterializedView(t *testing.T) {
 	assertRoundTrip(t,
 		"REFRESH MATERIALIZED VIEW CONCURRENTLY totals",
-		sql.RefreshMaterializedView(sql.Table{Name: "totals"}).Concurrently(),
+		sql.RefreshMaterializedView(sql.Table{Name: sql.NewIdent("totals")}).Concurrently(),
 		`REFRESH MATERIALIZED VIEW CONCURRENTLY "totals";`)
 }
 

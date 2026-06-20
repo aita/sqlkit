@@ -7,7 +7,7 @@ package sql
 type InsertStmt struct {
 	posField
 	Table     Table
-	Columns   []string
+	Columns   []Ident
 	Rows      [][]Expression
 	Select    Query
 	Conflict  *ConflictClause
@@ -61,7 +61,7 @@ func (b InsertBuilder) Stmt() InsertStmt { return b.s }
 
 // Columns sets the column list for the INSERT statement.
 func (b InsertBuilder) Columns(columns ...string) InsertBuilder {
-	b.s.Columns = columns
+	b.s.Columns = idents(columns)
 	return b
 }
 
@@ -106,7 +106,7 @@ func (b InsertBuilder) withConflict(mut func(*ConflictClause)) InsertBuilder {
 // conflict target. Without a following action the clause is DO NOTHING.
 func (b InsertBuilder) OnConflict(columns ...string) InsertBuilder {
 	return b.withConflict(func(c *ConflictClause) {
-		c.Target, c.TargetExprs, c.TargetConstraint = columns, nil, ""
+		c.Target, c.TargetExprs, c.TargetConstraint = idents(columns), nil, Ident{}
 	})
 }
 
@@ -114,7 +114,7 @@ func (b InsertBuilder) OnConflict(columns ...string) InsertBuilder {
 // (PostgreSQL ON CONFLICT ON CONSTRAINT). PostgreSQL only.
 func (b InsertBuilder) OnConflictConstraint(name string) InsertBuilder {
 	return b.withConflict(func(c *ConflictClause) {
-		c.TargetConstraint, c.Target, c.TargetExprs = name, nil, nil
+		c.TargetConstraint, c.Target, c.TargetExprs = NewIdent(name), nil, nil
 	})
 }
 
@@ -122,7 +122,7 @@ func (b InsertBuilder) OnConflictConstraint(name string) InsertBuilder {
 // (PostgreSQL ON CONFLICT ((lower(email)))).
 func (b InsertBuilder) OnConflictExpr(exprs ...Expression) InsertBuilder {
 	return b.withConflict(func(c *ConflictClause) {
-		c.TargetExprs, c.Target, c.TargetConstraint = exprs, nil, ""
+		c.TargetExprs, c.Target, c.TargetConstraint = exprs, nil, Ident{}
 	})
 }
 

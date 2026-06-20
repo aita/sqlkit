@@ -133,7 +133,7 @@ func TestFuncRemapCaseInsensitiveName(t *testing.T) {
 
 func TestMySQLSelect(t *testing.T) {
 	query := Select(Col("users.id"), Col("users.email")).
-		From(Table{Name: "users"}).
+		From(Table{Name: NewIdent("users")}).
 		Where(And(Eq(Col("users.id"), Int(7)), Like(Col("users.email"), Val("%@x.com")))).
 		OrderBy(Desc(Col("users.id"))).
 		Limit(10)
@@ -146,32 +146,32 @@ func TestMySQLSelect(t *testing.T) {
 func TestMySQLJSONObject(t *testing.T) {
 	// MySQL uses a flat key, value list (no VALUE separator).
 	assertMySQL(t,
-		Select(As(JSONObject("id", Col("id"), "name", Col("name")), "j")).From(Table{Name: "users"}),
+		Select(As(JSONObject("id", Col("id"), "name", Col("name")), "j")).From(Table{Name: NewIdent("users")}),
 		"SELECT JSON_OBJECT(?, `id`, ?, `name`) AS `j` FROM `users`", []any{"id", "name"})
 
 	assertMySQL(t,
-		Select(As(JSONObjectAgg(Col("k"), Col("v")), "obj")).From(Table{Name: "kv"}),
+		Select(As(JSONObjectAgg(Col("k"), Col("v")), "obj")).From(Table{Name: NewIdent("kv")}),
 		"SELECT JSON_OBJECTAGG(`k`, `v`) AS `obj` FROM `kv`", nil)
 }
 
 func TestMySQLConcat(t *testing.T) {
 	// MySQL's || is logical OR, so concatenation compiles to CONCAT(...).
 	assertMySQL(t,
-		Select(As(Concat(Col("first"), Val(" "), Col("last")), "name")).From(Table{Name: "users"}),
+		Select(As(Concat(Col("first"), Val(" "), Col("last")), "name")).From(Table{Name: NewIdent("users")}),
 		"SELECT CONCAT(`first`, ?, `last`) AS `name` FROM `users`", []any{" "})
 }
 
 func TestMySQLILike(t *testing.T) {
 	// MySQL has no ILIKE: it compiles to the portable LOWER ... LIKE LOWER form.
 	assertMySQL(t,
-		Select(Col("id")).From(Table{Name: "users"}).Where(ILike(Col("email"), Val("%@EXAMPLE.com"))),
+		Select(Col("id")).From(Table{Name: NewIdent("users")}).Where(ILike(Col("email"), Val("%@EXAMPLE.com"))),
 		"SELECT `id` FROM `users` WHERE (LOWER(`email`) LIKE LOWER(?))", []any{"%@EXAMPLE.com"})
 }
 
 func TestMySQLStringAgg(t *testing.T) {
 	// MySQL spells STRING_AGG as GROUP_CONCAT with a SEPARATOR keyword.
 	assertMySQL(t,
-		Select(As(StringAgg(Col("name"), ", "), "names")).From(Table{Name: "users"}).GroupBy(Col("org_id")),
+		Select(As(StringAgg(Col("name"), ", "), "names")).From(Table{Name: NewIdent("users")}).GroupBy(Col("org_id")),
 		"SELECT GROUP_CONCAT(`name` SEPARATOR ', ') AS `names` FROM `users` GROUP BY `org_id`", nil)
 }
 
@@ -186,40 +186,40 @@ func TestMySQLScalarFunctions(t *testing.T) {
 			As(CurrentDate(), "today"),
 			As(Extract("year", Col("created_at")), "yr"),
 			As(Position("@", Col("email")), "at"),
-		).From(Table{Name: "t"}),
+		).From(Table{Name: NewIdent("t")}),
 		"SELECT UPPER(`name`), ROUND(`rate`, ?), CURRENT_DATE AS `today`, EXTRACT(year FROM `created_at`) AS `yr`, POSITION(? IN `email`) AS `at` FROM `t`",
 		[]any{2, "@"})
 }
 
 func TestMySQLJSONAccess(t *testing.T) {
 	assertMySQL(t,
-		Select(As(JSONGet(Col("data"), "name"), "n")).From(Table{Name: "events"}),
+		Select(As(JSONGet(Col("data"), "name"), "n")).From(Table{Name: NewIdent("events")}),
 		"SELECT JSON_EXTRACT(`data`, '$.name') AS `n` FROM `events`", nil)
 
 	assertMySQL(t,
-		Select(As(JSONGetText(Col("data"), "items", 0, "id"), "id")).From(Table{Name: "events"}),
+		Select(As(JSONGetText(Col("data"), "items", 0, "id"), "id")).From(Table{Name: NewIdent("events")}),
 		"SELECT JSON_UNQUOTE(JSON_EXTRACT(`data`, '$.items[0].id')) AS `id` FROM `events`", nil)
 
 	// A key needing quoting in the path.
 	assertMySQL(t,
-		Select(JSONGet(Col("data"), "first name")).From(Table{Name: "events"}),
+		Select(JSONGet(Col("data"), "first name")).From(Table{Name: NewIdent("events")}),
 		"SELECT JSON_EXTRACT(`data`, '$.\"first name\"') FROM `events`", nil)
 }
 
 func TestMySQLInsertUpdateDelete(t *testing.T) {
-	insert := InsertInto(Table{Name: "users"}).Columns("email").Values("a@x.com")
+	insert := InsertInto(Table{Name: NewIdent("users")}).Columns("email").Values("a@x.com")
 	assertMySQL(t, insert, "INSERT INTO `users` (`email`) VALUES (?)", []any{"a@x.com"})
 
-	update := Update(Table{Name: "users"}).Set(Set("email", "b@x.com")).Where(Eq(Col("id"), Int(1)))
+	update := Update(Table{Name: NewIdent("users")}).Set(Set("email", "b@x.com")).Where(Eq(Col("id"), Int(1)))
 	assertMySQL(t, update, "UPDATE `users` SET `email` = ? WHERE (`id` = ?)", []any{"b@x.com", 1})
 
-	del := DeleteFrom(Table{Name: "users"}).Where(Eq(Col("id"), Int(1)))
+	del := DeleteFrom(Table{Name: NewIdent("users")}).Where(Eq(Col("id"), Int(1)))
 	assertMySQL(t, del, "DELETE FROM `users` WHERE (`id` = ?)", []any{1})
 }
 
 func TestMySQLOnDuplicateKeyUpdate(t *testing.T) {
 	// MySQL ignores the conflict target and uses VALUES(col) for the new row.
-	insert := InsertInto(Table{Name: "users"}).Columns("email", "name").Values("a@x.com", "Alice").
+	insert := InsertInto(Table{Name: NewIdent("users")}).Columns("email", "name").Values("a@x.com", "Alice").
 		OnConflict("email").DoUpdate(Set("name", Excluded("name")))
 	assertMySQL(t, insert,
 		"INSERT INTO `users` (`email`, `name`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `name` = VALUES(`name`)",
@@ -227,14 +227,14 @@ func TestMySQLOnDuplicateKeyUpdate(t *testing.T) {
 }
 
 func TestMySQLRejectsDoNothingAndConflictWhere(t *testing.T) {
-	doNothing := InsertInto(Table{Name: "users"}).Columns("email").Values("a@x.com").
+	doNothing := InsertInto(Table{Name: NewIdent("users")}).Columns("email").Values("a@x.com").
 		OnConflict("email").DoNothing()
 	if _, _, err := doNothing.ToSQL(MySQLDialect{}); err == nil ||
 		!strings.Contains(err.Error(), "DO NOTHING") {
 		t.Fatalf("ToSQL() error = %v, want DO NOTHING rejection", err)
 	}
 
-	withWhere := InsertInto(Table{Name: "users"}).Columns("email", "name").Values("a@x.com", "Alice").
+	withWhere := InsertInto(Table{Name: NewIdent("users")}).Columns("email", "name").Values("a@x.com", "Alice").
 		OnConflict("email").DoUpdate(Set("name", Excluded("name"))).
 		Where(Ne(Col("name"), Val("locked")))
 	if _, _, err := withWhere.ToSQL(MySQLDialect{}); err == nil ||
@@ -244,7 +244,7 @@ func TestMySQLRejectsDoNothingAndConflictWhere(t *testing.T) {
 }
 
 func TestMySQLRejectsReturning(t *testing.T) {
-	insert := InsertInto(Table{Name: "users"}).Columns("email").Values("a@x.com").Returning(Col("id"))
+	insert := InsertInto(Table{Name: NewIdent("users")}).Columns("email").Values("a@x.com").Returning(Col("id"))
 	_, _, err := insert.ToSQL(MySQLDialect{})
 	if err == nil || !strings.Contains(err.Error(), "does not support RETURNING") {
 		t.Fatalf("ToSQL() error = %v, want RETURNING rejection", err)
@@ -256,7 +256,7 @@ func TestMySQLRejectsReturning(t *testing.T) {
 
 func TestStandardSelect(t *testing.T) {
 	query := Select(Col("users.id"), Col("users.email")).
-		From(Table{Name: "users"}).
+		From(Table{Name: NewIdent("users")}).
 		Where(Eq(Col("users.id"), Int(7))).
 		Limit(10)
 
@@ -268,30 +268,30 @@ func TestStandardSelect(t *testing.T) {
 func TestStandardConcat(t *testing.T) {
 	// The standard || operator concatenates.
 	assertStandard(t,
-		Select(As(Concat(Col("first"), Val(" "), Col("last")), "name")).From(Table{Name: "users"}),
+		Select(As(Concat(Col("first"), Val(" "), Col("last")), "name")).From(Table{Name: NewIdent("users")}),
 		`SELECT ("first" || ? || "last") AS "name" FROM "users"`, []any{" "})
 }
 
 func TestStandardJSONAccess(t *testing.T) {
 	// SQL/JSON standard JSON_QUERY (JSON) and JSON_VALUE (text).
 	assertStandard(t,
-		Select(As(JSONGet(Col("data"), "address", "city"), "c")).From(Table{Name: "events"}),
+		Select(As(JSONGet(Col("data"), "address", "city"), "c")).From(Table{Name: NewIdent("events")}),
 		`SELECT JSON_QUERY("data", '$.address.city') AS "c" FROM "events"`, nil)
 
 	assertStandard(t,
-		Select(As(JSONGetText(Col("data"), "items", 0, "id"), "id")).From(Table{Name: "events"}),
+		Select(As(JSONGetText(Col("data"), "items", 0, "id"), "id")).From(Table{Name: NewIdent("events")}),
 		`SELECT JSON_VALUE("data", '$.items[0].id') AS "id" FROM "events"`, nil)
 }
 
 func TestStandardJSONObject(t *testing.T) {
 	// The SQL/JSON standard uses the "key VALUE value" separator.
 	assertStandard(t,
-		Select(As(JSONObject("id", Col("id"), "name", Col("name")), "j")).From(Table{Name: "users"}),
+		Select(As(JSONObject("id", Col("id"), "name", Col("name")), "j")).From(Table{Name: NewIdent("users")}),
 		`SELECT JSON_OBJECT(? VALUE "id", ? VALUE "name") AS "j" FROM "users"`, []any{"id", "name"})
 }
 
 func TestStandardRejectsReturning(t *testing.T) {
-	insert := InsertInto(Table{Name: "users"}).Columns("email").Values("a@x.com").Returning(Col("id"))
+	insert := InsertInto(Table{Name: NewIdent("users")}).Columns("email").Values("a@x.com").Returning(Col("id"))
 	_, _, err := insert.ToSQL(StandardSQLDialect{})
 	if err == nil || !strings.Contains(err.Error(), "does not support RETURNING") {
 		t.Fatalf("ToSQL() error = %v, want RETURNING rejection", err)
@@ -299,7 +299,7 @@ func TestStandardRejectsReturning(t *testing.T) {
 }
 
 func TestStandardRejectsUpsert(t *testing.T) {
-	insert := InsertInto(Table{Name: "users"}).Columns("email", "name").Values("a@x.com", "Alice").
+	insert := InsertInto(Table{Name: NewIdent("users")}).Columns("email", "name").Values("a@x.com", "Alice").
 		OnConflict("email").DoUpdate(Set("name", Excluded("name")))
 	_, _, err := insert.ToSQL(StandardSQLDialect{})
 	if err == nil || !strings.Contains(err.Error(), "upsert") {
@@ -308,9 +308,9 @@ func TestStandardRejectsUpsert(t *testing.T) {
 }
 
 func TestStandardCreateTableIdentity(t *testing.T) {
-	stmt := CreateTable(Table{Name: "items"}).
-		Column(ColumnDef{Name: "id", Type: EngineType{Name: "bigint"}, NotNull: true, AutoIncrement: true}).
-		Column(ColumnDef{Name: "name", Type: EngineType{Name: "varchar", Length: 255}, NotNull: true}).
+	stmt := CreateTable(Table{Name: NewIdent("items")}).
+		Column(ColumnDef{Name: NewIdent("id"), Type: EngineType{Name: "bigint"}, NotNull: true, AutoIncrement: true}).
+		Column(ColumnDef{Name: NewIdent("name"), Type: EngineType{Name: "varchar", Length: 255}, NotNull: true}).
 		PrimaryKey("id")
 	got := mustDDL(t, stmt, "standard")
 	want := "CREATE TABLE \"items\" (\n" +

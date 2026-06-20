@@ -7,11 +7,11 @@ func TestGroupingCompile(t *testing.T) {
 		query Query
 		want  string
 	}{
-		{Select(Col("a")).From(Table{Name: "t"}).GroupBy(Rollup(Col("a"), Col("b"))),
+		{Select(Col("a")).From(Table{Name: NewIdent("t")}).GroupBy(Rollup(Col("a"), Col("b"))),
 			`SELECT "a" FROM "t" GROUP BY ROLLUP ("a", "b")`},
-		{Select(Col("a")).From(Table{Name: "t"}).GroupBy(Cube(Col("a"))),
+		{Select(Col("a")).From(Table{Name: NewIdent("t")}).GroupBy(Cube(Col("a"))),
 			`SELECT "a" FROM "t" GROUP BY CUBE ("a")`},
-		{Select(Col("a")).From(Table{Name: "t"}).GroupBy(GroupingSets(
+		{Select(Col("a")).From(Table{Name: NewIdent("t")}).GroupBy(GroupingSets(
 			[]Expression{Col("a"), Col("b")}, nil)),
 			`SELECT "a" FROM "t" GROUP BY GROUPING SETS (("a", "b"), ())`},
 	}

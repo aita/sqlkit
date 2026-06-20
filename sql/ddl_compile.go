@@ -14,7 +14,7 @@ import (
 // share the syntax (on MySQL a schema is a database and CREATE SCHEMA is its
 // synonym), so it renders directly through QuoteName.
 func (c *Compiler) CompileCreateSchema(s CreateSchemaStmt) (string, error) {
-	if s.Name == "" {
+	if s.Name.IsZero() {
 		return "", fmt.Errorf("sqlkit/sql: CREATE SCHEMA requires a name")
 	}
 	var sb strings.Builder
@@ -22,14 +22,14 @@ func (c *Compiler) CompileCreateSchema(s CreateSchemaStmt) (string, error) {
 	if s.IfNotExists {
 		sb.WriteString("IF NOT EXISTS ")
 	}
-	sb.WriteString(c.Dialect.QuoteName(s.Name) + ";")
+	sb.WriteString(c.Dialect.QuoteName(s.Name.String()) + ";")
 	return sb.String(), nil
 }
 
 // CompileDropSchema renders a DROP SCHEMA statement (shared syntax; CASCADE is
 // PostgreSQL-only, as MySQL's DROP SCHEMA always drops the database's contents).
 func (c *Compiler) CompileDropSchema(s DropSchemaStmt) (string, error) {
-	if s.Name == "" {
+	if s.Name.IsZero() {
 		return "", fmt.Errorf("sqlkit/sql: DROP SCHEMA requires a name")
 	}
 	var sb strings.Builder
@@ -37,7 +37,7 @@ func (c *Compiler) CompileDropSchema(s DropSchemaStmt) (string, error) {
 	if s.IfExists {
 		sb.WriteString("IF EXISTS ")
 	}
-	sb.WriteString(c.Dialect.QuoteName(s.Name))
+	sb.WriteString(c.Dialect.QuoteName(s.Name.String()))
 	if s.Cascade && c.Dialect.Name() != "mysql" {
 		sb.WriteString(" CASCADE")
 	}
@@ -63,15 +63,15 @@ func (c *Compiler) CompileCreateTable(s CreateTableStmt) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		defs = append(defs, "CONSTRAINT "+c.Dialect.QuoteName(check.Name)+" CHECK ("+expr+")")
+		defs = append(defs, "CONSTRAINT "+c.Dialect.QuoteName(check.Name.String())+" CHECK ("+expr+")")
 	}
 	for _, u := range s.Uniques {
 		if len(u.Columns) == 0 {
 			return "", fmt.Errorf("sqlkit/sql: UNIQUE constraint requires at least one column")
 		}
 		clause := "UNIQUE (" + c.quoteAll(u.Columns) + ")"
-		if u.Name != "" {
-			clause = "CONSTRAINT " + c.Dialect.QuoteName(u.Name) + " " + clause
+		if !u.Name.IsZero() {
+			clause = "CONSTRAINT " + c.Dialect.QuoteName(u.Name.String()) + " " + clause
 		}
 		defs = append(defs, clause)
 	}
@@ -87,8 +87,8 @@ func (c *Compiler) CompileCreateTable(s CreateTableStmt) (string, error) {
 				return "", fmt.Errorf("sqlkit/sql: table index requires at least one column")
 			}
 			clause := "KEY "
-			if idx.Name != "" {
-				clause += c.Dialect.QuoteName(idx.Name) + " "
+			if !idx.Name.IsZero() {
+				clause += c.Dialect.QuoteName(idx.Name.String()) + " "
 			}
 			defs = append(defs, clause+"("+c.quoteAll(idx.Columns)+")")
 		}
@@ -122,7 +122,7 @@ func (c *Compiler) compileColumnDef(col ColumnDef) (string, error) {
 	if col.Type == nil {
 		return "", fmt.Errorf("sqlkit/sql: column %q has no type", col.Name)
 	}
-	name := c.Dialect.QuoteName(col.Name)
+	name := c.Dialect.QuoteName(col.Name.String())
 
 	// The column's type-and-value core: an auto-increment clause when the type
 	// renders one, otherwise the plain type plus a GENERATED/IDENTITY/DEFAULT.
@@ -142,8 +142,8 @@ func (c *Compiler) compileColumnDef(col ColumnDef) (string, error) {
 			return "", err
 		}
 		core = typeClause
-		if col.Collate != "" {
-			core += " COLLATE " + col.Collate
+		if !col.Collate.IsZero() {
+			core += " COLLATE " + col.Collate.String()
 		}
 		switch {
 		case col.Generated != nil:
@@ -212,10 +212,10 @@ func (c *Compiler) requireIdentity() error {
 
 // columnReferenceClause renders a column-level REFERENCES clause.
 func (c *Compiler) columnReferenceClause(r ColumnReference) (string, error) {
-	if r.Table == "" || r.Column == "" {
+	if r.Table.IsZero() || r.Column.IsZero() {
 		return "", fmt.Errorf("sqlkit/sql: a column REFERENCES needs a table and column")
 	}
-	clause := "REFERENCES " + c.qualifyName(r.Schema, r.Table) + " (" + c.Dialect.QuoteName(r.Column) + ")"
+	clause := "REFERENCES " + c.qualifyName(r.Schema, r.Table) + " (" + c.Dialect.QuoteName(r.Column.String()) + ")"
 	if r.OnDelete != "" {
 		clause += " ON DELETE " + r.OnDelete
 	}
@@ -239,7 +239,7 @@ func (c *Compiler) compileRestateColumn(col ColumnDef) (string, error) {
 		}
 		return "MODIFY COLUMN " + def, nil
 	}
-	name := c.Dialect.QuoteName(col.Name)
+	name := c.Dialect.QuoteName(col.Name.String())
 	typeClause, err := col.Type.RenderType(c.Dialect)
 	if err != nil {
 		return "", err
@@ -337,7 +337,7 @@ func (c *Compiler) CompileCreateIndex(s CreateIndexStmt) (string, error) {
 	if s.IfNotExists {
 		sb.WriteString("IF NOT EXISTS ")
 	}
-	sb.WriteString(c.Dialect.QuoteName(s.Name) + " ON " + c.qualify(s.Table) +
+	sb.WriteString(c.Dialect.QuoteName(s.Name.String()) + " ON " + c.qualify(s.Table) +
 		" (" + c.quoteAll(s.Columns) + ");")
 	return sb.String(), nil
 }
@@ -346,7 +346,7 @@ func (c *Compiler) CompileCreateIndex(s CreateIndexStmt) (string, error) {
 func (c *Compiler) CompileDropIndex(s DropIndexStmt) (string, error) {
 	return c.Dialect.DropIndex(
 		c.qualifyName(s.Table.Schema, s.Name),
-		c.Dialect.QuoteName(s.Name),
+		c.Dialect.QuoteName(s.Name.String()),
 		c.qualify(s.Table),
 	), nil
 }
@@ -386,7 +386,7 @@ func (c *Compiler) CompileTruncate(s TruncateStmt) (string, error) {
 
 // CompileDropForeignKey renders the drop-foreign-key statement via the dialect.
 func (c *Compiler) CompileDropForeignKey(s DropForeignKeyStmt) (string, error) {
-	return c.Dialect.DropForeignKey(c.qualify(s.Table), c.Dialect.QuoteName(s.Name)), nil
+	return c.Dialect.DropForeignKey(c.qualify(s.Table), c.Dialect.QuoteName(s.Name.String())), nil
 }
 
 // CompileCommentOnTable renders a standalone table comment ("" when the dialect
@@ -398,7 +398,7 @@ func (c *Compiler) CompileCommentOnTable(s CommentOnTableStmt) (string, error) {
 // CompileCommentOnColumn renders a standalone column comment ("" when the
 // dialect comments inline).
 func (c *Compiler) CompileCommentOnColumn(s CommentOnColumnStmt) (string, error) {
-	return c.Dialect.ColumnCommentStatement(c.qualify(s.Table), c.Dialect.QuoteName(s.Column), s.Comment), nil
+	return c.Dialect.ColumnCommentStatement(c.qualify(s.Table), c.Dialect.QuoteName(s.Column.String()), s.Comment), nil
 }
 
 // CompileAlterTable renders an ALTER TABLE statement as a single
@@ -430,7 +430,7 @@ func (c *Compiler) compileAlteration(table Table, a Alteration) (string, error) 
 		}
 		return "ADD COLUMN " + def, nil
 	case AlterDropColumn:
-		return "DROP COLUMN " + c.Dialect.QuoteName(a.Name), nil
+		return "DROP COLUMN " + c.Dialect.QuoteName(a.Name.String()), nil
 	case AlterRestateColumn:
 		if a.Column == nil {
 			return "", fmt.Errorf("sqlkit/sql: restate column has no column definition")
@@ -444,7 +444,7 @@ func (c *Compiler) compileAlteration(table Table, a Alteration) (string, error) 
 		}
 		// PostgreSQL has no DROP PRIMARY KEY; drop the constraint by its
 		// conventional "<table>_pkey" name.
-		return "DROP CONSTRAINT " + c.Dialect.QuoteName(table.Name+"_pkey"), nil
+		return "DROP CONSTRAINT " + c.Dialect.QuoteName(table.Name.String()+"_pkey"), nil
 	case AlterAddForeignKey:
 		if a.ForeignKey == nil {
 			return "", fmt.Errorf("sqlkit/sql: ADD FOREIGN KEY has no constraint")
@@ -455,22 +455,22 @@ func (c *Compiler) compileAlteration(table Table, a Alteration) (string, error) 
 		if err != nil {
 			return "", err
 		}
-		return "ADD CONSTRAINT " + c.Dialect.QuoteName(a.Name) + " CHECK (" + expr + ")", nil
+		return "ADD CONSTRAINT " + c.Dialect.QuoteName(a.Name.String()) + " CHECK (" + expr + ")", nil
 	case AlterAddUnique:
 		if len(a.Columns) == 0 {
 			return "", fmt.Errorf("sqlkit/sql: ADD UNIQUE requires at least one column")
 		}
 		clause := "ADD "
-		if a.Name != "" {
-			clause += "CONSTRAINT " + c.Dialect.QuoteName(a.Name) + " "
+		if !a.Name.IsZero() {
+			clause += "CONSTRAINT " + c.Dialect.QuoteName(a.Name.String()) + " "
 		}
 		return clause + "UNIQUE (" + c.quoteAll(a.Columns) + ")", nil
 	case AlterDropConstraint:
-		return "DROP CONSTRAINT " + c.Dialect.QuoteName(a.Name), nil
+		return "DROP CONSTRAINT " + c.Dialect.QuoteName(a.Name.String()), nil
 	case AlterRenameColumn:
-		return "RENAME COLUMN " + c.Dialect.QuoteName(a.Name) + " TO " + c.Dialect.QuoteName(a.NewName), nil
+		return "RENAME COLUMN " + c.Dialect.QuoteName(a.Name.String()) + " TO " + c.Dialect.QuoteName(a.NewName.String()), nil
 	case AlterRenameTable:
-		return "RENAME TO " + c.Dialect.QuoteName(a.NewName), nil
+		return "RENAME TO " + c.Dialect.QuoteName(a.NewName.String()), nil
 	case AlterColumnType:
 		if err := c.requireColumnModify("ALTER COLUMN TYPE"); err != nil {
 			return "", err
@@ -479,7 +479,7 @@ func (c *Compiler) compileAlteration(table Table, a Alteration) (string, error) 
 		if err != nil {
 			return "", err
 		}
-		return "ALTER COLUMN " + c.Dialect.QuoteName(a.Name) + " TYPE " + t, nil
+		return "ALTER COLUMN " + c.Dialect.QuoteName(a.Name.String()) + " TYPE " + t, nil
 	case AlterSetNotNull, AlterDropNotNull:
 		if err := c.requireColumnModify("SET/DROP NOT NULL"); err != nil {
 			return "", err
@@ -488,12 +488,12 @@ func (c *Compiler) compileAlteration(table Table, a Alteration) (string, error) 
 		if a.Kind == AlterDropNotNull {
 			op = "DROP NOT NULL"
 		}
-		return "ALTER COLUMN " + c.Dialect.QuoteName(a.Name) + " " + op, nil
+		return "ALTER COLUMN " + c.Dialect.QuoteName(a.Name.String()) + " " + op, nil
 	case AlterSetDefault, AlterDropDefault:
 		if err := c.requireColumnModify("SET/DROP DEFAULT"); err != nil {
 			return "", err
 		}
-		col := c.Dialect.QuoteName(a.Name)
+		col := c.Dialect.QuoteName(a.Name.String())
 		if a.Kind == AlterDropDefault {
 			return "ALTER COLUMN " + col + " DROP DEFAULT", nil
 		}
@@ -526,7 +526,7 @@ func (c *Compiler) foreignKeyClause(fk ForeignKeyConstraint) string {
 // foreignKeyDef renders a "CONSTRAINT name FOREIGN KEY (cols) REFERENCES ..."
 // table constraint, shared by CREATE TABLE and ALTER TABLE ADD.
 func (c *Compiler) foreignKeyDef(fk ForeignKeyConstraint) string {
-	clause := "CONSTRAINT " + c.Dialect.QuoteName(fk.Name) +
+	clause := "CONSTRAINT " + c.Dialect.QuoteName(fk.Name.String()) +
 		" FOREIGN KEY (" + c.quoteAll(fk.Columns) + ")" +
 		" REFERENCES " + c.qualifyName(fk.RefSchema, fk.RefTable) +
 		" (" + c.quoteAll(fk.RefColumns) + ")"
@@ -548,18 +548,18 @@ func (c *Compiler) qualify(t Table) string {
 // qualifyName quotes schema.name, or just name when schema is empty. DDL uses
 // QuoteName (not QuoteIdent) so a name containing a literal dot stays one
 // identifier.
-func (c *Compiler) qualifyName(schemaName, name string) string {
-	if schemaName == "" {
-		return c.Dialect.QuoteName(name)
+func (c *Compiler) qualifyName(schemaName, name Ident) string {
+	if schemaName.IsZero() {
+		return c.Dialect.QuoteName(name.String())
 	}
-	return c.Dialect.QuoteName(schemaName) + "." + c.Dialect.QuoteName(name)
+	return c.Dialect.QuoteName(schemaName.String()) + "." + c.Dialect.QuoteName(name.String())
 }
 
 // quoteAll quotes each identifier with QuoteName and joins them with ", ".
-func (c *Compiler) quoteAll(names []string) string {
+func (c *Compiler) quoteAll(names []Ident) string {
 	quoted := make([]string, len(names))
 	for i, name := range names {
-		quoted[i] = c.Dialect.QuoteName(name)
+		quoted[i] = c.Dialect.QuoteName(name.String())
 	}
 	return strings.Join(quoted, ", ")
 }

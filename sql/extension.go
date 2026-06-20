@@ -8,9 +8,10 @@ import (
 // CreateExtensionStmt is the AST for a CREATE EXTENSION statement (PostgreSQL).
 // It is a DDL Statement.
 type CreateExtensionStmt struct {
-	Name        string
+	posField
+	Name        Ident
 	IfNotExists bool
-	Schema      string
+	Schema      Ident
 }
 
 // ToSQL compiles the CREATE EXTENSION statement.
@@ -19,7 +20,7 @@ func (s CreateExtensionStmt) ToSQL(d Dialect) (string, []any, error) {
 	return out, nil, err
 }
 func (s CreateExtensionStmt) compileDDL(c *Compiler) (string, error) {
-	if s.Name == "" {
+	if s.Name.IsZero() {
 		return "", fmt.Errorf("sqlkit/sql: CREATE EXTENSION requires a name")
 	}
 	var sb strings.Builder
@@ -27,10 +28,10 @@ func (s CreateExtensionStmt) compileDDL(c *Compiler) (string, error) {
 	if s.IfNotExists {
 		sb.WriteString("IF NOT EXISTS ")
 	}
-	sb.WriteString(c.Dialect.QuoteName(s.Name))
-	if s.Schema != "" {
+	sb.WriteString(c.Dialect.QuoteName(s.Name.String()))
+	if !s.Schema.IsZero() {
 		sb.WriteString(" WITH SCHEMA ")
-		sb.WriteString(c.Dialect.QuoteName(s.Schema))
+		sb.WriteString(c.Dialect.QuoteName(s.Schema.String()))
 	}
 	sb.WriteString(";")
 	return sb.String(), nil
@@ -42,7 +43,7 @@ type CreateExtensionBuilder struct{ s CreateExtensionStmt }
 
 // CreateExtension starts a CREATE EXTENSION builder for an extension name.
 func CreateExtension(name string) CreateExtensionBuilder {
-	return CreateExtensionBuilder{s: CreateExtensionStmt{Name: name}}
+	return CreateExtensionBuilder{s: CreateExtensionStmt{Name: NewIdent(name)}}
 }
 
 // Stmt returns the built CREATE EXTENSION statement.
@@ -56,7 +57,7 @@ func (b CreateExtensionBuilder) IfNotExists() CreateExtensionBuilder {
 
 // Schema installs the extension into a specific schema (WITH SCHEMA name).
 func (b CreateExtensionBuilder) Schema(schema string) CreateExtensionBuilder {
-	b.s.Schema = schema
+	b.s.Schema = NewIdent(schema)
 	return b
 }
 
@@ -67,7 +68,8 @@ func (CreateExtensionBuilder) ddlStatement()                            {}
 
 // DropExtensionStmt is the AST for a DROP EXTENSION statement.
 type DropExtensionStmt struct {
-	Names    []string
+	posField
+	Names    []Ident
 	IfExists bool
 	Cascade  bool
 }
@@ -90,7 +92,7 @@ func (s DropExtensionStmt) compileDDL(c *Compiler) (string, error) {
 		if i > 0 {
 			sb.WriteString(", ")
 		}
-		sb.WriteString(c.Dialect.QuoteName(name))
+		sb.WriteString(c.Dialect.QuoteName(name.String()))
 	}
 	if s.Cascade {
 		sb.WriteString(" CASCADE")
@@ -105,7 +107,7 @@ type DropExtensionBuilder struct{ s DropExtensionStmt }
 
 // DropExtension starts a DROP EXTENSION builder for one or more extensions.
 func DropExtension(names ...string) DropExtensionBuilder {
-	return DropExtensionBuilder{s: DropExtensionStmt{Names: names}}
+	return DropExtensionBuilder{s: DropExtensionStmt{Names: idents(names)}}
 }
 
 // Stmt returns the built DROP EXTENSION statement.

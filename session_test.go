@@ -432,7 +432,7 @@ func TestSessionExecRunsInTransaction(t *testing.T) {
 	fake := &testutil.Fake{}
 	session := newSession(t, fake)
 
-	stmt := sql.Update(sql.Table{Schema: "public", Name: "users"}).Set(sql.Set("email", sql.Val("x@x")))
+	stmt := sql.Update(sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}).Set(sql.Set("email", sql.Val("x@x")))
 	if _, err := session.Exec(context.Background(), stmt); err != nil {
 		t.Fatalf("Session.Exec() error = %v", err)
 	}

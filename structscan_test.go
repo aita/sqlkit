@@ -199,7 +199,7 @@ func TestQueryScansPointerSliceAndAcceptsBuiltQuery(t *testing.T) {
 	db := sqlkit.WrapDB(fake.DB())
 
 	query := sql.Select(sql.Col("user_id"), sql.Col("email"), sql.Col("name"), sql.Col("created_at")).
-		From(sql.Table{Name: "users"})
+		From(sql.Table{Name: sql.NewIdent("users")})
 	var authors []*authorRow
 	if err := db.RawSQL(context.Background(), query).Scan(&authors); err != nil {
 		t.Fatalf("RawSQL().Scan() error = %v", err)
@@ -230,7 +230,7 @@ func TestQueryScansOneRowAndReportsNoRows(t *testing.T) {
 
 func TestQueryRejectsArgsWithBuiltQuery(t *testing.T) {
 	db := sqlkit.WrapDB(newAuthorFake().DB())
-	query := sql.Select(sql.Col("id")).From(sql.Table{Name: "users"})
+	query := sql.Select(sql.Col("id")).From(sql.Table{Name: sql.NewIdent("users")})
 	var authors []authorRow
 	if err := db.RawSQL(context.Background(), query, 1, 2).Scan(&authors); err == nil {
 		t.Fatal("RawSQL(builtQuery, args...) succeeded, want error")

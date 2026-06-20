@@ -36,7 +36,7 @@ func Slice(operand Expression, lower, upper Expression) SubscriptExpression {
 type FieldExpression struct {
 	posField
 	Operand Expression
-	Field   string
+	Field   Ident
 }
 
 func (FieldExpression) SQLExpression() {}
@@ -44,14 +44,14 @@ func (FieldExpression) SQLSelection()  {}
 
 // Field builds a composite field access (operand).field.
 func Field(operand Expression, field string) FieldExpression {
-	return FieldExpression{Operand: operand, Field: field}
+	return FieldExpression{Operand: operand, Field: NewIdent(field)}
 }
 
 // CollateExpression applies a collation to an operand (operand COLLATE "name").
 type CollateExpression struct {
 	posField
 	Operand   Expression
-	Collation string
+	Collation Ident
 }
 
 func (CollateExpression) SQLExpression() {}
@@ -59,5 +59,5 @@ func (CollateExpression) SQLSelection()  {}
 
 // Collate builds a COLLATE expression operand COLLATE collation.
 func Collate(operand Expression, collation string) CollateExpression {
-	return CollateExpression{Operand: operand, Collation: collation}
+	return CollateExpression{Operand: operand, Collation: NewIdent(collation)}
 }

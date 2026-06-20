@@ -9,8 +9,8 @@ import (
 )
 
 func TestTables(t *testing.T) {
-	users := sql.Table{Name: "users"}
-	orders := sql.Table{Name: "orders"}
+	users := sql.Table{Name: sql.NewIdent("users")}
+	orders := sql.Table{Name: sql.NewIdent("orders")}
 
 	tests := []struct {
 		name  string
@@ -64,9 +64,9 @@ func TestTables(t *testing.T) {
 }
 
 func TestTablesSubqueriesAndCTEs(t *testing.T) {
-	users := sql.Table{Name: "users"}
-	orders := sql.Table{Name: "orders"}
-	posts := sql.Table{Name: "posts"}
+	users := sql.Table{Name: sql.NewIdent("users")}
+	orders := sql.Table{Name: sql.NewIdent("orders")}
+	posts := sql.Table{Name: sql.NewIdent("posts")}
 
 	// active is a CTE over users, referenced by name from the outer queries.
 	active := sql.Select(sql.Col("id")).From(users).Where(sql.Eq(sql.Col("active"), sql.Val(true))).CTE("active")
@@ -113,7 +113,7 @@ func TestTablesSubqueriesAndCTEs(t *testing.T) {
 		},
 		{
 			name:  "delete with subquery collects both tables",
-			query: sql.DeleteFrom(sql.Table{Name: "sessions"}).Where(sql.InQuery(sql.Col("user_id"), sql.Select(sql.Col("id")).From(users))),
+			query: sql.DeleteFrom(sql.Table{Name: sql.NewIdent("sessions")}).Where(sql.InQuery(sql.Col("user_id"), sql.Select(sql.Col("id")).From(users))),
 			want:  []string{"sessions", "users"},
 		},
 		{

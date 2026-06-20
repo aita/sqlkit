@@ -161,7 +161,7 @@ func convertTableSource(ts *ast.TableSource) (sql.Source, error) {
 
 // tableFromName builds a Table from a TableName, keeping any schema qualifier.
 func tableFromName(tn *ast.TableName) sql.Table {
-	return sql.Table{Schema: tn.Schema.O, Name: tn.Name.O}
+	return sql.Table{Schema: sql.NewIdent(tn.Schema.O), Name: sql.NewIdent(tn.Name.O)}
 }
 
 // starQualifier renders the qualifier preceding a "*" wildcard, e.g. "t" or
