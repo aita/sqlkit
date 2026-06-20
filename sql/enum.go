@@ -43,6 +43,8 @@ func (s CreateEnumStmt) compileDDL(c *Compiler) (string, error) {
 }
 func (CreateEnumStmt) ddlStatement() {}
 
+func (s CreateEnumStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+
 // DropTypeStmt is the AST for a DROP TYPE statement (PostgreSQL).
 type DropTypeStmt struct {
 	posField
@@ -79,6 +81,8 @@ func (s DropTypeStmt) compileDDL(c *Compiler) (string, error) {
 }
 func (DropTypeStmt) ddlStatement() {}
 
+func (s DropTypeStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+
 // DropTypeBuilder is the fluent constructor for a DropTypeStmt.
 type DropTypeBuilder struct{ s DropTypeStmt }
 
@@ -107,6 +111,8 @@ func (b DropTypeBuilder) Cascade() DropTypeBuilder {
 func (b DropTypeBuilder) ToSQL(d Dialect) (string, []any, error) { return b.s.ToSQL(d) }
 func (b DropTypeBuilder) buildStmt() Query                       { return b.s }
 func (DropTypeBuilder) ddlStatement()                            {}
+
+func (b DropTypeBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
 
 // AlterTypeAddValueStmt is the AST for an ALTER TYPE ... ADD VALUE statement,
 // adding a label to an enum type (PostgreSQL). At most one of Before/After is
@@ -148,6 +154,8 @@ func (s AlterTypeAddValueStmt) compileDDL(c *Compiler) (string, error) {
 }
 func (AlterTypeAddValueStmt) ddlStatement() {}
 
+func (s AlterTypeAddValueStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+
 // AlterTypeAddValueBuilder is the fluent constructor for an AlterTypeAddValueStmt.
 type AlterTypeAddValueBuilder struct{ s AlterTypeAddValueStmt }
 
@@ -182,6 +190,8 @@ func (b AlterTypeAddValueBuilder) ToSQL(d Dialect) (string, []any, error) { retu
 func (b AlterTypeAddValueBuilder) buildStmt() Query                       { return b.s }
 func (AlterTypeAddValueBuilder) ddlStatement()                            {}
 
+func (b AlterTypeAddValueBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
+
 // AlterTypeRenameValueStmt is the AST for an ALTER TYPE ... RENAME VALUE
 // statement. It has no options, so it is constructed directly.
 type AlterTypeRenameValueStmt struct {
@@ -209,3 +219,5 @@ func (s AlterTypeRenameValueStmt) compileDDL(c *Compiler) (string, error) {
 		literal(s.OldValue) + " TO " + literal(s.NewValue) + ";", nil
 }
 func (AlterTypeRenameValueStmt) ddlStatement() {}
+
+func (s AlterTypeRenameValueStmt) setPos(pos int) Query { s.NodePos = pos; return s }

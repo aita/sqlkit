@@ -212,6 +212,8 @@ func (s CreateSchemaStmt) compileDDL(c *Compiler) (string, error) {
 }
 func (CreateSchemaStmt) ddlStatement() {}
 
+func (s CreateSchemaStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+
 // CreateSchemaBuilder is the fluent constructor for a CreateSchemaStmt.
 type CreateSchemaBuilder struct{ s CreateSchemaStmt }
 
@@ -235,6 +237,8 @@ func (b CreateSchemaBuilder) ToSQL(d Dialect) (string, []any, error) { return b.
 func (b CreateSchemaBuilder) buildStmt() Query                       { return b.s }
 func (CreateSchemaBuilder) ddlStatement()                            {}
 
+func (b CreateSchemaBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
+
 // DropSchemaStmt is the AST for a DROP SCHEMA statement. On MySQL, where a schema
 // is a database, this drops the database and everything left in it; on PostgreSQL
 // a non-empty schema needs the tables dropped first (or Cascade).
@@ -254,6 +258,8 @@ func (s DropSchemaStmt) compileDDL(c *Compiler) (string, error) {
 	return c.CompileDropSchema(s)
 }
 func (DropSchemaStmt) ddlStatement() {}
+
+func (s DropSchemaStmt) setPos(pos int) Query { s.NodePos = pos; return s }
 
 // DropSchemaBuilder is the fluent constructor for a DropSchemaStmt.
 type DropSchemaBuilder struct{ s DropSchemaStmt }
@@ -284,6 +290,8 @@ func (b DropSchemaBuilder) Cascade() DropSchemaBuilder {
 func (b DropSchemaBuilder) ToSQL(d Dialect) (string, []any, error) { return b.s.ToSQL(d) }
 func (b DropSchemaBuilder) buildStmt() Query                       { return b.s }
 func (DropSchemaBuilder) ddlStatement()                            {}
+
+func (b DropSchemaBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
 
 // CreateTableStmt is the AST for a CREATE TABLE statement.
 type CreateTableStmt struct {
@@ -318,6 +326,8 @@ func (s CreateTableStmt) compileDDL(c *Compiler) (string, error) {
 	return c.CompileCreateTable(s)
 }
 func (CreateTableStmt) ddlStatement() {}
+
+func (s CreateTableStmt) setPos(pos int) Query { s.NodePos = pos; return s }
 
 // CreateTableBuilder is the fluent constructor for a CreateTableStmt.
 type CreateTableBuilder struct{ s CreateTableStmt }
@@ -397,6 +407,8 @@ func (b CreateTableBuilder) ToSQL(d Dialect) (string, []any, error) { return b.s
 func (b CreateTableBuilder) buildStmt() Query                       { return b.s }
 func (CreateTableBuilder) ddlStatement()                            {}
 
+func (b CreateTableBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
+
 // DropTableStmt is the AST for a DROP TABLE statement over one or more tables.
 type DropTableStmt struct {
 	posField
@@ -413,6 +425,8 @@ func (s DropTableStmt) compileDDL(c *Compiler) (string, error) {
 	return c.CompileDropTable(s)
 }
 func (DropTableStmt) ddlStatement() {}
+
+func (s DropTableStmt) setPos(pos int) Query { s.NodePos = pos; return s }
 
 // DropTableBuilder is the fluent constructor for a DropTableStmt.
 type DropTableBuilder struct{ s DropTableStmt }
@@ -437,6 +451,8 @@ func (b DropTableBuilder) ToSQL(d Dialect) (string, []any, error) { return b.s.T
 func (b DropTableBuilder) buildStmt() Query                       { return b.s }
 func (DropTableBuilder) ddlStatement()                            {}
 
+func (b DropTableBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
+
 // CreateViewStmt is the AST for a CREATE VIEW statement whose body is a query (a
 // SELECT builder, or any Query). Like the other DDL nodes a view binds no values,
 // so the body must compile to plain SQL text — inline any literals with Raw
@@ -458,6 +474,8 @@ func (s CreateViewStmt) compileDDL(c *Compiler) (string, error) {
 	return c.CompileCreateView(s)
 }
 func (CreateViewStmt) ddlStatement() {}
+
+func (s CreateViewStmt) setPos(pos int) Query { s.NodePos = pos; return s }
 
 // CreateViewBuilder is the fluent constructor for a CreateViewStmt.
 type CreateViewBuilder struct{ s CreateViewStmt }
@@ -489,6 +507,8 @@ func (b CreateViewBuilder) ToSQL(d Dialect) (string, []any, error) { return b.s.
 func (b CreateViewBuilder) buildStmt() Query                       { return b.s }
 func (CreateViewBuilder) ddlStatement()                            {}
 
+func (b CreateViewBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
+
 // DropViewStmt is the AST for a DROP VIEW statement.
 type DropViewStmt struct {
 	posField
@@ -506,6 +526,8 @@ func (s DropViewStmt) compileDDL(c *Compiler) (string, error) {
 	return c.CompileDropView(s)
 }
 func (DropViewStmt) ddlStatement() {}
+
+func (s DropViewStmt) setPos(pos int) Query { s.NodePos = pos; return s }
 
 // DropViewBuilder is the fluent constructor for a DropViewStmt.
 type DropViewBuilder struct{ s DropViewStmt }
@@ -537,6 +559,8 @@ func (b DropViewBuilder) ToSQL(d Dialect) (string, []any, error) { return b.s.To
 func (b DropViewBuilder) buildStmt() Query                       { return b.s }
 func (DropViewBuilder) ddlStatement()                            {}
 
+func (b DropViewBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
+
 // CreateIndexStmt is the AST for a CREATE INDEX statement.
 type CreateIndexStmt struct {
 	posField
@@ -556,6 +580,8 @@ func (s CreateIndexStmt) compileDDL(c *Compiler) (string, error) {
 	return c.CompileCreateIndex(s)
 }
 func (CreateIndexStmt) ddlStatement() {}
+
+func (s CreateIndexStmt) setPos(pos int) Query { s.NodePos = pos; return s }
 
 // CreateIndexBuilder is the fluent constructor for a CreateIndexStmt.
 type CreateIndexBuilder struct{ s CreateIndexStmt }
@@ -585,6 +611,8 @@ func (b CreateIndexBuilder) ToSQL(d Dialect) (string, []any, error) { return b.s
 func (b CreateIndexBuilder) buildStmt() Query                       { return b.s }
 func (CreateIndexBuilder) ddlStatement()                            {}
 
+func (b CreateIndexBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
+
 // DropIndexStmt is the AST for a DROP INDEX statement. It has no options, so it
 // is constructed directly with DropIndex.
 type DropIndexStmt struct {
@@ -609,6 +637,8 @@ func (s DropIndexStmt) compileDDL(c *Compiler) (string, error) {
 }
 func (DropIndexStmt) ddlStatement() {}
 
+func (s DropIndexStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+
 // TruncateStmt is the AST for a TRUNCATE TABLE statement, which empties one or
 // more tables far faster than a DELETE. It binds no values and runs through Exec
 // like the other statements. The options diverge by engine: RESTART IDENTITY and
@@ -631,6 +661,8 @@ func (s TruncateStmt) compileDDL(c *Compiler) (string, error) {
 	return c.CompileTruncate(s)
 }
 func (TruncateStmt) ddlStatement() {}
+
+func (s TruncateStmt) setPos(pos int) Query { s.NodePos = pos; return s }
 
 // TruncateBuilder is the fluent constructor for a TruncateStmt.
 type TruncateBuilder struct{ s TruncateStmt }
@@ -663,6 +695,8 @@ func (b TruncateBuilder) ToSQL(d Dialect) (string, []any, error) { return b.s.To
 func (b TruncateBuilder) buildStmt() Query                       { return b.s }
 func (TruncateBuilder) ddlStatement()                            {}
 
+func (b TruncateBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
+
 // DropForeignKeyStmt is the AST for the statement that drops a foreign-key
 // constraint, using the dialect's syntax (PostgreSQL DROP CONSTRAINT, MySQL DROP
 // FOREIGN KEY). It has no options, so it is constructed directly.
@@ -688,6 +722,8 @@ func (s DropForeignKeyStmt) compileDDL(c *Compiler) (string, error) {
 }
 func (DropForeignKeyStmt) ddlStatement() {}
 
+func (s DropForeignKeyStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+
 // CommentOnTableStmt is the AST for a standalone table comment (PostgreSQL
 // COMMENT ON TABLE). It renders to "" on dialects that comment inline (MySQL).
 // It has no options, so it is constructed directly.
@@ -711,6 +747,8 @@ func (s CommentOnTableStmt) compileDDL(c *Compiler) (string, error) {
 	return c.CompileCommentOnTable(s)
 }
 func (CommentOnTableStmt) ddlStatement() {}
+
+func (s CommentOnTableStmt) setPos(pos int) Query { s.NodePos = pos; return s }
 
 // CommentOnColumnStmt is the AST for a standalone column comment (PostgreSQL
 // COMMENT ON COLUMN). It renders to "" on dialects that comment inline (MySQL).
@@ -736,6 +774,8 @@ func (s CommentOnColumnStmt) compileDDL(c *Compiler) (string, error) {
 	return c.CompileCommentOnColumn(s)
 }
 func (CommentOnColumnStmt) ddlStatement() {}
+
+func (s CommentOnColumnStmt) setPos(pos int) Query { s.NodePos = pos; return s }
 
 // AlterationKind identifies which ALTER TABLE action an Alteration describes.
 type AlterationKind int
@@ -808,6 +848,8 @@ func (s AlterTableStmt) compileDDL(c *Compiler) (string, error) {
 	return c.CompileAlterTable(s)
 }
 func (AlterTableStmt) ddlStatement() {}
+
+func (s AlterTableStmt) setPos(pos int) Query { s.NodePos = pos; return s }
 
 // AlterTableBuilder is the fluent constructor for an AlterTableStmt.
 type AlterTableBuilder struct{ s AlterTableStmt }
@@ -919,6 +961,8 @@ func (b AlterTableBuilder) RenameTo(name string) AlterTableBuilder {
 func (b AlterTableBuilder) ToSQL(d Dialect) (string, []any, error) { return b.s.ToSQL(d) }
 func (b AlterTableBuilder) buildStmt() Query                       { return b.s }
 func (AlterTableBuilder) ddlStatement()                            {}
+
+func (b AlterTableBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
 
 // Compile-time checks that every DDL node is a Statement (and therefore a
 // Query, so it runs through Database.Exec / Session.Exec). Both the immutable

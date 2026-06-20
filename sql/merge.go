@@ -117,6 +117,8 @@ func (q MergeStmt) compile(c *Compiler) (string, []any, error) {
 	return c.CompileMerge(q)
 }
 
+func (q MergeStmt) setPos(pos int) Query { q.NodePos = pos; return q }
+
 // MergeBuilder is the fluent constructor for a MergeStmt.
 type MergeBuilder struct{ s MergeStmt }
 
@@ -175,6 +177,8 @@ func (b MergeBuilder) ToSQL(dialect Dialect) (string, []any, error) { return b.s
 func (b MergeBuilder) compile(c *Compiler) (string, []any, error) { return b.s.compile(c) }
 
 func (b MergeBuilder) buildStmt() Query { return b.s }
+
+func (b MergeBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
 
 // CompileMerge compiles a MERGE statement. The dialect must implement
 // MergeDialect (PostgreSQL and the standard target do); others error.

@@ -26,6 +26,8 @@ func (q InsertStmt) compile(c *Compiler) (string, []any, error) {
 	return c.CompileInsert(q)
 }
 
+func (q InsertStmt) setPos(pos int) Query { q.NodePos = pos; return q }
+
 // ColumnCount reports the number of columns each VALUES row binds, the per-row
 // bind-parameter count used to size batches against a parameter limit. It is the
 // explicit Columns list when set, else the width of the first row, else 0.
@@ -189,6 +191,8 @@ func (b InsertBuilder) compile(c *Compiler) (string, []any, error) { return b.s.
 
 func (b InsertBuilder) buildStmt() Query { return b.s }
 
+func (b InsertBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
+
 // UpdateStmt is the immutable AST for an UPDATE statement.
 type UpdateStmt struct {
 	posField
@@ -212,6 +216,8 @@ func (q UpdateStmt) ToSQL(dialect Dialect) (string, []any, error) {
 func (q UpdateStmt) compile(c *Compiler) (string, []any, error) {
 	return c.CompileUpdate(q)
 }
+
+func (q UpdateStmt) setPos(pos int) Query { q.NodePos = pos; return q }
 
 // UpdateBuilder is the fluent constructor for an UpdateStmt.
 type UpdateBuilder struct{ s UpdateStmt }
@@ -292,6 +298,8 @@ func (b UpdateBuilder) compile(c *Compiler) (string, []any, error) { return b.s.
 
 func (b UpdateBuilder) buildStmt() Query { return b.s }
 
+func (b UpdateBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
+
 // DeleteStmt is the immutable AST for a DELETE statement.
 type DeleteStmt struct {
 	posField
@@ -314,6 +322,8 @@ func (q DeleteStmt) ToSQL(dialect Dialect) (string, []any, error) {
 func (q DeleteStmt) compile(c *Compiler) (string, []any, error) {
 	return c.CompileDelete(q)
 }
+
+func (q DeleteStmt) setPos(pos int) Query { q.NodePos = pos; return q }
 
 // DeleteBuilder is the fluent constructor for a DeleteStmt.
 type DeleteBuilder struct{ s DeleteStmt }
@@ -387,3 +397,5 @@ func (b DeleteBuilder) ToSQL(dialect Dialect) (string, []any, error) { return b.
 func (b DeleteBuilder) compile(c *Compiler) (string, []any, error) { return b.s.compile(c) }
 
 func (b DeleteBuilder) buildStmt() Query { return b.s }
+
+func (b DeleteBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }

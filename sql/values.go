@@ -46,6 +46,8 @@ func (q ValuesQuery) compile(c *Compiler) (string, []any, error) {
 	return c.CompileValues(q)
 }
 
+func (q ValuesQuery) setPos(pos int) Query { q.NodePos = pos; return q }
+
 // CompileValues compiles a standalone VALUES query.
 func (c *Compiler) CompileValues(q ValuesQuery) (string, []any, error) {
 	if len(q.rows) == 0 {

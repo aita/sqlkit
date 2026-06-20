@@ -28,6 +28,8 @@ func (s GrantStmt) compileDDL(c *Compiler) (string, error) {
 }
 func (GrantStmt) ddlStatement() {}
 
+func (s GrantStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+
 // GrantBuilder is the fluent constructor for a GrantStmt.
 type GrantBuilder struct{ s GrantStmt }
 
@@ -73,6 +75,8 @@ func (b GrantBuilder) ToSQL(d Dialect) (string, []any, error) { return b.s.ToSQL
 func (b GrantBuilder) buildStmt() Query                       { return b.s }
 func (GrantBuilder) ddlStatement()                            {}
 
+func (b GrantBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
+
 // RevokeStmt is the AST for a REVOKE statement removing privileges on database
 // objects from roles. It mirrors GrantStmt and is likewise a DDL Statement.
 // Behavior is "", "CASCADE", or "RESTRICT".
@@ -95,6 +99,8 @@ func (s RevokeStmt) compileDDL(c *Compiler) (string, error) {
 	return c.CompileRevoke(s)
 }
 func (RevokeStmt) ddlStatement() {}
+
+func (s RevokeStmt) setPos(pos int) Query { s.NodePos = pos; return s }
 
 // RevokeBuilder is the fluent constructor for a RevokeStmt.
 type RevokeBuilder struct{ s RevokeStmt }
@@ -150,6 +156,8 @@ func (b RevokeBuilder) Restrict() RevokeBuilder {
 func (b RevokeBuilder) ToSQL(d Dialect) (string, []any, error) { return b.s.ToSQL(d) }
 func (b RevokeBuilder) buildStmt() Query                       { return b.s }
 func (RevokeBuilder) ddlStatement()                            {}
+
+func (b RevokeBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
 
 // CompileGrant compiles a GRANT statement.
 func (c *Compiler) CompileGrant(s GrantStmt) (string, error) {

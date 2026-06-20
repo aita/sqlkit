@@ -80,6 +80,8 @@ func (s CreateSequenceStmt) compileDDL(c *Compiler) (string, error) {
 }
 func (CreateSequenceStmt) ddlStatement() {}
 
+func (s CreateSequenceStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+
 // CreateSequenceBuilder is the fluent constructor for a CreateSequenceStmt.
 type CreateSequenceBuilder struct{ s CreateSequenceStmt }
 
@@ -140,6 +142,8 @@ func (b CreateSequenceBuilder) ToSQL(d Dialect) (string, []any, error) { return 
 func (b CreateSequenceBuilder) buildStmt() Query                       { return b.s }
 func (CreateSequenceBuilder) ddlStatement()                            {}
 
+func (b CreateSequenceBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
+
 // DropSequenceStmt is the AST for a DROP SEQUENCE statement.
 type DropSequenceStmt struct {
 	posField
@@ -176,6 +180,8 @@ func (s DropSequenceStmt) compileDDL(c *Compiler) (string, error) {
 }
 func (DropSequenceStmt) ddlStatement() {}
 
+func (s DropSequenceStmt) setPos(pos int) Query { s.NodePos = pos; return s }
+
 // DropSequenceBuilder is the fluent constructor for a DropSequenceStmt.
 type DropSequenceBuilder struct{ s DropSequenceStmt }
 
@@ -198,3 +204,5 @@ func (b DropSequenceBuilder) Cascade() DropSequenceBuilder { b.s.Cascade = true;
 func (b DropSequenceBuilder) ToSQL(d Dialect) (string, []any, error) { return b.s.ToSQL(d) }
 func (b DropSequenceBuilder) buildStmt() Query                       { return b.s }
 func (DropSequenceBuilder) ddlStatement()                            {}
+
+func (b DropSequenceBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
