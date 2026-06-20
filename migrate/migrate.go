@@ -483,7 +483,7 @@ func (m *Migrator) Stamp(ctx context.Context, revision string) error {
 		want = m.ancestors(rev)
 	}
 
-	return m.db.WithSession(func(s *sqlkit.Session) error {
+	return m.db.WithSession(ctx, func(s *sqlkit.Session) error {
 		for _, mig := range m.order { // forward: stamp newly-applied
 			if want[mig.Revision] && !applied[mig.Revision] {
 				if _, err := s.Exec(ctx, m.recordEvent(mig, DirectionUp)); err != nil {
@@ -695,7 +695,7 @@ func (m *Migrator) apply(ctx context.Context, mig Migration, fn func(*Operator),
 	if mig.DisableTx {
 		return run(m.db)
 	}
-	return m.db.WithSession(func(s *sqlkit.Session) error { return run(s) })
+	return m.db.WithSession(ctx, func(s *sqlkit.Session) error { return run(s) })
 }
 
 // ensureTable creates the history table if it does not exist.

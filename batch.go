@@ -109,7 +109,7 @@ func execStatements(ctx context.Context, ex executorBinding, stmts []compiledStm
 	}
 	if db, ok := ex.(*Database); ok {
 		var out stdsql.Result
-		err := db.WithSession(func(s *Session) error {
+		err := db.WithSession(ctx, func(s *Session) error {
 			res, err := execOn(ctx, s, stmts)
 			out = res
 			return err

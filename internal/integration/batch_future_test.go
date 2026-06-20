@@ -138,7 +138,7 @@ func TestUowBatchedFlushEndToEnd(t *testing.T) {
 
 		// Bulk UPDATE: load all, rename each in place, flush as VALUES-join chunks.
 		updBefore := counter.execs
-		err := lim.WithSession(func(s *sqlkit.Session) error {
+		err := lim.WithSession(ctx, func(s *sqlkit.Session) error {
 			scope := uow.NewScope(s, uow.WithBatchSize(2))
 			var loaded []userRow
 			if err := scope.Find(ctx, blogdb.Users, &loaded); err != nil {
@@ -170,7 +170,7 @@ func TestUowBatchedFlushEndToEnd(t *testing.T) {
 
 		// Chunked DELETE: remove every row through the scope.
 		delBefore := counter.execs
-		err = lim.WithSession(func(s *sqlkit.Session) error {
+		err = lim.WithSession(ctx, func(s *sqlkit.Session) error {
 			scope := uow.NewScope(s, uow.WithBatchSize(2))
 			for _, u := range renamed {
 				if err := scope.Remove(blogdb.Users, u); err != nil {

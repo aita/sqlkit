@@ -6,7 +6,7 @@
 // It is deliberately named Scope, not Session, so it reads clearly alongside
 // sqlkit.Session (the transaction handle it flushes through):
 //
-//	db.WithSession(func(s *sqlkit.Session) error {
+//	db.WithSession(ctx, func(s *sqlkit.Session) error {
 //		scope := uow.NewScope(s)
 //
 //		var u User

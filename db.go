@@ -339,6 +339,12 @@ func (d *Database) NewSession(opts ...SessionOption) *Session {
 	for _, opt := range opts {
 		opt.applySession(&options)
 	}
+	return d.newSession(options)
+}
+
+// newSession builds a session from already-parsed options, the shared path for
+// NewSession and the WithSession retry loop.
+func (d *Database) newSession(options sessionOptions) *Session {
 	autoChunk := d.autoChunk
 	if options.autoChunk != nil {
 		autoChunk = *options.autoChunk
@@ -350,15 +356,35 @@ func (d *Database) NewSession(opts ...SessionOption) *Session {
 // error or panic it rolls back and the error (or panic) propagates. Thanks to
 // lazy transaction begin, a callback that runs no statements costs nothing.
 //
-//	err := db.WithSession(func(s *sqlkit.Session) error {
+//	err := db.WithSession(ctx, func(s *sqlkit.Session) error {
 //		if _, err := s.Insert(Users).Values(u).Exec(ctx); err != nil {
 //			return err
 //		}
 //		_, err := s.Update(Posts).Set(...).Where(...).Exec(ctx)
 //		return err
 //	})
-func (d *Database) WithSession(fn func(s *Session) error, opts ...SessionOption) error {
-	session := d.NewSession(opts...)
+//
+// Pass WithRetry to replay the whole callback in a fresh transaction on a
+// retryable failure (a serialization failure or deadlock by default); ctx then
+// also bounds the retry loop, cutting the backoff short and returning the last
+// error once it is cancelled.
+func (d *Database) WithSession(ctx context.Context, fn func(s *Session) error, opts ...SessionOption) error {
+	options := sessionOptions{}
+	for _, opt := range opts {
+		opt.applySession(&options)
+	}
+	run := func() error {
+		return runSession(d.newSession(options), fn)
+	}
+	if options.retry == nil {
+		return run()
+	}
+	return options.retry.run(ctx, run)
+}
+
+// runSession runs fn in session, committing on success and rolling back on
+// error or panic.
+func runSession(session *Session, fn func(s *Session) error) error {
 	defer func() {
 		if p := recover(); p != nil {
 			_ = session.Rollback()
@@ -382,6 +408,7 @@ type sessionOptions struct {
 	tx        *stdsql.TxOptions
 	autoChunk *bool
 	route     string
+	retry     *retryConfig
 }
 
 type txOption struct{ tx *stdsql.TxOptions }

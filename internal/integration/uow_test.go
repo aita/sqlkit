@@ -32,7 +32,7 @@ func TestUnitOfWorkTracking(t *testing.T) {
 
 		carol := &userRow{Email: "carol@example.com", Name: ptr("Carol")}
 		var draftID int64
-		err = db.WithSession(func(s *sqlkit.Session) error {
+		err = db.WithSession(ctx, func(s *sqlkit.Session) error {
 			scope := uow.NewScope(s, uow.WithIdentities(identities))
 
 			// Load Alice through the scope (managed) and rename her in place.
@@ -99,7 +99,7 @@ func TestUnitOfWorkNestedSavepoint(t *testing.T) {
 		ctx := context.Background()
 		seedBlog(t, db, eng)
 
-		err := db.WithSession(func(s *sqlkit.Session) error {
+		err := db.WithSession(ctx, func(s *sqlkit.Session) error {
 			scope := uow.NewScope(s)
 
 			// Parent work: insert dave.

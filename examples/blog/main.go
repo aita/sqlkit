@@ -59,7 +59,7 @@ type Post struct {
 func run(ctx context.Context, db *sqlkit.Database) error {
 	// WithSession runs the callback in one transaction: commit on nil,
 	// rollback on error or panic.
-	return db.WithSession(func(session *sqlkit.Session) error {
+	return db.WithSession(ctx, func(session *sqlkit.Session) error {
 
 		// INSERT ... RETURNING; Scan recovers database-generated values.
 		var inserted []User

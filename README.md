@@ -547,7 +547,7 @@ err := db.RawSQL(ctx, "SELECT * FROM users WHERE id = $1", 42).Scan(&user)
 rollback on error or panic:
 
 ```go
-err := db.WithSession(func(session *sqlkit.Session) error {
+err := db.WithSession(ctx, func(session *sqlkit.Session) error {
     if _, err := session.Insert(appdb.Users).Values(u).Exec(ctx); err != nil {
         return err
     }
@@ -558,6 +558,41 @@ err := db.WithSession(func(session *sqlkit.Session) error {
 For manual control, `NewSession` hands you the session directly. Either way the
 transaction begins lazily — nothing is opened until the first statement runs, so
 an untouched session's `Commit`/`Close` are free no-ops.
+
+Pass `WithRetry` to make `WithSession` **replay the whole callback in a fresh
+transaction** on a retryable failure — the safe granularity, since a failed
+statement may have aborted the surrounding transaction, so the entire unit of
+work must run again. By default it makes up to 3 attempts on a serialization
+failure or deadlock (`IsSerializationFailure`, recognizing SQLSTATE `40001` /
+`40P01`), waiting an exponential backoff between tries:
+
+```go
+err := db.WithSession(ctx, func(session *sqlkit.Session) error {
+    // read, decide, write — all replayed if the transaction conflicts
+    return nil
+}, sqlkit.WithRetry(sqlkit.MaxAttempts(5)))
+```
+
+Tune it with `MaxAttempts`, `RetryBackoff`, and `RetryIf` — the last to retry
+other conditions, such as an application-level `ErrVersionConflict` (for a
+callback that reloads its inputs) or a MySQL deadlock the SQLSTATE check does not
+see. The callback must be idempotent across attempts: it runs again from the top
+each time. The `ctx` passed to `WithSession` also bounds the retry loop: once it
+is cancelled the pending backoff is cut short and the last error is returned.
+
+To mark a one-off error as retryable without replacing the predicate, wrap it
+with `sqlkit.Retryable(err)` — the default predicate (`IsRetryable`) honours it
+anywhere in the error chain, and the wrapper stays transparent to
+`errors.Is`/`errors.As`:
+
+```go
+err := db.WithSession(ctx, func(session *sqlkit.Session) error {
+    if conflictedExternally {
+        return sqlkit.Retryable(err) // replay even though it is not a serialization failure
+    }
+    return nil
+}, sqlkit.WithRetry())
+```
 
 ---
 
