@@ -164,10 +164,10 @@ func TestMigratorStatus(t *testing.T) {
 	if len(status) != 2 {
 		t.Fatalf("status len = %d, want 2", len(status))
 	}
-	if !(status[0].Revision == "0001" && status[0].Applied) {
+	if status[0].Revision != "0001" || !status[0].Applied {
 		t.Errorf("status[0] = %+v, want revision 0001 applied", status[0])
 	}
-	if !(status[1].Revision == "0002" && !status[1].Applied) {
+	if status[1].Revision != "0002" || status[1].Applied {
 		t.Errorf("status[1] = %+v, want revision 0002 pending", status[1])
 	}
 }

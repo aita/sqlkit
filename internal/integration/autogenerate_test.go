@@ -214,12 +214,12 @@ func resetSchema(t *testing.T, db *sqlkit.Database, eng engine) {
 	if err != nil {
 		t.Fatalf("acquire connection: %v", err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck // best-effort close
 	if eng.name == "mysql" {
 		if _, err := conn.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS = 0"); err != nil {
 			t.Fatalf("disable foreign key checks: %v", err)
 		}
-		defer conn.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS = 1")
+		defer conn.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS = 1") //nolint:errcheck // best-effort cleanup
 	}
 	for _, tbl := range model.Tables {
 		stmt := "DROP TABLE IF EXISTS " + eng.dialect.QuoteIdent(qualifiedName(tbl))

@@ -83,7 +83,7 @@ func TestWrapExecutorAppliesToSession(t *testing.T) {
 	db := sqlkit.WrapExecutor(rec)
 	ctx := context.Background()
 	session := db.NewSession()
-	defer session.Close()
+	defer session.Close() //nolint:errcheck // best-effort close
 
 	if _, err := session.Delete(Users).Where(Users.ID.Eq(1)).Exec(ctx); err != nil {
 		t.Fatalf("Exec() error = %v", err)
@@ -99,7 +99,7 @@ func TestSessionRunsInItsTransaction(t *testing.T) {
 	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB())
 	session := db.NewSession()
-	defer session.Close()
+	defer session.Close() //nolint:errcheck // best-effort close
 
 	if _, err := session.Delete(Users).Where(Users.ID.Eq(1)).Exec(context.Background()); err != nil {
 		t.Fatalf("Exec() error = %v", err)
@@ -117,7 +117,7 @@ func TestWrapExecutorSavepointWithoutTx(t *testing.T) {
 	rec := &recordingExecutor{db: fake.DB()} // implements only Executor
 	db := sqlkit.WrapExecutor(rec)
 	session := db.NewSession()
-	defer session.Close()
+	defer session.Close() //nolint:errcheck // best-effort close
 
 	if _, err := session.Savepoint(context.Background()); err == nil {
 		t.Fatal("Savepoint() error = nil, want an error (session has no transaction)")
@@ -220,7 +220,7 @@ func TestWrapExecutorTxSavepoint(t *testing.T) {
 	term := &txExecutorStub{db: fake.DB()}
 	db := sqlkit.WrapExecutor(term)
 	session := db.NewSession()
-	defer session.Close()
+	defer session.Close() //nolint:errcheck // best-effort close
 
 	if _, err := session.Savepoint(context.Background()); err != nil {
 		t.Fatalf("Savepoint() error = %v", err)

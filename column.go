@@ -131,13 +131,6 @@ func NewColumn[T any](table TableInfo, name string) Column[T] {
 	return Column[T]{table: table, name: name}
 }
 
-// withTable returns a copy of the column bound to a different table identity
-// (same name and static type). It backs aliased table views.
-func (c Column[T]) withTable(table TableInfo) Column[T] {
-	c.table = table
-	return c
-}
-
 func (Column[T]) SQLExpression() {}
 func (Column[T]) SQLSelection()  {}
 func (Column[T]) typedExpr(T)    {}

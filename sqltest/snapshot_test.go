@@ -13,7 +13,7 @@ func TestSnapshotRestore(t *testing.T) {
 	fake := &testutil.Fake{}
 	db := wrap(fake, sqlkit.PostgreSQLDialect{})
 	session := db.NewSession()
-	defer session.Close()
+	defer session.Close() //nolint:errcheck // best-effort close
 
 	// Seed once, then snapshot.
 	sqltest.InsertRows(t, session, newUsers(), userRow{Email: "alice@example.com"})
@@ -46,7 +46,7 @@ func TestFixtureLoadSnapshot(t *testing.T) {
 	fake := &testutil.Fake{}
 	db := wrap(fake, sqlkit.PostgreSQLDialect{})
 	session := db.NewSession()
-	defer session.Close()
+	defer session.Close() //nolint:errcheck // best-effort close
 
 	restore := sqltest.NewFixture("blog").
 		Add(newUsers(), userRow{Email: "alice@example.com"}).

@@ -1,0 +1,18 @@
+# golangci-lint configuration for the examples module (schema v2).
+#
+# The examples are teaching code, so they are held to the plain standard linter
+# set with NO errcheck exclusions: an example should model proper error handling
+# rather than lean on the fire-and-forget allowances the root config grants the
+# library and CLI. golangci-lint uses the nearest config to the directory it
+# runs in, so this file (not the repo-root .golangci.yml) governs examples/.
+version: "2"
+
+linters:
+  # errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+
+issues:
+  # Report every finding rather than truncating repeated ones (see the root
+  # config for the rationale).
+  max-same-issues: 0
+  max-issues-per-linter: 0

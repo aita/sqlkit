@@ -149,7 +149,7 @@ func convertTableSource(ts *ast.TableSource, tp tablePos) (sql.Source, error) {
 		if ts.AsName.O == "" {
 			return nil, sqlparse.Unsupported("derived table without an alias")
 		}
-		query, err := convertResultSetQuery(src.(ast.ResultSetNode), tp)
+		query, err := convertResultSetQuery(src, tp)
 		if err != nil {
 			return nil, err
 		}

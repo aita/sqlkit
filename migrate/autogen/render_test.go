@@ -103,9 +103,9 @@ func TestRenderAddTable(t *testing.T) {
 			t.Errorf("Down missing %q\n--- Down ---\n%s", w, res.Down)
 		}
 	}
-	if !res.UsesSQL { // Default(sql.Raw) is not used here, but Default() is bare; FK has no sql.Raw
-		// id has bare Default(), so sql import may not be needed; don't assert UsesSQL true.
-	}
+	// UsesSQL is intentionally not asserted here: id has a bare Default() (no
+	// sql.Raw) and the FK carries no sql.Raw either, so the sql import may or may
+	// not be needed depending on rendering details.
 }
 
 func TestRenderAddDropColumn(t *testing.T) {

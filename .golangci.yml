@@ -1,0 +1,38 @@
+# golangci-lint configuration (schema v2).
+#
+# This is the repo-root config. golangci-lint uses the nearest config to the
+# directory it runs in, so this file governs the root module and the satellite
+# modules that sit under it (cmd/sqlkit, internal/integration, the sqlparse/*
+# frontends and querytrace/otelquery). The examples module has its own stricter
+# config (examples/.golangci.yml) and deliberately does NOT inherit the errcheck
+# exclusions below — example code should model proper error handling.
+#
+# The exclusions here are for the library and CLI code, not the examples.
+version: "2"
+
+linters:
+  # The standard set: errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+
+  settings:
+    errcheck:
+      # The exclusion list is kept to the two cases that are fire-and-forget by
+      # construction, everywhere they appear:
+      #   - io.WriteString: every call site writes to a hash.Hash, whose Write is
+      #     documented to never return an error — there is provably nothing to check.
+      #   - (*database/sql.Rows).Close: a deferred Close on a read cursor that has
+      #     already been drained; iteration errors are surfaced via rows.Err(), and
+      #     the Close error afterwards is not actionable.
+      # Every other fire-and-forget call (Session/DB/Stmt/Conn Close, Fprintf to an
+      # output writer, RemoveAll cleanup, ...) is suppressed individually at the
+      # call site with a //nolint:errcheck directive, keeping this list honest.
+      exclude-functions:
+        - io.WriteString
+        - (*database/sql.Rows).Close
+
+issues:
+  # Report every finding. The defaults (max-same-issues: 3,
+  # max-issues-per-linter: 50) silently truncate repeated findings, which would
+  # let a newly-introduced unhandled error hide behind already-known ones.
+  max-same-issues: 0
+  max-issues-per-linter: 0

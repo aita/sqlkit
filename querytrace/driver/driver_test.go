@@ -316,7 +316,7 @@ func TestPreparedStatement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	defer stmt.Close()
+	defer stmt.Close() //nolint:errcheck // best-effort close
 
 	rows, err := stmt.QueryContext(ctx, 1)
 	if err != nil {

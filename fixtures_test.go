@@ -60,7 +60,7 @@ type usersPostsRel struct{ PostsTable }
 func (r usersPostsRel) Target() sqlkit.Table { return r.PostsTable }
 
 func (r usersPostsRel) JoinOn() sqlkit.Predicate {
-	return sqlkit.Cond(sql.Eq(r.PostsTable.UserID, Users.ID))
+	return sqlkit.Cond(sql.Eq(r.UserID, Users.ID))
 }
 
 func (r usersPostsRel) Cardinality() sqlkit.Cardinality { return sqlkit.ToMany }
@@ -77,7 +77,7 @@ type postsUserRel struct{ UsersTable }
 func (r postsUserRel) Target() sqlkit.Table { return r.UsersTable }
 
 func (r postsUserRel) JoinOn() sqlkit.Predicate {
-	return sqlkit.Cond(sql.Eq(r.UsersTable.ID, Posts.UserID))
+	return sqlkit.Cond(sql.Eq(r.ID, Posts.UserID))
 }
 
 func (r postsUserRel) Cardinality() sqlkit.Cardinality { return sqlkit.ToOne }
