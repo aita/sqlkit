@@ -25,16 +25,16 @@ func TopLevelWhere(q sql.Query) sql.Expression {
 
 // FilterColumns returns the bare, lower-cased column names referenced in the
 // statement's top-level WHERE clause, deduplicated. It is best-effort: it walks
-// the WHERE expression with WalkExpr (which does not descend into subqueries), so
-// a predicate node WalkExpr does not model may under-report. nil when there is no
-// WHERE.
+// the WHERE expression with sql.WalkExpr (which does not descend into
+// subqueries), so a predicate node it does not model may under-report. nil when
+// there is no WHERE.
 func FilterColumns(q sql.Query) []string {
 	where := TopLevelWhere(q)
 	if where == nil {
 		return nil
 	}
 	var names []string
-	WalkExpr(where, func(e sql.Expression) {
+	sql.WalkExpr(where, func(e sql.Expression) {
 		if c, ok := e.(sql.ColumnExpression); ok {
 			names = append(names, BareColumn(c.Name.String()))
 		}
@@ -51,7 +51,7 @@ func MaxInList(q sql.Query) int {
 		return 0
 	}
 	max := 0
-	WalkExpr(where, func(e sql.Expression) {
+	sql.WalkExpr(where, func(e sql.Expression) {
 		if in, ok := e.(sql.InExpression); ok && in.Subquery == nil {
 			if n := len(in.Items); n > max {
 				max = n
@@ -73,7 +73,7 @@ func WherePredicates(q sql.Query) (filterColumns []string, maxInList int) {
 		return nil, 0
 	}
 	var names []string
-	WalkExpr(where, func(e sql.Expression) {
+	sql.WalkExpr(where, func(e sql.Expression) {
 		switch x := e.(type) {
 		case sql.ColumnExpression:
 			names = append(names, BareColumn(x.Name.String()))

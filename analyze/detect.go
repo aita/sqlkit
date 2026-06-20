@@ -213,7 +213,7 @@ func TargetScope(t sql.Table) []SourceRef {
 // does not descend into subqueries — each subquery is its own scope, walked on
 // its own (see Walk and SourcesOf).
 //
-// It is best-effort over the expression nodes WalkExpr models, so an exotic
+// It is best-effort over the expression nodes sql.WalkExpr models, so an exotic
 // expression may under-report.
 func Columns(q sql.Query) []ColumnUse {
 	var uses []ColumnUse
@@ -229,7 +229,7 @@ func Columns(q sql.Query) []ColumnUse {
 func WalkColumns(q sql.Query, visit func(ColumnUse)) {
 	// expr reports the column references inside an expression at clause/access.
 	expr := func(clause Clause, access Access, e sql.Expression) {
-		WalkExpr(e, func(x sql.Expression) {
+		sql.WalkExpr(e, func(x sql.Expression) {
 			if c, ok := x.(sql.ColumnExpression); ok {
 				visit(ColumnUse{Column: ColumnRefOf(c), Clause: clause, Access: access})
 			}
@@ -247,7 +247,7 @@ func WalkColumns(q sql.Query, visit func(ColumnUse)) {
 	}
 	sels := func(clause Clause, ss []sql.Selection) {
 		for _, s := range ss {
-			walkSelectionExpr(s, func(e sql.Expression) { expr(clause, Read, e) })
+			sql.WalkSelectionExpr(s, func(e sql.Expression) { expr(clause, Read, e) })
 		}
 	}
 	joins := func(js []sql.JoinClause) {
