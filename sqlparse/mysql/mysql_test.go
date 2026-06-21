@@ -150,3 +150,11 @@ func TestParsedQueryExposesStmt(t *testing.T) {
 		t.Fatalf("Limit = %d (has=%v), want 10", stmt.Limit, stmt.HasLimit)
 	}
 }
+
+// Invalid UTF-8 in the source is rejected outright: the TiDB lexer would map the
+// bad byte to "?", which can deparse to broken SQL (e.g. the call "?()").
+func TestParseRejectsInvalidUTF8(t *testing.T) {
+	if _, err := mysql.ParseOne("SELECT \xc6()"); err == nil {
+		t.Fatal("ParseOne(invalid UTF-8) error = nil, want a parse error")
+	}
+}

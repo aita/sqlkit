@@ -12,7 +12,9 @@ package mysql
 
 import (
 	"errors"
+	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/aita/sqlkit/sql"
 	"github.com/aita/sqlkit/sqlparse"
@@ -39,6 +41,14 @@ var _ sqlparse.Parser = Parser{}
 
 // Parse parses one or more MySQL statements in source order.
 func (Parser) Parse(text string) ([]sql.Query, error) {
+	// The TiDB lexer silently maps an invalid UTF-8 byte to "?", which can deparse
+	// to syntactically broken SQL (e.g. an invalid byte as a function name becomes
+	// the call "?()"). SQL source is expected to be valid UTF-8, so reject the rest
+	// up front rather than accept text neither the typed nor the raw path can
+	// faithfully round-trip.
+	if !utf8.ValidString(text) {
+		return nil, fmt.Errorf("sqlkit/sqlparse/mysql: input is not valid UTF-8")
+	}
 	stmts, _, err := parser.New().Parse(text, "", "")
 	if err != nil {
 		return nil, err
