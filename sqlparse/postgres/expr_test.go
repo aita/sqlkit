@@ -583,3 +583,10 @@ func TestColumnIdentifierWithDotFallsBackToRaw(t *testing.T) {
 func TestEmptyRowFallsBackToRaw(t *testing.T) {
 	assertRaw(t, "SELECT a FROM t WHERE r = ROW()")
 }
+
+// A function name that is not a bare identifier (a quoted name with a space or an
+// embedded quote) has no faithful unquoted form, since sqlkit renders a function
+// name unquoted; it round-trips as raw rather than emitting invalid SQL.
+func TestNonBareFunctionNameFallsBackToRaw(t *testing.T) {
+	assertRaw(t, `SELECT "My Func"()`)
+}

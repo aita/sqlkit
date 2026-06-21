@@ -22,6 +22,15 @@ func funcName(nodes []*pg.Node) (string, error) {
 	if len(parts) == 2 && parts[0] == "pg_catalog" {
 		parts = parts[1:]
 	}
+	// sqlkit renders a function name unquoted, so each part must be a bare
+	// identifier; a quoted name (a space, an embedded quote, or upper case the
+	// grammar would fold) has no faithful unquoted form, so report it unsupported
+	// and let the statement round-trip as raw.
+	for _, p := range parts {
+		if !isBareIdent(p) {
+			return "", sqlparse.Unsupportedf("function name is not a bare identifier: %q", p)
+		}
+	}
 	return strings.Join(parts, "."), nil
 }
 
