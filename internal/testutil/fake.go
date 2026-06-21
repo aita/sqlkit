@@ -32,7 +32,9 @@ type Fake struct {
 	all       []Call
 	begins    int
 	commits   int
+	rollbacks int
 	rowReads  int
+	rowCloses int
 	beginOpts []driver.TxOptions
 
 	// QueryFunc serves QueryContext calls. Nil means every query returns an
@@ -105,6 +107,24 @@ func (f *Fake) Commits() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.commits
+}
+
+// Rollbacks returns the number of rolled-back transactions, so tests can assert
+// that a failed or panicking unit of work actually rolled its transaction back
+// rather than merely failing to commit.
+func (f *Fake) Rollbacks() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.rollbacks
+}
+
+// RowCloses returns the number of result-set cursors that were closed, so tests
+// can assert a query's rows are always released — on the happy path and when
+// scanning or iteration fails.
+func (f *Fake) RowCloses() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.rowCloses
 }
 
 func (f *Fake) recordQuery(call Call) {
@@ -208,7 +228,12 @@ func (t tx) Commit() error {
 	return nil
 }
 
-func (t tx) Rollback() error { return nil }
+func (t tx) Rollback() error {
+	t.f.mu.Lock()
+	defer t.f.mu.Unlock()
+	t.f.rollbacks++
+	return nil
+}
 
 type rows struct {
 	f       *Fake
@@ -218,7 +243,15 @@ type rows struct {
 }
 
 func (r *rows) Columns() []string { return r.columns }
-func (r *rows) Close() error      { return nil }
+
+func (r *rows) Close() error {
+	if r.f != nil {
+		r.f.mu.Lock()
+		r.f.rowCloses++
+		r.f.mu.Unlock()
+	}
+	return nil
+}
 
 func (r *rows) Next(dest []driver.Value) error {
 	if r.pos >= len(r.data) {
