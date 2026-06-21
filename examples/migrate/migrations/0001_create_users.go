@@ -14,7 +14,7 @@ var _ = Registry.Add(migrate.Migration{
 		op.CreateTable("users",
 			decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
 			decl.Column("email", decl.VarChar(255), decl.Unique()),
-			decl.Column("created_at", decl.Timestamp, decl.Default(sql.Raw("now()"))),
+			decl.Column("created_at", decl.Timestamp, decl.Default(sql.Now())),
 		)
 	},
 	Down: func(op *migrate.Operator) {

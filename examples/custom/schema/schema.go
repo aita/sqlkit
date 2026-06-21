@@ -40,8 +40,8 @@ var Users = Public.Table("users",
 	decl.Column("metadata", decl.JSON, decl.Default(sql.Raw("'{}'"))),
 	// By default codegen maps uuid -> string. The mapper pins every uuid column
 	// to the blogdb.UUID domain type via Overrides.
-	decl.Column("external_id", decl.UUID, decl.Default(sql.Raw("gen_random_uuid()"))),
-	decl.Column("created_at", decl.Timestamp, decl.Default(sql.Raw("now()"))),
+	decl.Column("external_id", decl.UUID, decl.Default(sql.Func("gen_random_uuid"))),
+	decl.Column("created_at", decl.Timestamp, decl.Default(sql.Now())),
 )
 
 // Posts reference the user that wrote them (has-many).
