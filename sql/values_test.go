@@ -23,3 +23,19 @@ func TestValuesQueryRejectsRaggedRows(t *testing.T) {
 		t.Fatalf("ToSQL() error = %v, want ragged-row rejection", err)
 	}
 }
+
+// TestValuesSourceCoverage covers the VALUES query as a source and its plumbing.
+func TestValuesSourceCoverage(t *testing.T) {
+	pg := PostgreSQLDialect{}
+	v := Values([]Expression{Val(1), Val(2)}, []Expression{Val(3), Val(4)})
+	if _, _, err := v.ToSQL(pg); err != nil {
+		t.Fatal(err)
+	}
+	_ = v.SQLSource()
+	if sp, ok := Query(v).(interface{ setPos(int) Query }); ok {
+		sp.setPos(2)
+	}
+	if _, _, err := Select(Col("column1")).From(Alias(v, "x")).ToSQL(pg); err != nil {
+		t.Fatal(err)
+	}
+}

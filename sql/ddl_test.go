@@ -739,3 +739,32 @@ func TestDDLCompileColumnAndAlterCoverage(t *testing.T) {
 	mustCompile(pg, AlterTable(tbl).DropPrimaryKey().Stmt())
 	mustCompile(pg, AlterTable(tbl).RenameTo("t2").Stmt())
 }
+
+// TestDDLMorePlumbing covers Truncate, CreateIndex IfNotExists, and the
+// COMMENT ON table/column statements plus their setPos plumbing.
+func TestDDLMorePlumbing(t *testing.T) {
+	pg := PostgreSQLDialect{}
+	mustOK := func(q Query) {
+		t.Helper()
+		if _, _, err := q.ToSQL(pg); err != nil {
+			t.Fatalf("%T: %v", q, err)
+		}
+	}
+	tbl := Table{Name: NewIdent("t")}
+	mustOK(Truncate(tbl))
+	mustOK(CreateIndex("i", tbl, "a").IfNotExists())
+	mustOK(CommentOnTable(tbl, "hi"))
+	mustOK(CommentOnColumn(tbl, "a", "hi"))
+
+	_ = Truncate(tbl).Stmt()
+	_ = Truncate(tbl).buildStmt()
+	for _, q := range []Query{
+		Truncate(tbl), Truncate(tbl).Stmt(),
+		CreateIndex("i", tbl, "a"),
+		CommentOnTable(tbl, "x"), CommentOnColumn(tbl, "a", "x"),
+	} {
+		if sp, ok := q.(interface{ setPos(int) Query }); ok {
+			sp.setPos(2)
+		}
+	}
+}

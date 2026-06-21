@@ -75,3 +75,11 @@ func TestValuesSourceCastsDriverValuer(t *testing.T) {
 		t.Fatalf("ToSQL =\n  %s\nwant\n  %s", got, want)
 	}
 }
+
+// TestSubqueryHelper covers the deprecated Subquery source helper.
+func TestSubqueryHelper(t *testing.T) {
+	s := Subquery(Select(Col("id")).From(orgs), "x")
+	if _, _, err := Select(Col("id")).From(s).ToSQL(PostgreSQLDialect{}); err != nil {
+		t.Fatal(err)
+	}
+}

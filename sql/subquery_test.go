@@ -35,3 +35,11 @@ func TestCompoundQueryAs(t *testing.T) {
 		`SELECT "ids"."id" FROM ((SELECT "id" FROM "users") UNION ALL (SELECT "id" FROM "admins")) AS "ids"`,
 		nil)
 }
+
+// TestDerivedTableAlias covers DerivedTable.Alias.
+func TestDerivedTableAlias(t *testing.T) {
+	d := Select(Col("id")).From(orgs).As("d")
+	if d.Alias() != "d" {
+		t.Fatalf("Alias() = %q, want d", d.Alias())
+	}
+}
