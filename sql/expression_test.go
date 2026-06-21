@@ -382,3 +382,16 @@ func TestLogicalSingleOperand(t *testing.T) {
 		t.Fatal("Or with one operand should return it unchanged")
 	}
 }
+
+// MySQL has no one-field row (its ROW constructor requires >=2 elements), so a
+// single-element row has no valid MySQL spelling and is rejected at compile time
+// rather than emitted as the invalid ROW(x); PostgreSQL renders ROW(x).
+func TestSingleElementRowDialect(t *testing.T) {
+	q := Select(Star()).From(Table{Name: NewIdent("t")}).Where(Eq(Col("a"), Row(Int(1))))
+	if _, _, err := q.ToSQL(PostgreSQLDialect{}); err != nil {
+		t.Errorf("PostgreSQL single-element row: unexpected error %v", err)
+	}
+	if _, _, err := q.ToSQL(MySQLDialect{}); err == nil {
+		t.Error("MySQL single-element row: expected a compile error, got nil")
+	}
+}

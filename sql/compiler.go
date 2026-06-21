@@ -128,8 +128,13 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		}
 		// A multi-element row reads as a row from its commas: (a, b). A single
 		// element needs the ROW keyword — (x) alone is a parenthesized scalar, not a
-		// one-field row, and would lose its row-ness on a round-trip.
+		// one-field row, and would lose its row-ness on a round-trip. MySQL, however,
+		// has no one-field row (its ROW constructor requires at least two elements
+		// and rejects ROW(x)), so a single-element row has no valid MySQL spelling.
 		if len(parts) == 1 {
+			if c.Dialect.Name() == "mysql" {
+				return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support a single-element row", c.Dialect.Name())
+			}
 			return "ROW(" + parts[0] + ")", args, nil
 		}
 		return "(" + strings.Join(parts, ", ") + ")", args, nil
