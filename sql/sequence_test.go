@@ -49,6 +49,15 @@ func TestSequenceCoverage(t *testing.T) {
 		MinValue(1).MaxValue(100).Cycle().OwnedBy("t.c"))
 	mustCompile(CreateSequence(seq).NoMinValue().NoMaxValue().NoCycle())
 	mustCompile(DropSequence("s").IfExists().Cascade())
+	mustCompile(DropSequence("s", "s2").IfExists()) // multiple names exercise the separator
+
+	// Validation guards: a create with no name and a drop with no names.
+	if _, _, err := CreateSequence(Table{}).ToSQL(pg); err == nil {
+		t.Fatal("CREATE SEQUENCE without a name: want error")
+	}
+	if _, _, err := DropSequence().ToSQL(pg); err == nil {
+		t.Fatal("DROP SEQUENCE without a name: want error")
+	}
 
 	_ = CreateSequence(seq).Stmt()
 	_ = CreateSequence(seq).buildStmt()

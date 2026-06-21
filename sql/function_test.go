@@ -28,6 +28,12 @@ func TestCreateFunctionValidation(t *testing.T) {
 	if _, _, err := CreateFunction("f").Language("sql").Body("a $$ b").ToSQL(PostgreSQLDialect{}); err == nil {
 		t.Fatal("CREATE FUNCTION with $$ in body succeeded, want error")
 	}
+	if _, _, err := CreateFunction("").Language("sql").Body("x").ToSQL(PostgreSQLDialect{}); err == nil {
+		t.Fatal("CREATE FUNCTION without a name succeeded, want error")
+	}
+	if _, _, err := DropFunction("").ToSQL(PostgreSQLDialect{}); err == nil {
+		t.Fatal("DROP FUNCTION without a name succeeded, want error")
+	}
 }
 
 func TestDropFunctionCompile(t *testing.T) {

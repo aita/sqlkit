@@ -68,8 +68,18 @@ func TestGrantCoverage(t *testing.T) {
 	}
 	mustCompile(Grant("SELECT").On("t").To("u").WithGrantOption())
 	mustCompile(Grant("USAGE").OnType("SCHEMA", "public").To("u"))
+	mustCompile(Grant("SELECT").On("t1", "t2").To("u1", "u2")) // multiple objects and grantees
 	mustCompile(Revoke("SELECT").GrantOptionFor().On("t").From("u").Cascade())
 	mustCompile(Revoke("USAGE").OnType("SCHEMA", "public").From("u").Restrict())
+
+	// REVOKE with no object reaches the grantBody error path.
+	if _, _, err := Revoke("SELECT").From("u").ToSQL(pg); err == nil {
+		t.Fatal("REVOKE without an object: want error")
+	}
+
+	// buildStmt unwraps the builder to its statement form.
+	_ = Grant("SELECT").On("t").To("u").buildStmt()
+	_ = Revoke("SELECT").On("t").From("u").buildStmt()
 
 	for _, q := range []Query{
 		Grant("SELECT").On("t").To("u"), Grant("SELECT").On("t").To("u").Stmt(),

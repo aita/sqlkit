@@ -58,4 +58,8 @@ func TestMySQLAdminStatements(t *testing.T) {
 		SetVar{Name: "autocommit", Value: Raw("1"), Scope: "GLOBAL"},
 		SetVar{Name: "x", Value: Raw("5"), User: true},
 	), "SET GLOBAL autocommit = 1, @x = 5;", nil)
+
+	// A plain variable (no scope, not a user variable) uses the default arm.
+	assertMySQL(t, SetVariables(SetVar{Name: "time_zone", Value: Raw("'UTC'")}),
+		"SET time_zone = 'UTC';", nil)
 }

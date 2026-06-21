@@ -347,6 +347,11 @@ func TestStatementsRender(t *testing.T) {
 	if out != want {
 		t.Errorf("Render() =\n%s\nwant\n%s", out, want)
 	}
+
+	// A statement that fails to compile surfaces its error from Render.
+	if _, err := (Statements{RenameTable(Table{}, "x")}).Render(mustDialect(t, "mysql")); err == nil {
+		t.Fatal("Render of an invalid statement: want error")
+	}
 }
 
 func TestForeignKeyWithActions(t *testing.T) {

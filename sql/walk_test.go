@@ -291,7 +291,19 @@ func TestWalkRemainingArms(t *testing.T) {
 	walk(CreateMaterializedView(Table{Name: NewIdent("mv")}, Select(Col("id")).From(orgs)))
 	walk(Select(Col("id")).From(orgs).Where(Func("noop", JSONGet(Col("data"), Col("dynkey")))))
 
+	// A VALUES source carries rows that Walk descends into.
+	walk(Select(Col("v")).From(ValuesSource([][]Expression{{Val(1)}}, "rows", "v")))
+	// A generated column carries an expression that Walk descends into.
+	walk(CreateTable(tbl).Column(ColumnDef{
+		Name:      NewIdent("total"),
+		Type:      RawType("int"),
+		Generated: &GeneratedColumn{Expression: Col("a"), Stored: true},
+	}))
+
 	// Decompose over a plain-table FROM (the case Table branch).
+	var tableNames []string
+	Decompose(Unwrap(Update(tbl).Set(Set("a", 1))), nil,
+		func(s string) { tableNames = append(tableNames, s) }, nil)
 	Decompose(Unwrap(Select(Col("id")).From(Table{Name: NewIdent("plain")})), nil, nil, nil)
 	// Decompose over a query whose AST is not a Node returns early.
 	Decompose(rawTestQuery{}, nil, nil, nil)

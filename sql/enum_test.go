@@ -39,6 +39,7 @@ func TestEnumCoverage(t *testing.T) {
 	}
 	mustCompile(CreateEnum("mood", "happy", "sad"))
 	mustCompile(DropType("mood").IfExists().Cascade())
+	mustCompile(DropType("mood", "status").IfExists()) // multiple names exercise the separator
 	mustCompile(AlterTypeAddValue("mood", "meh").IfNotExists().After("happy"))
 	mustCompile(AlterTypeAddValue("mood", "x").Before("sad"))
 	mustCompile(AlterTypeRenameValue("mood", "sad", "down"))

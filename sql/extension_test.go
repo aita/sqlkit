@@ -15,6 +15,10 @@ func TestExtensionCoverage(t *testing.T) {
 	mustCompile(CreateExtension("pgcrypto").IfNotExists().Schema("public"))
 	mustCompile(DropExtension("pgcrypto").IfExists().Cascade())
 
+	if _, _, err := DropExtension().ToSQL(pg); err == nil {
+		t.Fatal("DROP EXTENSION without a name succeeded, want error")
+	}
+
 	_ = CreateExtension("x").Stmt()
 	_ = CreateExtension("x").buildStmt()
 	_ = DropExtension("x").Stmt()

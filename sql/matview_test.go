@@ -47,6 +47,19 @@ func TestMatviewCoverage(t *testing.T) {
 	mustCompile(RefreshMaterializedView(mv).Concurrently())
 	mustCompile(RefreshMaterializedView(mv).WithNoData())
 
+	// Validation guards: a nil query, a query that fails to compile, and a
+	// refresh with no target name.
+	if _, _, err := CreateMaterializedView(mv, nil).ToSQL(pg); err == nil {
+		t.Fatal("CREATE MATERIALIZED VIEW with nil query: want error")
+	}
+	badBody := Select(UnaryExpression{Operand: Col("x")}).From(orgs)
+	if _, _, err := CreateMaterializedView(mv, badBody).ToSQL(pg); err == nil {
+		t.Fatal("CREATE MATERIALIZED VIEW with bad query: want error")
+	}
+	if _, _, err := RefreshMaterializedView(Table{}).ToSQL(pg); err == nil {
+		t.Fatal("REFRESH MATERIALIZED VIEW without a name: want error")
+	}
+
 	for _, q := range []Query{
 		CreateMaterializedView(mv, body), CreateMaterializedView(mv, body).Stmt(),
 		DropMaterializedView(mv), DropMaterializedView(mv).Stmt(),
