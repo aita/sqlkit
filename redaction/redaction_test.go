@@ -506,3 +506,48 @@ func TestApplyNilQuery(t *testing.T) {
 		t.Errorf("Apply(nil) = %v, want nil", got)
 	}
 }
+
+// assertNoLeak applies the redactor and fails if the secret survives anywhere in
+// the rendered SQL or its bind arguments.
+func assertNoLeak(t *testing.T, name string, q sql.Query, secret string) {
+	t.Helper()
+	out := redaction.New(redaction.Columns("users.name")).Apply(q)
+	text, a, err := out.ToSQL(sql.PostgreSQLDialect{})
+	if err != nil {
+		t.Fatalf("%s: ToSQL: %v", name, err)
+	}
+	hay := text
+	for _, v := range a {
+		if s, ok := v.(string); ok {
+			hay += "\x00" + s
+		}
+	}
+	if strings.Contains(hay, secret) {
+		t.Errorf("%s: sensitive value %q leaked into %q args=%v", name, secret, text, a)
+	}
+}
+
+// A sensitive literal wrapped in an expression (cast, concat, function, row
+// constructor, CASE) must still be masked: maskValue recurses into the wrapper so
+// the value never reaches the rendered SQL or bind args. Without this the literal
+// leaks even though its column is policy-sensitive.
+func TestApplyMasksWrappedSensitiveLiterals(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	const s = "SECRETTARO"
+	cases := []struct {
+		name string
+		q    sql.Query
+	}{
+		{"cast", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Cast(sql.Val(s), "text")))},
+		{"concat", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Concat(sql.Val(s), sql.Val("X"))))},
+		{"func", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Func("lower", sql.Val(s))))},
+		{"in_wrapped", sql.Select(sql.Star()).From(users).Where(sql.In(sql.Col("name"), sql.Func("lower", sql.Val(s)), sql.Val("b")))},
+		{"between_wrapped", sql.Select(sql.Star()).From(users).Where(sql.Between(sql.Col("name"), sql.Func("lower", sql.Val(s)), sql.Val("z")))},
+		{"row_pair", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Row(sql.Col("name"), sql.Col("id")), sql.Row(sql.Val(s), sql.Val(1))))},
+		{"case_result", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Case().When(sql.Eq(sql.Col("id"), 1), sql.Val(s)).Else(sql.Val("other"))))},
+		{"update_set", sql.Update(users).Set(sql.Set("name", sql.Func("lower", sql.Val(s)))).Where(sql.Eq(sql.Col("id"), 1))},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { assertNoLeak(t, tc.name, tc.q, s) })
+	}
+}

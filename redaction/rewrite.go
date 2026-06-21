@@ -22,6 +22,10 @@ func (m *Redactor) rewriteExpr(e sql.Expression, scope []analysis.SourceRef) sql
 			x.Right = m.maskValue(x.Right)
 		} else if m.sensitiveColumn(x.Right, scope) {
 			x.Left = m.maskValue(x.Left)
+		} else {
+			// Row constructor comparison: (a, b) = (v1, v2). Mask each value
+			// element whose paired column element is sensitive.
+			x.Left, x.Right = m.maskRowPair(x.Left, x.Right, scope)
 		}
 		return x
 	case sql.DistinctPredicate:
@@ -196,14 +200,91 @@ func (m *Redactor) isSensitive(scope []analysis.SourceRef, col analysis.ColumnRe
 }
 
 // maskValue replaces a string literal with the mask value, leaving every other
-// expression — a number, a bind placeholder, a column, an expression — untouched.
+// leaf — a number, a bind placeholder, a column — untouched. When the value is a
+// string literal wrapped in an expression (a cast, concatenation, function call,
+// collation, or row constructor), it recurses so the embedded literal does not
+// survive into the rendered SQL.
 func (m *Redactor) maskValue(e sql.Expression) sql.Expression {
 	if v, ok := e.(sql.ValueExpression); ok {
 		if _, isString := v.Value.(string); isString {
 			return sql.Val(m.mask)
 		}
+		return e
+	}
+	switch x := e.(type) {
+	case sql.CastExpression:
+		x.Operand = m.maskValue(x.Operand)
+		return x
+	case sql.CollateExpression:
+		x.Operand = m.maskValue(x.Operand)
+		return x
+	case sql.ConcatExpression:
+		x.Operands = m.maskValues(x.Operands)
+		return x
+	case sql.FuncExpression:
+		x.Args = m.maskValues(x.Args)
+		return x
+	case sql.RowExpression:
+		x.Elements = m.maskValues(x.Elements)
+		return x
+	case sql.ArrayExpression:
+		x.Elements = m.maskValues(x.Elements)
+		return x
+	case sql.CaseExpression:
+		// The whole CASE is the value being compared to a sensitive column, so
+		// every result branch carries sensitive data; mask each THEN and the ELSE.
+		// The WHEN conditions are predicates, not the value, so they are left alone.
+		if len(x.Whens) > 0 {
+			whens := clone(x.Whens)
+			for i := range whens {
+				whens[i].Result = m.maskValue(whens[i].Result)
+			}
+			x.Whens = whens
+		}
+		x.ElseValue = m.maskValue(x.ElseValue)
+		return x
 	}
 	return e
+}
+
+// maskRowPair masks the value-side elements of a row-constructor comparison whose
+// paired column element is sensitive — the "(a, b) = (v1, v2)" form, where neither
+// whole side is itself a single sensitive column. The value side may be on either
+// operand. Returns the operands unchanged when both are not row constructors.
+func (m *Redactor) maskRowPair(left, right sql.Expression, scope []analysis.SourceRef) (sql.Expression, sql.Expression) {
+	lrow, lok := left.(sql.RowExpression)
+	rrow, rok := right.(sql.RowExpression)
+	if !lok || !rok {
+		return left, right
+	}
+	mask := func(cols, vals sql.RowExpression) sql.RowExpression {
+		out := clone(vals.Elements)
+		for i := range out {
+			if i < len(cols.Elements) && m.sensitiveColumn(cols.Elements[i], scope) {
+				out[i] = m.maskValue(out[i])
+			}
+		}
+		vals.Elements = out
+		return vals
+	}
+	// Mask in both directions so a sensitive column on either side masks the
+	// paired element on the other.
+	left = mask(rrow, lrow)
+	right = mask(lrow, rrow)
+	return left, right
+}
+
+// maskValues masks each string literal in es (recursively), returning a fresh
+// slice so the input query's backing array is never mutated.
+func (m *Redactor) maskValues(es []sql.Expression) []sql.Expression {
+	if len(es) == 0 {
+		return es
+	}
+	out := clone(es)
+	for i := range out {
+		out[i] = m.maskValue(out[i])
+	}
+	return out
 }
 
 // maskArray masks the string elements of an ARRAY[...] constructor, for the
