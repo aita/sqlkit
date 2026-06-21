@@ -12,7 +12,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/aita/sqlkit/codegen"
-	"github.com/aita/sqlkit/introspect"
+	"github.com/aita/sqlkit/introspection"
 )
 
 // inspectCmd introspects a live database and emits a decl catalog file.
@@ -39,7 +39,7 @@ func (c *inspectCmd) Run() error {
 	}
 	defer db.Close() //nolint:errcheck // best-effort close
 
-	inspected, err := introspect.Schema(ctx, db, dialect, c.Schema)
+	inspected, err := introspection.Schema(ctx, db, dialect, c.Schema)
 	if err != nil {
 		return err
 	}

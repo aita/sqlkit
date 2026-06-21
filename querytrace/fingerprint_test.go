@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aita/sqlkit/analyze"
+	"github.com/aita/sqlkit/analysis"
 	"github.com/aita/sqlkit/sql"
 )
 
@@ -19,7 +19,7 @@ func TestFingerprintParsedUnifiesPlaceholders(t *testing.T) {
 	q2 := sql.Select(sql.Col("id")).From(users).
 		Where(sql.And(sql.Eq(sql.Col("id"), sql.Val(999)), sql.Eq(sql.Col("name"), sql.Val("z"))))
 
-	a := analyze.New(analyze.WithDialect(cfg.Dialect()))
+	a := analysis.New(analysis.WithDialect(cfg.Dialect()))
 	f1 := fingerprint(a, "", q1)
 	f2 := fingerprint(a, "", q2)
 	if f1 != f2 {

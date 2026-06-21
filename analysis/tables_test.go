@@ -1,10 +1,10 @@
-package analyze_test
+package analysis_test
 
 import (
 	"reflect"
 	"testing"
 
-	"github.com/aita/sqlkit/analyze"
+	"github.com/aita/sqlkit/analysis"
 	"github.com/aita/sqlkit/sql"
 )
 
@@ -56,7 +56,7 @@ func TestTables(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := analyze.Tables(tt.query); !reflect.DeepEqual(got, tt.want) {
+			if got := analysis.Tables(tt.query); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("Tables = %v, want %v", got, tt.want)
 			}
 		})
@@ -128,7 +128,7 @@ func TestTablesSubqueriesAndCTEs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := analyze.Tables(tt.query); !reflect.DeepEqual(got, tt.want) {
+			if got := analysis.Tables(tt.query); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("Tables = %v, want %v", got, tt.want)
 			}
 		})
@@ -143,7 +143,7 @@ func TestTablesCompoundWithOrderBy(t *testing.T) {
 	q := sql.Select(sql.Col("id")).From(users).
 		Union(sql.Select(sql.Col("user_id")).From(orders)).
 		OrderBy(sql.Asc(sql.Col("id")))
-	if got := analyze.Tables(q); !reflect.DeepEqual(got, []string{"users", "orders"}) {
+	if got := analysis.Tables(q); !reflect.DeepEqual(got, []string{"users", "orders"}) {
 		t.Errorf("Tables(union) = %v, want [users orders]", got)
 	}
 }

@@ -1,7 +1,7 @@
 package querytrace
 
 import (
-	"github.com/aita/sqlkit/analyze"
+	"github.com/aita/sqlkit/analysis"
 	"github.com/aita/sqlkit/meta"
 )
 
@@ -54,6 +54,6 @@ func (s *schemaColumns) hasColumnMatching(table string, globs []string) bool {
 
 // bareName normalizes a possibly qualified table or column name to its bare,
 // lower-cased form ("public.users" -> "users"), the same folding
-// analyze.BareColumn applies, so a schema's keys line up with the analyzer's table
+// analysis.BareColumn applies, so a schema's keys line up with the analyzer's table
 // and column names.
-func bareName(name string) string { return analyze.BareColumn(name) }
+func bareName(name string) string { return analysis.BareColumn(name) }

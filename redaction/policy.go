@@ -1,4 +1,4 @@
-package redact
+package redaction
 
 import (
 	"path"

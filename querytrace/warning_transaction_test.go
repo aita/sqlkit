@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/aita/sqlkit/analyze"
+	"github.com/aita/sqlkit/analysis"
 	querytrace "github.com/aita/sqlkit/querytrace"
 	"github.com/aita/sqlkit/sqltest"
 )
@@ -16,7 +16,7 @@ func TestWriteOutsideTransactionWarns(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		trace.RecordStatement(context.Background(), querytrace.Event{
 			Kind:  querytrace.EventExec,
-			Query: &querytrace.QueryInfo{Analysis: analyze.Analysis{Kind: querytrace.StmtInsert}},
+			Query: &querytrace.QueryInfo{Analysis: analysis.Analysis{Kind: querytrace.StmtInsert}},
 		})
 	}
 	sqltest.Expect(t, trace).Warns(querytrace.WarnWriteOutsideTransaction)
@@ -28,7 +28,7 @@ func TestSingleWriteOutsideTransactionIsClean(t *testing.T) {
 	trace := querytrace.New("op", querytrace.WithConfig(querytrace.NewConfig()))
 	trace.RecordStatement(context.Background(), querytrace.Event{
 		Kind:  querytrace.EventExec,
-		Query: &querytrace.QueryInfo{Analysis: analyze.Analysis{Kind: querytrace.StmtInsert}},
+		Query: &querytrace.QueryInfo{Analysis: analysis.Analysis{Kind: querytrace.StmtInsert}},
 	})
 	sqltest.Expect(t, trace).NoWarn(querytrace.WarnWriteOutsideTransaction)
 }
@@ -41,7 +41,7 @@ func TestWritesInsideTransactionAreClean(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		trace.RecordStatement(context.Background(), querytrace.Event{
 			Kind:  querytrace.EventExec,
-			Query: &querytrace.QueryInfo{Analysis: analyze.Analysis{Kind: querytrace.StmtInsert}},
+			Query: &querytrace.QueryInfo{Analysis: analysis.Analysis{Kind: querytrace.StmtInsert}},
 		})
 	}
 	trace.RecordTxEnd(querytrace.TxCommit, txID)

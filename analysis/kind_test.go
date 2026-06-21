@@ -1,10 +1,10 @@
-package analyze_test
+package analysis_test
 
 import (
 	"reflect"
 	"testing"
 
-	"github.com/aita/sqlkit/analyze"
+	"github.com/aita/sqlkit/analysis"
 	"github.com/aita/sqlkit/sql"
 )
 
@@ -15,21 +15,21 @@ func TestKindOf(t *testing.T) {
 	tests := []struct {
 		name     string
 		query    sql.Query
-		wantKind analyze.StmtKind
+		wantKind analysis.StmtKind
 		wantOK   bool
 	}{
-		{"select", sql.Select(sql.Col("id")).From(users), analyze.StmtSelect, true},
-		{"union is select", sql.Select(sql.Col("id")).From(users).Union(sql.Select(sql.Col("id")).From(orders)), analyze.StmtSelect, true},
-		{"values is select", sql.Values([]sql.Expression{sql.Expr(1), sql.Expr(2)}), analyze.StmtSelect, true},
-		{"insert", sql.InsertInto(users).Columns("name").Values("a"), analyze.StmtInsert, true},
-		{"update", sql.Update(users).Set(sql.Set("name", sql.Expr("a"))), analyze.StmtUpdate, true},
-		{"delete", sql.DeleteFrom(users), analyze.StmtDelete, true},
-		{"truncate is ddl", sql.Truncate(users), analyze.StmtDDL, true},
-		{"nil is unknown", nil, analyze.StmtUnknown, false},
+		{"select", sql.Select(sql.Col("id")).From(users), analysis.StmtSelect, true},
+		{"union is select", sql.Select(sql.Col("id")).From(users).Union(sql.Select(sql.Col("id")).From(orders)), analysis.StmtSelect, true},
+		{"values is select", sql.Values([]sql.Expression{sql.Expr(1), sql.Expr(2)}), analysis.StmtSelect, true},
+		{"insert", sql.InsertInto(users).Columns("name").Values("a"), analysis.StmtInsert, true},
+		{"update", sql.Update(users).Set(sql.Set("name", sql.Expr("a"))), analysis.StmtUpdate, true},
+		{"delete", sql.DeleteFrom(users), analysis.StmtDelete, true},
+		{"truncate is ddl", sql.Truncate(users), analysis.StmtDDL, true},
+		{"nil is unknown", nil, analysis.StmtUnknown, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotKind, gotOK := analyze.KindOf(tt.query)
+			gotKind, gotOK := analysis.KindOf(tt.query)
 			if gotKind != tt.wantKind || gotOK != tt.wantOK {
 				t.Errorf("KindOf = (%v, %v), want (%v, %v)", gotKind, gotOK, tt.wantKind, tt.wantOK)
 			}
@@ -38,13 +38,13 @@ func TestKindOf(t *testing.T) {
 }
 
 func TestKindHelpers(t *testing.T) {
-	if !analyze.StmtSelect.IsRead() {
+	if !analysis.StmtSelect.IsRead() {
 		t.Errorf("StmtSelect.IsRead() = false, want true")
 	}
-	if analyze.StmtSelect.IsWrite() {
+	if analysis.StmtSelect.IsWrite() {
 		t.Errorf("StmtSelect.IsWrite() = true, want false")
 	}
-	for _, k := range []analyze.StmtKind{analyze.StmtInsert, analyze.StmtUpdate, analyze.StmtDelete} {
+	for _, k := range []analysis.StmtKind{analysis.StmtInsert, analysis.StmtUpdate, analysis.StmtDelete} {
 		if !k.IsWrite() {
 			t.Errorf("%s.IsWrite() = false, want true", k)
 		}
@@ -81,11 +81,11 @@ func TestKindOfAndTablesDDL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			kind, ok := analyze.KindOf(tt.query)
-			if !ok || kind != analyze.StmtDDL {
+			kind, ok := analysis.KindOf(tt.query)
+			if !ok || kind != analysis.StmtDDL {
 				t.Errorf("KindOf = (%v, %v), want (ddl, true)", kind, ok)
 			}
-			if got := analyze.Tables(tt.query); !reflect.DeepEqual(got, tt.wantTables) {
+			if got := analysis.Tables(tt.query); !reflect.DeepEqual(got, tt.wantTables) {
 				t.Errorf("Tables = %v, want %v", got, tt.wantTables)
 			}
 		})
@@ -95,7 +95,7 @@ func TestKindOfAndTablesDDL(t *testing.T) {
 func TestKindOfUnknown(t *testing.T) {
 	// A statement of an unrecognized, non-DDL type yields ok=false. ValuesQuery is
 	// a SELECT-kind read, so use it to confirm the StmtSelect arm via Tables=nil.
-	if got := analyze.Tables(sql.Values([]sql.Expression{sql.Expr(1)})); got != nil {
+	if got := analysis.Tables(sql.Values([]sql.Expression{sql.Expr(1)})); got != nil {
 		t.Errorf("Tables(values) = %v, want nil", got)
 	}
 }

@@ -3,7 +3,7 @@ package sql
 // InsertStmt is the immutable AST for an INSERT statement (INSERT ... VALUES or
 // INSERT ... SELECT). Exactly one of Rows or Select carries the inserted data;
 // Conflict holds an optional upsert action and Returning an optional RETURNING.
-// Build one with InsertInto; read its exported fields directly to introspect.
+// Build one with InsertInto; read its exported fields directly to introspection.
 type InsertStmt struct {
 	posField
 	Table     Table

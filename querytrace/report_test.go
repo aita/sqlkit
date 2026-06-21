@@ -6,13 +6,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aita/sqlkit/analyze"
+	"github.com/aita/sqlkit/analysis"
 	querytrace "github.com/aita/sqlkit/querytrace"
 )
 
 // queryInfo builds a minimal analyzed QueryInfo for report rendering tests.
 func queryInfo(fp string, kind querytrace.StmtKind) *querytrace.QueryInfo {
-	return &querytrace.QueryInfo{Analysis: analyze.Analysis{Fingerprint: fp, Kind: kind}}
+	return &querytrace.QueryInfo{Analysis: analysis.Analysis{Fingerprint: fp, Kind: kind}}
 }
 
 // TestTextReportRendersTimelineAndWarnings exercises the report renderer end to

@@ -96,7 +96,7 @@ func (w MergeWhen) ThenInsert(columns []string, values ...any) MergeWhen {
 // MergeStmt is the immutable AST for a MERGE statement (SQL:2003, PostgreSQL
 // 15+): it matches rows of a target table against a USING data source on an ON
 // condition and applies a list of WHEN clauses. Build it with MergeInto; read
-// its exported fields directly to introspect.
+// its exported fields directly to introspection.
 type MergeStmt struct {
 	posField
 	With        []CTE

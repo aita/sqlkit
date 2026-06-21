@@ -6,7 +6,7 @@ import (
 
 	"github.com/aita/sqlkit"
 	"github.com/aita/sqlkit/codegen"
-	"github.com/aita/sqlkit/introspect"
+	"github.com/aita/sqlkit/introspection"
 )
 
 // TestInspectLiveSchema verifies the introspection reads the schema the ddl
@@ -16,7 +16,7 @@ func TestInspectLiveSchema(t *testing.T) {
 	eachEngine(t, func(t *testing.T, eng engine, db *sqlkit.Database) {
 		ctx := context.Background()
 
-		model, err := introspect.Schema(ctx, db.SQL(), eng.name, testSchema)
+		model, err := introspection.Schema(ctx, db.SQL(), eng.name, testSchema)
 		if err != nil {
 			t.Fatalf("inspect: %v", err)
 		}

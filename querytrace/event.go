@@ -21,7 +21,7 @@ package querytrace
 import (
 	"time"
 
-	"github.com/aita/sqlkit/analyze"
+	"github.com/aita/sqlkit/analysis"
 )
 
 // EventKind is the kind of thing an Event records. SQL reads and writes are the
@@ -79,7 +79,7 @@ type Event struct {
 }
 
 // QueryInfo holds the SQL details of an EventQuery or EventExec. It is split into
-// two halves: the static analysis of the statement — the embedded analyze.Analysis,
+// two halves: the static analysis of the statement — the embedded analysis.Analysis,
 // the facts derived from the SQL itself (kind, tables, clause shape, fingerprint),
 // owned and produced by the analyze framework — and the runtime details querytrace
 // captures around execution (raw text, parameters, transaction). The Analysis
@@ -89,7 +89,7 @@ type Event struct {
 type QueryInfo struct {
 	// Analysis is the static SQL analysis of the statement, produced by the analyze
 	// framework. Its fields are promoted onto QueryInfo.
-	analyze.Analysis
+	analysis.Analysis
 
 	// RawSQL is the executed SQL text, kept only when raw SQL capture is on
 	// (WithRawSQL); otherwise empty.

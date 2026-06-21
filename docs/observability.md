@@ -77,17 +77,17 @@ configuration, and integration details.
 
 ## analyze
 
-[`analyze`](https://pkg.go.dev/github.com/aita/sqlkit/analyze) is a small,
+[`analysis`](https://pkg.go.dev/github.com/aita/sqlkit/analysis) is a small,
 read-only analysis framework over the sqlkit SQL AST. It answers focused
 structural questions about a built or parsed statement —
-[`KindOf`](https://pkg.go.dev/github.com/aita/sqlkit/analyze#KindOf) (statement
-kind), [`Tables`](https://pkg.go.dev/github.com/aita/sqlkit/analyze#Tables)
+[`KindOf`](https://pkg.go.dev/github.com/aita/sqlkit/analysis#KindOf) (statement
+kind), [`Tables`](https://pkg.go.dev/github.com/aita/sqlkit/analysis#Tables)
 (tables touched),
-[`HasTopLevelWhere`](https://pkg.go.dev/github.com/aita/sqlkit/analyze#HasTopLevelWhere) /
-[`HasTopLevelJoin`](https://pkg.go.dev/github.com/aita/sqlkit/analyze#HasTopLevelJoin),
-[`FilterColumns`](https://pkg.go.dev/github.com/aita/sqlkit/analyze#FilterColumns),
-[`SelectsStar`](https://pkg.go.dev/github.com/aita/sqlkit/analyze#SelectsStar),
-and [`Fingerprint`](https://pkg.go.dev/github.com/aita/sqlkit/analyze#Fingerprint)
+[`HasTopLevelWhere`](https://pkg.go.dev/github.com/aita/sqlkit/analysis#HasTopLevelWhere) /
+[`HasTopLevelJoin`](https://pkg.go.dev/github.com/aita/sqlkit/analysis#HasTopLevelJoin),
+[`FilterColumns`](https://pkg.go.dev/github.com/aita/sqlkit/analysis#FilterColumns),
+[`SelectsStar`](https://pkg.go.dev/github.com/aita/sqlkit/analysis#SelectsStar),
+and [`Fingerprint`](https://pkg.go.dev/github.com/aita/sqlkit/analysis#Fingerprint)
 (a normalized shape id). It is
 the structural engine querytrace's warnings build on, exposed for your own
 linters and guards.

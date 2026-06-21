@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/aita/sqlkit/introspect"
+	"github.com/aita/sqlkit/introspection"
 	"github.com/aita/sqlkit/meta"
 	"github.com/aita/sqlkit/migrate"
 )
@@ -35,7 +35,7 @@ func TestMigratorAgainstPostgres(t *testing.T) {
 		t.Fatalf("Up: %v", err)
 	}
 
-	model, err := introspect.Schema(ctx, db.SQL(), eng.name, testSchema)
+	model, err := introspection.Schema(ctx, db.SQL(), eng.name, testSchema)
 	if err != nil {
 		t.Fatalf("inspect after up: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestMigratorAgainstPostgres(t *testing.T) {
 	if err := m.DownTo(ctx, ""); err != nil {
 		t.Fatalf("DownTo: %v", err)
 	}
-	model, err = introspect.Schema(ctx, db.SQL(), eng.name, testSchema)
+	model, err = introspection.Schema(ctx, db.SQL(), eng.name, testSchema)
 	if err != nil {
 		t.Fatalf("inspect after down: %v", err)
 	}

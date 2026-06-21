@@ -208,9 +208,9 @@ go run github.com/aita/sqlkit/cmd/sqlkit@latest inspect \
   --dsn "$DATABASE_URL" --schema public --package schema --out schema/schema.go
 ```
 
-The same reader is available as a library — [`introspect.Schema`](https://pkg.go.dev/github.com/aita/sqlkit/introspect#Schema)`(ctx, db, dialect,
+The same reader is available as a library — [`introspection.Schema`](https://pkg.go.dev/github.com/aita/sqlkit/introspection#Schema)`(ctx, db, dialect,
 schemaName)` returns a [`meta.Metadata`](https://pkg.go.dev/github.com/aita/sqlkit/meta#Metadata) you can feed straight into `codegen` or
-[`redact`](redaction.md). Constructs the metadata model cannot represent are
+[`redaction`](redaction.md). Constructs the metadata model cannot represent are
 skipped on import (see [Limitations](limitations.md)).
 
 ---

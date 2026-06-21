@@ -27,7 +27,7 @@ narrative, how-to side.
   sessions.
 - **[Observability](observability.md)** — hooks,
   [`querytrace`](https://pkg.go.dev/github.com/aita/sqlkit/querytrace) tracing, and the
-  [`analyze`](https://pkg.go.dev/github.com/aita/sqlkit/analyze) AST framework.
+  [`analysis`](https://pkg.go.dev/github.com/aita/sqlkit/analysis) AST framework.
 - **[Redaction](redaction.md)** — mask PII literals before logging a statement.
 - **[Testing](testing.md)** — the
   [`sqltest`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest) seeding helpers,
@@ -46,7 +46,7 @@ into their own modules:
 
 | Module | Why separate |
 | --- | --- |
-| `github.com/aita/sqlkit` | The core: query builder, [`sql`](https://pkg.go.dev/github.com/aita/sqlkit/sql), `decl`, [`meta`](https://pkg.go.dev/github.com/aita/sqlkit/meta), [`migrate`](https://pkg.go.dev/github.com/aita/sqlkit/migrate), [`codegen`](https://pkg.go.dev/github.com/aita/sqlkit/codegen), [`introspect`](https://pkg.go.dev/github.com/aita/sqlkit/introspect), [`sqlparse`](https://pkg.go.dev/github.com/aita/sqlkit/sqlparse) (surface), `querytrace`, `analyze`, [`redact`](https://pkg.go.dev/github.com/aita/sqlkit/redact), `sqltest`, [`uow`](https://pkg.go.dev/github.com/aita/sqlkit/uow). No third-party dependencies. |
+| `github.com/aita/sqlkit` | The core: query builder, [`sql`](https://pkg.go.dev/github.com/aita/sqlkit/sql), `decl`, [`meta`](https://pkg.go.dev/github.com/aita/sqlkit/meta), [`migrate`](https://pkg.go.dev/github.com/aita/sqlkit/migrate), [`codegen`](https://pkg.go.dev/github.com/aita/sqlkit/codegen), [`introspection`](https://pkg.go.dev/github.com/aita/sqlkit/introspection), [`sqlparse`](https://pkg.go.dev/github.com/aita/sqlkit/sqlparse) (surface), `querytrace`, `analysis`, [`redaction`](https://pkg.go.dev/github.com/aita/sqlkit/redaction), `sqltest`, [`uow`](https://pkg.go.dev/github.com/aita/sqlkit/uow). No third-party dependencies. |
 | `cmd/sqlkit` | The CLI links PostgreSQL/MySQL drivers for `inspect`. |
 | `sqlparse/postgres` | The `pg_query_go` (cgo) PostgreSQL grammar. |
 | `sqlparse/mysql` | The TiDB MySQL parser. |

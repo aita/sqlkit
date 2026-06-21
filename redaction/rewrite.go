@@ -1,7 +1,7 @@
-package redact
+package redaction
 
 import (
-	"github.com/aita/sqlkit/analyze"
+	"github.com/aita/sqlkit/analysis"
 	"github.com/aita/sqlkit/sql"
 )
 
@@ -10,7 +10,7 @@ import (
 // predicate is reached, and into embedded subqueries (each with its own scope),
 // and applies masking at the comparison and membership nodes where a column meets
 // a literal. Unrecognized nodes are returned unchanged.
-func (m *Masker) rewriteExpr(e sql.Expression, scope []analyze.SourceRef) sql.Expression {
+func (m *Masker) rewriteExpr(e sql.Expression, scope []analysis.SourceRef) sql.Expression {
 	if e == nil {
 		return nil
 	}
@@ -158,7 +158,7 @@ func (m *Masker) rewriteExpr(e sql.Expression, scope []analyze.SourceRef) sql.Ex
 
 // rewriteExprs rewrites each expression in es, returning a fresh slice so the
 // input query's backing array is never mutated.
-func (m *Masker) rewriteExprs(es []sql.Expression, scope []analyze.SourceRef) []sql.Expression {
+func (m *Masker) rewriteExprs(es []sql.Expression, scope []analysis.SourceRef) []sql.Expression {
 	if len(es) == 0 {
 		return es
 	}
@@ -171,7 +171,7 @@ func (m *Masker) rewriteExprs(es []sql.Expression, scope []analyze.SourceRef) []
 
 // sensitiveColumn reports whether e is a column reference that resolves, in scope,
 // to a policy-sensitive column.
-func (m *Masker) sensitiveColumn(e sql.Expression, scope []analyze.SourceRef) bool {
+func (m *Masker) sensitiveColumn(e sql.Expression, scope []analysis.SourceRef) bool {
 	col, ok := columnOf(e)
 	return ok && m.isSensitive(scope, col)
 }
@@ -179,9 +179,9 @@ func (m *Masker) sensitiveColumn(e sql.Expression, scope []analyze.SourceRef) bo
 // isSensitive resolves col against the scope and reports whether it is a policy
 // column. It fails safe: an unqualified column that is ambiguous across in-scope
 // tables is treated as sensitive when any candidate table marks it PII.
-func (m *Masker) isSensitive(scope []analyze.SourceRef, col analyze.ColumnRef) bool {
-	res := analyze.ResolveColumn(scope, col)
-	if res.Status == analyze.Resolved {
+func (m *Masker) isSensitive(scope []analysis.SourceRef, col analysis.ColumnRef) bool {
+	res := analysis.ResolveColumn(scope, col)
+	if res.Status == analysis.Resolved {
 		return m.policy.IsSensitive(res.Schema.String(), res.Table.String(), col.Name.String())
 	}
 	// Unknown or Ambiguous: fail safe — mask if any in-scope table marks the
@@ -224,10 +224,10 @@ func (m *Masker) maskArray(e sql.Expression) sql.Expression {
 // columnOf returns the column reference a ColumnExpression names, reporting
 // ok=false for any other expression. The reference itself comes from analyze, so
 // the masker resolves a column the same way the analysis layer does.
-func columnOf(e sql.Expression) (analyze.ColumnRef, bool) {
+func columnOf(e sql.Expression) (analysis.ColumnRef, bool) {
 	c, ok := e.(sql.ColumnExpression)
 	if !ok {
-		return analyze.ColumnRef{}, false
+		return analysis.ColumnRef{}, false
 	}
-	return analyze.ColumnRefOf(c), true
+	return analysis.ColumnRefOf(c), true
 }

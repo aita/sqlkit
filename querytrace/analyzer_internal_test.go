@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/aita/sqlkit/analyze"
+	"github.com/aita/sqlkit/analysis"
 	"github.com/aita/sqlkit/meta"
 	"github.com/aita/sqlkit/sql"
 )
@@ -32,17 +32,17 @@ func hasCode(trace *Trace, code WarningCode) bool {
 func TestLargeInListWarning(t *testing.T) {
 	cfg := NewConfig(WithMaxInList(100))
 
-	over := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"users"}, MaxInList: 100}})
+	over := recordAnalyzed(t, cfg, QueryInfo{Analysis: analysis.Analysis{Kind: StmtSelect, Tables: []string{"users"}, MaxInList: 100}})
 	if !hasCode(over, WarnLargeInList) {
 		t.Error("IN list at budget should warn")
 	}
 
-	under := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"users"}, MaxInList: 99}})
+	under := recordAnalyzed(t, cfg, QueryInfo{Analysis: analysis.Analysis{Kind: StmtSelect, Tables: []string{"users"}, MaxInList: 99}})
 	if hasCode(under, WarnLargeInList) {
 		t.Error("IN list below budget should not warn")
 	}
 
-	off := recordAnalyzed(t, NewConfig(), QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, MaxInList: 5000}})
+	off := recordAnalyzed(t, NewConfig(), QueryInfo{Analysis: analysis.Analysis{Kind: StmtSelect, MaxInList: 5000}})
 	if hasCode(off, WarnLargeInList) {
 		t.Error("disabled check should not warn")
 	}
@@ -51,17 +51,17 @@ func TestLargeInListWarning(t *testing.T) {
 func TestSelectStarWarning(t *testing.T) {
 	cfg := NewConfig(WithSelectStarWarning())
 
-	star := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"users"}, SelectStar: true}})
+	star := recordAnalyzed(t, cfg, QueryInfo{Analysis: analysis.Analysis{Kind: StmtSelect, Tables: []string{"users"}, SelectStar: true}})
 	if !hasCode(star, WarnSelectStar) {
 		t.Error("SELECT * should warn when enabled")
 	}
 
-	explicit := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"users"}, SelectStar: false}})
+	explicit := recordAnalyzed(t, cfg, QueryInfo{Analysis: analysis.Analysis{Kind: StmtSelect, Tables: []string{"users"}, SelectStar: false}})
 	if hasCode(explicit, WarnSelectStar) {
 		t.Error("explicit projection should not warn")
 	}
 
-	off := recordAnalyzed(t, NewConfig(), QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, SelectStar: true}})
+	off := recordAnalyzed(t, NewConfig(), QueryInfo{Analysis: analysis.Analysis{Kind: StmtSelect, SelectStar: true}})
 	if hasCode(off, WarnSelectStar) {
 		t.Error("disabled check should not warn")
 	}
@@ -70,24 +70,24 @@ func TestSelectStarWarning(t *testing.T) {
 func TestTenantPredicateWarning(t *testing.T) {
 	cfg := NewConfig(WithTenantCheck(Columns("tenant_id")))
 
-	missing := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"users"}, FilterColumns: []string{"id"}}})
+	missing := recordAnalyzed(t, cfg, QueryInfo{Analysis: analysis.Analysis{Kind: StmtSelect, Tables: []string{"users"}, FilterColumns: []string{"id"}}})
 	if !hasCode(missing, WarnMissingTenantPredicate) {
 		t.Error("select without tenant predicate should warn")
 	}
 
-	present := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtUpdate, Tables: []string{"users"}, FilterColumns: []string{"tenant_id", "id"}}})
+	present := recordAnalyzed(t, cfg, QueryInfo{Analysis: analysis.Analysis{Kind: StmtUpdate, Tables: []string{"users"}, FilterColumns: []string{"tenant_id", "id"}}})
 	if hasCode(present, WarnMissingTenantPredicate) {
 		t.Error("statement with tenant predicate should not warn")
 	}
 
 	// An INSERT carries its tenant value in the row, not a WHERE: out of scope.
-	ins := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtInsert, Tables: []string{"users"}}})
+	ins := recordAnalyzed(t, cfg, QueryInfo{Analysis: analysis.Analysis{Kind: StmtInsert, Tables: []string{"users"}}})
 	if hasCode(ins, WarnMissingTenantPredicate) {
 		t.Error("insert should be out of scope for the tenant check")
 	}
 
 	// No base table (or unanalyzed) means nothing to scope.
-	noTable := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect}})
+	noTable := recordAnalyzed(t, cfg, QueryInfo{Analysis: analysis.Analysis{Kind: StmtSelect}})
 	if hasCode(noTable, WarnMissingTenantPredicate) {
 		t.Error("statement without a base table should not warn")
 	}
@@ -96,18 +96,18 @@ func TestTenantPredicateWarning(t *testing.T) {
 func TestSoftDeletePredicateWarning(t *testing.T) {
 	cfg := NewConfig(WithSoftDeleteCheck(Columns("deleted_at")))
 
-	missing := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"users"}, FilterColumns: []string{"id"}}})
+	missing := recordAnalyzed(t, cfg, QueryInfo{Analysis: analysis.Analysis{Kind: StmtSelect, Tables: []string{"users"}, FilterColumns: []string{"id"}}})
 	if !hasCode(missing, WarnMissingSoftDeletePredicate) {
 		t.Error("select without soft-delete predicate should warn")
 	}
 
-	present := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"users"}, FilterColumns: []string{"deleted_at"}}})
+	present := recordAnalyzed(t, cfg, QueryInfo{Analysis: analysis.Analysis{Kind: StmtSelect, Tables: []string{"users"}, FilterColumns: []string{"deleted_at"}}})
 	if hasCode(present, WarnMissingSoftDeletePredicate) {
 		t.Error("select with soft-delete predicate should not warn")
 	}
 
 	// The soft-delete check is for reads; a DELETE is not subject to it.
-	del := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtDelete, Tables: []string{"users"}, FilterColumns: []string{"id"}}})
+	del := recordAnalyzed(t, cfg, QueryInfo{Analysis: analysis.Analysis{Kind: StmtDelete, Tables: []string{"users"}, FilterColumns: []string{"id"}}})
 	if hasCode(del, WarnMissingSoftDeletePredicate) {
 		t.Error("delete should be out of scope for the soft-delete check")
 	}
@@ -152,19 +152,19 @@ func TestSchemaScopesPredicateChecks(t *testing.T) {
 	)
 
 	// users has both marker columns, and this SELECT references neither: it warns.
-	users := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"users"}, FilterColumns: []string{"id"}}})
+	users := recordAnalyzed(t, cfg, QueryInfo{Analysis: analysis.Analysis{Kind: StmtSelect, Tables: []string{"users"}, FilterColumns: []string{"id"}}})
 	if !hasCode(users, WarnMissingSoftDeletePredicate) || !hasCode(users, WarnMissingTenantPredicate) {
 		t.Error("users lacks both predicates and should warn for both")
 	}
 
 	// countries has neither marker column, so the checks do not apply to it.
-	countries := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"countries"}, FilterColumns: []string{"code"}}})
+	countries := recordAnalyzed(t, cfg, QueryInfo{Analysis: analysis.Analysis{Kind: StmtSelect, Tables: []string{"countries"}, FilterColumns: []string{"code"}}})
 	if hasCode(countries, WarnMissingSoftDeletePredicate) || hasCode(countries, WarnMissingTenantPredicate) {
 		t.Error("a reference table without marker columns must be skipped")
 	}
 
 	// A table the schema does not cover at all is left alone too.
-	unknown := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"events"}, FilterColumns: []string{"id"}}})
+	unknown := recordAnalyzed(t, cfg, QueryInfo{Analysis: analysis.Analysis{Kind: StmtSelect, Tables: []string{"events"}, FilterColumns: []string{"id"}}})
 	if hasCode(unknown, WarnMissingSoftDeletePredicate) || hasCode(unknown, WarnMissingTenantPredicate) {
 		t.Error("a table absent from the schema must be skipped")
 	}
@@ -178,11 +178,11 @@ func TestSchemaScopeQualifiedAndCase(t *testing.T) {
 		WithSoftDeleteCheck(Columns("deleted_at"), ScopedToSchema(md)),
 	)
 
-	missing := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"public.users"}, FilterColumns: []string{"id"}}})
+	missing := recordAnalyzed(t, cfg, QueryInfo{Analysis: analysis.Analysis{Kind: StmtSelect, Tables: []string{"public.users"}, FilterColumns: []string{"id"}}})
 	if !hasCode(missing, WarnMissingSoftDeletePredicate) {
 		t.Error("qualified table with the marker column should warn when unfiltered")
 	}
-	present := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"public.users"}, FilterColumns: []string{"deleted_at"}}})
+	present := recordAnalyzed(t, cfg, QueryInfo{Analysis: analysis.Analysis{Kind: StmtSelect, Tables: []string{"public.users"}, FilterColumns: []string{"deleted_at"}}})
 	if hasCode(present, WarnMissingSoftDeletePredicate) {
 		t.Error("filtering on the marker column should clear the warning")
 	}
@@ -199,7 +199,7 @@ func TestPredicateWarningPerTable(t *testing.T) {
 		WithSoftDeleteCheck(Columns("deleted_at"), ScopedToSchema(md)),
 	)
 
-	trace := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"users", "orders"}, FilterColumns: []string{"id"}}})
+	trace := recordAnalyzed(t, cfg, QueryInfo{Analysis: analysis.Analysis{Kind: StmtSelect, Tables: []string{"users", "orders"}, FilterColumns: []string{"id"}}})
 	if got := countCode(trace, WarnMissingSoftDeletePredicate); got != 2 {
 		t.Errorf("missing predicate on two tables = %d warnings, want 2", got)
 	}
@@ -209,12 +209,12 @@ func TestPredicateWarningPerTable(t *testing.T) {
 func TestPredicateColumnGlob(t *testing.T) {
 	cfg := NewConfig(WithSoftDeleteCheck(Columns("*_at")))
 
-	missing := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"users"}, FilterColumns: []string{"id"}}})
+	missing := recordAnalyzed(t, cfg, QueryInfo{Analysis: analysis.Analysis{Kind: StmtSelect, Tables: []string{"users"}, FilterColumns: []string{"id"}}})
 	if !hasCode(missing, WarnMissingSoftDeletePredicate) {
 		t.Error("no *_at column in WHERE should warn")
 	}
 	// deactivated_at matches the *_at glob, so the predicate is satisfied.
-	present := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"users"}, FilterColumns: []string{"deactivated_at"}}})
+	present := recordAnalyzed(t, cfg, QueryInfo{Analysis: analysis.Analysis{Kind: StmtSelect, Tables: []string{"users"}, FilterColumns: []string{"deactivated_at"}}})
 	if hasCode(present, WarnMissingSoftDeletePredicate) {
 		t.Error("deactivated_at matches *_at and should clear the warning")
 	}
@@ -225,7 +225,7 @@ func TestPredicateColumnGlob(t *testing.T) {
 func TestPredicateMultipleMarkers(t *testing.T) {
 	cfg := NewConfig(WithSoftDeleteCheck(Columns("deleted_at", "deactivated_at")))
 
-	ok := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"users"}, FilterColumns: []string{"deactivated_at"}}})
+	ok := recordAnalyzed(t, cfg, QueryInfo{Analysis: analysis.Analysis{Kind: StmtSelect, Tables: []string{"users"}, FilterColumns: []string{"deactivated_at"}}})
 	if hasCode(ok, WarnMissingSoftDeletePredicate) {
 		t.Error("one of the markers present should clear the warning")
 	}
@@ -237,17 +237,17 @@ func TestPredicateTableQualifiedSpec(t *testing.T) {
 	cfg := NewConfig(WithSoftDeleteCheck(Columns("orders.deleted_at")))
 
 	// orders is governed and misses the predicate: it warns.
-	orders := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"orders"}, FilterColumns: []string{"id"}}})
+	orders := recordAnalyzed(t, cfg, QueryInfo{Analysis: analysis.Analysis{Kind: StmtSelect, Tables: []string{"orders"}, FilterColumns: []string{"id"}}})
 	if !hasCode(orders, WarnMissingSoftDeletePredicate) {
 		t.Error("orders is governed by the spec and should warn")
 	}
 	// users is not named by the spec, so it is not checked.
-	users := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"users"}, FilterColumns: []string{"id"}}})
+	users := recordAnalyzed(t, cfg, QueryInfo{Analysis: analysis.Analysis{Kind: StmtSelect, Tables: []string{"users"}, FilterColumns: []string{"id"}}})
 	if hasCode(users, WarnMissingSoftDeletePredicate) {
 		t.Error("users is not named by the table-qualified spec and should be skipped")
 	}
 	// A schema-qualified table name still resolves to the bare table.
-	qualified := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"public.orders"}, FilterColumns: []string{"id"}}})
+	qualified := recordAnalyzed(t, cfg, QueryInfo{Analysis: analysis.Analysis{Kind: StmtSelect, Tables: []string{"public.orders"}, FilterColumns: []string{"id"}}})
 	if !hasCode(qualified, WarnMissingSoftDeletePredicate) {
 		t.Error("public.orders should match the orders spec")
 	}
@@ -257,11 +257,11 @@ func TestPredicateTableQualifiedSpec(t *testing.T) {
 func TestPredicateTableGlob(t *testing.T) {
 	cfg := NewConfig(WithTenantCheck(Columns("tenant_*.tenant_id")))
 
-	governed := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"tenant_orders"}, FilterColumns: []string{"id"}}})
+	governed := recordAnalyzed(t, cfg, QueryInfo{Analysis: analysis.Analysis{Kind: StmtSelect, Tables: []string{"tenant_orders"}, FilterColumns: []string{"id"}}})
 	if !hasCode(governed, WarnMissingTenantPredicate) {
 		t.Error("tenant_orders matches tenant_* and should warn")
 	}
-	other := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"users"}, FilterColumns: []string{"id"}}})
+	other := recordAnalyzed(t, cfg, QueryInfo{Analysis: analysis.Analysis{Kind: StmtSelect, Tables: []string{"users"}, FilterColumns: []string{"id"}}})
 	if hasCode(other, WarnMissingTenantPredicate) {
 		t.Error("users does not match tenant_* and should be skipped")
 	}
@@ -296,12 +296,12 @@ func (analyzerTestParser) Parse(string) ([]sql.Query, error) {
 // TestEqNullWarning covers the always-on correctness check: a = NULL / <> NULL
 // predicate raises eq_null whenever analysis saw it, with no policy to enable.
 func TestEqNullWarning(t *testing.T) {
-	warned := recordAnalyzed(t, NewConfig(), QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, NullEquality: true}})
+	warned := recordAnalyzed(t, NewConfig(), QueryInfo{Analysis: analysis.Analysis{Kind: StmtSelect, NullEquality: true}})
 	if !hasCode(warned, WarnEqNull) {
 		t.Error("= NULL comparison should warn")
 	}
 
-	clean := recordAnalyzed(t, NewConfig(), QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, NullEquality: false}})
+	clean := recordAnalyzed(t, NewConfig(), QueryInfo{Analysis: analysis.Analysis{Kind: StmtSelect, NullEquality: false}})
 	if hasCode(clean, WarnEqNull) {
 		t.Error("clean predicate should not warn")
 	}

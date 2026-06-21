@@ -4,12 +4,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aita/sqlkit/analyze"
+	"github.com/aita/sqlkit/analysis"
 	"github.com/aita/sqlkit/sqlparse/postgres"
 )
 
 // TestColumnRefCarriesSourcePosition checks the byte offset a parsed column
-// reference records flows through analyze.Columns into ColumnRef.SrcPos, so a
+// reference records flows through analysis.Columns into ColumnRef.SrcPos, so a
 // caller can map a detected column back to where it appears in the SQL text.
 func TestColumnRefCarriesSourcePosition(t *testing.T) {
 	src := "SELECT id FROM users WHERE email = 'x'"
@@ -19,7 +19,7 @@ func TestColumnRefCarriesSourcePosition(t *testing.T) {
 	}
 
 	pos := -1
-	for _, u := range analyze.Columns(q) {
+	for _, u := range analysis.Columns(q) {
 		if u.Column.Name.String() == "email" {
 			pos = u.Column.SrcPos
 		}

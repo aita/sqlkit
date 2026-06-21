@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aita/sqlkit/analyze"
+	"github.com/aita/sqlkit/analysis"
 	querytrace "github.com/aita/sqlkit/querytrace"
 )
 
@@ -21,12 +21,12 @@ func TestExpvarRecorder(t *testing.T) {
 	trace.RecordStatement(ctx, querytrace.Event{
 		Kind:     querytrace.EventQuery,
 		Duration: 10 * time.Millisecond,
-		Query:    &querytrace.QueryInfo{Analysis: analyze.Analysis{Fingerprint: "SELECT 1", Kind: querytrace.StmtSelect}},
+		Query:    &querytrace.QueryInfo{Analysis: analysis.Analysis{Fingerprint: "SELECT 1", Kind: querytrace.StmtSelect}},
 	})
 	trace.RecordStatement(ctx, querytrace.Event{
 		Kind:     querytrace.EventQuery,
 		Duration: 5 * time.Millisecond,
-		Query:    &querytrace.QueryInfo{Analysis: analyze.Analysis{Fingerprint: "SELECT 1", Kind: querytrace.StmtSelect}},
+		Query:    &querytrace.QueryInfo{Analysis: analysis.Analysis{Fingerprint: "SELECT 1", Kind: querytrace.StmtSelect}},
 	})
 	rec.Record(trace)
 
