@@ -16,6 +16,12 @@ func convertFuncCall(fc *ast.FuncCallExpr) (sql.Expression, error) {
 	if fc.Schema.O != "" {
 		return nil, sqlparse.Unsupportedf("schema-qualified function %s.%s", fc.Schema.O, fc.FnName.O)
 	}
+	// The name renders unquoted, so it must be a plain identifier. The lexer maps
+	// an invalid byte to "?", which would render as the call "?()"; fall back to
+	// raw for any non-identifier name rather than emit that.
+	if !isPlainIdent(fc.FnName.O) {
+		return nil, sqlparse.Unsupportedf("function name %q is not a plain identifier", fc.FnName.O)
+	}
 	// EXTRACT(unit FROM x) and POSITION(sub IN str) keep keyword syntax: rendered
 	// as the call form EXTRACT(unit, x) / POSITION(sub, str), MySQL's grammar
 	// rejects them, so rebuild the dedicated nodes that emit the keyword form.
@@ -49,6 +55,23 @@ func convertFuncCall(fc *ast.FuncCallExpr) (sql.Expression, error) {
 		return nil, err
 	}
 	return sql.Func(strings.ToUpper(fc.FnName.L), args...), nil
+}
+
+// isPlainIdent reports whether s is a non-empty identifier of ASCII letters,
+// digits, underscore, or dollar — the shape a bare (unquoted) function name must
+// have to render as valid SQL. Every MySQL built-in qualifies.
+func isPlainIdent(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '$':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // convertExtract rebuilds EXTRACT(unit FROM operand) from its call form

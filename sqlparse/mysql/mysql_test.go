@@ -151,11 +151,16 @@ func TestParsedQueryExposesStmt(t *testing.T) {
 	}
 }
 
-// Invalid UTF-8 in the source is rejected outright: the TiDB lexer would map the
-// bad byte to "?", which can deparse to broken SQL (e.g. the call "?()").
-func TestParseRejectsInvalidUTF8(t *testing.T) {
-	if _, err := mysql.ParseOne("SELECT \xc6()"); err == nil {
-		t.Fatal("ParseOne(invalid UTF-8) error = nil, want a parse error")
+// A function name the lexer could not read as a plain identifier (here an invalid
+// UTF-8 byte the lexer maps to "?") is not rejected — the TiDB parser accepted
+// it, so it round-trips as a raw passthrough rather than a hard error.
+func TestNonIdentifierFunctionNameFallsBackToRaw(t *testing.T) {
+	q, err := mysql.ParseOne("SELECT \xc6()")
+	if err != nil {
+		t.Fatalf("ParseOne error = %v, want a raw passthrough", err)
+	}
+	if _, ok := q.(sql.RawQuery); !ok {
+		t.Fatalf("ParseOne returned %T, want a RawQuery", q)
 	}
 }
 

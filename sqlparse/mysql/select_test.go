@@ -413,3 +413,9 @@ func TestSelectScalarSubqueryInWhere(t *testing.T) {
 				sql.ScalarSubquery(sql.Select(sql.Func("MAX", sql.Col("y"))).From(sql.Table{Name: sql.NewIdent("u")})))),
 		"SELECT `id` FROM `t` WHERE (`x` = (SELECT MAX(`y`) FROM `u`))")
 }
+
+// TiDB tolerates an empty backtick-quoted table name (FROM “), which the
+// compiler cannot render; the statement falls back to raw rather than error.
+func TestEmptyTableNameFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT a FROM ``")
+}

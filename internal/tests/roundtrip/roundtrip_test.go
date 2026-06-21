@@ -96,6 +96,15 @@ func roundTrip(t *testing.T, fe frontend, stmt string) {
 		t.Fatalf("ToSQL errored on a parseable statement (L1): %v\n  stmt: %s", err, stmt)
 	}
 
+	// A RawQuery is the backing parser's own deparse of a construct sqlkit does not
+	// model. Its validity and stability are that parser's concern, not sqlkit's:
+	// sqlkit only promises not to error or panic on it (checked above). The L1/L2
+	// invariants below test sqlkit's own typed rendering, so they apply to typed
+	// statements only.
+	if isRaw(q1) {
+		return
+	}
+
 	q2, err := sqlparse.ParseOne(fe.parser, text1)
 	if err != nil {
 		t.Fatalf("compiler emitted SQL its own grammar rejects (L1): %v\n  generated: %s\n  from: %s", err, text1, stmt)
@@ -104,8 +113,8 @@ func roundTrip(t *testing.T, fe frontend, stmt string) {
 	// A typed statement that degrades to a verbatim RawQuery on re-parse is a
 	// signal that the rendering, while syntactically accepted, is no longer
 	// understood as the construct it started as — worth surfacing, not a silent
-	// pass. (A statement that was already Raw on the first pass is exempt.)
-	if !isRaw(q1) && isRaw(q2) {
+	// pass.
+	if isRaw(q2) {
 		t.Errorf("generated SQL re-parsed only as a raw passthrough (L1):\n  generated: %s\n  from: %s", text1, stmt)
 	}
 

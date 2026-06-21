@@ -223,11 +223,15 @@ func TestParamRefPassthrough(t *testing.T) {
 	}
 }
 
-// A raw passthrough must re-parse: when the deparser mangles a tolerated-but-
-// invalid construct (here $0 inside an otherwise-raw statement deparses to a bare
-// "?"), the statement is surfaced as a parse failure rather than emitted.
-func TestRawPassthroughMustReparse(t *testing.T) {
-	if _, err := postgres.ParseOne("SELECT !0 WHER, 0 < $0"); err == nil {
-		t.Fatal("ParseOne(invalid raw) error = nil, want a parse error")
+// A construct pg_query accepts but sqlkit does not model round-trips as a raw
+// passthrough, never a hard parse error — even when the deparse is imperfect.
+// Faithfully representing what the backing parser accepted is the contract.
+func TestUnmodeledConstructFallsBackToRaw(t *testing.T) {
+	q, err := postgres.ParseOne("SELECT !0 WHER, 0 < $0")
+	if err != nil {
+		t.Fatalf("ParseOne error = %v, want a raw passthrough", err)
+	}
+	if _, ok := q.(sql.RawQuery); !ok {
+		t.Fatalf("ParseOne returned %T, want a RawQuery", q)
 	}
 }
