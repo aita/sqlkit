@@ -130,17 +130,33 @@ build-then-compile flow, turning SQL text back into
 `sql` AST nodes. Two facts shape its limits:
 
 - 🔒 **Two backends, two modules.** [`sqlparse/postgres`](https://pkg.go.dev/github.com/aita/sqlkit/sqlparse/postgres) (real PostgreSQL grammar
-  via `pg_query_go`, cgo) and [`sqlparse/mysql`](https://pkg.go.dev/github.com/aita/sqlkit/sqlparse/mysql) (the TiDB parser, pure Go) are
+  via `pg_query_go`) and [`sqlparse/mysql`](https://pkg.go.dev/github.com/aita/sqlkit/sqlparse/mysql) (the TiDB parser, pure Go) are
   **separate modules** so their heavy dependency trees never reach the root
-  module that library consumers import.
+  module that library consumers import. `pg_query_go` embeds `libpg_query`, so
+  the PostgreSQL backend **requires cgo** and a C toolchain to build; the MySQL
+  backend is pure Go.
 - 🚧 **Not every construct round-trips.** Each backend recognizes the full grammar
-  but only maps the constructs the `sql` AST can model; anything else either
-  falls back to a raw passthrough node or returns an [`UnsupportedError`](https://pkg.go.dev/github.com/aita/sqlkit/sqlparse#UnsupportedError) naming the
-  construct. Examples that do not model to typed nodes include partial/`INCLUDE`/
-  concurrent indexes, materialized-view bodies, `INSERT … DEFAULT VALUES`,
-  `WITH ROLLUP`, some window-frame and multi-table-`UPDATE`/`DELETE` shapes, and
-  `RETURNING` on the MySQL grammar. Treat the parser as a high-coverage importer,
-  not a total one.
+  but only maps the constructs the `sql` AST can model. When a converter meets a
+  construct it cannot represent it reports an [`UnsupportedError`](https://pkg.go.dev/github.com/aita/sqlkit/sqlparse#UnsupportedError); the backend
+  then **deparses just that statement back to SQL and keeps it as a
+  [`sql.RawSQL`](https://pkg.go.dev/github.com/aita/sqlkit/sql#RawSQL) passthrough**, so every statement the grammar accepts still yields a
+  usable `Query`. Only a genuine syntax error (not an `UnsupportedError`) fails
+  the whole `Parse` call. Inspect a result's concrete type to tell a typed node
+  from a raw fallback. Examples that do not model to typed nodes include
+  partial/`INCLUDE`/concurrent indexes, materialized-view bodies,
+  `INSERT … DEFAULT VALUES`, `WITH ROLLUP`, `RIGHT`/`FULL` joins combined with
+  `NATURAL`/`USING`, an unaliased subquery source, non-constant `LIMIT`/`OFFSET`,
+  some window-frame and multi-table-`UPDATE`/`DELETE` shapes, and `RETURNING` on
+  the MySQL grammar. Treat the parser as a high-coverage importer, not a total one.
+- 🔒 **The raw fallback is reformatted and dialect-bound.** A deparsed `RawSQL` is
+  normalized by the backend's printer: **comments and the original whitespace,
+  quoting, and keyword casing are not preserved.** It is rendered in its source
+  dialect and carries no structure, so re-compiling it against a *different*
+  dialect re-emits that text verbatim rather than translating it.
+- 🚧 **MySQL positions are reconstructed.** `pg_query_go` reports real statement
+  locations, but the TiDB parser records no usable node offset, so the MySQL
+  backend computes each statement's position from the running length of the
+  preceding statements' verbatim text and recovers table offsets heuristically.
 
 ## Introspection
 
