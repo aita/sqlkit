@@ -48,6 +48,13 @@ func (Parser) Parse(text string) ([]sql.Query, error) {
 				if derr != nil {
 					return nil, err
 				}
+				// A raw passthrough must be valid SQL. The deparser can mangle a
+				// construct the raw parser tolerated but that is not really valid (e.g.
+				// the $0 parameter, which deparses to a bare "?"); surface those as a
+				// parse failure instead of emitting SQL that will not re-parse.
+				if _, perr := pg.Parse(rawSQL); perr != nil {
+					return nil, err
+				}
 				queries = append(queries, sql.RawSQL(rawSQL))
 				continue
 			}

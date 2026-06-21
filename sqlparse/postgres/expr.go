@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -23,7 +24,13 @@ func convertExpr(node *pg.Node) (sql.Expression, error) {
 		// A positional placeholder ($N). sqlkit numbers its own placeholders from
 		// bound values, so there is no native placeholder node; pass the PostgreSQL
 		// spelling through verbatim, which round-trips under PostgreSQLDialect.
-		return sql.Raw("$" + strconv.Itoa(int(node.GetParamRef().GetNumber()))), nil
+		// PostgreSQL numbers parameters from $1; $0 (which the raw parser tolerates)
+		// is not valid SQL, so reject it outright rather than emit it.
+		num := node.GetParamRef().GetNumber()
+		if num < 1 {
+			return nil, fmt.Errorf("sqlkit/sqlparse/postgres: invalid parameter reference $%d", num)
+		}
+		return sql.Raw("$" + strconv.Itoa(int(num))), nil
 	case node.GetAExpr() != nil:
 		return convertAExpr(node.GetAExpr())
 	case node.GetBoolExpr() != nil:

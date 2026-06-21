@@ -205,3 +205,20 @@ func TestGrantUsageOnSchema(t *testing.T) {
 		sql.Grant("USAGE").OnType("SCHEMA", "s").To("r"),
 		`GRANT USAGE ON SCHEMA "s" TO "r";`)
 }
+
+// PostgreSQL numbers parameters from $1; $0, which the raw parser tolerates, is
+// not valid SQL, so a typed query carrying it is rejected outright.
+func TestParamRefZeroRejected(t *testing.T) {
+	if _, err := postgres.ParseOne("SELECT $0"); err == nil {
+		t.Fatal("ParseOne(SELECT $0) error = nil, want a parse error")
+	}
+}
+
+// A raw passthrough must re-parse: when the deparser mangles a tolerated-but-
+// invalid construct (here $0 inside an otherwise-raw statement deparses to a bare
+// "?"), the statement is surfaced as a parse failure rather than emitted.
+func TestRawPassthroughMustReparse(t *testing.T) {
+	if _, err := postgres.ParseOne("SELECT !0 WHER, 0 < $0"); err == nil {
+		t.Fatal("ParseOne(invalid raw) error = nil, want a parse error")
+	}
+}
