@@ -245,6 +245,60 @@ func TestParseStatementPosition(t *testing.T) {
 	}
 }
 
+// TestParseTablePositionThroughComments checks the table-offset scanner skips
+// line comments (-- and #) and block comments (/* */) and quoted strings, so an
+// identifier inside them is never mistaken for a table and the real table name
+// still records its offset.
+func TestParseTablePositionThroughComments(t *testing.T) {
+	src := "SELECT id /* from x */ FROM users -- from y\nWHERE name = '# from z'"
+	q, err := mysql.ParseOne(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tbl, ok := sql.Unwrap(q).(sql.SelectStmt).From.(sql.Table)
+	if !ok {
+		t.Fatalf("FROM source is not a Table: %T", sql.Unwrap(q).(sql.SelectStmt).From)
+	}
+	if got, want := tbl.Name.Pos(), strings.Index(src, "users"); got != want {
+		t.Errorf("table name offset = %d, want %d", got, want)
+	}
+}
+
+// TestParseTablePositionThroughHashComment exercises the # line-comment form
+// specifically, which precedes the table-introducing FROM.
+func TestParseTablePositionThroughHashComment(t *testing.T) {
+	src := "SELECT id # pick a column\nFROM accounts WHERE id = 1"
+	q, err := mysql.ParseOne(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tbl := sql.Unwrap(q).(sql.SelectStmt).From.(sql.Table)
+	if got, want := tbl.Name.Pos(), strings.Index(src, "accounts"); got != want {
+		t.Errorf("table name offset = %d, want %d", got, want)
+	}
+}
+
+// TestParseBacktickTablePosition checks the table-offset scanner reads a
+// backtick-quoted table name, unquoting it and recording the offset of the opening
+// backtick.
+func TestParseBacktickTablePosition(t *testing.T) {
+	src := "SELECT id FROM `users` WHERE id = 1"
+	q, err := mysql.ParseOne(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tbl, ok := sql.Unwrap(q).(sql.SelectStmt).From.(sql.Table)
+	if !ok {
+		t.Fatalf("FROM source is not a Table: %T", sql.Unwrap(q).(sql.SelectStmt).From)
+	}
+	if got := tbl.Name.String(); got != "users" {
+		t.Errorf("table name = %q, want %q", got, "users")
+	}
+	if got, want := tbl.Name.Pos(), strings.Index(src, "`users`"); got != want {
+		t.Errorf("backtick table offset = %d, want %d", got, want)
+	}
+}
+
 // TestBuiltNodesHaveNoPos pins that builder-constructed nodes carry NoPos: only
 // parsing records positions.
 func TestBuiltNodesHaveNoPos(t *testing.T) {
