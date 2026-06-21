@@ -171,3 +171,9 @@ func TestInsertColumnValueMismatchFallsBackToRaw(t *testing.T) {
 func TestInsertWithoutColumnsFallsBackToRaw(t *testing.T) {
 	assertRaw(t, "INSERT INTO t VALUES (1, 2, 3)")
 }
+
+// TiDB tolerates an empty backtick-quoted table name in a DML target
+// (UPDATE “), which the compiler cannot render, so it falls back to raw.
+func TestUpdateEmptyTableNameFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "UPDATE `` SET a = 0")
+}

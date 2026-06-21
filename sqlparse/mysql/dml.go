@@ -23,6 +23,11 @@ func singleTable(refs *ast.TableRefsClause, tp tablePos) (sql.Table, error) {
 	if !ok {
 		return sql.Table{}, sqlparse.Unsupportedf("table source %T", ts.Source)
 	}
+	// TiDB tolerates an empty backtick-quoted name (UPDATE ``), which the compiler
+	// cannot render; fall back to raw rather than build a table with no name.
+	if tn.Name.O == "" {
+		return sql.Table{}, sqlparse.Unsupported("table with an empty name")
+	}
 	return tableAt(tn, tp), nil
 }
 
