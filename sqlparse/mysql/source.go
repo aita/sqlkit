@@ -136,10 +136,8 @@ func convertTableSourceNode(node ast.ResultSetNode, tp tablePos) (sql.Source, er
 func convertTableSource(ts *ast.TableSource, tp tablePos) (sql.Source, error) {
 	switch src := ts.Source.(type) {
 	case *ast.TableName:
-		// TiDB tolerates an empty backtick-quoted name (FROM ``), which the compiler
-		// cannot render; fall back to raw rather than build a source with no name.
-		if src.Name.O == "" {
-			return nil, sqlparse.Unsupported("table with an empty name")
+		if err := checkTableName(src); err != nil {
+			return nil, err
 		}
 		table := tableAt(src, tp)
 		if alias := ts.AsName.O; alias != "" {
@@ -172,6 +170,20 @@ func convertTableSource(ts *ast.TableSource, tp tablePos) (sql.Source, error) {
 // recording the table name's source offset when the parser provides one.
 func tableFromName(tn *ast.TableName) sql.Table {
 	return sql.Table{Schema: sql.NewIdent(tn.Schema.O), Name: identAt(tn.Name.O, tn)}
+}
+
+// checkTableName reports whether a TableName can be rendered faithfully. TiDB
+// tolerates an empty backtick-quoted name (“), which the compiler cannot
+// render, and a single quoted identifier with a dot (`a.b`) that sqlkit would
+// re-split into a qualified reference; both fall back to raw.
+func checkTableName(tn *ast.TableName) error {
+	if tn.Name.O == "" {
+		return sqlparse.Unsupported("table with an empty name")
+	}
+	if strings.Contains(tn.Name.O, ".") || strings.Contains(tn.Schema.O, ".") {
+		return sqlparse.Unsupportedf("table identifier with a dot: %q", tn.Name.O)
+	}
+	return nil
 }
 
 // starQualifier renders the qualifier preceding a "*" wildcard, e.g. "t" or

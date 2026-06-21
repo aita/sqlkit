@@ -442,3 +442,10 @@ func TestColumnIdentifierWithDotFallsBackToRaw(t *testing.T) {
 func TestLimitOutOfRangeFallsBackToRaw(t *testing.T) {
 	assertRaw(t, "SELECT a FROM t LIMIT 9227000000000000000")
 }
+
+// A table identifier containing a dot (`a.b`) is a single name, but sqlkit
+// re-splits a table reference on '.' to recover the schema, so it round-trips as
+// raw rather than rendering the wrong `a`.`b` (or, for `.`, an empty “ . “).
+func TestTableIdentifierWithDotFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT a FROM `x.y`")
+}
