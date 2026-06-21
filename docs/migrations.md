@@ -1,18 +1,22 @@
 # Migrations
 
-The `migrate` package runs schema migrations: each migration's `Up` and `Down`
-are callbacks that receive an `Operator` and perform the change with operations
+The [`migrate`](https://pkg.go.dev/github.com/aita/sqlkit/migrate) package runs
+schema migrations: each migration's `Up` and `Down`
+are callbacks that receive an
+[`Operator`](https://pkg.go.dev/github.com/aita/sqlkit/migrate#Operator) and perform the change with operations
 like `op.CreateTable`, `op.AddColumn`, `op.CreateIndex`, and
 `op.CreateForeignKey`. Session-scoped tables and views have their own operations
 too — `op.CreateTemporaryTable`, and `op.CreateView` / `op.DropView` (the view
-body is a `sql` package query, with `OrReplace()` / `ViewColumns(...)` options).
-Columns are declared with the same `decl` DSL. Migrations are self-contained —
+body is a [`sql`](https://pkg.go.dev/github.com/aita/sqlkit/sql) package query, with
+[`OrReplace()`](https://pkg.go.dev/github.com/aita/sqlkit/migrate#OrReplace) /
+[`ViewColumns(...)`](https://pkg.go.dev/github.com/aita/sqlkit/migrate#ViewColumns) options).
+Columns are declared with the same [`decl`](https://pkg.go.dev/github.com/aita/sqlkit/decl) DSL. Migrations are self-contained —
 they don't import your schema catalog — and target PostgreSQL or MySQL through
 the same code.
 
 Migrations form a **DAG**: each carries a `Revision` id and the `DownRevision`
 it builds on (`""` for the first), and the apply order is resolved from those
-links — not declaration or filename order. `migrate.NewRevision()` mints
+links — not declaration or filename order. [`migrate.NewRevision()`](https://pkg.go.dev/github.com/aita/sqlkit/migrate#NewRevision) mints
 collision-resistant ids.
 
 ```go
@@ -70,7 +74,7 @@ Other capabilities:
   partly-applied migration back — see [Limitations](limitations.md).
 
 **Splitting across files.** Register each migration with a shared
-`migrate.Registry`, so adding a migration is dropping in a file rather than
+[`migrate.Registry`](https://pkg.go.dev/github.com/aita/sqlkit/migrate#Registry), so adding a migration is dropping in a file rather than
 editing a central slice (order is still resolved from the DAG):
 
 ```go
@@ -102,7 +106,7 @@ sqlkit migrate new "add tags" --migrations ./migrations  # scaffold a new migrat
 ```
 
 If you would rather ship your own binary, the same command set is available
-without `migrate` pulling in a CLI dependency: `migrate.NewCLI()` returns the
+without `migrate` pulling in a CLI dependency: [`migrate.NewCLI()`](https://pkg.go.dev/github.com/aita/sqlkit/migrate#NewCLI) returns the
 command grammar and `CLI.Dispatch(m.Runner(ctx), args)` parses and runs it
 directly, so a minimal binary needs no third-party parser. If you want richer
 `--help` and flag handling, hand `migrate.NewCLI()` to a parser like kong in
@@ -135,12 +139,12 @@ safety. A drop+add that is really a rename keeps its data when you say so
 (`--rename users.name:full_name`, `--rename-table old:new`); unhinted drop/add
 pairs get a `// possible rename` suggestion. As with any autogenerator, **review
 the result before applying** — data backfills and risky renames still need a
-human. The same diff is available as a library via `migrate.Diff(old, new,
+human. The same diff is available as a library via [`migrate.Diff`](https://pkg.go.dev/github.com/aita/sqlkit/migrate#Diff)`(old, new,
 dialect)`.
 
 ## Migrations across backends
 
-Migrations are not routed: a `migrate.Migrator` already targets one `*Database`
+Migrations are not routed: a [`migrate.Migrator`](https://pkg.go.dev/github.com/aita/sqlkit/migrate#Migrator) already targets one `*`[`Database`](https://pkg.go.dev/github.com/aita/sqlkit#Database)
 and keeps its own `schema_migrations` history, so you apply them per writable
 backend yourself (the Alembic `--name`/env-loop model, not a framework router).
 Replicas are skipped — they receive DDL through replication.

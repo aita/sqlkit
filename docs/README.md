@@ -16,8 +16,8 @@ narrative, how-to side.
   CTEs, writes & upserts, relation-aware queries & preload, transactions,
   auto-splitting, and the standalone `ToSQL` builder.
 - **[Schema as code & code generation](schema-codegen.md)** — declare the schema
-  with `decl`, generate bindings and DDL, customize the type mapping, bootstrap
-  from a live database.
+  with [`decl`](https://pkg.go.dev/github.com/aita/sqlkit/decl), generate bindings
+  and DDL, customize the type mapping, bootstrap from a live database.
 - **[Migrations](migrations.md)** — DAG-ordered up/down migrations, the CLI, and
   autogeneration.
 
@@ -25,11 +25,13 @@ narrative, how-to side.
 
 - **[Query routing](routing.md)** — read/write splitting, sharding, and pinned
   sessions.
-- **[Observability](observability.md)** — hooks, `querytrace` tracing, and the
-  `analyze` AST framework.
+- **[Observability](observability.md)** — hooks,
+  [`querytrace`](https://pkg.go.dev/github.com/aita/sqlkit/querytrace) tracing, and the
+  [`analyze`](https://pkg.go.dev/github.com/aita/sqlkit/analyze) AST framework.
 - **[Redaction](redaction.md)** — mask PII literals before logging a statement.
-- **[Testing](testing.md)** — the `sqltest` seeding helpers, query spy, and mock
-  database.
+- **[Testing](testing.md)** — the
+  [`sqltest`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest) seeding helpers,
+  query spy, and mock database.
 
 ## Reference
 
@@ -44,7 +46,7 @@ into their own modules:
 
 | Module | Why separate |
 | --- | --- |
-| `github.com/aita/sqlkit` | The core: query builder, `sql`, `decl`, `meta`, `migrate`, `codegen`, `introspect`, `sqlparse` (surface), `querytrace`, `analyze`, `redact`, `sqltest`, `uow`. No third-party dependencies. |
+| `github.com/aita/sqlkit` | The core: query builder, [`sql`](https://pkg.go.dev/github.com/aita/sqlkit/sql), `decl`, [`meta`](https://pkg.go.dev/github.com/aita/sqlkit/meta), [`migrate`](https://pkg.go.dev/github.com/aita/sqlkit/migrate), [`codegen`](https://pkg.go.dev/github.com/aita/sqlkit/codegen), [`introspect`](https://pkg.go.dev/github.com/aita/sqlkit/introspect), [`sqlparse`](https://pkg.go.dev/github.com/aita/sqlkit/sqlparse) (surface), `querytrace`, `analyze`, [`redact`](https://pkg.go.dev/github.com/aita/sqlkit/redact), `sqltest`, [`uow`](https://pkg.go.dev/github.com/aita/sqlkit/uow). No third-party dependencies. |
 | `cmd/sqlkit` | The CLI links PostgreSQL/MySQL drivers for `inspect`. |
 | `sqlparse/postgres` | The `pg_query_go` (cgo) PostgreSQL grammar. |
 | `sqlparse/mysql` | The TiDB MySQL parser. |

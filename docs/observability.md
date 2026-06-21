@@ -10,9 +10,11 @@ database:
 
 ## Hooks
 
-`Hooks` observe — and may rewrite — statements around execution. A `Before` hook
-runs just before a statement reaches the database; an `AfterQuery`/`AfterExec`
-hook runs once its result is produced. Register them with `WithHooks`; they apply
+[`Hooks`](https://pkg.go.dev/github.com/aita/sqlkit#Hooks) observe — and may
+rewrite — statements around execution. A `Before` hook runs just before a
+statement reaches the database; an `AfterQuery`/`AfterExec` hook runs once its
+result is produced. Register them with
+[`WithHooks`](https://pkg.go.dev/github.com/aita/sqlkit#WithHooks); they apply
 to every read and write run through the database and any session it opens, and
 nil fields are skipped so a hook fills in only the points it needs.
 
@@ -77,9 +79,16 @@ configuration, and integration details.
 
 [`analyze`](https://pkg.go.dev/github.com/aita/sqlkit/analyze) is a small,
 read-only analysis framework over the sqlkit SQL AST. It answers focused
-structural questions about a built or parsed statement — `KindOf` (statement
-kind), `Tables` (tables touched), `HasTopLevelWhere` / `HasTopLevelJoin`,
-`FilterColumns`, `SelectsStar`, and `Fingerprint` (a normalized shape id). It is
+structural questions about a built or parsed statement —
+[`KindOf`](https://pkg.go.dev/github.com/aita/sqlkit/analyze#KindOf) (statement
+kind), [`Tables`](https://pkg.go.dev/github.com/aita/sqlkit/analyze#Tables)
+(tables touched),
+[`HasTopLevelWhere`](https://pkg.go.dev/github.com/aita/sqlkit/analyze#HasTopLevelWhere) /
+[`HasTopLevelJoin`](https://pkg.go.dev/github.com/aita/sqlkit/analyze#HasTopLevelJoin),
+[`FilterColumns`](https://pkg.go.dev/github.com/aita/sqlkit/analyze#FilterColumns),
+[`SelectsStar`](https://pkg.go.dev/github.com/aita/sqlkit/analyze#SelectsStar),
+and [`Fingerprint`](https://pkg.go.dev/github.com/aita/sqlkit/analyze#Fingerprint)
+(a normalized shape id). It is
 the structural engine querytrace's warnings build on, exposed for your own
 linters and guards.
 

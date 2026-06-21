@@ -23,7 +23,8 @@ go install github.com/aita/sqlkit/cmd/sqlkit@latest
 
 ## 2. Declare the schema
 
-Author the schema as plain Go values with the `decl` package — no live database
+Author the schema as plain Go values with the
+[`decl`](https://pkg.go.dev/github.com/aita/sqlkit/decl) package — no live database
 required. Foreign keys reference their target by name and resolve at `Build`.
 
 ```go
@@ -68,7 +69,7 @@ Drop a pair of `go:generate` directives next to the catalog and run
 ```
 
 - `generate` writes `blogdb/tables.go` — the typed `Users`/`Posts` bindings with
-  `Column[T]` fields. `--relations` adds the FK metadata that powers `JoinRel`,
+  [`Column[T]`](https://pkg.go.dev/github.com/aita/sqlkit#Column) fields. `--relations` adds the FK metadata that powers `JoinRel`,
   `Preload`, and typed filter bundles.
 - `ddl` writes `schema.sql` — the `CREATE TABLE`/index/constraint statements.
 

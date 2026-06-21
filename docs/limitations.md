@@ -36,20 +36,20 @@ PostgreSQL); override with `WithDialect`.
 
 | Feature | PostgreSQL | MySQL | Notes |
 | --- | :---: | :---: | --- |
-| `RETURNING` (read rows back from a write) | ✅ | ❌ | MySQL: `Returning(...)` won't compile; use `Result.LastInsertId` (`sqltest.InsertID` smooths it over in tests). |
+| `RETURNING` (read rows back from a write) | ✅ | ❌ | MySQL: `Returning(...)` won't compile; use `Result.LastInsertId` ([`sqltest.InsertID`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#InsertID) smooths it over in tests). |
 | Upsert | ✅ | ⚠️ | PG `ON CONFLICT`; MySQL `ON DUPLICATE KEY UPDATE` — no named-constraint target (`OnConflictConstraint`), no `WHERE` on the update. |
 | `MERGE` | ✅ | ❌ | PostgreSQL 15+. `WHEN NOT MATCHED` can only `INSERT` / do nothing — never `UPDATE`/`DELETE` (both engines). |
-| Row locks `ForUpdate` / `ForShare` | ✅ | ✅ | MySQL 8.0+. Refine with `SkipLocked`/`NoWait`/`LockOf`. |
+| Row locks `ForUpdate` / `ForShare` | ✅ | ✅ | MySQL 8.0+. Refine with [`SkipLocked`](https://pkg.go.dev/github.com/aita/sqlkit#SkipLocked)/[`NoWait`](https://pkg.go.dev/github.com/aita/sqlkit#NoWait)/[`LockOf`](https://pkg.go.dev/github.com/aita/sqlkit#LockOf). |
 | `ForKeyShare` / `ForNoKeyUpdate` | ✅ | ❌ | Extra PostgreSQL lock strengths. |
-| Arrays — `sql.Array`, `EqAny`/`NeAll`, `decl.Array` | ✅ | ❌ | MySQL has no array type. |
-| JSON path access — `sql.JSONGet` / `JSONGetText` | ✅ | ❌ | 🚧 MySQL has JSON path functions; sqlkit just doesn't map to them yet. The `json`/`jsonb` struct-tag round-trip (whole-value marshal) works on both. |
-| Full-text search — `sqlkit.Match` | ✅ | ⚠️ | MySQL: the columns need a `FULLTEXT` index. Boolean mode / a text-search config needs the `sql` package (below). |
+| Arrays — [`sql.Array`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Array), `EqAny`/`NeAll`, [`decl.Array`](https://pkg.go.dev/github.com/aita/sqlkit/decl#Array) | ✅ | ❌ | MySQL has no array type. |
+| JSON path access — [`sql.JSONGet`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGet) / [`JSONGetText`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGetText) | ✅ | ❌ | 🚧 MySQL has JSON path functions; sqlkit just doesn't map to them yet. The `json`/`jsonb` struct-tag round-trip (whole-value marshal) works on both. |
+| Full-text search — [`sqlkit.Match`](https://pkg.go.dev/github.com/aita/sqlkit#Match) | ✅ | ⚠️ | MySQL: the columns need a `FULLTEXT` index. Boolean mode / a text-search config needs the `sql` package (below). |
 | Regex match — `~` / `~*` | ✅ | ❌ | MySQL can't express a case-insensitive regex inline (collation-dependent). |
 | `SIMILAR TO` / `NOT SIMILAR TO` | ✅ | ❌ | SQL-standard pattern matching. |
 | `DISTINCT ON (col)` | ✅ | ❌ | No MySQL equivalent. |
 | Multi-table `UPDATE … FROM` / `DELETE … USING` | ✅ | ⚠️ | Some shapes error ("multi-table UPDATE/DELETE is unsupported for this dialect"). |
 | Aliased `VALUES` derived-table source | ✅ | ⚠️ | MySQL can't alias `VALUES` columns, so sqlkit renders it as a `UNION ALL` of `SELECT`s (equivalent result, different SQL text). |
-| Schema introspection — `introspect.Schema` | ✅ | ✅ | Constructs the `meta` model can't represent are skipped on import. |
+| Schema introspection — [`introspect.Schema`](https://pkg.go.dev/github.com/aita/sqlkit/introspect#Schema) | ✅ | ✅ | Constructs the [`meta`](https://pkg.go.dev/github.com/aita/sqlkit/meta) model can't represent are skipped on import. |
 | Transactional (atomic) migrations | ✅ | ❌ | MySQL commits DDL implicitly and can't roll a partly-applied migration back — see [Migrations](#migrations). |
 
 The matrix records engine *capabilities*, so a ❌/⚠️ cell is 🔒 inherent (the
@@ -72,21 +72,21 @@ Splitting keeps a single statement under the driver's bind-parameter limit
 (65535 for PostgreSQL and MySQL). These rules are all 🔒 **by design** — they
 trade convenience for correctness:
 
-- **Off by default.** Bulk-insert auto-splitting needs `WithAutoChunk(true)` on
-  the `Database`; otherwise split by hand with `BatchSize(n)`. `ToSQL` always
+- **Off by default.** Bulk-insert auto-splitting needs [`WithAutoChunk`](https://pkg.go.dev/github.com/aita/sqlkit#WithAutoChunk)`(true)` on
+  the [`Database`](https://pkg.go.dev/github.com/aita/sqlkit#Database); otherwise split by hand with `BatchSize(n)`. `ToSQL` always
   compiles the full value list into one statement regardless.
 - **`IN` splits only when it is the whole query.** A `Select` whose sole `Where`
   is a column `In(...)` splits and concatenates rows. Adding `ORDER BY`,
   `GROUP BY`, `DISTINCT`, `HAVING`, or `LIMIT`/`OFFSET` marks it **unsafe to
   split** (results can't be combined across chunks): it runs as a single
   statement and can still hit the bind limit. Batch those yourself with
-  `sqlkit.InBatches`.
+  [`sqlkit.InBatches`](https://pkg.go.dev/github.com/aita/sqlkit#InBatches).
 - **`NOT IN` is never split.** A row is excluded only if it appears in *no*
   chunk, which splitting cannot guarantee — a very large `NOT IN` must fit in one
   statement. Express the complement as an anti-join or `NOT EXISTS` instead, or
   use `NeAll` (PostgreSQL array form).
 - **Preload chunking** is fixed-window — 1000 parent keys per follow-up `SELECT`
-  by default (`WithPreloadBatchSize(n)`), for query-plan-cache friendliness.
+  by default ([`WithPreloadBatchSize`](https://pkg.go.dev/github.com/aita/sqlkit#WithPreloadBatchSize)`(n)`), for query-plan-cache friendliness.
 
 ## Preload
 
@@ -113,9 +113,9 @@ trade convenience for correctness:
 ## Code generation
 
 - 🔒 **Every SQL type needs a Go mapping.** A column whose database type has no
-  built-in mapping is a generation error. Supply a `TypeMapperConfig.Overrides`
+  built-in mapping is a generation error. Supply a [`TypeMapperConfig`](https://pkg.go.dev/github.com/aita/sqlkit/codegen#TypeMapperConfig)`.Overrides`
   (by type name) or `ColumnOverrides` (by `table.column`), or pin a Go type on
-  the `decl` column.
+  the [`decl`](https://pkg.go.dev/github.com/aita/sqlkit/decl) column.
 - 🔒 **Exact numerics default to `shopspring/decimal`.** `decimal`/`numeric`
   columns map to `github.com/shopspring/decimal` because `float64` cannot scan
   them without losing precision; the import lands in *your* generated package (the
@@ -125,16 +125,17 @@ trade convenience for correctness:
 
 ## SQL parser (sqlparse)
 
-`sqlparse` inverts the build-then-compile flow, turning SQL text back into
+[`sqlparse`](https://pkg.go.dev/github.com/aita/sqlkit/sqlparse) inverts the
+build-then-compile flow, turning SQL text back into
 `sql` AST nodes. Two facts shape its limits:
 
-- 🔒 **Two backends, two modules.** `sqlparse/postgres` (real PostgreSQL grammar
-  via `pg_query_go`, cgo) and `sqlparse/mysql` (the TiDB parser, pure Go) are
+- 🔒 **Two backends, two modules.** [`sqlparse/postgres`](https://pkg.go.dev/github.com/aita/sqlkit/sqlparse/postgres) (real PostgreSQL grammar
+  via `pg_query_go`, cgo) and [`sqlparse/mysql`](https://pkg.go.dev/github.com/aita/sqlkit/sqlparse/mysql) (the TiDB parser, pure Go) are
   **separate modules** so their heavy dependency trees never reach the root
   module that library consumers import.
 - 🚧 **Not every construct round-trips.** Each backend recognizes the full grammar
   but only maps the constructs the `sql` AST can model; anything else either
-  falls back to a raw passthrough node or returns an `UnsupportedError` naming the
+  falls back to a raw passthrough node or returns an [`UnsupportedError`](https://pkg.go.dev/github.com/aita/sqlkit/sqlparse#UnsupportedError) naming the
   construct. Examples that do not model to typed nodes include partial/`INCLUDE`/
   concurrent indexes, materialized-view bodies, `INSERT … DEFAULT VALUES`,
   `WITH ROLLUP`, some window-frame and multi-table-`UPDATE`/`DELETE` shapes, and
@@ -150,17 +151,17 @@ the `meta` model gains types.)
 
 ## Other
 
-- 🔒 **Keyset pagination needs a unique tail key.** End a `Paginator`'s sort keys
+- 🔒 **Keyset pagination needs a unique tail key.** End a [`Paginator`](https://pkg.go.dev/github.com/aita/sqlkit#Paginator)'s sort keys
   with a unique column (typically the primary key) so the order is total and a
   cursor lands on exactly one row.
-- 🔒 **Filter terms** support `Eq`/`Ne`/`Lt`/`Le`/`Gt`/`Ge`/`In`/`FilterLike`/
-  `FilterIsNull` or a raw `Predicate`; other `FilterTerm` values error.
+- 🔒 **Filter terms** support `Eq`/`Ne`/`Lt`/`Le`/`Gt`/`Ge`/`In`/[`FilterLike`](https://pkg.go.dev/github.com/aita/sqlkit#FilterLike)/
+  [`FilterIsNull`](https://pkg.go.dev/github.com/aita/sqlkit#FilterIsNull) or a raw [`Predicate`](https://pkg.go.dev/github.com/aita/sqlkit#Predicate); other [`FilterTerm`](https://pkg.go.dev/github.com/aita/sqlkit#FilterTerm) values error.
 - 🚧 **`decl` targets PostgreSQL and MySQL** only; other dialects ("oracle", …)
   error.
 - 🔒 **A primary-key column cannot be nullable** in a `decl` catalog.
-- 🔒 **Unit of Work nesting requires a transaction.** Nested `uow.Scope`s are
+- 🔒 **Unit of Work nesting requires a transaction.** Nested [`uow.Scope`](https://pkg.go.dev/github.com/aita/sqlkit/uow#Scope)s are
   savepoint-backed, so a nested flush over a non-transactional executor returns
-  `ErrNestingRequiresTx` — open a `*sqlkit.Session` first.
+  [`ErrNestingRequiresTx`](https://pkg.go.dev/github.com/aita/sqlkit/uow#ErrNestingRequiresTx) — open a `*`[`sqlkit.Session`](https://pkg.go.dev/github.com/aita/sqlkit#Session) first.
 
 ---
 

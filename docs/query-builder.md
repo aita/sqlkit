@@ -4,10 +4,12 @@ The typed SQL builder is the core of sqlkit: you build statements from typed
 columns, the compiler checks them, and results scan into your own structs.
 `Users.ID.Eq("foo")` is a compile error, not a runtime SQL error.
 
-Chains are bound to the executor they start from — a `Database` (auto-commit) or
-a transaction-scoped `Session` — so the terminals (`All`, `One`, `Exec`, …) take
+Chains are bound to the executor they start from — a
+[`Database`](https://pkg.go.dev/github.com/aita/sqlkit#Database) (auto-commit) or
+a transaction-scoped [`Session`](https://pkg.go.dev/github.com/aita/sqlkit#Session) — so the terminals (`All`, `One`, `Exec`, …) take
 only a context. Every chain also has an unbound form (package-level
-`sqlkit.Select`/`Insert`/… and everything in package `sql`) that compiles to SQL
+[`sqlkit.Select`](https://pkg.go.dev/github.com/aita/sqlkit#Select)/[`Insert`](https://pkg.go.dev/github.com/aita/sqlkit#Insert)/…
+and everything in package [`sql`](https://pkg.go.dev/github.com/aita/sqlkit/sql)) that compiles to SQL
 text + args with `ToSQL(dialect)` — see [Standalone builder](#standalone-builder).
 
 - [Querying and scanning](#querying-and-scanning)
@@ -62,9 +64,9 @@ err = db.Select().From(appdb.Users).Where(appdb.Users.ID.Eq(1)).All(ctx).Scan(&o
 n, err := db.Select().From(appdb.Users).Where(...).Count(ctx)
 ```
 
-`sqlkit.Star(table)` is the `table.*` select-list item, so you can fetch one
+[`sqlkit.Star`](https://pkg.go.dev/github.com/aita/sqlkit#Star)`(table)` is the `table.*` select-list item, so you can fetch one
 whole table plus a column from another. For a single row, chains offer `First`
-(pushes `LIMIT 1`) and `One` (requires exactly one row, else `ErrTooManyRows`)
+(pushes `LIMIT 1`) and `One` (requires exactly one row, else [`ErrTooManyRows`](https://pkg.go.dev/github.com/aita/sqlkit#ErrTooManyRows))
 alongside `All`. `Page(ctx, limit, offset)` fetches a window in one call.
 
 Row locking (PostgreSQL/MySQL 8.0+) is `ForUpdate` / `ForShare` (plus
@@ -77,9 +79,9 @@ err := db.Select().From(appdb.Jobs).Where(appdb.Jobs.Status.Eq("ready")).
 ```
 
 For keyset (cursor) pagination — a page that costs the same at any depth and
-does not shift when rows are inserted or deleted — configure a `Paginator` with
+does not shift when rows are inserted or deleted — configure a [`Paginator`](https://pkg.go.dev/github.com/aita/sqlkit#Paginator) with
 the sort keys and a page size, then walk it with cursors. The first page uses
-`sqlkit.Start()`; each returned `Page` hands out the cursor for its neighbours,
+[`sqlkit.Start()`](https://pkg.go.dev/github.com/aita/sqlkit#Start); each returned [`Page`](https://pkg.go.dev/github.com/aita/sqlkit#Page) hands out the cursor for its neighbours,
 which you pass straight back:
 
 ```go
@@ -97,7 +99,7 @@ if page.HasNext {
 
 The cursor is opaque and carries its own direction, so it cannot be applied the
 wrong way. To cross an HTTP request, render it with `page.Next().String()` and
-rebuild it with `sqlkit.ParseCursor(token)` (an empty token is the first page) —
+rebuild it with [`sqlkit.ParseCursor`](https://pkg.go.dev/github.com/aita/sqlkit#ParseCursor)`(token)` (an empty token is the first page) —
 treat the string as a token, not a value to parse. The Paginator owns cursor
 encoding; supply `WithCodec` to sign or encrypt the envelope. End the keys with a
 unique column (typically the primary key) so the order is total.
@@ -131,7 +133,7 @@ type Account struct {
   slice writes SQL NULL.
 - **`version`** — turns `SetStruct` into an optimistic-locked update: the column
   is bumped (`version = version + 1`) and the row is guarded on the field's
-  current value, so `Exec` returns `ErrVersionConflict` when another writer
+  current value, so `Exec` returns [`ErrVersionConflict`](https://pkg.go.dev/github.com/aita/sqlkit#ErrVersionConflict) when another writer
   advanced it first — the tag-driven equivalent of `CheckVersion`.
 - **`touch`** — an app-maintained timestamp: the column is set to
   `CURRENT_TIMESTAMP` (inlined, no bind value) on every `Insert().Values` and on
@@ -149,12 +151,12 @@ Typed columns carry the predicate vocabulary directly: `Eq`/`Ne`/`Lt`/`Le`/
 array-valued `= ANY($1)` / `<> ALL($1)` (the whole list bound as one array
 parameter, so they replace a large `In`/`NotIn` without nearing the bind-param
 limit). String columns add the free helpers
-`sqlkit.Like` / `NotLike` / `ILike` (case-insensitive on both engines) and
-`sqlkit.SimilarTo` / `NotSimilarTo` (PostgreSQL/standard only).
-`sqlkit.Exists` / `NotExists` wrap a subquery, and `sqlkit.And` / `Or` / `Not`
+[`sqlkit.Like`](https://pkg.go.dev/github.com/aita/sqlkit#Like) / [`NotLike`](https://pkg.go.dev/github.com/aita/sqlkit#NotLike) / [`ILike`](https://pkg.go.dev/github.com/aita/sqlkit#ILike) (case-insensitive on both engines) and
+[`sqlkit.SimilarTo`](https://pkg.go.dev/github.com/aita/sqlkit#SimilarTo) / [`NotSimilarTo`](https://pkg.go.dev/github.com/aita/sqlkit#NotSimilarTo) (PostgreSQL/standard only).
+[`sqlkit.Exists`](https://pkg.go.dev/github.com/aita/sqlkit#Exists) / [`NotExists`](https://pkg.go.dev/github.com/aita/sqlkit#NotExists) wrap a subquery, and [`sqlkit.And`](https://pkg.go.dev/github.com/aita/sqlkit#And) / [`Or`](https://pkg.go.dev/github.com/aita/sqlkit#Or) / [`Not`](https://pkg.go.dev/github.com/aita/sqlkit#Not)
 combine predicates.
 
-`sqlkit.Match(query, cols...)` is a **portable full-text search** predicate: it
+[`sqlkit.Match`](https://pkg.go.dev/github.com/aita/sqlkit#Match)`(query, cols...)` is a **portable full-text search** predicate: it
 renders as PostgreSQL's `to_tsvector(...) @@ plainto_tsquery(...)` and MySQL's
 `MATCH(...) AGAINST(... IN NATURAL LANGUAGE MODE)` — on MySQL the columns must
 be covered by a `FULLTEXT` index — and is rejected on the standard target. For a
@@ -191,7 +193,7 @@ err := db.Select().From(appdb.Users).
 `Join` / `LeftJoin` / `RightJoin` / `FullJoin` take a source and an ON
 predicate; `CrossJoin` takes only a source. `JoinUsing` / `LeftJoinUsing` join
 on equally named columns (`USING (...)`), and `NaturalJoin` / `NaturalLeftJoin`
-match every shared column implicitly. Wrap a source with `sql.Lateral` for a
+match every shared column implicitly. Wrap a source with [`sql.Lateral`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Lateral) for a
 `LATERAL` join.
 
 ```go
@@ -207,7 +209,7 @@ err := db.Select(appdb.Posts.ID, appdb.Posts.Title).From(appdb.Posts).
 `Exists`/`NotExists` and `InQuery`/`NotInQuery` accept correlated subqueries.
 Two more forms cover the rest:
 
-- **Scalar subqueries** — `sqlkit.SubExpr[T](sub)` wraps a single-column,
+- **Scalar subqueries** — [`sqlkit.SubExpr`](https://pkg.go.dev/github.com/aita/sqlkit#SubExpr)`[T](sub)` wraps a single-column,
   single-row subquery as a typed expression, usable as a projection or in a
   comparison (`EqExpr`/`LtExpr`/…). May be correlated.
 - **Quantified comparisons** — `LtAny`/`GtAll`/… render `column <op> ANY/ALL
@@ -233,7 +235,7 @@ err := db.Select(sub.Col("id")).From(sub).All(ctx).Scan(&ids)
 
 ## Aggregates, CASE, and window functions
 
-The `sql` package supplies the expression vocabulary; `sqlkit.Cond` lifts any
+The `sql` package supplies the expression vocabulary; [`sqlkit.Cond`](https://pkg.go.dev/github.com/aita/sqlkit#Cond) lifts any
 sql expression into a typed-chain predicate.
 
 ```go
@@ -258,28 +260,28 @@ db.Select(
     Window(sql.WindowDef("w").PartitionBy(appdb.Games.Team).OrderBy(appdb.Games.PlayedAt.Asc()))
 ```
 
-The function DSL (in `sql`) covers the conditional/NULL helpers (`Coalesce`,
-`NullIf`, `Greatest`, `Least`), aggregates (`Sum`, `Avg`, `Min`, `Max`,
-`StringAgg`, …), ranking/window functions (`Rank`, `Lag`, `Lead`, …), portable
+The function DSL (in `sql`) covers the conditional/NULL helpers ([`Coalesce`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Coalesce),
+[`NullIf`](https://pkg.go.dev/github.com/aita/sqlkit/sql#NullIf), [`Greatest`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Greatest), [`Least`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Least)), aggregates ([`Sum`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Sum), [`Avg`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Avg), [`Min`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Min), [`Max`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Max),
+[`StringAgg`](https://pkg.go.dev/github.com/aita/sqlkit/sql#StringAgg), …), ranking/window functions ([`Rank`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Rank), [`Lag`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Lag), [`Lead`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Lead), …), portable
 string and numeric functions, date/time keywords, and JSON access
-(`sql.JSONGet` / `sql.JSONGetText` with portable path steps; PostgreSQL only).
-`sql.Func(name, args...)` is the escape hatch for anything else.
+([`sql.JSONGet`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGet) / [`sql.JSONGetText`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGetText) with portable path steps; PostgreSQL only).
+[`sql.Func`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Func)`(name, args...)` is the escape hatch for anything else.
 
-Distinct aggregates are spelled `sql.CountDistinct(col)` and
-`sql.DistinctFunc("SUM", col)`. CASE comes in both forms — searched
-(`sql.Case().When(cond, result).Else(...)`) and simple
-(`sql.CaseOf(col).When(value, result)…`). Other expression nodes fill out the
-vocabulary: unary operators (`sql.Neg` / `sql.Pos` / `sql.Unary`), row
-constructors (`sql.Row(a, b)`) for row-wise comparisons and `IN`, and the
-null-safe `sql.IsDistinctFrom` / `sql.IsNotDistinctFrom` (typed as
+Distinct aggregates are spelled [`sql.CountDistinct`](https://pkg.go.dev/github.com/aita/sqlkit/sql#CountDistinct)`(col)` and
+[`sql.DistinctFunc`](https://pkg.go.dev/github.com/aita/sqlkit/sql#DistinctFunc)`("SUM", col)`. CASE comes in both forms — searched
+([`sql.Case`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Case)`().When(cond, result).Else(...)`) and simple
+([`sql.CaseOf`](https://pkg.go.dev/github.com/aita/sqlkit/sql#CaseOf)`(col).When(value, result)…`). Other expression nodes fill out the
+vocabulary: unary operators ([`sql.Neg`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Neg) / [`sql.Pos`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Pos) / [`sql.Unary`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Unary)), row
+constructors ([`sql.Row`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Row)`(a, b)`) for row-wise comparisons and `IN`, and the
+null-safe [`sql.IsDistinctFrom`](https://pkg.go.dev/github.com/aita/sqlkit/sql#IsDistinctFrom) / [`sql.IsNotDistinctFrom`](https://pkg.go.dev/github.com/aita/sqlkit/sql#IsNotDistinctFrom) (typed as
 `col.IsDistinctFrom(v)` / `col.IsNotDistinctFrom(v)`), which render as MySQL's
-`<=>` there. PostgreSQL arrays use `sql.Array(...)` for an `ARRAY[...]`
-constructor and `sql.AnyArray` / `sql.AllArray` for `op ANY(array)` /
+`<=>` there. PostgreSQL arrays use [`sql.Array`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Array)`(...)` for an `ARRAY[...]`
+constructor and [`sql.AnyArray`](https://pkg.go.dev/github.com/aita/sqlkit/sql#AnyArray) / [`sql.AllArray`](https://pkg.go.dev/github.com/aita/sqlkit/sql#AllArray) for `op ANY(array)` /
 `op ALL(array)` comparisons.
 
 ## Set operations and CTEs
 
-`Union` / `UnionAll` / `Intersect` / `IntersectAll` / `Except` / `ExceptAll`
+[`Union`](https://pkg.go.dev/github.com/aita/sqlkit#Union) / [`UnionAll`](https://pkg.go.dev/github.com/aita/sqlkit#UnionAll) / [`Intersect`](https://pkg.go.dev/github.com/aita/sqlkit#Intersect) / [`IntersectAll`](https://pkg.go.dev/github.com/aita/sqlkit#IntersectAll) / [`Except`](https://pkg.go.dev/github.com/aita/sqlkit#Except) / [`ExceptAll`](https://pkg.go.dev/github.com/aita/sqlkit#ExceptAll)
 combine a flat list of SELECTs; `db.Union(...)` binds the result so the operands
 need no executor of their own. The `…All` variants keep duplicate rows (the
 multiset forms).
@@ -292,10 +294,10 @@ err = db.Union(
 ```
 
 `CTE(name)` turns a query into a named common table expression; attach it with
-`WithCTE` (works on SELECT/UPDATE/DELETE). Pass `sql.Recursive()` for a
+`WithCTE` (works on SELECT/UPDATE/DELETE). Pass [`sql.Recursive()`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Recursive) for a
 `WITH RECURSIVE`.
 
-`sql.Values().Row(...)` builds a standalone `VALUES (...), (...)` query — usable
+[`sql.Values`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Values)`().Row(...)` builds a standalone `VALUES (...), (...)` query — usable
 on its own, as an aliased derived-table source, or as an `INSERT … SELECT`
 source.
 
@@ -380,7 +382,7 @@ _, err = db.Insert(appdb.Users).Values(u).
 ## Relation-aware queries
 
 Generate the bindings with `--relations` and each foreign key gains **relation
-metadata** the same `SelectQuery` consumes (in the spirit of SQLAlchemy 2.0's
+metadata** the same [`SelectQuery`](https://pkg.go.dev/github.com/aita/sqlkit#SelectQuery) consumes (in the spirit of SQLAlchemy 2.0's
 unified `select()`). `JoinRel` derives the `ON` clause from the FK, and `Preload`
 eager-loads a relation in one batched follow-up query to avoid the N+1.
 
@@ -434,7 +436,7 @@ err = db.Select().From(appdb.Users).
     All(ctx).Scan(&users)
 ```
 
-**Nested preload** — pass a `RelPath` of related tables as the target and `Preload`
+**Nested preload** — pass a [`RelPath`](https://pkg.go.dev/github.com/aita/sqlkit#RelPath) of related tables as the target and `Preload`
 eager-loads along the whole chain, creating any intermediate level not already
 registered; each hop is its own batched query and the conditions apply to the last
 table:
@@ -490,7 +492,7 @@ err := appdb.Users.Q(db).Filter(appdb.UsersFilter{
 ## Raw SQL
 
 When a query is easier by hand, `RawSQL` runs a raw string (or a built
-`sql.Query`) and scans the same way.
+[`sql.Query`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Query)) and scans the same way.
 
 ```go
 err := db.RawSQL(ctx, "SELECT * FROM users WHERE id = $1", 42).Scan(&user)
@@ -523,7 +525,7 @@ package.
 Bulk inserts and large `IN` lists split themselves so a single statement never
 exceeds the database's bind-parameter limit (65535 for PostgreSQL and MySQL).
 
-Automatic splitting is **off by default**: pass `WithAutoChunk(true)` to enable
+Automatic splitting is **off by default**: pass [`WithAutoChunk`](https://pkg.go.dev/github.com/aita/sqlkit#WithAutoChunk)`(true)` to enable
 it, after which a bulk insert sizes itself to that limit. With it off you can
 still split a single insert by hand with `BatchSize(n)`.
 
@@ -548,12 +550,12 @@ err = db.Select().From(appdb.Users).Where(appdb.Users.ID.In(ids...)).
 A `Select` is chunked only when its `IN` list is the whole query. Adding
 `ORDER BY`, `GROUP BY`, `DISTINCT`, `HAVING`, or `LIMIT`/`OFFSET` marks it
 unsafe to split, so it runs as a single statement and can still hit the bind
-limit — batch such queries yourself with `sqlkit.InBatches`. `NOT IN` is never
+limit — batch such queries yourself with [`sqlkit.InBatches`](https://pkg.go.dev/github.com/aita/sqlkit#InBatches). `NOT IN` is never
 split. See [Limitations](limitations.md) for the full rules.
 
 A split `Select` runs its chunks inside one `REPEATABLE READ` transaction by
 default so they observe a single consistent snapshot
-(`WithBatchReadSnapshot(false)` turns that off); split writes are always wrapped
+([`WithBatchReadSnapshot`](https://pkg.go.dev/github.com/aita/sqlkit#WithBatchReadSnapshot)`(false)` turns that off); split writes are always wrapped
 in their own atomic transaction. `ToSQL` is unaffected — it always compiles the
 full value list into a single statement.
 
@@ -561,7 +563,7 @@ full value list into a single statement.
 
 sqlkit also works as a pure SQL builder, with execution and scanning handled by
 another library. Every builder has an unbound form — the package-level
-`sqlkit.Select` / `Insert` / `Update` / `Delete` (and everything in package
+`sqlkit.Select` / `Insert` / [`Update`](https://pkg.go.dev/github.com/aita/sqlkit#Update) / [`Delete`](https://pkg.go.dev/github.com/aita/sqlkit#Delete) (and everything in package
 `sql`) — and compiles to SQL text + bind args with `ToSQL(dialect)`. Nothing in
 that path touches a database, and it needs no database driver.
 
@@ -579,13 +581,13 @@ rows, err := stdDB.QueryContext(ctx, sqlText, args...)        // database/sql
 ```
 
 When execution goes through `database/sql` (including sqlx and pgx's stdlib
-adapter), `sqlkit.ScanRows` applies sqlkit's column-to-field mapping to the
+adapter), [`sqlkit.ScanRows`](https://pkg.go.dev/github.com/aita/sqlkit#ScanRows) applies sqlkit's column-to-field mapping to the
 result, so the scanning rules stay the same regardless of who ran the query.
-Table bindings don't require codegen or a live database — a `TableInfo` and
-typed columns are enough for SELECT, and the full `Table` interface can be
+Table bindings don't require codegen or a live database — a [`TableInfo`](https://pkg.go.dev/github.com/aita/sqlkit#TableInfo) and
+typed columns are enough for SELECT, and the full [`Table`](https://pkg.go.dev/github.com/aita/sqlkit#Table) interface can be
 written by hand.
 
-For display, logging, and snapshots, `sql.CompileInline(dialect, query)` renders
+For display, logging, and snapshots, [`sql.CompileInline`](https://pkg.go.dev/github.com/aita/sqlkit/sql#CompileInline)`(dialect, query)` renders
 a statement with its values inlined as literals instead of `$N` placeholders, so
 it carries no args. It is not for execution — the values are not parameterized —
 but it is handy for a readable, copy-pasteable statement. It takes a query built
@@ -603,7 +605,7 @@ text, err := sql.CompileInline(sql.PostgreSQLDialect{}, q)
 
 What the compiler enforces:
 
-- comparison and `IN` values match the column's Go type (`Column[T]` methods take `T`),
+- comparison and `IN` values match the column's Go type ([`Column[T]`](https://pkg.go.dev/github.com/aita/sqlkit#Column) methods take `T`),
 - join conditions compare columns of the same type (`EqExpr(TypedExpr[T])`),
 - `SET` assignments match the column type (`Column[T].Set(T)`),
 - every generated binding satisfies `sqlkit.Table`.
