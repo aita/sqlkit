@@ -77,6 +77,14 @@ func convertColumnDef(cd *pg.ColumnDef) (sql.ColumnDef, bool, error) {
 	}
 	def := sql.ColumnDef{Name: sql.NewIdentAt(cd.GetColname(), int(cd.GetLocation())), Type: sql.RawType(typeName)}
 
+	// A column COLLATE clause has no typed home here that renders correctly: the
+	// DDL compiler emits the collation name unquoted, but PostgreSQL collation
+	// names ("C", "en_US") are case-sensitive and must stay quoted. Rather than
+	// drop the collation or render it wrong, fall back to raw so it is preserved.
+	if cd.GetCollClause() != nil {
+		return sql.ColumnDef{}, false, sqlparse.Unsupported("column COLLATE clause")
+	}
+
 	var isPK bool
 	for _, c := range cd.GetConstraints() {
 		con := c.GetConstraint()

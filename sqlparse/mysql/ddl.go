@@ -7,6 +7,7 @@ import (
 	"github.com/aita/sqlkit/sql"
 	"github.com/aita/sqlkit/sqlparse"
 	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
 )
 
@@ -138,6 +139,23 @@ func convertColumnDef(cd *ast.ColumnDef) (sql.ColumnDef, bool, error) {
 			def.Generated = &sql.GeneratedColumn{Expression: expr, Stored: opt.Stored}
 		default:
 			return sql.ColumnDef{}, false, sqlparse.Unsupportedf("column option %d", opt.Tp)
+		}
+	}
+
+	// CHARACTER SET and ZEROFILL live on the field type, not the option list, and
+	// the verbatim type text the compiler keeps (InfoSchemaStr) omits both.
+	// Rather than silently drop them — a charset changes the column's collation,
+	// ZEROFILL pads the display and implies UNSIGNED — fall back to raw so the
+	// column keeps the attribute. An explicit charset is the only time GetCharset
+	// is non-empty; a bare COLLATE leaves it empty and stays typed.
+	if cd.Tp != nil {
+		// "binary" is the intrinsic charset of the BLOB/BINARY/VARBINARY family, not
+		// a user CHARACTER SET clause, so it does not count as an explicit charset.
+		if cs := cd.Tp.GetCharset(); cs != "" && cs != "binary" {
+			return sql.ColumnDef{}, false, sqlparse.Unsupported("column CHARACTER SET")
+		}
+		if cd.Tp.GetFlag()&mysql.ZerofillFlag != 0 {
+			return sql.ColumnDef{}, false, sqlparse.Unsupported("column ZEROFILL")
 		}
 	}
 

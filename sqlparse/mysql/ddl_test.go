@@ -407,3 +407,15 @@ func TestCreateIndexPrefixFallsBackToRaw(t *testing.T) {
 func TestCreateTableOptionsFallBackToRaw(t *testing.T) {
 	assertRaw(t, "CREATE TABLE t (id INT) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")
 }
+
+// CHARACTER SET and ZEROFILL live on the field type and are dropped by the
+// verbatim type text the compiler keeps, so a column carrying either round-trips
+// as raw rather than silently losing the attribute. A bare COLLATE (no explicit
+// charset) and the intrinsic "binary" charset of BLOB/VARBINARY stay typed.
+func TestColumnCharsetFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "CREATE TABLE t (a VARCHAR(10) CHARACTER SET utf8)")
+}
+
+func TestColumnZerofillFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "CREATE TABLE t (a INT UNSIGNED ZEROFILL)")
+}
