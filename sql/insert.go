@@ -265,7 +265,6 @@ func (b UpdateBuilder) Where(expr Expression) UpdateBuilder {
 	return b
 }
 
-// WithCTE prepends common table expressions to the UPDATE.
 // OrderBy adds ORDER BY terms that bound which rows an UPDATE touches
 // (UPDATE ... ORDER BY ... LIMIT). MySQL only; other dialects reject it.
 func (b UpdateBuilder) OrderBy(terms ...OrderTerm) UpdateBuilder {
@@ -280,6 +279,7 @@ func (b UpdateBuilder) Limit(n int) UpdateBuilder {
 	return b
 }
 
+// WithCTE prepends common table expressions to the UPDATE.
 func (b UpdateBuilder) WithCTE(ctes ...CTE) UpdateBuilder {
 	b.s.With = append(append([]CTE(nil), b.s.With...), ctes...)
 	return b
@@ -365,7 +365,6 @@ func (b DeleteBuilder) Where(expr Expression) DeleteBuilder {
 	return b
 }
 
-// WithCTE prepends common table expressions to the DELETE.
 // OrderBy adds ORDER BY terms that bound which rows a DELETE removes
 // (DELETE ... ORDER BY ... LIMIT). MySQL only; other dialects reject it.
 func (b DeleteBuilder) OrderBy(terms ...OrderTerm) DeleteBuilder {
@@ -380,6 +379,7 @@ func (b DeleteBuilder) Limit(n int) DeleteBuilder {
 	return b
 }
 
+// WithCTE prepends common table expressions to the DELETE.
 func (b DeleteBuilder) WithCTE(ctes ...CTE) DeleteBuilder {
 	b.s.With = append(append([]CTE(nil), b.s.With...), ctes...)
 	return b

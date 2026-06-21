@@ -869,7 +869,8 @@ func (d StandardSQLDialect) AutoIncrementColumn(name string, length, precision, 
 	return d.ColumnType(name, length, precision, scale) + " GENERATED ALWAYS AS IDENTITY", true
 }
 
-// The SQL standard has no COMMENT syntax.
+// InlineColumnComment and the sibling comment methods return empty: the SQL
+// standard has no COMMENT syntax.
 func (StandardSQLDialect) InlineColumnComment(string) string           { return "" }
 func (StandardSQLDialect) InlineTableComment(string) string            { return "" }
 func (StandardSQLDialect) TableCommentStatement(string, string) string { return "" }

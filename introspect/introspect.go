@@ -1,4 +1,4 @@
-// Package introspection reads database schema metadata into the schema model. Both
+// Package introspect reads database schema metadata into the schema model. Both
 // PostgreSQL and MySQL are supported; the dialect switch is the extension point
 // for other engines.
 package introspect
