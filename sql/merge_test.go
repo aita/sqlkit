@@ -146,3 +146,39 @@ func TestMergeCoverage(t *testing.T) {
 		sp.setPos(2)
 	}
 }
+
+// TestMergeErrors covers the MERGE validation and error-propagation branches.
+func TestMergeErrors(t *testing.T) {
+	pg := PostgreSQLDialect{}
+	tgt := Table{Name: NewIdent("t")}
+	src := SourceAlias(Table{Name: NewIdent("s")}, "s")
+	on := Eq(Col("t.id"), Col("s.id"))
+	bad := UnaryExpression{Operand: Col("x")}
+	base := func() MergeBuilder { return MergeInto(tgt).Using(src).On(on) }
+	mergeErr := func(name string, m MergeBuilder) {
+		t.Helper()
+		if _, _, err := m.ToSQL(pg); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+	}
+
+	mergeErr("no using", MergeInto(tgt).On(on).When(WhenMatched().ThenDelete()))
+	mergeErr("no on", MergeInto(tgt).Using(src).When(WhenMatched().ThenDelete()))
+	mergeErr("no when", MergeInto(tgt).Using(src).On(on))
+	if _, _, err := base().When(WhenMatched().ThenDelete()).ToSQL(MySQLDialect{}); err == nil {
+		t.Error("mysql merge: want unsupported error")
+	}
+	mergeErr("notmatched delete", base().When(WhenNotMatched().ThenDelete()))
+	mergeErr("notmatched update", base().When(WhenNotMatched().ThenUpdate(Set("a", Val(1)))))
+	mergeErr("matched insert", base().When(WhenMatched().ThenInsert([]string{"a"}, 1)))
+	mergeErr("update no assign", base().When(WhenMatched().ThenUpdate()))
+	mergeErr("no action", base().When(WhenMatched()))
+	mergeErr("bad on", MergeInto(tgt).Using(src).On(bad).When(WhenMatched().ThenDelete()))
+	mergeErr("bad when cond", base().When(WhenMatched().And(bad).ThenDelete()))
+	mergeErr("bad update val", base().When(WhenMatched().ThenUpdate(Set("a", bad))))
+	mergeErr("bad insert val", base().When(WhenNotMatched().ThenInsert([]string{"a"}, bad)))
+	mergeErr("insert count mismatch", base().When(WhenNotMatched().ThenInsert([]string{"a", "b"}, 1)))
+	mergeErr("bad cte", base().WithCTE(Select(bad).From(orgs).CTE("c")).When(WhenMatched().ThenDelete()))
+
+	_ = MergeInto(tgt).Using(src).On(on).When(WhenMatched().ThenDelete()).Stmt().setPos(1)
+}
