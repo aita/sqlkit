@@ -388,6 +388,14 @@ var canonicalTypes = map[string]string{
 // letter (which PostgreSQL folds to lower case on re-parse) — leaving a plain
 // lower-case identifier unquoted so built-in and ordinary types render as is.
 func quoteTypeIdent(s string) string {
+	// "char" (the internal single-byte type) must stay quoted: unquoted char is
+	// the reserved alias for character(1)/bpchar, a different type that re-parses
+	// with an added (1). pg_query only leaves the bare name "char" for the quoted
+	// internal type — the standard char already canonicalizes to bpchar — so a
+	// "char" reaching here is always the one that needs its quotes back.
+	if s == "char" {
+		return `"char"`
+	}
 	if isBareIdent(s) {
 		return s
 	}
@@ -424,6 +432,15 @@ func typeNameString(tn *pg.TypeName) (string, error) {
 	}
 	base := strings.Join(parts, ".")
 	hasTypmods := len(tn.GetTypmods()) > 0
+	// A field-qualified interval (INTERVAL '1' HOUR, MINUTE TO SECOND, …) carries
+	// its field set as a single bitmask typmod (HOUR=1024, …), not a
+	// fractional-seconds precision. Rendering it as interval(1024) is both a
+	// meaning change (the field restriction is lost) and non-round-trippable
+	// (re-parsing reads 1024 as a precision). There is no typed spelling for the
+	// field mask here, so fall back to raw for any modified interval.
+	if base == "interval" && hasTypmods {
+		return "", sqlparse.Unsupported("interval with a field qualifier or precision")
+	}
 	canonical, isCanonical := canonicalTypes[base]
 	switch {
 	// bpchar canonicalizes to char only with a length. Bare "char" is char(1), but

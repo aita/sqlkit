@@ -1047,3 +1047,24 @@ func TestAliasRendersAsSingleIdentifier(t *testing.T) {
 		t.Fatalf("ToSQL() =\n  %q\nwant\n  %q", got, want)
 	}
 }
+
+// MySQL has no bare OFFSET — it is valid only after a LIMIT — so an offset
+// without a limit renders MySQL's "all rows" sentinel count to keep the OFFSET
+// valid; PostgreSQL emits a bare OFFSET.
+func TestOffsetWithoutLimitDialect(t *testing.T) {
+	q := Select(Col("id")).From(Table{Name: NewIdent("t")}).Offset(5)
+	my, _, err := q.ToSQL(MySQLDialect{})
+	if err != nil {
+		t.Fatalf("mysql ToSQL error = %v", err)
+	}
+	if my != "SELECT `id` FROM `t` LIMIT 18446744073709551615 OFFSET 5" {
+		t.Errorf("mysql offset-only = %q", my)
+	}
+	pg, _, err := q.ToSQL(PostgreSQLDialect{})
+	if err != nil {
+		t.Fatalf("postgres ToSQL error = %v", err)
+	}
+	if pg != `SELECT "id" FROM "t" OFFSET 5` {
+		t.Errorf("postgres offset-only = %q", pg)
+	}
+}

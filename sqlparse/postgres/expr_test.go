@@ -310,10 +310,14 @@ func TestExprUnaryMinusDecimal(t *testing.T) {
 		`SELECT "id" FROM "t" WHERE ("a" = -1.5)`)
 }
 
-// A unary operator applied to a non-constant (a column reference) is not
-// representable, so the statement falls back to raw.
-func TestExprUnaryMinusColumnFallsBackToRaw(t *testing.T) {
-	assertRaw(t, "SELECT id FROM t WHERE a = -b")
+// A unary operator applied to a non-constant (a column reference) is modeled as
+// a UnaryExpression so the typed shape round-trips — matching the compiler,
+// which emits sql.Neg/sql.Pos as "(-x)".
+func TestExprUnaryMinusColumn(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT id FROM t WHERE a = -b",
+		selWhere(sql.Eq(sql.Col("a"), sql.Neg(sql.Col("b")))),
+		`SELECT "id" FROM "t" WHERE ("a" = (-"b"))`)
 }
 
 // GREATEST/LEAST map to the corresponding lower-cased function calls.
@@ -589,4 +593,30 @@ func TestEmptyRowFallsBackToRaw(t *testing.T) {
 // name unquoted; it round-trips as raw rather than emitting invalid SQL.
 func TestNonBareFunctionNameFallsBackToRaw(t *testing.T) {
 	assertRaw(t, `SELECT "My Func"()`)
+}
+
+// A field-qualified INTERVAL stores its field set as a bitmask typmod, not a
+// precision; rendering it as interval(N) loses the field restriction, so it
+// round-trips as raw rather than a meaning-changed CAST.
+func TestExprIntervalFieldQualifierFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT INTERVAL '1' HOUR")
+}
+
+// The internal single-byte "char" type must keep its quotes: unquoted char is
+// the alias for character(1)/bpchar, a different type.
+func TestExprInternalCharTypeKeepsQuotes(t *testing.T) {
+	assertRoundTrip(t,
+		`SELECT x::"char" FROM t`,
+		sql.Select(sql.Cast(sql.Col("x"), `"char"`)).From(sql.Table{Name: sql.NewIdent("t")}),
+		`SELECT CAST("x" AS "char") FROM "t"`)
+}
+
+// Unary plus is identity and PostgreSQL folds it, so it is dropped rather than
+// emitted as (+x) — keeping it (e.g. for the inner + of ++2) would re-parse
+// without the plus and break the round-trip fixpoint.
+func TestExprUnaryPlusIsDropped(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT +x FROM t",
+		sql.Select(sql.Col("x")).From(sql.Table{Name: sql.NewIdent("t")}),
+		`SELECT "x" FROM "t"`)
 }
