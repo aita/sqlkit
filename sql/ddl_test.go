@@ -1,6 +1,7 @@
 package sql
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -347,6 +348,11 @@ func TestStatementsRender(t *testing.T) {
 	if out != want {
 		t.Errorf("Render() =\n%s\nwant\n%s", out, want)
 	}
+
+	// A statement that fails to compile surfaces its error from Render.
+	if _, err := (Statements{RenameTable(Table{}, "x")}).Render(mustDialect(t, "mysql")); err == nil {
+		t.Fatal("Render of an invalid statement: want error")
+	}
 }
 
 func TestForeignKeyWithActions(t *testing.T) {
@@ -612,4 +618,267 @@ func TestDDLStmt(t *testing.T) {
 	if created.Table.Name.String() != "users" || len(created.Columns) != 1 || len(created.PrimaryKey) != 1 {
 		t.Errorf("CreateTable parts = %+v, want one column and a primary key", created)
 	}
+}
+
+// TestDDLBuilderPlumbing exercises the accessor "plumbing" every DDL builder and
+// statement shares — Stmt(), buildStmt(), and setPos() — which the feature tests
+// in ddl_test.go don't all reach. These are uniform across the DDL types, so a
+// single table keeps them covered.
+
+// ddlBuilder is the shared shape of every DDL fluent builder.
+type ddlBuilder interface {
+	buildStmt() Query
+	setPos(int) Query
+}
+
+func TestDDLBuilderPlumbing(t *testing.T) {
+	view := Select(Col("id")).From(orgs)
+
+	// Stmt() returns a distinct concrete type per builder, so call each directly.
+	_ = CreateSchema("s").Stmt()
+	_ = DropSchema("s").Stmt()
+	_ = CreateTable(users).Stmt()
+	_ = DropTable(users).Stmt()
+	_ = CreateView(users, view).Stmt()
+	_ = DropView(users).Stmt()
+	_ = CreateIndex("i", users, "id").Stmt()
+	_ = AlterTable(users).Stmt()
+
+	// buildStmt() and the builder's setPos() are uniform: drive them via the
+	// shared interface.
+	builders := []ddlBuilder{
+		CreateSchema("s"),
+		DropSchema("s"),
+		CreateTable(users),
+		DropTable(users),
+		CreateView(users, view),
+		DropView(users),
+		CreateIndex("i", users, "id"),
+		AlterTable(users),
+	}
+	for _, b := range builders {
+		if q := b.buildStmt(); q == nil {
+			t.Fatalf("%T.buildStmt() = nil", b)
+		}
+		if q := b.setPos(5); q == nil {
+			t.Fatalf("%T.setPos() = nil", b)
+		}
+	}
+
+	// Every DDL statement value (including the two that have no builder,
+	// DropIndex/DropForeignKey) carries setPos via the Query plumbing.
+	stmts := []Query{
+		CreateSchema("s").Stmt(),
+		DropSchema("s").Stmt(),
+		CreateTable(users).Stmt(),
+		DropTable(users).Stmt(),
+		CreateView(users, view).Stmt(),
+		DropView(users).Stmt(),
+		CreateIndex("i", users, "id").Stmt(),
+		AlterTable(users).Stmt(),
+		DropIndex("i", users),
+		DropForeignKey(users, "fk"),
+	}
+	for _, s := range stmts {
+		sp, ok := s.(interface{ setPos(int) Query })
+		if !ok {
+			t.Fatalf("%T has no setPos", s)
+		}
+		if sp.setPos(7) == nil {
+			t.Fatalf("%T.setPos() = nil", s)
+		}
+	}
+}
+
+// TestDDLCompileColumnAndAlterCoverage drives the column-definition and
+// alteration compile branches (defaults, references, generated, identity,
+// collate, auto-increment, ON UPDATE) across both dialects.
+func TestDDLCompileColumnAndAlterCoverage(t *testing.T) {
+	pg, my := PostgreSQLDialect{}, MySQLDialect{}
+	mustCompile := func(d Dialect, q Query) {
+		t.Helper()
+		if _, _, err := q.ToSQL(d); err != nil {
+			t.Fatalf("%T on %s: %v", q, d.Name(), err)
+		}
+	}
+	tbl := Table{Name: NewIdent("t")}
+
+	// PostgreSQL CREATE TABLE exercising the column-definition branches.
+	mustCompile(pg, CreateTable(tbl).IfNotExists().
+		Column(ColumnDef{Name: NewIdent("id"), Type: EngineType{Name: "bigint"}, Identity: IdentityByDefault, NotNull: true}).
+		Column(ColumnDef{Name: NewIdent("email"), Type: EngineType{Name: "text"}, NotNull: true, Unique: true, Collate: NewIdent("\"C\"")}).
+		Column(ColumnDef{Name: NewIdent("author_id"), Type: EngineType{Name: "bigint"},
+			References: &ColumnReference{Table: NewIdent("users"), Column: NewIdent("id"), OnDelete: "CASCADE", OnUpdate: "RESTRICT"}}).
+		Column(ColumnDef{Name: NewIdent("status"), Type: EngineType{Name: "text"}, Default: Raw("'active'"), Comment: "the status"}).
+		Column(ColumnDef{Name: NewIdent("search"), Type: EngineType{Name: "text"}, Generated: &GeneratedColumn{Expression: Raw("lower(email)"), Stored: true}}).
+		PrimaryKey("id").
+		Check("c_author", Raw("author_id > 0")).
+		Unique("u_email", "email").
+		ForeignKey(ForeignKeyConstraint{Name: NewIdent("fk"), Columns: []Ident{NewIdent("author_id")}, RefTable: NewIdent("users"), RefColumns: []Ident{NewIdent("id")}, OnDelete: "SET NULL"}).
+		Comment("a table").
+		Stmt())
+
+	// Temporary table and a MySQL table with AUTO_INCREMENT, ON UPDATE, inline index.
+	mustCompile(pg, CreateTable(tbl).Temporary().Column(ColumnDef{Name: NewIdent("a"), Type: EngineType{Name: "int"}}).Stmt())
+	mustCompile(my, CreateTable(tbl).
+		Column(ColumnDef{Name: NewIdent("id"), Type: EngineType{Name: "int"}, AutoIncrement: true, NotNull: true}).
+		Column(ColumnDef{Name: NewIdent("updated"), Type: EngineType{Name: "datetime"}, OnUpdate: Raw("CURRENT_TIMESTAMP")}).
+		PrimaryKey("id").Index("i_updated", "updated").Stmt())
+
+	// ALTER TABLE exercising every alteration kind.
+	mustCompile(pg, AlterTable(tbl).
+		AddColumn(ColumnDef{Name: NewIdent("n"), Type: EngineType{Name: "int"}, NotNull: true, Default: Raw("0")}).
+		DropColumn("old").
+		AddForeignKey(ForeignKeyConstraint{Name: NewIdent("fk2"), Columns: []Ident{NewIdent("n")}, RefTable: NewIdent("users"), RefColumns: []Ident{NewIdent("id")}, OnUpdate: "CASCADE"}).
+		AddCheck("c2", Raw("n >= 0")).
+		AddUnique("u2", "n").
+		DropConstraint("c2").
+		AlterColumnType("n", EngineType{Name: "bigint"}).
+		SetNotNull("n").
+		DropNotNull("n").
+		SetDefault("n", Raw("1")).
+		DropDefault("n").
+		RestateColumn(ColumnDef{Name: NewIdent("n"), Type: EngineType{Name: "bigint"}, NotNull: true, Default: Raw("2")}).
+		AddPrimaryKey("n").
+		RenameColumn("n", "m").
+		Stmt())
+	mustCompile(pg, AlterTable(tbl).DropPrimaryKey().Stmt())
+	mustCompile(pg, AlterTable(tbl).RenameTo("t2").Stmt())
+}
+
+// TestDDLMorePlumbing covers Truncate, CreateIndex IfNotExists, and the
+// COMMENT ON table/column statements plus their setPos plumbing.
+func TestDDLMorePlumbing(t *testing.T) {
+	pg := PostgreSQLDialect{}
+	mustOK := func(q Query) {
+		t.Helper()
+		if _, _, err := q.ToSQL(pg); err != nil {
+			t.Fatalf("%T: %v", q, err)
+		}
+	}
+	tbl := Table{Name: NewIdent("t")}
+	mustOK(Truncate(tbl))
+	mustOK(CreateIndex("i", tbl, "a").IfNotExists())
+	mustOK(CommentOnTable(tbl, "hi"))
+	mustOK(CommentOnColumn(tbl, "a", "hi"))
+
+	_ = Truncate(tbl).Stmt()
+	_ = Truncate(tbl).buildStmt()
+	for _, q := range []Query{
+		Truncate(tbl), Truncate(tbl).Stmt(),
+		CreateIndex("i", tbl, "a"),
+		CommentOnTable(tbl, "x"), CommentOnColumn(tbl, "a", "x"),
+	} {
+		if sp, ok := q.(interface{ setPos(int) Query }); ok {
+			sp.setPos(2)
+		}
+	}
+}
+
+// TestDDLCompileErrors covers the validation/error branches of the DDL compiler.
+func TestDDLCompileErrors(t *testing.T) {
+	pg, my := PostgreSQLDialect{}, MySQLDialect{}
+	tbl := Table{Name: NewIdent("t")}
+	intCol := func(n string) ColumnDef { return ColumnDef{Name: NewIdent(n), Type: EngineType{Name: "int"}} }
+	errOn := func(name string, d Dialect, q Query) {
+		t.Helper()
+		if _, _, err := q.ToSQL(d); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+	}
+
+	errOn("unique no cols", pg, CreateTable(tbl).Column(intCol("a")).Unique("u"))
+	errOn("index no cols", my, CreateTable(tbl).Column(intCol("a")).Index("i"))
+	errOn("col no type", pg, CreateTable(tbl).Column(ColumnDef{Name: NewIdent("a")}))
+	errOn("default+generated", pg, CreateTable(tbl).Column(ColumnDef{Name: NewIdent("a"),
+		Type: EngineType{Name: "int"}, Default: Raw("0"), Generated: &GeneratedColumn{Expression: Raw("1"), Stored: true}}))
+	errOn("onupdate on pg", pg, CreateTable(tbl).Column(ColumnDef{Name: NewIdent("a"),
+		Type: EngineType{Name: "timestamp"}, OnUpdate: Raw("CURRENT_TIMESTAMP")}))
+	errOn("ref empty", pg, CreateTable(tbl).Column(ColumnDef{Name: NewIdent("a"),
+		Type: EngineType{Name: "int"}, References: &ColumnReference{}}))
+	errOn("bad default expr", pg, CreateTable(tbl).Column(ColumnDef{Name: NewIdent("a"),
+		Type: EngineType{Name: "int"}, Default: UnaryExpression{Operand: Col("x")}}))
+	errOn("drop no tables", pg, DropTable())
+	errOn("view no query", pg, CreateView(tbl, nil))
+	errOn("view binds values", pg, CreateView(tbl, Select(Col("a")).From(orgs).Where(Eq(Col("a"), Val(1)))))
+	errOn("truncate no tables", pg, Truncate())
+	errOn("truncate multi mysql", my, Truncate(tbl, Table{Name: NewIdent("u")}))
+	errOn("truncate cascade mysql", my, Truncate(tbl).Cascade())
+	errOn("alter empty", pg, AlterTable(tbl))
+	errOn("add unique no cols", pg, AlterTable(tbl).AddUnique("u"))
+	errOn("column modify on mysql", my, AlterTable(tbl).SetNotNull("a"))
+
+	// Raw alterations for the no-definition / unsupported-kind guards.
+	errOn("add column nil def", pg, AlterTableStmt{Table: tbl, Alterations: []Alteration{{Kind: AlterAddColumn}}})
+	errOn("restate nil def", pg, AlterTableStmt{Table: tbl, Alterations: []Alteration{{Kind: AlterRestateColumn}}})
+	errOn("add fk nil", pg, AlterTableStmt{Table: tbl, Alterations: []Alteration{{Kind: AlterAddForeignKey}}})
+	errOn("unsupported kind", pg, AlterTableStmt{Table: tbl, Alterations: []Alteration{{Kind: AlterationKind(9999)}}})
+}
+
+// errColumnType is a ColumnType whose RenderType always fails, driving the
+// type-render error branches of compileColumnDef, compileRestateColumn, and
+// compileAlteration.
+type errColumnType struct{}
+
+func (errColumnType) RenderType(Dialect) (string, error) {
+	return "", fmt.Errorf("render boom")
+}
+
+// TestDDLCompileRemainingBranches covers the remaining ddl_compile.go branches:
+// the CREATE TABLE CHECK error, the column type-render / generated / on-update
+// errors, every compileRestateColumn arm, the CREATE VIEW nil-query guard, and
+// the compileAlteration ADD COLUMN / ADD CHECK / column-modify / type-render
+// branches.
+func TestDDLCompileRemainingBranches(t *testing.T) {
+	pg, my := PostgreSQLDialect{}, MySQLDialect{}
+	tbl := Table{Name: NewIdent("t")}
+	bad := UnaryExpression{Operand: Col("x")}
+	errOn := func(name string, d Dialect, q Query) {
+		t.Helper()
+		if _, _, err := q.ToSQL(d); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+	}
+
+	// CREATE TABLE: a CHECK with a bad expression, a column whose type fails to
+	// render, a bad GENERATED expression, and a bad ON UPDATE (MySQL).
+	errOn("check bad expr", pg, CreateTable(tbl).
+		Column(ColumnDef{Name: NewIdent("a"), Type: EngineType{Name: "int"}}).Check("c", bad))
+	errOn("col render error", pg, CreateTable(tbl).
+		Column(ColumnDef{Name: NewIdent("a"), Type: errColumnType{}}))
+	errOn("generated bad expr", pg, CreateTable(tbl).Column(ColumnDef{Name: NewIdent("a"),
+		Type: EngineType{Name: "int"}, Generated: &GeneratedColumn{Expression: bad, Stored: true}}))
+	errOn("onupdate bad expr", my, CreateTable(tbl).Column(ColumnDef{Name: NewIdent("a"),
+		Type: EngineType{Name: "timestamp"}, OnUpdate: bad}))
+
+	// compileRestateColumn: nil type, a MySQL MODIFY whose column fails, a
+	// PostgreSQL type-render error, and a bad DEFAULT.
+	errOn("restate nil type", pg, AlterTable(tbl).RestateColumn(ColumnDef{Name: NewIdent("a")}))
+	errOn("restate mysql bad", my, AlterTable(tbl).RestateColumn(ColumnDef{Name: NewIdent("a"), Type: errColumnType{}}))
+	errOn("restate render error", pg, AlterTable(tbl).RestateColumn(ColumnDef{Name: NewIdent("a"), Type: errColumnType{}}))
+	errOn("restate bad default", pg, AlterTable(tbl).RestateColumn(ColumnDef{
+		Name: NewIdent("a"), Type: EngineType{Name: "int"}, Default: bad}))
+
+	// A restate that keeps NOT NULL and no default drives the DROP DEFAULT arm.
+	if _, _, err := AlterTable(tbl).RestateColumn(ColumnDef{
+		Name: NewIdent("a"), Type: EngineType{Name: "int"}, NotNull: true}).ToSQL(pg); err != nil {
+		t.Errorf("restate drop default: %v", err)
+	}
+
+	// CREATE VIEW without a query.
+	errOn("view nil query", pg, CreateView(tbl, nil))
+
+	// compileAlteration: ADD COLUMN render error, ADD CHECK bad expr, ALTER
+	// COLUMN TYPE on MySQL (unsupported) and with a render error, and SET
+	// DEFAULT / SET NOT NULL on MySQL (unsupported).
+	errOn("add column render error", pg, AlterTable(tbl).AddColumn(ColumnDef{Name: NewIdent("a"), Type: errColumnType{}}))
+	errOn("add check bad expr", pg, AlterTable(tbl).AddCheck("c", bad))
+	errOn("alter type on mysql", my, AlterTable(tbl).AlterColumnType("a", EngineType{Name: "int"}))
+	errOn("alter type render error", pg, AlterTable(tbl).AlterColumnType("a", errColumnType{}))
+	errOn("set default on mysql", my, AlterTable(tbl).SetDefault("a", Raw("0")))
+	errOn("set default bad expr", pg, AlterTable(tbl).SetDefault("a", bad))
+	errOn("set not null on mysql", my, AlterTable(tbl).SetNotNull("a"))
+
+	// CREATE VIEW whose body fails to compile.
+	errOn("view bad body", pg, CreateView(tbl, Select(bad).From(orgs)))
 }

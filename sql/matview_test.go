@@ -30,3 +30,46 @@ func TestMaterializedViewRejectsBoundValues(t *testing.T) {
 		t.Fatal("materialized view with a bound value compiled, want error")
 	}
 }
+
+// TestMatviewCoverage exercises the materialized-view builder options and plumbing.
+func TestMatviewCoverage(t *testing.T) {
+	pg := PostgreSQLDialect{}
+	mustCompile := func(q Query) {
+		t.Helper()
+		if _, _, err := q.ToSQL(pg); err != nil {
+			t.Fatalf("%T: %v", q, err)
+		}
+	}
+	mv := Table{Name: NewIdent("mv")}
+	body := Select(Col("id")).From(orgs)
+	mustCompile(CreateMaterializedView(mv, body).IfNotExists().Columns("id").WithNoData())
+	mustCompile(DropMaterializedView(mv).IfExists().Cascade())
+	mustCompile(RefreshMaterializedView(mv).Concurrently())
+	mustCompile(RefreshMaterializedView(mv).WithNoData())
+
+	// Validation guards: a nil query, a query that fails to compile, and a
+	// refresh with no target name.
+	if _, _, err := CreateMaterializedView(mv, nil).ToSQL(pg); err == nil {
+		t.Fatal("CREATE MATERIALIZED VIEW with nil query: want error")
+	}
+	badBody := Select(UnaryExpression{Operand: Col("x")}).From(orgs)
+	if _, _, err := CreateMaterializedView(mv, badBody).ToSQL(pg); err == nil {
+		t.Fatal("CREATE MATERIALIZED VIEW with bad query: want error")
+	}
+	if _, _, err := RefreshMaterializedView(Table{}).ToSQL(pg); err == nil {
+		t.Fatal("REFRESH MATERIALIZED VIEW without a name: want error")
+	}
+
+	for _, q := range []Query{
+		CreateMaterializedView(mv, body), CreateMaterializedView(mv, body).Stmt(),
+		DropMaterializedView(mv), DropMaterializedView(mv).Stmt(),
+		RefreshMaterializedView(mv), RefreshMaterializedView(mv).Stmt(),
+	} {
+		if sp, ok := q.(interface{ setPos(int) Query }); ok {
+			sp.setPos(2)
+		}
+	}
+	_ = CreateMaterializedView(mv, body).buildStmt()
+	_ = DropMaterializedView(mv).buildStmt()
+	_ = RefreshMaterializedView(mv).buildStmt()
+}

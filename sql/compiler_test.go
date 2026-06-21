@@ -1,6 +1,7 @@
 package sql
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -599,4 +600,435 @@ func TestAdminSetScopesAndSchemaQualifiedLock(t *testing.T) {
 	assertMySQL(t,
 		LockTables(TableLock{Table: Table{Schema: NewIdent("s"), Name: NewIdent("t")}, Mode: LockWrite}),
 		"LOCK TABLES `s`.`t` WRITE;", nil)
+}
+
+// --- CompileExpression: subquery / element error propagation & capability gates
+
+// TestCompileExpressionSubqueryAndCapabilityErrors covers the CompileExpression
+// arms whose error branches the error-propagation table above does not reach:
+// subquery-bearing nodes, array/JSON element loops, and the dialect-capability
+// gates (arrays, JSON access).
+func TestCompileExpressionSubqueryAndCapabilityErrors(t *testing.T) {
+	pg := NewCompiler(PostgreSQLDialect{})
+	// badExpr fails to compile (empty unary operator); badQuery is a query that
+	// fails to compile because it projects badExpr.
+	badExpr := UnaryExpression{Operand: Col("x")}
+	badQuery := Select(badExpr).From(orgs)
+
+	subqueryErr := []Expression{
+		InExpression{Left: Col("a"), Subquery: badQuery},
+		ExistsExpression{Query: badQuery},
+		ScalarSubqueryExpression{Query: badQuery},
+		QuantifiedExpression{Left: badExpr, Operator: "=", Quantifier: "ANY", Query: badQuery},
+		QuantifiedExpression{Left: Col("a"), Operator: "=", Quantifier: "ANY", Query: badQuery},
+		ArrayExpression{Elements: []Expression{badExpr}},
+		JSONObjectExpression{Pairs: []Expression{badExpr, Col("b")}},
+		JSONAccessExpression{Operand: badExpr, Path: []any{"k"}},
+	}
+	for i, e := range subqueryErr {
+		if _, _, err := pg.CompileExpression(e); err == nil {
+			t.Errorf("case %d (%T) compiled without error, want propagation", i, e)
+		}
+	}
+
+	// Capability gates: arrays and JSON access are unavailable on the standard
+	// dialect, so a well-formed node is rejected at compile time.
+	std := NewCompiler(StandardSQLDialect{})
+	if _, _, err := std.CompileExpression(Array(Val(1))); err == nil ||
+		!strings.Contains(err.Error(), "does not support arrays") {
+		t.Errorf("Array on standard: err = %v, want arrays rejection", err)
+	}
+}
+
+// rawTestQuery is a minimal Query (ToSQL only, not compilable), so compiling it
+// as a subquery exercises compileSubquery's ToSQL fallback.
+type rawTestQuery struct{}
+
+func (rawTestQuery) ToSQL(Dialect) (string, []any, error) { return "SELECT 1", nil, nil }
+
+func TestCompileSubqueryToSQLFallback(t *testing.T) {
+	got, _, err := NewCompiler(PostgreSQLDialect{}).
+		CompileExpression(ScalarSubqueryExpression{Query: rawTestQuery{}})
+	if err != nil || got != "(SELECT 1)" {
+		t.Fatalf("scalar subquery over non-compilable query = %q, %v; want (SELECT 1)", got, err)
+	}
+}
+
+// TestUpdateOrderByErrorsMySQL covers writeOrderBy's error branches, reached via
+// the MySQL UPDATE row-limit path (writeRowLimit -> writeOrderBy).
+func TestUpdateOrderByErrorsMySQL(t *testing.T) {
+	bad := UnaryExpression{Operand: Col("x")}
+	q := Update(Table{Name: NewIdent("t")}).Set(Set("a", 1)).OrderBy(Asc(bad)).Limit(1)
+	if _, _, err := q.ToSQL(MySQLDialect{}); err == nil {
+		t.Fatal("UPDATE ORDER BY bad expr compiled, want error")
+	}
+	q2 := Update(Table{Name: NewIdent("t")}).Set(Set("a", 1)).
+		OrderBy(Desc(Col("x")).NullsLast()).Limit(1)
+	if _, _, err := q2.ToSQL(MySQLDialect{}); err == nil ||
+		!strings.Contains(err.Error(), "does not support NULLS ordering") {
+		t.Fatalf("UPDATE ORDER BY NULLS on mysql = %v, want NULLS rejection", err)
+	}
+}
+
+// TestStatementErrorPropagation drives the sub-expression / sub-clause error
+// branches of the statement compile functions: a single failing component
+// (badExpr / badQuery) in each clause position must surface an error.
+func TestStatementErrorPropagation(t *testing.T) {
+	bad := UnaryExpression{Operand: Col("x")} // empty operator: always fails
+	badQuery := Select(bad).From(orgs)
+	tbl := Table{Name: NewIdent("t")}
+
+	stmts := []Query{
+		// SELECT clauses.
+		Select(bad).From(orgs),
+		Select(Col("a")).From(orgs).Where(bad),
+		Select(Col("a")).From(orgs).GroupBy(bad),
+		Select(Col("a")).From(orgs).GroupBy(Col("a")).Having(bad),
+		Select(Col("a")).From(orgs).OrderBy(Asc(bad)),
+		Select(Col("a")).From(orgs).Join(orgs, bad),
+		Select(Col("a")).From(Alias(badQuery, "x")),
+		Select(Col("a")).From(orgs).WithCTE(badQuery.CTE("c")),
+		// INSERT clauses.
+		InsertInto(tbl).Columns("a").Values(bad),
+		InsertInto(tbl).Columns("a").Values(1).Returning(bad),
+		InsertInto(tbl).Columns("a").Values(1).OnConflict("a").DoUpdate(Set("a", bad)),
+		InsertInto(tbl).Columns("a").FromSelect(badQuery),
+		// UPDATE clauses.
+		Update(tbl).Set(Set("a", bad)),
+		Update(tbl).Set(Set("a", 1)).Where(bad),
+		Update(tbl).Set(Set("a", 1)).From(Alias(badQuery, "x")).Where(Eq(Col("a"), 1)),
+		Update(tbl).Set(Set("a", 1)).Returning(bad),
+		// DELETE clauses.
+		DeleteFrom(tbl).Where(bad),
+		DeleteFrom(tbl).Using(Alias(badQuery, "x")).Where(Eq(Col("a"), 1)),
+		DeleteFrom(tbl).Returning(bad),
+	}
+	for i, q := range stmts {
+		if _, _, err := q.ToSQL(PostgreSQLDialect{}); err == nil {
+			t.Errorf("case %d (%T) compiled without error, want propagation", i, q)
+		}
+	}
+}
+
+// TestCompileExpressionMoreErrors covers the remaining CompileExpression error
+// and capability branches: ILIKE / regexp / SIMILAR TO / MATCH / quantified-array
+// sub-expression failures, plus the SIMILAR-TO-on-MySQL and arrays-on-standard
+// capability gates and the Excluded zero-column guard.
+func TestCompileExpressionMoreErrors(t *testing.T) {
+	pg := NewCompiler(PostgreSQLDialect{})
+	my := NewCompiler(MySQLDialect{})
+	std := NewCompiler(StandardSQLDialect{})
+	bad := UnaryExpression{Operand: Col("x")}
+	cases := []struct {
+		c *Compiler
+		e Expression
+	}{
+		{pg, ILikeExpression{Left: bad, Pattern: Val("%a%")}},
+		{pg, ILikeExpression{Left: Col("a"), Pattern: bad}},
+		{pg, RegexpExpression{Left: bad, Pattern: Val("x")}},
+		{pg, RegexpExpression{Left: Col("a"), Pattern: bad}},
+		{pg, SimilarToExpression{Left: bad, Pattern: Val("x")}},
+		{pg, SimilarToExpression{Left: Col("a"), Pattern: bad}},
+		{my, SimilarToExpression{Left: Col("a"), Pattern: Val("x")}}, // unsupported on mysql
+		{pg, MatchExpression{}},                                      // no columns
+		{pg, MatchExpression{Columns: []Expression{bad}, Query: Val("q")}},
+		{pg, MatchExpression{Columns: []Expression{Col("a")}, Query: bad}},
+		{pg, QuantifiedArrayExpression{Left: Col("a"), Operator: "=", Quantifier: "ANY"}},                        // nil array
+		{std, QuantifiedArrayExpression{Left: Col("a"), Operator: "=", Quantifier: "ANY", Array: Array(Val(1))}}, // arrays unsupported
+		{pg, QuantifiedArrayExpression{Left: bad, Operator: "=", Quantifier: "ANY", Array: Array(Val(1))}},       // left error
+		{pg, QuantifiedArrayExpression{Left: Col("a"), Operator: "=", Quantifier: "ANY", Array: bad}},            // array error
+		{pg, ExcludedExpression{}},                                                                               // zero column
+	}
+	for i, tc := range cases {
+		if _, _, err := tc.c.CompileExpression(tc.e); err == nil {
+			t.Errorf("case %d (%T): want error", i, tc.e)
+		}
+	}
+}
+
+// bareDialect implements only the base Dialect interface and none of the
+// optional capability interfaces, so it drives the "not ok" capability gates in
+// CompileExpression (JSON access, regexp, full-text search).
+type bareDialect struct{}
+
+func (bareDialect) Name() string                                             { return "bare" }
+func (bareDialect) QuoteIdent(identifier string) string                      { return identifier }
+func (bareDialect) QuoteName(name string) string                             { return name }
+func (bareDialect) Placeholder(int) string                                   { return "?" }
+func (bareDialect) SupportsReturning() bool                                  { return false }
+func (bareDialect) ColumnType(name string, _, _, _ int) string               { return name }
+func (bareDialect) AutoIncrementColumn(string, int, int, int) (string, bool) { return "", false }
+func (bareDialect) InlineColumnComment(string) string                        { return "" }
+func (bareDialect) InlineTableComment(string) string                         { return "" }
+func (bareDialect) TableCommentStatement(string, string) string              { return "" }
+func (bareDialect) ColumnCommentStatement(string, string, string) string     { return "" }
+func (bareDialect) DropForeignKey(string, string) string                     { return "" }
+func (bareDialect) DropIndex(string, string, string) string                  { return "" }
+
+// TestCompileExpressionMissingCapabilities covers the capability gates that fire
+// when a dialect implements neither JSON access, regexp matching, nor full-text
+// search.
+func TestCompileExpressionMissingCapabilities(t *testing.T) {
+	c := NewCompiler(bareDialect{})
+	cases := []Expression{
+		JSONAccessExpression{Operand: Col("a"), Path: []any{"k"}},
+		RegexpExpression{Left: Col("a"), Pattern: Val("x")},
+		MatchExpression{Columns: []Expression{Col("a")}, Query: Val("q")},
+	}
+	for i, e := range cases {
+		if _, _, err := c.CompileExpression(e); err == nil {
+			t.Errorf("case %d (%T): want capability error", i, e)
+		}
+	}
+}
+
+// refExpr / unwrapExpr / refSel / unwrapSel are minimal nodes that hit the
+// generic Reference and Unwrap arms of CompileExpression and CompileSelection.
+type refExpr struct{}
+
+func (refExpr) SQLExpression()    {}
+func (refExpr) Reference() string { return "ref_e" }
+
+type unwrapExpr struct{}
+
+func (unwrapExpr) SQLExpression()               {}
+func (unwrapExpr) UnwrapExpression() Expression { return Col("inner") }
+
+type refSel struct{}
+
+func (refSel) SQLSelection()     {}
+func (refSel) Reference() string { return "ref_s" }
+
+type unwrapSel struct{}
+
+func (unwrapSel) SQLSelection()              {}
+func (unwrapSel) UnwrapSelection() Selection { return Col("inner") }
+
+// TestCompileReferenceAndUnwrapArms covers the generic Reference and Unwrap arms
+// of the expression and selection type switches.
+func TestCompileReferenceAndUnwrapArms(t *testing.T) {
+	c := NewCompiler(PostgreSQLDialect{})
+	if got, _, err := c.CompileExpression(refExpr{}); err != nil || got == "" {
+		t.Fatalf("refExpr = %q, %v", got, err)
+	}
+	if got, _, err := c.CompileExpression(unwrapExpr{}); err != nil || got == "" {
+		t.Fatalf("unwrapExpr = %q, %v", got, err)
+	}
+	if got, _, err := c.CompileSelection(refSel{}); err != nil || got == "" {
+		t.Fatalf("refSel = %q, %v", got, err)
+	}
+	if got, _, err := c.CompileSelection(unwrapSel{}); err != nil || got == "" {
+		t.Fatalf("unwrapSel = %q, %v", got, err)
+	}
+}
+
+// TestCompileSelectRemainingBranches covers the DISTINCT ON element error, the
+// GROUP BY and WINDOW separators, and the WINDOW name/parts guards of
+// CompileSelect, plus the source-name and nil-source guards of CompileSource.
+func TestCompileSelectRemainingBranches(t *testing.T) {
+	pg := NewCompiler(PostgreSQLDialect{})
+	bad := UnaryExpression{Operand: Col("x")}
+
+	// DISTINCT ON with a bad element.
+	if _, _, err := Select(Col("a")).From(orgs).DistinctOn(bad).ToSQL(PostgreSQLDialect{}); err == nil {
+		t.Error("DISTINCT ON bad expr: want error")
+	}
+	// Two GROUP BY expressions exercise the separator.
+	if _, _, err := Select(Col("a")).From(orgs).GroupBy(Col("a"), Col("b")).ToSQL(PostgreSQLDialect{}); err != nil {
+		t.Errorf("multi GROUP BY: %v", err)
+	}
+	// Two named windows exercise the separator; a nameless window and a window
+	// with a bad partition fail.
+	twoWindows := Select(Col("a")).From(orgs).
+		Window(WindowDef("w1").PartitionBy(Col("a")), WindowDef("w2").OrderBy(Asc(Col("b"))))
+	if _, _, err := twoWindows.ToSQL(PostgreSQLDialect{}); err != nil {
+		t.Errorf("multi WINDOW: %v", err)
+	}
+	if _, _, err := Select(Col("a")).From(orgs).Window(WindowDef("")).ToSQL(PostgreSQLDialect{}); err == nil {
+		t.Error("nameless WINDOW: want error")
+	}
+	if _, _, err := Select(Col("a")).From(orgs).Window(WindowDef("w").PartitionBy(bad)).ToSQL(PostgreSQLDialect{}); err == nil {
+		t.Error("WINDOW bad partition: want error")
+	}
+
+	// CompileSource guards: nil source and a source with neither query, values,
+	// nor name.
+	if _, _, err := pg.CompileSource(nil); err == nil {
+		t.Error("CompileSource(nil): want error")
+	}
+	if _, _, err := pg.CompileSource(SourceExpression{}); err == nil {
+		t.Error("CompileSource(empty): want error")
+	}
+}
+
+// TestCompileWindowPartsErrors covers compileWindowParts' partition-element,
+// order-term, and order-modifier error branches via an OVER(...) projection.
+func TestCompileWindowPartsErrors(t *testing.T) {
+	bad := UnaryExpression{Operand: Col("x")}
+	from := orgs
+
+	badPartition := Select(As(Over(CountAll()).PartitionBy(bad), "c")).From(from)
+	if _, _, err := badPartition.ToSQL(PostgreSQLDialect{}); err == nil {
+		t.Error("window bad partition: want error")
+	}
+	badOrder := Select(As(Over(CountAll()).OrderBy(Asc(bad)), "c")).From(from)
+	if _, _, err := badOrder.ToSQL(PostgreSQLDialect{}); err == nil {
+		t.Error("window bad order: want error")
+	}
+	// NULLS ordering inside a window over MySQL hits the order-modifier error.
+	badMod := Select(As(Over(CountAll()).OrderBy(Desc(Col("a")).NullsLast()), "c")).From(from)
+	if _, _, err := badMod.ToSQL(MySQLDialect{}); err == nil {
+		t.Error("window NULLS on mysql: want error")
+	}
+}
+
+// TestValuesSourceValueError covers the value-compile error branch of
+// compileValuesSource.
+func TestValuesSourceValueError(t *testing.T) {
+	bad := UnaryExpression{Operand: Col("x")}
+	q := Select(Col("v")).From(ValuesSource([][]Expression{{bad}}, "rows", "v"))
+	if _, _, err := q.ToSQL(PostgreSQLDialect{}); err == nil {
+		t.Fatal("VALUES source bad value: want error")
+	}
+}
+
+// TestCompileJoinSourceError covers the join-source error branch of CompileJoin.
+func TestCompileJoinSourceError(t *testing.T) {
+	bad := UnaryExpression{Operand: Col("x")}
+	badSource := Alias(Select(bad).From(orgs), "j")
+	q := Select(Col("a")).From(orgs).Join(badSource, Eq(Col("a"), Col("j.a")))
+	if _, _, err := q.ToSQL(PostgreSQLDialect{}); err == nil {
+		t.Fatal("join over bad source: want error")
+	}
+}
+
+// TestCompileWithNilQueryCTE covers the nil-query guard of compileWith.
+func TestCompileWithNilQueryCTE(t *testing.T) {
+	q := Select(Col("a")).From(orgs).WithCTE(CTE{name: NewIdent("c")})
+	if _, _, err := q.ToSQL(PostgreSQLDialect{}); err == nil {
+		t.Fatal("CTE without a query: want error")
+	}
+}
+
+// TestInsertUpsertRemainingErrors covers the INSERT no-columns guard, the
+// FROM SELECT upsert/returning error branches, and the ON CONFLICT target,
+// assignment-LHS, and WHERE error branches.
+func TestInsertUpsertRemainingErrors(t *testing.T) {
+	pg := PostgreSQLDialect{}
+	tbl := Table{Name: NewIdent("t")}
+	bad := UnaryExpression{Operand: Col("x")}
+	good := Select(Col("a")).From(orgs)
+	errOn := func(name string, q Query) {
+		t.Helper()
+		if _, _, err := q.ToSQL(pg); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+	}
+
+	errOn("no columns", InsertInto(tbl).Values(1))
+	errOn("fromselect upsert", InsertInto(tbl).Columns("a").FromSelect(good).
+		OnConflict("a").DoUpdate(Set("a", bad)))
+	errOn("fromselect returning", InsertInto(tbl).Columns("a").FromSelect(good).Returning(bad))
+	errOn("conflict target expr", InsertInto(tbl).Columns("a").Values(1).
+		OnConflictExpr(bad).DoUpdate(Set("a", 1)))
+	errOn("conflict assignment lhs", InsertInto(tbl).Columns("a").Values(1).
+		OnConflict("a").DoUpdate(SetAt(bad, 1)))
+	errOn("conflict where", InsertInto(tbl).Columns("a").Values(1).
+		OnConflict("a").DoUpdate(Set("a", 1)).Where(bad))
+}
+
+// TestUpdateDeleteRemainingErrors covers the compileWith, inline join/source,
+// and assignment-LHS error branches of CompileUpdate and CompileDelete, plus the
+// empty-ORDER-BY arm of writeOrderBy via a MySQL row limit.
+func TestUpdateDeleteRemainingErrors(t *testing.T) {
+	pg := PostgreSQLDialect{}
+	my := MySQLDialect{}
+	tbl := Table{Name: NewIdent("t")}
+	join := Table{Name: NewIdent("j")}
+	bad := UnaryExpression{Operand: Col("x")}
+	badCTE := CTE{name: NewIdent("c")}
+
+	if _, _, err := Update(tbl).WithCTE(badCTE).Set(Set("a", 1)).ToSQL(pg); err == nil {
+		t.Error("update bad cte: want error")
+	}
+	if _, _, err := Update(tbl).Set(Set("a", 1)).Join(Alias(Select(bad).From(orgs), "j"),
+		Eq(Col("t.id"), Col("j.id"))).ToSQL(my); err == nil {
+		t.Error("update inline join bad source: want error")
+	}
+	if _, _, err := Update(tbl).Set(SetAt(bad, 1)).ToSQL(pg); err == nil {
+		t.Error("update assignment lhs: want error")
+	}
+	if _, _, err := DeleteFrom(tbl).WithCTE(badCTE).Where(Eq(Col("a"), 1)).ToSQL(pg); err == nil {
+		t.Error("delete bad cte: want error")
+	}
+	if _, _, err := DeleteFrom(tbl).Using(Alias(Select(bad).From(orgs), "u")).
+		Join(join, Eq(Col("t.id"), Col("j.id"))).Where(Eq(Col("a"), 1)).ToSQL(my); err == nil {
+		t.Error("delete inline source bad: want error")
+	}
+
+	// A MySQL UPDATE with a LIMIT but no ORDER BY reaches writeOrderBy's empty arm.
+	if _, _, err := Update(tbl).Set(Set("a", 1)).Limit(1).ToSQL(my); err != nil {
+		t.Errorf("mysql update limit without order: %v", err)
+	}
+}
+
+// TestFoldJoinOnsNilOn covers foldJoinOns skipping a join whose ON is nil,
+// reached through a standard-dialect UPDATE ... FROM with a join.
+func TestFoldJoinOnsNilOn(t *testing.T) {
+	tbl := Table{Name: NewIdent("t")}
+	q := Update(tbl).Set(Set("a", 1)).
+		Join(Table{Name: NewIdent("j")}, nil).
+		Where(Eq(Col("a"), 1))
+	// Standard dialect folds join ONs into WHERE; a nil ON is skipped.
+	if _, _, err := q.ToSQL(StandardSQLDialect{}); err != nil {
+		t.Fatalf("update join nil on: %v", err)
+	}
+}
+
+// TestCompileExpressionFinalBranches covers the last CompileExpression branches:
+// a full-text Match whose renderer rejects empty columns, a COUNT over a bad
+// target selection, and an OVER() whose function fails to compile.
+func TestCompileExpressionFinalBranches(t *testing.T) {
+	pg := NewCompiler(PostgreSQLDialect{})
+	bad := UnaryExpression{Operand: Col("x")}
+	cases := []Expression{
+		MatchExpression{Query: Val("q")}, // no columns: caught by the column guard
+		CountExpression{Target: bad},     // bad target selection
+		WindowExpression{Fn: bad},        // bad window function
+	}
+	for i, e := range cases {
+		if _, _, err := pg.CompileExpression(e); err == nil {
+			t.Errorf("case %d (%T): want error", i, e)
+		}
+	}
+
+	// A searcher whose Match fails for valid columns drives the renderer-error
+	// branch (distinct from the empty-column guard above).
+	es := NewCompiler(errSearchDialect{})
+	if _, _, err := es.CompileExpression(
+		MatchExpression{Columns: []Expression{Col("a")}, Query: Val("q")}); err == nil {
+		t.Error("searcher Match error: want propagation")
+	}
+}
+
+// errSearchDialect is a PostgreSQL dialect whose full-text Match always fails,
+// driving CompileExpression's searcher-error branch.
+type errSearchDialect struct{ PostgreSQLDialect }
+
+func (errSearchDialect) Match([]string, string, bool, string) (string, error) {
+	return "", errors.New("match boom")
+}
+
+// TestDeleteInlineJoinSourceError covers CompileDelete's inline-join source error
+// branch: a valid USING source with a join whose source fails to compile.
+func TestDeleteInlineJoinSourceError(t *testing.T) {
+	tbl := Table{Name: NewIdent("t")}
+	bad := UnaryExpression{Operand: Col("x")}
+	q := DeleteFrom(tbl).
+		Using(Alias(Select(Col("a")).From(orgs), "u")).
+		Join(Alias(Select(bad).From(orgs), "j"), Eq(Col("t.id"), Col("j.id"))).
+		Where(Eq(Col("a"), 1))
+	if _, _, err := q.ToSQL(MySQLDialect{}); err == nil {
+		t.Fatal("delete inline join bad source: want error")
+	}
 }

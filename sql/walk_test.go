@@ -137,3 +137,174 @@ func (f VisitorFunc) Visit(node Node) Visitor {
 	}
 	return nil
 }
+
+// TestWalkCoversEveryNodeKind drives walkChildren's dispatch arm for every node
+// type. A rich SELECT covers the structural arms and their loop bodies (joins,
+// group by, having, order by, window, CTE); a projection of every expression
+// kind (each wrapped in an aliased selection) covers the expression arms via
+// walkSelection -> walkExpr; and zero-value statements cover the remaining arms
+// (Walk dispatches on the dynamic type, then walks the node's empty children).
+func TestWalkCoversEveryNodeKind(t *testing.T) {
+	count := 0
+	v := countingVisitor{&count}
+	walk := func(n Node) { Walk(v, n) }
+
+	cte := Select(Col("id")).From(orgs).CTE("c")
+	rich := Select(Col("a"), As(Over(Func("rank")).Named("w"), "rn")).
+		From(SourceAlias(orgs, "o")).
+		Join(users, Eq(Col("o.id"), Col("u.id"))).
+		WithCTE(cte).
+		Where(And(Gt(Col("a"), Val(1)), In(Col("a"), 1, 2))).
+		GroupBy(Col("a")).
+		Having(Gt(CountAll(), Val(0))).
+		Window(WindowDef("w").PartitionBy(Col("a")).OrderBy(Asc(Col("b")))).
+		OrderBy(Asc(Col("a")), Desc(Col("b")))
+	walk(Unwrap(rich).(Node))
+
+	// Writes: conflict clause, assignments, USING/FROM sources.
+	walk(Unwrap(InsertInto(users).Columns("a").Values(1).OnConflict("a").DoUpdate(Set("a", Excluded("a")))).(Node))
+	walk(Unwrap(Update(users).Set(Set("a", Val(1))).From(SourceAlias(orgs, "o")).Where(Eq(Col("a"), Val(1)))).(Node))
+	walk(Unwrap(DeleteFrom(users).Using(orgs).Where(Eq(Col("a"), Val(1)))).(Node))
+
+	// Every expression kind, each wrapped in an aliased selection so
+	// walkSelection -> walkExpr reaches its arm. Zero values suffice for the
+	// arms whose bodies are simple; richer ones get children for the loop paths.
+	exprs := []Expression{
+		BinaryExpression{Left: Col("a"), Operator: "=", Right: Col("b")},
+		UnaryExpression{Operator: "-", Operand: Col("a")},
+		LogicalExpression{Operator: "AND", Operands: []Expression{Col("a"), Col("b")}},
+		NotExpression{Operand: Col("a")},
+		NullPredicate{Operand: Col("a")},
+		DistinctPredicate{Left: Col("a"), Right: Col("b")},
+		BetweenExpression{Operand: Col("a"), Low: Col("b"), High: Col("c")},
+		ConcatExpression{Operands: []Expression{Col("a"), Col("b")}},
+		ILikeExpression{},
+		RegexpExpression{},
+		SimilarToExpression{},
+		RowExpression{Elements: []Expression{Col("a")}},
+		Array(Val(1), Val(2)),
+		AnyArray(Col("a"), "=", Array(Val(1))),
+		GroupingExpression{Kind: "ROLLUP", Elements: []Expression{Col("a")}},
+		GroupingSetsExpression{Sets: [][]Expression{{Col("a")}}},
+		Case().When(Col("a"), Col("b")).Else(Col("c")),
+		Over(Func("rank")).PartitionBy(Col("a")).OrderBy(Asc(Col("b"))),
+		Func("f", Col("a")),
+		CountAll(),
+		Count(Col("a")),
+		StringAggExpression{Arg: Col("a")},
+		ExtractExpression{Field: "YEAR", Operand: Col("a")},
+		PositionExpression{Substring: Col("a"), String: Col("b")},
+		CastExpression{Type: "int", Operand: Col("a")},
+		CollateExpression{Operand: Col("a"), Collation: NewIdent("C")},
+		FieldExpression{Operand: Col("a"), Field: NewIdent("f")},
+		SubscriptExpression{Operand: Col("a"), Indices: []SubscriptIndex{{Upper: Val(1)}, {Slice: true, Lower: Val(1), Upper: Val(2)}}},
+		JSONObjectExpression{Pairs: []Expression{Val("k"), Val("v")}},
+		JSONGet(Col("a"), "k"),
+		In(Col("a"), 1, 2),
+		Exists(Select(Col("id")).From(orgs)),
+		ScalarSubquery(Select(Col("id")).From(orgs)),
+		QuantifiedExpression{Left: Col("a"), Operator: "=", Quantifier: "ANY", Query: Select(Col("id")).From(orgs)},
+		MatchExpression{},
+	}
+	// Pack every expression as arguments of one function call in a WHERE, so the
+	// SELECT arm walks the predicate, the FuncExpression arm walks its args, and
+	// walkExpr reaches each expression's arm.
+	args := make([]any, len(exprs))
+	for i, e := range exprs {
+		args[i] = e
+	}
+	walk(Unwrap(Select(Col("a")).From(orgs).Where(Func("noop", args...))).(Node))
+
+	// Remaining statement arms via zero-value nodes.
+	for _, n := range []Node{
+		CompoundStmt{}, MergeStmt{}, ValuesQuery{}, CreateTableStmt{}, AlterTableStmt{},
+		CreateViewStmt{}, CreateMaterializedViewStmt{}, CreateIndexStmt{}, DropTableStmt{},
+		TruncateStmt{}, SetStmt{}, LockTablesStmt{},
+	} {
+		walk(n)
+	}
+
+	if count == 0 {
+		t.Fatal("Walk visited no nodes")
+	}
+
+	// Scoped public helpers: subquery- and expression-collectors over a single
+	// expression / selection scope (they must not descend into nested queries).
+	exprWithSub := Exists(Select(Col("id")).From(orgs))
+	WalkSubqueries(exprWithSub, func(Query) {})
+	WalkExpr(exprWithSub, func(Expression) {})
+	selWithSub := As(ScalarSubquery(Select(Col("id")).From(orgs)), "n")
+	WalkSelectionSubqueries(selWithSub, func(Query) {})
+	WalkSelectionExpr(selWithSub, func(Expression) {})
+
+	// Decompose with nil callbacks exercises the orNoop substitution.
+	Decompose(Unwrap(rich), nil, nil, nil)
+}
+
+// TestWalkLoopBodies walks rich statements so the slice/loop bodies inside
+// walkChildren's arms run (columns, checks, alterations, tables, vars, locks,
+// MERGE WHEN clauses, compound operands, JSON path steps).
+func TestWalkLoopBodies(t *testing.T) {
+	n := 0
+	v := countingVisitor{&n}
+	walk := func(q Query) { Walk(v, Unwrap(q).(Node)) }
+
+	tbl := Table{Name: NewIdent("t")}
+	walk(CreateTable(tbl).
+		Column(ColumnDef{Name: NewIdent("a"), Type: EngineType{Name: "int"}, Default: Raw("0")}).
+		Check("c", Raw("a > 0")))
+	walk(AlterTable(tbl).AddColumn(ColumnDef{Name: NewIdent("b"), Type: EngineType{Name: "int"}}).DropColumn("x"))
+	walk(DropTable(tbl, Table{Name: NewIdent("u")}))
+	walk(Truncate(tbl, Table{Name: NewIdent("u")}))
+	walk(SetVariables(SetVar{Name: "x", Value: Raw("1")}, SetVar{Name: "y", Value: Raw("2")}))
+	walk(LockTables(TableLock{Table: tbl, Mode: LockRead}, TableLock{Table: Table{Name: NewIdent("u")}, Mode: LockWrite}))
+
+	src := SourceAlias(Table{Name: NewIdent("s")}, "s")
+	walk(MergeInto(tbl).Using(src).On(Eq(Col("t.id"), Col("s.id"))).
+		When(WhenMatched().And(Gt(Col("s.v"), 0)).ThenUpdate(Set("v", Col("s.v"))),
+			WhenNotMatched().ThenInsert([]string{"id"}, Col("s.id"))))
+
+	a := Select(Col("id")).From(Table{Name: NewIdent("a")})
+	b := Select(Col("id")).From(Table{Name: NewIdent("b")})
+	walk(a.Union(b))
+
+	// JSON access with a multi-step path.
+	walk(Select(Col("id")).From(orgs).Where(Func("noop", JSONGet(Col("data"), "k", 0))))
+
+	if n == 0 {
+		t.Fatal("walked nothing")
+	}
+}
+
+// TestWalkRemainingArms covers the last walkChildren/Decompose branches: the
+// UPDATE/DELETE join loops, a materialized-view body, an expression-valued JSON
+// path step, and Decompose over a plain-table FROM and a non-Node query.
+func TestWalkRemainingArms(t *testing.T) {
+	n := 0
+	v := countingVisitor{&n}
+	walk := func(q Query) { Walk(v, Unwrap(q).(Node)) }
+	tbl := Table{Name: NewIdent("t")}
+	join := Table{Name: NewIdent("j")}
+
+	walk(Update(tbl).Set(Set("a", 1)).Join(join, Eq(Col("t.id"), Col("j.id"))).Where(Eq(Col("a"), 1)))
+	walk(DeleteFrom(tbl).Join(join, Eq(Col("t.id"), Col("j.id"))).Where(Eq(Col("a"), 1)))
+	walk(CreateMaterializedView(Table{Name: NewIdent("mv")}, Select(Col("id")).From(orgs)))
+	walk(Select(Col("id")).From(orgs).Where(Func("noop", JSONGet(Col("data"), Col("dynkey")))))
+
+	// A VALUES source carries rows that Walk descends into.
+	walk(Select(Col("v")).From(ValuesSource([][]Expression{{Val(1)}}, "rows", "v")))
+	// A generated column carries an expression that Walk descends into.
+	walk(CreateTable(tbl).Column(ColumnDef{
+		Name:      NewIdent("total"),
+		Type:      RawType("int"),
+		Generated: &GeneratedColumn{Expression: Col("a"), Stored: true},
+	}))
+
+	// Decompose over a plain-table FROM (the case Table branch).
+	var tableNames []string
+	Decompose(Unwrap(Update(tbl).Set(Set("a", 1))), nil,
+		func(s string) { tableNames = append(tableNames, s) }, nil)
+	Decompose(Unwrap(Select(Col("id")).From(Table{Name: NewIdent("plain")})), nil, nil, nil)
+	// Decompose over a query whose AST is not a Node returns early.
+	Decompose(rawTestQuery{}, nil, nil, nil)
+}

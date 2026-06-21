@@ -45,3 +45,10 @@ func TestTableDefInsertRowsRejectsShortRow(t *testing.T) {
 		t.Fatal("InsertRows() with short row succeeded, want error")
 	}
 }
+
+// TestIsZeroValueNil covers the nil short-circuit of isZeroValue.
+func TestIsZeroValueNil(t *testing.T) {
+	if !isZeroValue(nil) {
+		t.Fatal("isZeroValue(nil) = false, want true")
+	}
+}

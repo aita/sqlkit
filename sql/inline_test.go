@@ -111,3 +111,38 @@ func TestCompileInlineNilQuery(t *testing.T) {
 		t.Fatal("CompileInline(nil) succeeded, want error")
 	}
 }
+
+// inlineNonCompilable is a Query whose AST is not compilable.
+type inlineNonCompilable struct{}
+
+func (inlineNonCompilable) ToSQL(sql.Dialect) (string, []any, error) { return "SELECT 1", nil, nil }
+
+// TestCompileInlineErrorsAndSuccess covers CompileInline's non-compilable guard
+// and the value-inlining success path.
+func TestCompileInlineErrorsAndSuccess(t *testing.T) {
+	pg := sql.PostgreSQLDialect{}
+	if _, err := sql.CompileInline(pg, inlineNonCompilable{}); err == nil {
+		t.Fatal("non-compilable query: want error")
+	}
+	got, err := sql.CompileInline(pg, sql.Select(sql.Col("a")).
+		From(sql.Table{Name: sql.NewIdent("t")}).Where(sql.Eq(sql.Col("a"), sql.Val(1))))
+	if err != nil {
+		t.Fatalf("inline success: %v", err)
+	}
+	if got == "" {
+		t.Fatal("inline produced empty SQL")
+	}
+
+	// A query whose AST fails to compile propagates the error.
+	bad := sql.Select(sql.UnaryExpression{Operand: sql.Col("x")}).
+		From(sql.Table{Name: sql.NewIdent("t")})
+	if _, err := sql.CompileInline(pg, bad); err == nil {
+		t.Fatal("compile error: want error")
+	}
+
+	// A RawQuery keeps its own bind args even in inline mode, which inline
+	// rejects because it cannot fold them into the text.
+	if _, err := sql.CompileInline(pg, sql.RawSQL("SELECT $1", 1)); err == nil {
+		t.Fatal("residual bind args: want error")
+	}
+}

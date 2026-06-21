@@ -86,3 +86,52 @@ func TestUnionPlaceholderNumbering(t *testing.T) {
 		`(SELECT "id" FROM "a" WHERE ("x" = $1)) UNION (SELECT "id" FROM "b" WHERE ("y" = $2))`,
 		[]any{1, 2})
 }
+
+// TestCompoundCoverage covers the set-operation variants, the compound used as a
+// derived source, the builder plumbing, and the operand/order error branches.
+func TestCompoundCoverage(t *testing.T) {
+	pg := PostgreSQLDialect{}
+	a := Select(Col("id")).From(Table{Name: NewIdent("a")})
+	b := Select(Col("id")).From(Table{Name: NewIdent("b")})
+	mustOK := func(q Query) {
+		t.Helper()
+		if _, _, err := q.ToSQL(pg); err != nil {
+			t.Fatalf("%T: %v", q, err)
+		}
+	}
+	mustOK(a.UnionAll(b))
+	mustOK(a.IntersectAll(b))
+	mustOK(a.ExceptAll(b))
+	mustOK(a.Union(b).IntersectAll(b))
+	mustOK(a.Union(b).ExceptAll(b))
+	mustOK(Select(Col("id")).From(Alias(a.Union(b), "u")))
+	mustOK(a.Union(rawTestQuery{}))                           // operand compiled via the ToSQL fallback
+	mustOK(a.Union(b).OrderBy(Asc(Col("id")), Asc(Col("v")))) // multi-term compound ORDER BY
+
+	c := a.Union(b)
+	_ = c.Stmt()
+	_ = c.SQLSource()
+	_ = c.Stmt().SQLSource()
+	if sp, ok := Query(c).(interface{ setPos(int) Query }); ok {
+		sp.setPos(2)
+	}
+	if sp, ok := Query(c.Stmt()).(interface{ setPos(int) Query }); ok {
+		sp.setPos(2)
+	}
+
+	bad := Select(UnaryExpression{Operand: Col("x")}).From(orgs)
+	if _, _, err := a.Union(bad).ToSQL(pg); err == nil {
+		t.Fatal("bad right operand should error")
+	}
+	if _, _, err := bad.Union(a).ToSQL(pg); err == nil {
+		t.Fatal("bad left operand should error")
+	}
+	if _, _, err := a.Union(b).OrderBy(Asc(UnaryExpression{Operand: Col("x")})).ToSQL(pg); err == nil {
+		t.Fatal("bad compound order expr should error")
+	}
+	// NULLS ordering on a dialect that does not support it errors while rendering
+	// the compound's ORDER BY modifiers.
+	if _, _, err := a.Union(b).OrderBy(OrderTerm{Expr: Col("id"), Nulls: "FIRST"}).ToSQL(MySQLDialect{}); err == nil {
+		t.Fatal("compound NULLS ordering on MySQL should error")
+	}
+}

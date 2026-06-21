@@ -295,3 +295,17 @@ func TestSelectStmtFields(t *testing.T) {
 		t.Errorf("HasOffset = true, want false")
 	}
 }
+
+// TestSelectLeftJoinPlumbing covers SelectBuilder.LeftJoin and setPos.
+func TestSelectLeftJoinPlumbing(t *testing.T) {
+	q := Select(Col("a")).From(orgs).LeftJoin(users, Eq(Col("a"), Col("b")))
+	if _, _, err := q.ToSQL(PostgreSQLDialect{}); err != nil {
+		t.Fatal(err)
+	}
+	if sp, ok := Query(q).(interface{ setPos(int) Query }); ok {
+		sp.setPos(2)
+	}
+	if sp, ok := Query(q.Stmt()).(interface{ setPos(int) Query }); ok {
+		sp.setPos(2)
+	}
+}

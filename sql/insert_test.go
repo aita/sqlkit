@@ -340,3 +340,68 @@ func TestInsertStmtConflict(t *testing.T) {
 		t.Errorf("Conflict = %+v, want a DO UPDATE with one assignment", c.Conflict)
 	}
 }
+
+// TestInsertUpdateDeletePlumbing covers the Insert/Update/Delete accessor
+// plumbing: ColumnCount, SplitRows, the second-Where AND-combine, Stmt /
+// buildStmt / setPos, and the compile entry point.
+func TestInsertUpdateDeletePlumbing(t *testing.T) {
+	pg := PostgreSQLDialect{}
+	tbl := Table{Name: NewIdent("t")}
+
+	// Calling Where twice AND-combines the predicates.
+	mustOK := func(q Query) {
+		t.Helper()
+		if _, _, err := q.ToSQL(pg); err != nil {
+			t.Fatalf("%T: %v", q, err)
+		}
+	}
+	mustOK(InsertInto(tbl).Columns("a").Values(1).OnConflict("a").
+		DoUpdate(Set("a", Excluded("a"))).Where(Gt(Col("a"), 0)).Where(Lt(Col("a"), 9)))
+	mustOK(Update(tbl).Set(Set("a", 1)).Where(Gt(Col("a"), 0)).Where(Lt(Col("a"), 9)))
+	mustOK(DeleteFrom(tbl).Where(Gt(Col("a"), 0)).Where(Lt(Col("a"), 9)))
+
+	ib := InsertInto(tbl).Columns("a", "b").Values(1, 2)
+	if ib.ColumnCount() != 2 || ib.Stmt().ColumnCount() != 2 {
+		t.Fatalf("ColumnCount = %d", ib.ColumnCount())
+	}
+	if got := InsertInto(tbl).Columns("a").Values(1).Values(2).Values(3).SplitRows(2); len(got) == 0 {
+		t.Fatal("SplitRows returned nothing")
+	}
+
+	c := NewCompiler(pg)
+	// Compile via the builder methods, which delegate to the statement form.
+	_, _, _ = InsertInto(tbl).Columns("a").Values(1).compile(c)
+	_, _, _ = Update(tbl).Set(Set("a", 1)).compile(c)
+	_, _, _ = DeleteFrom(tbl).Where(Gt(Col("a"), 0)).compile(c)
+
+	// ColumnCount falls back to the first row width when no columns are named,
+	// and reports zero when neither columns nor rows are present.
+	if got := InsertInto(tbl).Values(1, 2).ColumnCount(); got != 2 {
+		t.Fatalf("ColumnCount from rows = %d, want 2", got)
+	}
+	if got := InsertInto(tbl).Stmt().ColumnCount(); got != 0 {
+		t.Fatalf("ColumnCount empty = %d, want 0", got)
+	}
+
+	// SplitRows returns the builder unchanged for n <= 0 and when the row count
+	// does not exceed n.
+	if got := InsertInto(tbl).Columns("a").Values(1).Values(2).SplitRows(0); len(got) != 1 {
+		t.Fatalf("SplitRows(0) = %d batches, want 1", len(got))
+	}
+	if got := InsertInto(tbl).Columns("a").Values(1).SplitRows(5); len(got) != 1 {
+		t.Fatalf("SplitRows(5) over 1 row = %d batches, want 1", len(got))
+	}
+
+	_ = InsertInto(tbl).Columns("a").Values(1).buildStmt()
+	_ = Update(tbl).Set(Set("a", 1)).buildStmt()
+	_ = DeleteFrom(tbl).Where(Gt(Col("a"), 0)).buildStmt()
+	for _, q := range []Query{
+		InsertInto(tbl).Columns("a").Values(1), InsertInto(tbl).Columns("a").Values(1).Stmt(),
+		Update(tbl).Set(Set("a", 1)), Update(tbl).Set(Set("a", 1)).Stmt(),
+		DeleteFrom(tbl).Where(Gt(Col("a"), 0)), DeleteFrom(tbl).Where(Gt(Col("a"), 0)).Stmt(),
+	} {
+		if sp, ok := q.(interface{ setPos(int) Query }); ok {
+			sp.setPos(2)
+		}
+	}
+}

@@ -33,3 +33,11 @@ func TestSavepointRequiresName(t *testing.T) {
 		t.Fatal("SAVEPOINT without a name succeeded, want error")
 	}
 }
+
+// TestTransactionUnknownKind covers the default arm: a statement with an
+// unrecognized Kind is rejected at compile time.
+func TestTransactionUnknownKind(t *testing.T) {
+	if _, _, err := (TransactionStmt{Kind: "BOGUS"}).ToSQL(PostgreSQLDialect{}); err == nil {
+		t.Fatal("unknown transaction kind succeeded, want error")
+	}
+}

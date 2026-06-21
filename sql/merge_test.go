@@ -1,6 +1,9 @@
 package sql
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestMergeStmt(t *testing.T) {
 	p := MergeInto(Table{Name: NewIdent("accounts")}).As("t").
@@ -114,5 +117,111 @@ func TestMergeValidation(t *testing.T) {
 	}
 	if _, _, err := MergeInto(Table{Name: NewIdent("t")}).ToSQL(PostgreSQLDialect{}); err == nil {
 		t.Fatal("MERGE without USING/ON/WHEN succeeded, want error")
+	}
+}
+
+// TestMergeCoverage drives the MERGE compile branches (every WHEN action) plus
+// the builder plumbing (WithCTE, Returning, compile, setPos).
+func TestMergeCoverage(t *testing.T) {
+	pg := PostgreSQLDialect{}
+	tgt := Table{Name: NewIdent("t")}
+	src := SourceAlias(Table{Name: NewIdent("s")}, "s")
+	cte := Select(Col("id")).From(orgs).CTE("c")
+	m := MergeInto(tgt).As("t").Using(src).On(Eq(Col("t.id"), Col("s.id"))).
+		WithCTE(cte).
+		When(
+			WhenMatched().And(Gt(Col("s.v"), 0)).ThenUpdate(Set("v", Col("s.v"))),
+			WhenMatched().ThenDelete(),
+			WhenMatched().ThenDoNothing(),
+			WhenNotMatched().ThenInsert([]string{"id", "v"}, Col("s.id"), 1),
+			WhenNotMatched().ThenDoNothing(),
+			WhenNotMatchedBySource().ThenDelete(),
+		).
+		Returning(Col("t.id"))
+	if _, _, err := m.ToSQL(pg); err != nil {
+		t.Fatalf("merge ToSQL: %v", err)
+	}
+	_ = m.Stmt()
+	if _, _, err := m.compile(NewCompiler(pg)); err != nil {
+		t.Fatalf("merge compile: %v", err)
+	}
+	if sp, ok := Query(m).(interface{ setPos(int) Query }); ok {
+		sp.setPos(2)
+	}
+}
+
+// TestMergeErrors covers the MERGE validation and error-propagation branches.
+func TestMergeErrors(t *testing.T) {
+	pg := PostgreSQLDialect{}
+	tgt := Table{Name: NewIdent("t")}
+	src := SourceAlias(Table{Name: NewIdent("s")}, "s")
+	on := Eq(Col("t.id"), Col("s.id"))
+	bad := UnaryExpression{Operand: Col("x")}
+	base := func() MergeBuilder { return MergeInto(tgt).Using(src).On(on) }
+	mergeErr := func(name string, m MergeBuilder) {
+		t.Helper()
+		if _, _, err := m.ToSQL(pg); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+	}
+
+	mergeErr("no using", MergeInto(tgt).On(on).When(WhenMatched().ThenDelete()))
+	mergeErr("no on", MergeInto(tgt).Using(src).When(WhenMatched().ThenDelete()))
+	mergeErr("no when", MergeInto(tgt).Using(src).On(on))
+	if _, _, err := base().When(WhenMatched().ThenDelete()).ToSQL(MySQLDialect{}); err == nil {
+		t.Error("mysql merge: want unsupported error")
+	}
+	mergeErr("notmatched delete", base().When(WhenNotMatched().ThenDelete()))
+	mergeErr("notmatched update", base().When(WhenNotMatched().ThenUpdate(Set("a", Val(1)))))
+	mergeErr("matched insert", base().When(WhenMatched().ThenInsert([]string{"a"}, 1)))
+	mergeErr("update no assign", base().When(WhenMatched().ThenUpdate()))
+	mergeErr("no action", base().When(WhenMatched()))
+	mergeErr("bad on", MergeInto(tgt).Using(src).On(bad).When(WhenMatched().ThenDelete()))
+	mergeErr("bad when cond", base().When(WhenMatched().And(bad).ThenDelete()))
+	mergeErr("bad update val", base().When(WhenMatched().ThenUpdate(Set("a", bad))))
+	mergeErr("bad insert val", base().When(WhenNotMatched().ThenInsert([]string{"a"}, bad)))
+	mergeErr("insert count mismatch", base().When(WhenNotMatched().ThenInsert([]string{"a", "b"}, 1)))
+	mergeErr("bad cte", base().WithCTE(Select(bad).From(orgs).CTE("c")).When(WhenMatched().ThenDelete()))
+
+	_ = MergeInto(tgt).Using(src).On(on).When(WhenMatched().ThenDelete()).Stmt().setPos(1)
+}
+
+// TestMergeMoreBranches covers the zero-target guard, a USING source that fails
+// to compile, a RETURNING expression error, the multi-assignment UPDATE SET
+// separator, an assignment with a bad target expression, and INSERT DEFAULT
+// VALUES.
+func TestMergeMoreBranches(t *testing.T) {
+	pg := PostgreSQLDialect{}
+	tgt := Table{Name: NewIdent("t")}
+	src := SourceAlias(Table{Name: NewIdent("s")}, "s")
+	on := Eq(Col("t.id"), Col("s.id"))
+	bad := UnaryExpression{Operand: Col("x")}
+	mergeErr := func(name string, m MergeBuilder) {
+		t.Helper()
+		if _, _, err := m.ToSQL(pg); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+	}
+
+	mergeErr("zero target", MergeInto(Table{}).Using(src).On(on).When(WhenMatched().ThenDelete()))
+	mergeErr("bad using", MergeInto(tgt).Using(SourceAlias(Select(bad).From(orgs), "u")).On(on).
+		When(WhenMatched().ThenDelete()))
+	mergeErr("bad returning", MergeInto(tgt).Using(src).On(on).
+		When(WhenMatched().ThenDelete()).Returning(bad))
+	mergeErr("bad update target", MergeInto(tgt).Using(src).On(on).
+		When(WhenMatched().ThenUpdate(SetAt(bad, 1))))
+
+	// Multi-assignment UPDATE SET exercises the separator, and INSERT with no
+	// columns/values renders DEFAULT VALUES.
+	q := MergeInto(tgt).Using(src).On(on).When(
+		WhenMatched().ThenUpdate(Set("a", 1), Set("b", 2)),
+		WhenNotMatched().ThenInsert(nil),
+	)
+	got, _, err := q.ToSQL(pg)
+	if err != nil {
+		t.Fatalf("merge ToSQL: %v", err)
+	}
+	if !strings.Contains(got, "DEFAULT VALUES") {
+		t.Errorf("expected DEFAULT VALUES in %q", got)
 	}
 }

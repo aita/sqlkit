@@ -28,6 +28,12 @@ func TestCreateFunctionValidation(t *testing.T) {
 	if _, _, err := CreateFunction("f").Language("sql").Body("a $$ b").ToSQL(PostgreSQLDialect{}); err == nil {
 		t.Fatal("CREATE FUNCTION with $$ in body succeeded, want error")
 	}
+	if _, _, err := CreateFunction("").Language("sql").Body("x").ToSQL(PostgreSQLDialect{}); err == nil {
+		t.Fatal("CREATE FUNCTION without a name succeeded, want error")
+	}
+	if _, _, err := DropFunction("").ToSQL(PostgreSQLDialect{}); err == nil {
+		t.Fatal("DROP FUNCTION without a name succeeded, want error")
+	}
 }
 
 func TestDropFunctionCompile(t *testing.T) {
@@ -39,5 +45,34 @@ func TestDropFunctionCompile(t *testing.T) {
 	want := `DROP FUNCTION IF EXISTS "hr"."add"(integer, integer) CASCADE;`
 	if got != want {
 		t.Fatalf("ToSQL() = %q, want %q", got, want)
+	}
+}
+
+// TestFunctionCoverage exercises the function builder options and plumbing.
+func TestFunctionCoverage(t *testing.T) {
+	pg := PostgreSQLDialect{}
+	mustCompile := func(q Query) {
+		t.Helper()
+		if _, _, err := q.ToSQL(pg); err != nil {
+			t.Fatalf("%T: %v", q, err)
+		}
+	}
+	mustCompile(CreateFunction("f").OrReplace().Arg("x", "int").
+		Args(FunctionArg{Mode: "IN", Name: "y", Type: "int", Default: "0"}).
+		Returns("int").Language("sql").Option("STABLE").Body("SELECT 1"))
+	mustCompile(DropFunction("f").IfExists().ArgTypes("int").Cascade())
+	mustCompile(DropFunction("g").Restrict())
+
+	_ = CreateFunction("f").Stmt()
+	_ = CreateFunction("f").buildStmt()
+	_ = DropFunction("f").Stmt()
+	_ = DropFunction("f").buildStmt()
+	for _, q := range []Query{
+		CreateFunction("f"), CreateFunction("f").Stmt(),
+		DropFunction("f"), DropFunction("f").Stmt(),
+	} {
+		if sp, ok := q.(interface{ setPos(int) Query }); ok {
+			sp.setPos(2)
+		}
 	}
 }
