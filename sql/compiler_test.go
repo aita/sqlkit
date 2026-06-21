@@ -600,3 +600,41 @@ func TestAdminSetScopesAndSchemaQualifiedLock(t *testing.T) {
 		LockTables(TableLock{Table: Table{Schema: NewIdent("s"), Name: NewIdent("t")}, Mode: LockWrite}),
 		"LOCK TABLES `s`.`t` WRITE;", nil)
 }
+
+// --- CompileExpression: subquery / element error propagation & capability gates
+
+// TestCompileExpressionSubqueryAndCapabilityErrors covers the CompileExpression
+// arms whose error branches the error-propagation table above does not reach:
+// subquery-bearing nodes, array/JSON element loops, and the dialect-capability
+// gates (arrays, JSON access).
+func TestCompileExpressionSubqueryAndCapabilityErrors(t *testing.T) {
+	pg := NewCompiler(PostgreSQLDialect{})
+	// badExpr fails to compile (empty unary operator); badQuery is a query that
+	// fails to compile because it projects badExpr.
+	badExpr := UnaryExpression{Operand: Col("x")}
+	badQuery := Select(badExpr).From(orgs)
+
+	subqueryErr := []Expression{
+		InExpression{Left: Col("a"), Subquery: badQuery},
+		ExistsExpression{Query: badQuery},
+		ScalarSubqueryExpression{Query: badQuery},
+		QuantifiedExpression{Left: badExpr, Operator: "=", Quantifier: "ANY", Query: badQuery},
+		QuantifiedExpression{Left: Col("a"), Operator: "=", Quantifier: "ANY", Query: badQuery},
+		ArrayExpression{Elements: []Expression{badExpr}},
+		JSONObjectExpression{Pairs: []Expression{badExpr, Col("b")}},
+		JSONAccessExpression{Operand: badExpr, Path: []any{"k"}},
+	}
+	for i, e := range subqueryErr {
+		if _, _, err := pg.CompileExpression(e); err == nil {
+			t.Errorf("case %d (%T) compiled without error, want propagation", i, e)
+		}
+	}
+
+	// Capability gates: arrays and JSON access are unavailable on the standard
+	// dialect, so a well-formed node is rejected at compile time.
+	std := NewCompiler(StandardSQLDialect{})
+	if _, _, err := std.CompileExpression(Array(Val(1))); err == nil ||
+		!strings.Contains(err.Error(), "does not support arrays") {
+		t.Errorf("Array on standard: err = %v, want arrays rejection", err)
+	}
+}
