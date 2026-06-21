@@ -366,3 +366,13 @@ func TestComparisonAndArithmeticHelpers(t *testing.T) {
 	assertSQL(t, Select(Over(Func("sum", Col("x"))).Named("w")).From(orgs).Window(w),
 		`SELECT sum("x") OVER "w" FROM "orgs" WINDOW "w" AS (PARTITION BY "a" ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)`, nil)
 }
+
+// TestLogicalSingleOperand covers And/Or with a single operand (returned as-is).
+func TestLogicalSingleOperand(t *testing.T) {
+	if _, ok := And(Col("a")).(ColumnExpression); !ok {
+		t.Fatal("And with one operand should return it unchanged")
+	}
+	if _, ok := Or(Col("a")).(ColumnExpression); !ok {
+		t.Fatal("Or with one operand should return it unchanged")
+	}
+}

@@ -111,3 +111,25 @@ func TestCompileInlineNilQuery(t *testing.T) {
 		t.Fatal("CompileInline(nil) succeeded, want error")
 	}
 }
+
+// inlineNonCompilable is a Query whose AST is not compilable.
+type inlineNonCompilable struct{}
+
+func (inlineNonCompilable) ToSQL(sql.Dialect) (string, []any, error) { return "SELECT 1", nil, nil }
+
+// TestCompileInlineErrorsAndSuccess covers CompileInline's non-compilable guard
+// and the value-inlining success path.
+func TestCompileInlineErrorsAndSuccess(t *testing.T) {
+	pg := sql.PostgreSQLDialect{}
+	if _, err := sql.CompileInline(pg, inlineNonCompilable{}); err == nil {
+		t.Fatal("non-compilable query: want error")
+	}
+	got, err := sql.CompileInline(pg, sql.Select(sql.Col("a")).
+		From(sql.Table{Name: sql.NewIdent("t")}).Where(sql.Eq(sql.Col("a"), sql.Val(1))))
+	if err != nil {
+		t.Fatalf("inline success: %v", err)
+	}
+	if got == "" {
+		t.Fatal("inline produced empty SQL")
+	}
+}

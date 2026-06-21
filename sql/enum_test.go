@@ -58,3 +58,18 @@ func TestEnumCoverage(t *testing.T) {
 		}
 	}
 }
+
+// TestEnumValidationErrors covers the enum/type compile validation guards.
+func TestEnumValidationErrors(t *testing.T) {
+	pg := PostgreSQLDialect{}
+	errOn := func(name string, q Query) {
+		t.Helper()
+		if _, _, err := q.ToSQL(pg); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+	}
+	errOn("create enum no name", CreateEnum(""))
+	errOn("drop type no names", DropType())
+	errOn("add value empty", AlterTypeAddValue("", ""))
+	errOn("rename value empty", AlterTypeRenameValue("", "", ""))
+}
