@@ -162,7 +162,9 @@ func (c *Compiler) CompileCompound(q CompoundStmt) (string, []any, error) {
 				return "", nil, err
 			}
 			sb.WriteString(termSQL)
-			writeOrderModifiers(&sb, term)
+			if err := c.writeOrderModifiers(&sb, term); err != nil {
+				return "", nil, err
+			}
 			args = append(args, termArgs...)
 		}
 	}

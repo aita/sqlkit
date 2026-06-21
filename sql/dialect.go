@@ -267,6 +267,14 @@ type DistinctOnDialect interface {
 	SupportsDistinctOn() bool
 }
 
+// NullsOrderingDialect is an optional capability a Dialect implements to allow
+// NULLS FIRST / NULLS LAST modifiers on ORDER BY terms. PostgreSQL and standard
+// SQL support them; MySQL does not, so the compiler rejects the modifier there
+// rather than emit SQL MySQL cannot parse.
+type NullsOrderingDialect interface {
+	SupportsNullsOrdering() bool
+}
+
 // SimilarToMatcher is an optional capability a Dialect implements to render a
 // SQL-standard SIMILAR TO match (SimilarToExpression). PostgreSQL and the SQL
 // standard support it; MySQL does not, and rejects it at compile time
@@ -578,6 +586,9 @@ func (PostgreSQLDialect) SimilarTo(left, pattern string, negate bool) string {
 // SupportsDistinctOn reports PostgreSQL's support for SELECT DISTINCT ON.
 func (PostgreSQLDialect) SupportsDistinctOn() bool { return true }
 
+// SupportsNullsOrdering reports PostgreSQL's support for NULLS FIRST/LAST.
+func (PostgreSQLDialect) SupportsNullsOrdering() bool { return true }
+
 // LockClause renders PostgreSQL's row-locking clause; it supports all four lock
 // strengths (UPDATE, NO KEY UPDATE, SHARE, KEY SHARE).
 func (PostgreSQLDialect) LockClause(strength, of, wait string) (string, error) {
@@ -856,6 +867,9 @@ func (StandardSQLDialect) SupportsReturning() bool { return false }
 
 // SupportsMerge reports MERGE support (the SQL standard defines MERGE).
 func (StandardSQLDialect) SupportsMerge() bool { return true }
+
+// SupportsNullsOrdering reports support for NULLS FIRST/LAST (standard SQL).
+func (StandardSQLDialect) SupportsNullsOrdering() bool { return true }
 
 var standardLengthTypes = map[string]bool{"varchar": true, "char": true, "character": true}
 var standardDecimalTypes = map[string]bool{"numeric": true, "decimal": true}
