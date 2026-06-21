@@ -1,6 +1,9 @@
 package codegen
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 // commonInitialisms are rendered fully uppercase in Go identifiers.
 var commonInitialisms = map[string]bool{
@@ -15,21 +18,43 @@ var commonInitialisms = map[string]bool{
 }
 
 // goName converts a snake_case database identifier to an exported Go name.
+// Runes that are not legal in a Go identifier (anything other than a letter or
+// a digit) are dropped, so the result is always a valid identifier: an empty
+// result becomes "X", and a result that would start with a digit is prefixed
+// with "X".
 func goName(name string) string {
 	var sb strings.Builder
 	for _, part := range strings.FieldsFunc(name, func(r rune) bool { return r == '_' || r == ' ' || r == '-' }) {
-		lower := strings.ToLower(part)
+		// Keep only runes that are legal in a Go identifier. Letters may be
+		// non-ASCII (those are valid in Go identifiers); other runes are dropped.
+		lower := strings.Map(func(r rune) rune {
+			if unicode.IsLetter(r) || unicode.IsDigit(r) {
+				return unicode.ToLower(r)
+			}
+			return -1
+		}, part)
+		if lower == "" {
+			continue
+		}
 		if commonInitialisms[lower] {
 			sb.WriteString(strings.ToUpper(lower))
 			continue
 		}
-		sb.WriteString(strings.ToUpper(lower[:1]))
-		sb.WriteString(lower[1:])
+		// Uppercase the first rune in a rune-safe way (multibyte letters are
+		// possible after the unicode filtering above).
+		runes := []rune(lower)
+		runes[0] = unicode.ToUpper(runes[0])
+		sb.WriteString(string(runes))
 	}
 	if sb.Len() == 0 {
 		return "X"
 	}
-	return sb.String()
+	out := sb.String()
+	// A leading digit is not a legal Go identifier; prefix a letter.
+	if r := []rune(out)[0]; unicode.IsDigit(r) {
+		return "X" + out
+	}
+	return out
 }
 
 // singular returns the singular form of a snake_case identifier's last word,

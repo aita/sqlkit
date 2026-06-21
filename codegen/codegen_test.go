@@ -3,8 +3,11 @@ package codegen
 import (
 	"flag"
 	"fmt"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -590,6 +593,16 @@ func TestNaming(t *testing.T) {
 		{"user_id", "UserID"},
 		{"http_request_logs", "HTTPRequestLogs"},
 		{"created_at", "CreatedAt"},
+		// A leading digit is not a legal Go identifier; it gets an "X" prefix.
+		{"2fa", "X2fa"},
+		{"2fa_enabled", "X2faEnabled"},
+		// Non-identifier runes are dropped, not passed through verbatim.
+		{"we`ird", "Weird"},
+		{`na"me`, "Name"},
+		{`back\slash`, "Backslash"},
+		{"dot.column", "Dotcolumn"}, // '.' is dropped, not treated as a word break
+		// A name with no identifier-legal runes falls back to "X".
+		{"@#$", "X"},
 	}
 	for _, c := range cases {
 		if got := goName(c.in); got != c.out {
@@ -680,5 +693,85 @@ func TestSqlkitVersionFallsBackToDevel(t *testing.T) {
 	// fingerprint reports the devel fallback rather than an empty string.
 	if got := sqlkitVersion(); got == "" {
 		t.Fatal("sqlkitVersion returned empty; want a version or (devel)")
+	}
+}
+
+// parseGenerated generates a single file for the given columns and asserts the
+// emitted Go source parses (a valid identifier or duplicate-field bug would
+// otherwise make Generate's format.Source fail, or yield unparseable source).
+// It returns the parsed source so callers can make further assertions.
+func parseGenerated(t *testing.T, columns []meta.Column) string {
+	t.Helper()
+	tables := []meta.Table{{
+		Schema:  meta.Schema{Name: "public"},
+		Name:    "widgets",
+		Columns: columns,
+	}}
+	files, err := Generate(meta.Metadata{Tables: tables}, Options{PackageName: "widgetdb", EmitDTO: true})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("Generate() produced %d files, want 1", len(files))
+	}
+	src := string(files[0].Content)
+	if _, err := parser.ParseFile(token.NewFileSet(), "generated.go", src, parser.AllErrors); err != nil {
+		t.Fatalf("generated source does not parse: %v\n--- source ---\n%s", err, src)
+	}
+	return src
+}
+
+// TestGenerateLeadingDigitColumn covers bug A: a column whose name starts with a
+// digit (e.g. 2fa) must not yield an identifier that starts with a digit.
+func TestGenerateLeadingDigitColumn(t *testing.T) {
+	if got := goName("2fa"); got == "2fa" {
+		t.Fatalf("goName(%q) = %q, an invalid Go identifier", "2fa", got)
+	}
+	src := parseGenerated(t, []meta.Column{
+		{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true},
+		{Name: "2fa", Type: meta.Of("postgres", "bool", 0, 0, 0)},
+		{Name: "2fa_enabled", Type: meta.Of("postgres", "bool", 0, 0, 0)},
+	})
+	if !regexp.MustCompile(`\bX2fa\s+sqlkit\.Column`).MatchString(src) {
+		t.Errorf("generated source missing X2fa field:\n%s", src)
+	}
+}
+
+// TestGenerateSpecialCharColumn covers bug A: a column name containing runes
+// that are illegal in a Go identifier (backtick, quote, dot, backslash) must be
+// sanitized rather than emitted verbatim.
+func TestGenerateSpecialCharColumn(t *testing.T) {
+	if got := goName(`we"ird`); strings.ContainsAny(got, `"\.`) {
+		t.Fatalf("goName(%q) = %q, contains an illegal identifier rune", `we"ird`, got)
+	}
+	parseGenerated(t, []meta.Column{
+		{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true},
+		{Name: `we"ird`, Type: meta.Of("postgres", "text", 0, 0, 0)},
+		{Name: "dot.column", Type: meta.Of("postgres", "text", 0, 0, 0)},
+	})
+}
+
+// TestGenerateCollidingColumns covers bug B: distinct columns that map to the
+// same Go name (user_id and user__id both -> UserID) must be deduped into
+// distinct struct fields rather than redeclaring one.
+func TestGenerateCollidingColumns(t *testing.T) {
+	if goName("user_id") != goName("user__id") {
+		t.Fatalf("precondition: expected user_id and user__id to collide, got %q and %q",
+			goName("user_id"), goName("user__id"))
+	}
+	src := parseGenerated(t, []meta.Column{
+		{Name: "user_id", Type: meta.Of("postgres", "int8", 0, 0, 0)},
+		{Name: "user__id", Type: meta.Of("postgres", "int8", 0, 0, 0)},
+	})
+	// Both the table binding struct and the DTO struct must declare two distinct
+	// fields. The first keeps the natural name; the second is deduped to UserID2.
+	// gofmt aligns the field columns, so allow arbitrary intervening whitespace.
+	binding := regexp.MustCompile(`\bUserID\s+sqlkit\.Column`)
+	if n := len(binding.FindAllString(src, -1)); n != 1 {
+		t.Errorf("expected exactly one UserID binding field, got %d:\n%s", n, src)
+	}
+	dedup := regexp.MustCompile(`\bUserID2\s+sqlkit\.Column`)
+	if !dedup.MatchString(src) {
+		t.Errorf("expected a deduped UserID2 binding field:\n%s", src)
 	}
 }
