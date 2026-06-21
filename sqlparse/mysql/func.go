@@ -16,11 +16,148 @@ func convertFuncCall(fc *ast.FuncCallExpr) (sql.Expression, error) {
 	if fc.Schema.O != "" {
 		return nil, sqlparse.Unsupportedf("schema-qualified function %s.%s", fc.Schema.O, fc.FnName.O)
 	}
+	// The name renders unquoted, so it must be a plain identifier. The lexer maps
+	// an invalid byte to "?", which would render as the call "?()"; fall back to
+	// raw for any non-identifier name rather than emit that.
+	if !isPlainIdent(fc.FnName.O) {
+		return nil, sqlparse.Unsupportedf("function name %q is not a plain identifier", fc.FnName.O)
+	}
+	// EXTRACT(unit FROM x) and POSITION(sub IN str) keep keyword syntax: rendered
+	// as the call form EXTRACT(unit, x) / POSITION(sub, str), MySQL's grammar
+	// rejects them, so rebuild the dedicated nodes that emit the keyword form.
+	switch fc.FnName.L {
+	case "count":
+		// COUNT is modeled as an aggregate (AggregateFuncExpr). Reaching here means
+		// the degenerate call form (e.g. the spaced "Count (0)"), which renders as a
+		// plain COUNT(arg) that re-parses as the aggregate with different semantics
+		// (COUNT(0) folds to COUNT(*)); fall back to raw rather than mis-render it.
+		return nil, sqlparse.Unsupported("COUNT in non-aggregate call form")
+	case "char_func":
+		// TiDB names CHAR(...) "char_func" internally and even its own deparse emits
+		// the non-standard CHAR_FUNC; rebuild the real CHAR(...) spelling.
+		return convertCharFunc(fc)
+	case "extract":
+		if expr, err := convertExtract(fc); err != nil {
+			return nil, err
+		} else if expr != nil {
+			return expr, nil
+		}
+	case "position":
+		if expr, err := convertPosition(fc); err != nil {
+			return nil, err
+		} else if expr != nil {
+			return expr, nil
+		}
+	case "convert":
+		// CONVERT(x USING charset) renders as the call form CONVERT(x, charset),
+		// which MySQL rejects. Fall back to a raw statement, whose deparse keeps the
+		// USING keyword. (CONVERT(x, type) is a cast and never reaches here.)
+		return nil, sqlparse.Unsupported("CONVERT(x USING charset)")
+	case "trim":
+		// TRIM(x) is an ordinary call, but TRIM([spec] [remstr] FROM x) renders as
+		// TRIM(x, remstr), which MySQL rejects; let those forms fall back to raw.
+		if len(fc.Args) != 1 {
+			return nil, sqlparse.Unsupported("TRIM with a trim specification")
+		}
+	}
 	args, err := convertExprAnys(fc.Args)
 	if err != nil {
 		return nil, err
 	}
 	return sql.Func(strings.ToUpper(fc.FnName.L), args...), nil
+}
+
+// convertCharFunc rebuilds CHAR(v1, v2, ... [USING charset]) from TiDB's internal
+// char_func form, whose trailing argument carries the charset (NULL when none).
+// The value and charset arguments are rendered via the parser's own restore so
+// the spelling matches the source; a raw passthrough covers any restore failure.
+func convertCharFunc(fc *ast.FuncCallExpr) (sql.Expression, error) {
+	args := fc.Args
+	if len(args) < 1 {
+		return nil, sqlparse.Unsupported("CHAR() without arguments")
+	}
+	values, charset := args[:len(args)-1], args[len(args)-1]
+	parts := make([]string, 0, len(values))
+	for _, v := range values {
+		text, err := restoreExpr(v)
+		if err != nil {
+			return nil, err
+		}
+		parts = append(parts, text)
+	}
+	inner := strings.Join(parts, ", ")
+	// A non-NULL trailing argument is the result charset: CHAR(... USING name).
+	if ce, ok := charset.(ast.ValueExpr); !ok || ce.GetValue() != nil {
+		text, err := restoreExpr(charset)
+		if err != nil {
+			return nil, err
+		}
+		inner += " USING " + strings.Trim(text, "'")
+	}
+	return sql.Raw("CHAR(" + inner + ")"), nil
+}
+
+// restoreExpr renders a sub-expression to SQL text via the TiDB restore, so a
+// node sqlkit rebuilds by hand keeps the source spelling of its operands.
+func restoreExpr(node ast.ExprNode) (string, error) {
+	var sb strings.Builder
+	if err := node.Restore(format.NewRestoreCtx(format.DefaultRestoreFlags, &sb)); err != nil {
+		return "", sqlparse.Unsupportedf("restore %T: %v", node, err)
+	}
+	return sb.String(), nil
+}
+
+// isPlainIdent reports whether s is a non-empty identifier of ASCII letters,
+// digits, underscore, or dollar — the shape a bare (unquoted) function name must
+// have to render as valid SQL. Every MySQL built-in qualifies.
+func isPlainIdent(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '$':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// convertExtract rebuilds EXTRACT(unit FROM operand) from its call form
+// extract(TimeUnit, operand). It returns a nil expression (not an error) for any
+// shape it does not recognize, so the caller falls back to a generic call.
+func convertExtract(fc *ast.FuncCallExpr) (sql.Expression, error) {
+	if len(fc.Args) != 2 {
+		return nil, nil
+	}
+	unit, ok := fc.Args[0].(*ast.TimeUnitExpr)
+	if !ok {
+		return nil, nil
+	}
+	operand, err := convertExpr(fc.Args[1])
+	if err != nil {
+		return nil, err
+	}
+	return sql.Extract(unit.Unit.String(), operand), nil
+}
+
+// convertPosition rebuilds POSITION(substring IN str) from its call form
+// position(substring, str). TiDB keeps the source operand order, unlike
+// PostgreSQL.
+func convertPosition(fc *ast.FuncCallExpr) (sql.Expression, error) {
+	if len(fc.Args) != 2 {
+		return nil, nil
+	}
+	substring, err := convertExpr(fc.Args[0])
+	if err != nil {
+		return nil, err
+	}
+	str, err := convertExpr(fc.Args[1])
+	if err != nil {
+		return nil, err
+	}
+	return sql.Position(substring, str), nil
 }
 
 // convertAggregate converts an aggregate function. COUNT maps to sqlkit's

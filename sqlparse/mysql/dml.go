@@ -23,6 +23,11 @@ func singleTable(refs *ast.TableRefsClause, tp tablePos) (sql.Table, error) {
 	if !ok {
 		return sql.Table{}, sqlparse.Unsupportedf("table source %T", ts.Source)
 	}
+	// TiDB tolerates an empty backtick-quoted name (UPDATE ``), which the compiler
+	// cannot render; fall back to raw rather than build a table with no name.
+	if tn.Name.O == "" {
+		return sql.Table{}, sqlparse.Unsupported("table with an empty name")
+	}
 	return tableAt(tn, tp), nil
 }
 
@@ -49,7 +54,17 @@ func convertInsert(s *ast.InsertStmt, tp tablePos) (sql.Query, error) {
 
 	switch {
 	case len(s.Lists) > 0:
+		// sqlkit's compiler requires an explicit column list for a VALUES insert,
+		// and a row whose arity differs from it cannot be compiled — but TiDB accepts
+		// both (it defers the checks). Fall back to raw rather than build an INSERT
+		// the compiler must reject.
+		if len(s.Columns) == 0 {
+			return nil, sqlparse.Unsupported("INSERT without a column list")
+		}
 		for _, row := range s.Lists {
+			if len(row) != len(s.Columns) {
+				return nil, sqlparse.Unsupportedf("INSERT row has %d values for %d columns", len(row), len(s.Columns))
+			}
 			cells, err := convertInsertRow(row)
 			if err != nil {
 				return nil, err
@@ -280,7 +295,11 @@ func convertAssignments(list []*ast.Assignment, duplicate bool) ([]sql.Assignmen
 		if err != nil {
 			return nil, err
 		}
-		assignments = append(assignments, sql.Set(columnRefName(a.Column), value))
+		name, err := columnRefName(a.Column)
+		if err != nil {
+			return nil, err
+		}
+		assignments = append(assignments, sql.Set(name, value))
 	}
 	return assignments, nil
 }

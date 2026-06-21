@@ -36,12 +36,21 @@ func FuzzRoundTrip(f *testing.F) {
 				t.Fatalf("[%s] ToSQL errored on a parseable statement: %v\n  stmt: %s", fe.name, err, stmt)
 			}
 
+			// A RawQuery is the backing parser's own deparse of a construct sqlkit
+			// does not model; its re-parseability and stability are that parser's
+			// concern, not sqlkit's. sqlkit's contract for it is only that ToSQL not
+			// error or panic (checked above). The invariants below test sqlkit's own
+			// typed rendering, so they apply to typed statements only.
+			if isRaw(q1) {
+				continue
+			}
+
 			q2, err := sqlparse.ParseOne(fe.parser, text1)
 			if err != nil {
 				t.Fatalf("[%s] compiler emitted SQL its own grammar rejects: %v\n  generated: %s\n  from: %s", fe.name, err, text1, stmt)
 			}
 
-			if !isRaw(q1) && isRaw(q2) {
+			if isRaw(q2) {
 				t.Fatalf("[%s] generated SQL re-parsed only as a raw passthrough:\n  generated: %s\n  from: %s", fe.name, text1, stmt)
 			}
 

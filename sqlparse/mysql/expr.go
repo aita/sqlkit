@@ -38,7 +38,11 @@ func convertExprNode(node ast.ExprNode) (sql.Expression, error) {
 	case *ast.ColumnNameExpr:
 		// The column's identifier shares the reference's position, so a qualified or
 		// bare column name reports where it was written, not just the node.
-		c := sql.Col(columnRefName(e.Name))
+		name, err := columnRefName(e.Name)
+		if err != nil {
+			return nil, err
+		}
+		c := sql.Col(name)
 		c.Name = identAt(c.Name.Name, e)
 		return c, nil
 	case ast.ParamMarkerExpr:
@@ -102,17 +106,34 @@ func convertExprNode(node ast.ExprNode) (sql.Expression, error) {
 }
 
 // columnRefName joins a ColumnName's qualified parts (schema.table.column) into
-// the dotted name sqlkit's Col understands.
-func columnRefName(name *ast.ColumnName) string {
+// the dotted name sqlkit's Col understands. sqlkit re-splits that name on '.' to
+// recover the qualifier, so a single quoted identifier that itself contains a dot
+// (`a.b`) cannot be told apart from the qualified a.b and would render wrongly; an
+// individual part carrying a dot is reported unsupported so it round-trips as raw.
+func columnRefName(name *ast.ColumnName) (string, error) {
 	parts := make([]string, 0, 3)
-	if name.Schema.O != "" {
-		parts = append(parts, name.Schema.O)
+	for _, p := range []string{name.Schema.O, name.Table.O, name.Name.O} {
+		if p == "" {
+			continue
+		}
+		if strings.Contains(p, ".") {
+			return "", sqlparse.Unsupportedf("column identifier with a dot: %q", p)
+		}
+		parts = append(parts, p)
 	}
-	if name.Table.O != "" {
-		parts = append(parts, name.Table.O)
+	return strings.Join(parts, "."), nil
+}
+
+// decimalDigits counts the digits in a numeric literal's text, ignoring a sign,
+// decimal point, and exponent marker — the precision MySQL's DECIMAL bounds at 65.
+func decimalDigits(text string) int {
+	n := 0
+	for _, r := range text {
+		if r >= '0' && r <= '9' {
+			n++
+		}
 	}
-	parts = append(parts, name.Name.O)
-	return strings.Join(parts, ".")
+	return n
 }
 
 // convertValue maps a literal value. MySQL has no boolean literal type: TRUE and
@@ -137,7 +158,20 @@ func convertValue(v ast.ValueExpr) (sql.Expression, error) {
 		// fmt.Stringer; keep its precise text (scale and all) in a Decimal rather
 		// than rounding through a float.
 		if s, ok := val.(fmt.Stringer); ok {
-			return sql.Val(Decimal(s.String())), nil
+			text := s.String()
+			// An empty hex/bit literal (x'' / b'') stringifies to "", which would
+			// vanish from the output (and a Decimal never does). Render it as the
+			// explicit empty hex literal so it stays valid SQL. A decimal value is
+			// always non-empty, so this only catches the empty binary literal.
+			if text == "" {
+				return sql.Raw("x''"), nil
+			}
+			// A decimal beyond MySQL's 65-digit precision is out of range, and the
+			// value driver can panic re-parsing such a literal; fall back to raw.
+			if decimalDigits(text) > 65 {
+				return nil, sqlparse.Unsupported("decimal literal out of range")
+			}
+			return sql.Val(Decimal(text)), nil
 		}
 		return nil, sqlparse.Unsupportedf("literal value %T", val)
 	}

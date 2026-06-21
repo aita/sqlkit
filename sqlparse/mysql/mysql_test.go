@@ -150,3 +150,56 @@ func TestParsedQueryExposesStmt(t *testing.T) {
 		t.Fatalf("Limit = %d (has=%v), want 10", stmt.Limit, stmt.HasLimit)
 	}
 }
+
+// A function name that is not a plain ASCII identifier (here a valid non-ASCII
+// name) is not rejected — the TiDB parser accepted it, so it round-trips as a raw
+// passthrough rather than a hard error.
+func TestNonIdentifierFunctionNameFallsBackToRaw(t *testing.T) {
+	q, err := mysql.ParseOne("SELECT café()")
+	if err != nil {
+		t.Fatalf("ParseOne error = %v, want a raw passthrough", err)
+	}
+	if _, ok := q.(sql.RawQuery); !ok {
+		t.Fatalf("ParseOne returned %T, want a RawQuery", q)
+	}
+}
+
+// Invalid UTF-8 is rejected as malformed input (not a SQL construct): the TiDB
+// lexer maps the bad byte to U+FFFD/"?", losing it, so no round-trip is stable.
+func TestParseRejectsInvalidUTF8(t *testing.T) {
+	if _, err := mysql.ParseOne("SELECT 0 AS `\xc6`"); err == nil {
+		t.Fatal("ParseOne(invalid UTF-8) error = nil, want a parse error")
+	}
+}
+
+// A raw SET passthrough must be stable under re-parsing. TiDB's restore is not
+// idempotent for a SET system variable (it keeps the source case once, then
+// lower-cases the case-insensitive name), so the raw deparse settles it.
+func TestSetSystemVariableRawIsFixpoint(t *testing.T) {
+	q, err := mysql.ParseOne("SET A=0")
+	if err != nil {
+		t.Fatalf("ParseOne error = %v", err)
+	}
+	first, _, err := q.ToSQL(sql.MySQLDialect{})
+	if err != nil {
+		t.Fatalf("ToSQL error = %v", err)
+	}
+	q2, err := mysql.ParseOne(first)
+	if err != nil {
+		t.Fatalf("re-parse error = %v", err)
+	}
+	second, _, _ := q2.ToSQL(sql.MySQLDialect{})
+	if first != second {
+		t.Fatalf("raw SET is not a fixpoint:\n  first:  %s\n  second: %s", first, second)
+	}
+}
+
+// The reference value driver panics on inputs that exercise an unimplemented
+// MyDecimal branch (e.g. an over-long numeric literal); Parse must recover and
+// return an error rather than let the panic escape.
+func TestParseRecoversFromDriverPanic(t *testing.T) {
+	long := "0000000000000000000000000000000000000000000000000000000000000018700000000000000000"
+	if _, err := mysql.ParseOne(long); err == nil {
+		t.Fatal("ParseOne(over-long numeric) error = nil, want a recovered parser error")
+	}
+}

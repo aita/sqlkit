@@ -9,7 +9,33 @@ import (
 
 	"github.com/aita/sqlkit"
 	"github.com/aita/sqlkit/internal/testutil"
+	"github.com/aita/sqlkit/sql"
 )
+
+// TestUpdateWithCTE covers WithCTE: a leading WITH clause prepended to the UPDATE.
+func TestUpdateWithCTE(t *testing.T) {
+	active := sqlkit.Select(Posts.UserID).From(Posts).CTE("active")
+	assertToSQL(t,
+		sqlkit.Update(Users).Set(Users.Email.Set("x@example.com")).WithCTE(active).Where(Users.ID.Eq(1)),
+		`WITH "active" AS (SELECT "public"."posts"."user_id" FROM "public"."posts") UPDATE "public"."users" SET "email" = $1 WHERE ("public"."users"."id" = $2)`,
+		[]any{"x@example.com", int64(1)})
+}
+
+// TestUpdateLeftJoin covers LeftJoin, the MySQL inline LEFT JOIN form of a
+// multi-table UPDATE (PostgreSQL has no inline LEFT JOIN for UPDATE).
+func TestUpdateLeftJoin(t *testing.T) {
+	query := sqlkit.Update(Users).Set(Users.Email.Set("x")).
+		LeftJoin(Posts, Users.ID.EqExpr(Posts.UserID)).
+		Where(Posts.ID.IsNull())
+	sqlText, _, err := query.ToSQL(sql.MySQLDialect{})
+	if err != nil {
+		t.Fatalf("ToSQL() error = %v", err)
+	}
+	want := "UPDATE `public`.`users` LEFT JOIN `public`.`posts` ON (`public`.`users`.`id` = `public`.`posts`.`user_id`) SET `email` = ? WHERE (`public`.`posts`.`id` IS NULL)"
+	if sqlText != want {
+		t.Fatalf("ToSQL() = %q,\nwant %q", sqlText, want)
+	}
+}
 
 func TestTypedUpdateFromAndDeleteUsing(t *testing.T) {
 	assertToSQL(t,

@@ -91,3 +91,33 @@ func TestSelectsStar(t *testing.T) {
 		})
 	}
 }
+
+func TestHasTopLevelJoinWriteStatements(t *testing.T) {
+	users := sql.Table{Name: sql.NewIdent("users")}
+	orders := sql.Table{Name: sql.NewIdent("orders")}
+
+	upd := sql.Update(users).Set(sql.Set("name", sql.Expr("x"))).
+		From(sql.SourceAlias(orders, "o")).Join(sql.SourceAlias(orders, "o2"), sql.Eq(sql.Col("o.id"), sql.Col("o2.id")))
+	if !analyze.HasTopLevelJoin(upd) {
+		t.Error("HasTopLevelJoin(update with join) = false, want true")
+	}
+
+	del := sql.DeleteFrom(users).Join(sql.SourceAlias(orders, "o"), sql.Eq(sql.Col("users.id"), sql.Col("o.user_id")))
+	if !analyze.HasTopLevelJoin(del) {
+		t.Error("HasTopLevelJoin(delete with join) = false, want true")
+	}
+
+	// INSERT has no top-level JOIN.
+	if analyze.HasTopLevelJoin(sql.InsertInto(users).Columns("name").Values("a")) {
+		t.Error("HasTopLevelJoin(insert) = true, want false")
+	}
+}
+
+func TestSelectsStarAliased(t *testing.T) {
+	users := sql.Table{Name: sql.NewIdent("users")}
+	// "SELECT users.* AS everything": isStar must look through the AS alias.
+	q := sql.Select(sql.As(sql.Star(), "everything"), sql.Col("id")).From(users)
+	if !analyze.SelectsStar(q) {
+		t.Error("SelectsStar(aliased star) = false, want true")
+	}
+}

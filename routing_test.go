@@ -464,6 +464,43 @@ func TestStatementAccess(t *testing.T) {
 	}
 }
 
+// TestStatementKindString covers StatementKind.String over every kind plus an
+// out-of-range value, which renders the diagnostic label.
+func TestStatementKindString(t *testing.T) {
+	cases := map[sqlkit.StatementKind]string{
+		sqlkit.KindSelect:        "select",
+		sqlkit.KindInsert:        "insert",
+		sqlkit.KindUpdate:        "update",
+		sqlkit.KindDelete:        "delete",
+		sqlkit.KindMerge:         "merge",
+		sqlkit.KindDDL:           "ddl",
+		sqlkit.KindRawRead:       "raw-read",
+		sqlkit.KindRawUnknown:    "raw-unknown",
+		sqlkit.StatementKind(99): "unknown",
+	}
+	for kind, want := range cases {
+		if got := kind.String(); got != want {
+			t.Fatalf("StatementKind(%d).String() = %q, want %q", kind, got, want)
+		}
+	}
+}
+
+// TestAccessString covers Access.String over each access plus an out-of-range
+// value.
+func TestAccessString(t *testing.T) {
+	cases := map[sqlkit.Access]string{
+		sqlkit.AccessRead:    "read",
+		sqlkit.AccessWrite:   "write",
+		sqlkit.AccessUnknown: "unknown",
+		sqlkit.Access(99):    "invalid",
+	}
+	for access, want := range cases {
+		if got := access.String(); got != want {
+			t.Fatalf("Access(%d).String() = %q, want %q", access, got, want)
+		}
+	}
+}
+
 func TestStatementTables(t *testing.T) {
 	cases := []struct {
 		name string
@@ -473,6 +510,8 @@ func TestStatementTables(t *testing.T) {
 		{"select", sqlkit.Statement{Query: sqlkit.Select().From(Users)}, "public.users"},
 		{"insert", sqlkit.Statement{Query: sqlkit.Insert(Posts)}, "public.posts"},
 		{"update", sqlkit.Statement{Query: sqlkit.Update(Users)}, "public.users"},
+		{"delete", sqlkit.Statement{Query: sqlkit.Delete(Posts)}, "public.posts"},
+		{"merge", sqlkit.Statement{Query: sqlkit.Merge(Users)}, "public.users"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -481,5 +520,11 @@ func TestStatementTables(t *testing.T) {
 				t.Fatalf("Tables() = %v, want [%s]", tables, tc.want)
 			}
 		})
+	}
+
+	// A raw-string statement exposes no AST table, so Tables is the empty
+	// "no opinion" result.
+	if tables := (sqlkit.Statement{Op: sqlkit.OpQuery, SQL: "SELECT 1"}).Tables(); tables != nil {
+		t.Fatalf("raw Tables() = %v, want nil", tables)
 	}
 }

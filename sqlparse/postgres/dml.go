@@ -44,10 +44,20 @@ func convertInsert(s *pg.InsertStmt) (sql.Query, error) {
 			return nil, sqlparse.Unsupportedf("insert source %T", src.GetNode())
 		}
 		if values := inner.GetValuesLists(); len(values) > 0 {
+			// sqlkit's compiler requires an explicit column list for a VALUES insert,
+			// and a row whose arity differs from it cannot be compiled. Fall back to
+			// raw rather than build an INSERT the compiler must reject.
+			ncols := len(s.GetCols())
+			if ncols == 0 {
+				return nil, sqlparse.Unsupported("INSERT without a column list")
+			}
 			for _, rowNode := range values {
 				row := rowNode.GetList()
 				if row == nil {
 					return nil, sqlparse.Unsupportedf("VALUES row %T", rowNode.GetNode())
+				}
+				if len(row.GetItems()) != ncols {
+					return nil, sqlparse.Unsupportedf("INSERT row has %d values for %d columns", len(row.GetItems()), ncols)
 				}
 				cells := make([]any, 0, len(row.GetItems()))
 				for _, item := range row.GetItems() {
@@ -86,14 +96,17 @@ func convertInsert(s *pg.InsertStmt) (sql.Query, error) {
 }
 
 func applyOnConflict(q sql.InsertBuilder, oc *pg.OnConflictClause) (sql.InsertBuilder, error) {
+	hasTarget := false
 	if infer := oc.GetInfer(); infer != nil {
 		if name := infer.GetConname(); name != "" {
 			q = q.OnConflictConstraint(name)
+			hasTarget = true
 		} else if elems := infer.GetIndexElems(); len(elems) > 0 {
 			var err error
 			if q, err = applyInferTarget(q, elems); err != nil {
 				return q, err
 			}
+			hasTarget = true
 		}
 	}
 
@@ -101,6 +114,12 @@ func applyOnConflict(q sql.InsertBuilder, oc *pg.OnConflictClause) (sql.InsertBu
 	case pg.OnConflictAction_ONCONFLICT_NOTHING:
 		return q.DoNothing(), nil
 	case pg.OnConflictAction_ONCONFLICT_UPDATE:
+		// PostgreSQL requires a conflict target for DO UPDATE (only DO NOTHING may
+		// omit it); the raw parser tolerates its absence, but the result cannot be
+		// compiled, so fall back to raw.
+		if !hasTarget {
+			return q, sqlparse.Unsupported("ON CONFLICT DO UPDATE without a conflict target")
+		}
 		assignments, err := convertAssignments(oc.GetTargetList(), true)
 		if err != nil {
 			return q, err

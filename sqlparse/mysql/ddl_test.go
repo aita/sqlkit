@@ -136,6 +136,173 @@ func TestCreateDatabase(t *testing.T) {
 		"CREATE SCHEMA IF NOT EXISTS `shop`;")
 }
 
+func TestDropDatabase(t *testing.T) {
+	assertRoundTrip(t,
+		"DROP DATABASE IF EXISTS shop",
+		sql.DropSchema("shop").IfExists(),
+		"DROP SCHEMA IF EXISTS `shop`;")
+}
+
+// An inline column-level REFERENCES clause records a single-column foreign key on
+// the column itself, with its referential action.
+func TestCreateTableInlineColumnReference(t *testing.T) {
+	assertRoundTrip(t,
+		"CREATE TABLE posts (id INT, uid INT REFERENCES users (id) ON DELETE SET NULL)",
+		sql.CreateTable(sql.Table{Name: sql.NewIdent("posts")}).
+			Column(sql.ColumnDef{Name: sql.NewIdent("id"), Type: sql.RawType("int(11)")}).
+			Column(sql.ColumnDef{Name: sql.NewIdent("uid"), Type: sql.RawType("int(11)"), References: &sql.ColumnReference{
+				Table:    sql.NewIdent("users"),
+				Column:   sql.NewIdent("id"),
+				OnDelete: "SET NULL",
+			}}),
+		"CREATE TABLE `posts` (\n"+
+			"    `id` int(11),\n"+
+			"    `uid` int(11) REFERENCES `users` (`id`) ON DELETE SET NULL\n"+
+			");")
+}
+
+// A CHECK constraint with no explicit name renders its predicate verbatim (DDL
+// constants are not bound), exercising the static-expression path.
+func TestCreateTableCheckConstraint(t *testing.T) {
+	assertRoundTrip(t,
+		"CREATE TABLE t (age INT, CHECK (age >= 0))",
+		sql.CreateTable(sql.Table{Name: sql.NewIdent("t")}).
+			Column(sql.ColumnDef{Name: sql.NewIdent("age"), Type: sql.RawType("int(11)")}).
+			Check("", sql.BinaryExpression{Left: sql.Col("age"), Operator: ">=", Right: sql.Raw("0")}),
+		"CREATE TABLE `t` (\n"+
+			"    `age` int(11),\n"+
+			"    CONSTRAINT `` CHECK ((`age` >= 0))\n"+
+			");")
+}
+
+// A column COMMENT is a string literal read verbatim, and a string DEFAULT is
+// escaped and rendered as a static SQL constant rather than a bind parameter.
+func TestCreateTableColumnCommentAndStringDefault(t *testing.T) {
+	assertRoundTrip(t,
+		"CREATE TABLE t (state VARCHAR(10) DEFAULT 'it''s on' COMMENT 'the state')",
+		sql.CreateTable(sql.Table{Name: sql.NewIdent("t")}).
+			Column(sql.ColumnDef{Name: sql.NewIdent("state"), Type: sql.RawType("varchar(10)"),
+				Default: sql.Raw("'it''s on'"), Comment: "the state"}),
+		"CREATE TABLE `t` (\n"+
+			"    `state` varchar(10) DEFAULT 'it''s on' COMMENT 'the state'\n"+
+			");")
+}
+
+// A CHECK predicate over a function call and column references exercises the DDL
+// static-expression path (FuncCall, ColumnName, nested BinaryOperation), where
+// constants render verbatim rather than as bind parameters.
+func TestCreateTableCheckWithFunction(t *testing.T) {
+	assertRoundTrip(t,
+		"CREATE TABLE t (a INT, b INT, CONSTRAINT ck CHECK (a < ABS(b)))",
+		sql.CreateTable(sql.Table{Name: sql.NewIdent("t")}).
+			Column(sql.ColumnDef{Name: sql.NewIdent("a"), Type: sql.RawType("int(11)")}).
+			Column(sql.ColumnDef{Name: sql.NewIdent("b"), Type: sql.RawType("int(11)")}).
+			Check("ck", sql.BinaryExpression{
+				Left:     sql.Col("a"),
+				Operator: "<",
+				Right:    sql.Func("ABS", sql.Col("b")),
+			}),
+		"CREATE TABLE `t` (\n"+
+			"    `a` int(11),\n"+
+			"    `b` int(11),\n"+
+			"    CONSTRAINT `ck` CHECK ((`a` < ABS(`b`)))\n"+
+			");")
+}
+
+// Numeric column DEFAULTs render as static SQL constants: an integer, a float, and
+// an unsigned value too large for int64 keep their exact text.
+func TestCreateTableNumericDefaults(t *testing.T) {
+	assertRoundTrip(t,
+		"CREATE TABLE t (a INT DEFAULT 0, b DOUBLE DEFAULT 1.5, c BIGINT UNSIGNED DEFAULT 18446744073709551615)",
+		sql.CreateTable(sql.Table{Name: sql.NewIdent("t")}).
+			Column(sql.ColumnDef{Name: sql.NewIdent("a"), Type: sql.RawType("int(11)"), Default: sql.Raw("0")}).
+			Column(sql.ColumnDef{Name: sql.NewIdent("b"), Type: sql.RawType("double"), Default: sql.Raw("1.5")}).
+			Column(sql.ColumnDef{Name: sql.NewIdent("c"), Type: sql.RawType("bigint(20) unsigned"), Default: sql.Raw("18446744073709551615")}),
+		"CREATE TABLE `t` (\n"+
+			"    `a` int(11) DEFAULT 0,\n"+
+			"    `b` double DEFAULT 1.5,\n"+
+			"    `c` bigint(20) unsigned DEFAULT 18446744073709551615\n"+
+			");")
+}
+
+func TestAlterTableAddPrimaryKey(t *testing.T) {
+	assertRoundTrip(t,
+		"ALTER TABLE t ADD PRIMARY KEY (id)",
+		sql.AlterTable(sql.Table{Name: sql.NewIdent("t")}).AddPrimaryKey("id"),
+		"ALTER TABLE `t` ADD PRIMARY KEY (`id`);")
+}
+
+func TestAlterTableAddUnique(t *testing.T) {
+	assertRoundTrip(t,
+		"ALTER TABLE t ADD CONSTRAINT uq UNIQUE (a, b)",
+		sql.AlterTable(sql.Table{Name: sql.NewIdent("t")}).AddUnique("uq", "a", "b"),
+		"ALTER TABLE `t` ADD CONSTRAINT `uq` UNIQUE (`a`, `b`);")
+}
+
+func TestAlterTableAddForeignKey(t *testing.T) {
+	assertRoundTrip(t,
+		"ALTER TABLE posts ADD CONSTRAINT fk FOREIGN KEY (uid) REFERENCES users (id)",
+		sql.AlterTable(sql.Table{Name: sql.NewIdent("posts")}).AddForeignKey(sql.ForeignKeyConstraint{
+			Name: sql.NewIdent("fk"), Columns: sql.Idents("uid"),
+			RefTable: sql.NewIdent("users"), RefColumns: sql.Idents("id"),
+		}),
+		"ALTER TABLE `posts` ADD CONSTRAINT `fk` FOREIGN KEY (`uid`) REFERENCES `users` (`id`);")
+}
+
+func TestAlterTableAddCheck(t *testing.T) {
+	assertRoundTrip(t,
+		"ALTER TABLE t ADD CONSTRAINT ck CHECK (age > 0)",
+		sql.AlterTable(sql.Table{Name: sql.NewIdent("t")}).
+			AddCheck("ck", sql.BinaryExpression{Left: sql.Col("age"), Operator: ">", Right: sql.Raw("0")}),
+		"ALTER TABLE `t` ADD CONSTRAINT `ck` CHECK ((`age` > 0));")
+}
+
+func TestAlterTableDropPrimaryKey(t *testing.T) {
+	assertRoundTrip(t,
+		"ALTER TABLE t DROP PRIMARY KEY",
+		sql.AlterTable(sql.Table{Name: sql.NewIdent("t")}).DropPrimaryKey(),
+		"ALTER TABLE `t` DROP PRIMARY KEY;")
+}
+
+func TestAlterTableRenameTo(t *testing.T) {
+	assertRoundTrip(t,
+		"ALTER TABLE old RENAME TO new",
+		sql.AlterTable(sql.Table{Name: sql.NewIdent("old")}).RenameTo("new"),
+		"ALTER TABLE `old` RENAME TO `new`;")
+}
+
+// SPATIAL/FULLTEXT indexes have no typed home and round-trip as a verbatim
+// RawQuery, exercising the non-plain index-key-type path.
+func TestCreateFulltextIndexFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "CREATE FULLTEXT INDEX ft ON docs (body)")
+}
+
+// DROP INDEX IF EXISTS has no typed home (sqlkit's DropIndex carries no IF EXISTS),
+// so it round-trips raw.
+func TestDropIndexIfExistsFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "DROP INDEX IF EXISTS idx ON t")
+}
+
+// A multi-pair RENAME TABLE and a cross-schema rename both exceed sqlkit's single
+// rename and round-trip raw.
+func TestRenameTableUnmodeledFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "RENAME TABLE a TO b, c TO d")
+	assertRaw(t, "RENAME TABLE s1.a TO s2.b")
+}
+
+// CREATE TABLE ... LIKE, AS SELECT, and a multi-table DROP VIEW have no typed home.
+func TestCreateTableLikeAndSelectFallBackToRaw(t *testing.T) {
+	assertRaw(t, "CREATE TABLE copy LIKE original")
+	assertRaw(t, "CREATE TABLE copy AS SELECT id FROM original")
+	assertRaw(t, "DROP VIEW a, b")
+}
+
+// An ALTER TABLE action sqlkit does not model (here a combined drop plus add)
+// round-trips raw rather than erroring.
+func TestAlterTableUnmodeledFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "ALTER TABLE t DROP INDEX i, ADD COLUMN c INT")
+}
+
 func TestCreateTableWithIndex(t *testing.T) {
 	assertRoundTrip(t,
 		"CREATE TABLE t (name VARCHAR(20) COLLATE utf8mb4_bin, KEY idx_name (name))",

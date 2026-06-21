@@ -1,0 +1,2 @@
+go test fuzz v1
+string("INSERT INTO A(A,A)VALUES(0,'')ON CONFLICT DO UPDATE SET A=0")

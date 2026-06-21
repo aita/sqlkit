@@ -185,14 +185,18 @@ func (c *Compiler) CompileCompound(q CompoundStmt) (string, []any, error) {
 // naturally without parentheses. Mixing operators needs explicit parentheses to
 // preserve left-to-right grouping, since INTERSECT binds tighter than
 // UNION/EXCEPT (so a UNION b INTERSECT c would parse as a UNION (b INTERSECT c)).
-// Plain SELECTs are always wrapped to keep their own clauses scoped.
+// A nested compound that carries its own ORDER BY / LIMIT / OFFSET is also always
+// wrapped: those clauses bind to that nested result alone, so dropping the
+// parentheses would re-scope them to the whole chain (and emit invalid SQL with an
+// ORDER BY mid-chain). Plain SELECTs are always wrapped to keep their own clauses
+// scoped.
 func (c *Compiler) compileOperand(query Query, parentOperator string) (string, []any, error) {
 	sql, args, err := c.compileSubquery(query)
 	if err != nil {
 		return "", nil, err
 	}
 	if sub, ok := astOf(query).(CompoundStmt); ok {
-		if sub.Operator == parentOperator {
+		if sub.Operator == parentOperator && len(sub.OrderBy) == 0 && !sub.HasLimit && !sub.HasOffset {
 			return sql, args, nil
 		}
 		return "(" + sql + ")", args, nil

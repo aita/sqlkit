@@ -2,6 +2,8 @@ package sqlkit_test
 
 import (
 	"context"
+	stdsql "database/sql"
+	"database/sql/driver"
 	"testing"
 
 	"github.com/aita/sqlkit"
@@ -9,6 +11,36 @@ import (
 	"github.com/aita/sqlkit/meta"
 	"github.com/aita/sqlkit/sql"
 )
+
+// nopDriver is a registered driver whose Open never connects, just enough for
+// Open's lazy *sql.DB handle (database/sql does not dial until first use).
+type nopDriver struct{}
+
+func (nopDriver) Open(string) (driver.Conn, error) { return nil, driver.ErrBadConn }
+
+func init() { stdsql.Register("sqlkit-nop", nopDriver{}) }
+
+// TestOpenUnknownDriverErrors covers Open's error path: an unregistered driver
+// name fails before any handle is wrapped.
+func TestOpenUnknownDriverErrors(t *testing.T) {
+	if _, err := sqlkit.Open("sqlkit-no-such-driver", "dsn"); err == nil {
+		t.Fatal("Open() with an unknown driver succeeded, want error")
+	}
+}
+
+// TestOpenInfersDialectFromDriver covers Open's success path: it wraps the
+// handle and infers the dialect from the driver name (mysql here).
+func TestOpenInfersDialectFromDriver(t *testing.T) {
+	sqlkit.RegisterDriverDialect("sqlkit-nop", sqlkit.MySQLDialect{})
+	db, err := sqlkit.Open("sqlkit-nop", "dsn")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer func() { _ = db.SQL().Close() }()
+	if _, ok := db.Dialect().(sqlkit.MySQLDialect); !ok {
+		t.Fatalf("Dialect() = %T, want MySQLDialect inferred from the driver", db.Dialect())
+	}
+}
 
 // usersCatalog builds a representative metadata table that the WithMetadata
 // tests compile into an identity map.

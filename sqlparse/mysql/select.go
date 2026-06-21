@@ -1,6 +1,7 @@
 package mysql
 
 import (
+	"math"
 	"strconv"
 
 	"github.com/aita/sqlkit/sql"
@@ -351,10 +352,19 @@ func convertFieldList(list *ast.FieldList) ([]sql.Selection, error) {
 // SELECT-list / aggregate target (a Selection).
 func convertSelectionExpr(node ast.ExprNode) (sql.Selection, error) {
 	if col, ok := node.(*ast.ColumnNameExpr); ok {
-		c := sql.Col(columnRefName(col.Name))
+		name, err := columnRefName(col.Name)
+		if err != nil {
+			return nil, err
+		}
+		c := sql.Col(name)
 		c.NodePos = offsetOf(col)
 		c.Name = identAt(c.Name.Name, col)
 		return c, nil
+	}
+	// A placeholder (?) is also an ast.ValueExpr, but its value is unbound: pass
+	// the marker through verbatim rather than render its nil value as NULL.
+	if _, ok := node.(ast.ParamMarkerExpr); ok {
+		return sql.Raw("?"), nil
 	}
 	// A bare literal (SELECT 1, SELECT 'x') is not a sqlkit Selection as a bound
 	// value, so render it as a raw constant — faithful and common in
@@ -389,7 +399,20 @@ func rawLiteral(v ast.ValueExpr) (sql.Selection, error) {
 		return sql.Raw("'" + escapeStringLiteral(x) + "'"), nil
 	default:
 		if s, ok := v.GetValue().(interface{ String() string }); ok {
-			return sql.Raw(s.String()), nil
+			text := s.String()
+			// An empty hex/bit literal (x'' / b'') stringifies to "", which would
+			// vanish from the select list; render it as the explicit empty hex
+			// literal. A decimal value is always non-empty, so this only catches the
+			// empty binary literal.
+			if text == "" {
+				return sql.Raw("x''"), nil
+			}
+			// A decimal beyond MySQL's 65-digit precision is out of range, and the
+			// value driver can panic re-parsing such a literal; fall back to raw.
+			if decimalDigits(text) > 65 {
+				return nil, sqlparse.Unsupported("decimal literal out of range")
+			}
+			return sql.Raw(text), nil
 		}
 		return nil, sqlparse.Unsupportedf("select-list literal %T", v.GetValue())
 	}
@@ -477,6 +500,11 @@ func intLiteral(node ast.ExprNode) (int, error) {
 	case int64:
 		return int(n), nil
 	case uint64:
+		// A value past the int range overflows to a negative LIMIT/OFFSET (invalid
+		// SQL); it cannot be modeled, so fall back to raw.
+		if n > math.MaxInt {
+			return 0, sqlparse.Unsupported("LIMIT/OFFSET out of range")
+		}
 		return int(n), nil
 	default:
 		return 0, sqlparse.Unsupported("non-integer LIMIT/OFFSET")

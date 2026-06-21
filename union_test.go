@@ -204,6 +204,22 @@ func TestUnionAllAppendsThirdOperand(t *testing.T) {
 		nil)
 }
 
+// TestIntersectAllExceptAllHelpers covers the package-level IntersectAll and
+// ExceptAll helpers (the multiset variants), including folding a third operand
+// onto the chain, which exercises UnionQuery.IntersectAll/ExceptAll too.
+func TestIntersectAllExceptAllHelpers(t *testing.T) {
+	a := sqlkit.Select(Users.ID).From(Users)
+	b := sqlkit.Select(Posts.ID).From(Posts)
+	c := sqlkit.Select(Posts.UserID).From(Posts)
+
+	assertToSQL(t, sqlkit.IntersectAll(a, b, c),
+		`(SELECT "public"."users"."id" FROM "public"."users") INTERSECT ALL (SELECT "public"."posts"."id" FROM "public"."posts") INTERSECT ALL (SELECT "public"."posts"."user_id" FROM "public"."posts")`,
+		nil)
+	assertToSQL(t, sqlkit.ExceptAll(a, b, c),
+		`(SELECT "public"."users"."id" FROM "public"."users") EXCEPT ALL (SELECT "public"."posts"."id" FROM "public"."posts") EXCEPT ALL (SELECT "public"."posts"."user_id" FROM "public"."posts")`,
+		nil)
+}
+
 // TestUnionAsSubquerySource covers UnionQuery.SQLSource: a set operation used as
 // a FROM source (derived table).
 func TestUnionAsSubquerySource(t *testing.T) {

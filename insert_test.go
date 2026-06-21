@@ -211,6 +211,30 @@ func TestInsertBatchSizeSplitsExec(t *testing.T) {
 	}
 }
 
+// TestInsertBatchSizeLastInsertId covers batchResult.LastInsertId: a split
+// INSERT reports the id of the final batch (and RowsAffected still sums).
+func TestInsertBatchSizeLastInsertId(t *testing.T) {
+	fake := &testutil.Fake{LastInsertID: 42}
+	db := sqlkit.WrapDB(fake.DB())
+
+	users := []User{
+		{Email: "a@example.com"},
+		{Email: "b@example.com"},
+		{Email: "c@example.com"},
+	}
+	res, err := db.Insert(Users).Values(users).BatchSize(2).Exec(context.Background())
+	if err != nil {
+		t.Fatalf("Exec() error = %v", err)
+	}
+	if len(fake.Execs()) != 2 {
+		t.Fatalf("execs = %d, want 2 batches", len(fake.Execs()))
+	}
+	id, err := res.LastInsertId()
+	if err != nil || id != 42 {
+		t.Fatalf("LastInsertId() = %d, %v; want 42, nil", id, err)
+	}
+}
+
 func TestInsertBatchSizeSingleStatementWhenNotExceeded(t *testing.T) {
 	users := []User{{Email: "a@example.com"}, {Email: "b@example.com"}}
 	// batchSize >= rows, and batchSize <= 0, both run as a single statement.
@@ -324,6 +348,21 @@ func TestTypedOnConflictOnConstraint(t *testing.T) {
 	assertToSQL(t, query,
 		`INSERT INTO "public"."users" ("id", "email", "name") VALUES ($1, $2, $3) ON CONFLICT ON CONSTRAINT "users_email_key" DO UPDATE SET "email" = excluded."email"`,
 		[]any{int64(1), "a@example.com", &name})
+}
+
+// TestTypedOnConflictExprWhere covers OnConflictExpr (an expression unique-index
+// target) together with the upsert's DO UPDATE Where clause, neither reached by
+// the column / constraint OnConflict tests above.
+func TestTypedOnConflictExprWhere(t *testing.T) {
+	name := "Alice"
+	query := sqlkit.Insert(Users).
+		Values(User{ID: 1, Email: "a@example.com", Name: &name}).
+		OnConflictExpr(sql.Col("email")).
+		DoUpdate(Users.Name.SetExpr(Users.Name.Excluded())).
+		Where(Users.ID.Gt(0))
+	assertToSQL(t, query,
+		`INSERT INTO "public"."users" ("id", "email", "name") VALUES ($1, $2, $3) ON CONFLICT (("email")) DO UPDATE SET "name" = excluded."name" WHERE ("public"."users"."id" > $4)`,
+		[]any{int64(1), "a@example.com", &name, int64(0)})
 }
 
 func TestInsertValuesSlice(t *testing.T) {

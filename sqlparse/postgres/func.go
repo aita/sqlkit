@@ -32,6 +32,12 @@ func convertFuncCall(fc *pg.FuncCall) (sql.Expression, error) {
 	}
 	var base sql.Expression
 	switch {
+	case fc.GetFuncformat() == pg.CoercionForm_COERCE_SQL_SYNTAX && isSQLSyntaxFunc(name):
+		// EXTRACT(field FROM x), POSITION(sub IN str), and similar keyword-syntax
+		// functions are reported as ordinary calls (pg_catalog.extract, ...) tagged
+		// COERCE_SQL_SYNTAX. They must be rebuilt as their dedicated nodes, or they
+		// render as extract($1, x) — a call form PostgreSQL's grammar rejects.
+		base, err = convertSQLSyntaxFunc(name, fc)
 	case strings.EqualFold(name, "count"):
 		base, err = convertCount(fc)
 	default:
@@ -46,6 +52,52 @@ func convertFuncCall(fc *pg.FuncCall) (sql.Expression, error) {
 		return convertWindow(base, fc.GetOver())
 	}
 	return base, nil
+}
+
+// isSQLSyntaxFunc reports whether name is a keyword-syntax function sqlkit models
+// with a dedicated node. Only these are diverted from the generic call path;
+// other COERCE_SQL_SYNTAX functions (substring, trim, overlay) render acceptably
+// as ordinary calls, so they fall through.
+func isSQLSyntaxFunc(name string) bool {
+	return strings.EqualFold(name, "extract") || strings.EqualFold(name, "position")
+}
+
+// convertSQLSyntaxFunc rebuilds the dedicated node for a keyword-syntax function.
+func convertSQLSyntaxFunc(name string, fc *pg.FuncCall) (sql.Expression, error) {
+	args := fc.GetArgs()
+	switch {
+	case strings.EqualFold(name, "extract"):
+		// extract(field_const, source): the field is a bare string constant.
+		if len(args) != 2 {
+			return nil, sqlparse.Unsupportedf("EXTRACT with %d arguments", len(args))
+		}
+		field := args[0].GetAConst().GetSval()
+		if field == nil {
+			return nil, sqlparse.Unsupported("EXTRACT field is not a constant")
+		}
+		operand, err := convertExpr(args[1])
+		if err != nil {
+			return nil, err
+		}
+		return sql.Extract(field.GetSval(), operand), nil
+	case strings.EqualFold(name, "position"):
+		// position(str, sub): PostgreSQL stores the operands swapped relative to the
+		// POSITION(sub IN str) source order.
+		if len(args) != 2 {
+			return nil, sqlparse.Unsupportedf("POSITION with %d arguments", len(args))
+		}
+		str, err := convertExpr(args[0])
+		if err != nil {
+			return nil, err
+		}
+		substring, err := convertExpr(args[1])
+		if err != nil {
+			return nil, err
+		}
+		return sql.Position(substring, str), nil
+	default:
+		return nil, sqlparse.Unsupportedf("SQL-syntax function %q", name)
+	}
 }
 
 func convertCount(fc *pg.FuncCall) (sql.Expression, error) {
@@ -322,6 +374,32 @@ var canonicalTypes = map[string]string{
 	"timetz":      "time with time zone",
 }
 
+// quoteTypeIdent double-quotes a type-name part that would not render verbatim
+// unquoted — one starting with a digit (a "0" type) or carrying an upper-case
+// letter (which PostgreSQL folds to lower case on re-parse) — leaving a plain
+// lower-case identifier unquoted so built-in and ordinary types render as is.
+func quoteTypeIdent(s string) string {
+	if isBareIdent(s) {
+		return s
+	}
+	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+}
+
+// isBareIdent reports whether s renders unquoted without changing: a lower-case
+// letter or underscore, then lower-case letters, digits, underscores, or dollars.
+// Upper case is excluded because an unquoted identifier folds to lower case.
+func isBareIdent(s string) bool {
+	for i, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r == '_':
+		case (r >= '0' && r <= '9' || r == '$') && i > 0:
+		default:
+			return false
+		}
+	}
+	return s != ""
+}
+
 // typeNameString renders a TypeName as a CAST target type, e.g. "integer",
 // "numeric(10, 2)", or "text[]".
 func typeNameString(tn *pg.TypeName) (string, error) {
@@ -336,8 +414,23 @@ func typeNameString(tn *pg.TypeName) (string, error) {
 		parts = parts[1:]
 	}
 	base := strings.Join(parts, ".")
-	if canonical, ok := canonicalTypes[base]; ok {
+	hasTypmods := len(tn.GetTypmods()) > 0
+	canonical, isCanonical := canonicalTypes[base]
+	switch {
+	// bpchar canonicalizes to char only with a length. Bare "char" is char(1), but
+	// bare "bpchar" is the unbounded blank-padded type; rendering a length-less
+	// bpchar as char would change its meaning and break the round-trip, since
+	// re-parsing bare char re-adds the (1).
+	case isCanonical && (base != "bpchar" || hasTypmods):
 		base = canonical
+	case !isCanonical:
+		// A non-built-in type: quote any part that is not a valid bare identifier
+		// (e.g. a quoted type name like "0"), or it renders as invalid SQL.
+		quoted := make([]string, len(parts))
+		for i, p := range parts {
+			quoted[i] = quoteTypeIdent(p)
+		}
+		base = strings.Join(quoted, ".")
 	}
 
 	if mods := tn.GetTypmods(); len(mods) > 0 {

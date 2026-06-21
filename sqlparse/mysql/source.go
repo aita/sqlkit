@@ -136,6 +136,11 @@ func convertTableSourceNode(node ast.ResultSetNode, tp tablePos) (sql.Source, er
 func convertTableSource(ts *ast.TableSource, tp tablePos) (sql.Source, error) {
 	switch src := ts.Source.(type) {
 	case *ast.TableName:
+		// TiDB tolerates an empty backtick-quoted name (FROM ``), which the compiler
+		// cannot render; fall back to raw rather than build a source with no name.
+		if src.Name.O == "" {
+			return nil, sqlparse.Unsupported("table with an empty name")
+		}
 		table := tableAt(src, tp)
 		if alias := ts.AsName.O; alias != "" {
 			// SourceAlias collapses the table into a single qualified Name Ident, so

@@ -625,7 +625,7 @@ func (c *Compiler) CompileSelection(selection Selection) (string, []any, error) 
 		if err != nil {
 			return "", nil, err
 		}
-		return inner + " AS " + c.Dialect.QuoteIdent(s.Alias.String()), args, nil
+		return inner + " AS " + c.Dialect.QuoteName(s.Alias.String()), args, nil
 	case interface{ Reference() string }:
 		return c.Dialect.QuoteIdent(s.Reference()), nil, nil
 	case interface{ UnwrapSelection() Selection }:
@@ -661,7 +661,7 @@ func (c *Compiler) CompileSource(source Source) (string, []any, error) {
 		}
 		compiled := lateral + "(" + sql + ")"
 		if !s.Alias.IsZero() {
-			compiled += " AS " + c.Dialect.QuoteIdent(s.Alias.String())
+			compiled += " AS " + c.Dialect.QuoteName(s.Alias.String())
 		}
 		return compiled, args, nil
 	}
@@ -670,7 +670,7 @@ func (c *Compiler) CompileSource(source Source) (string, []any, error) {
 	}
 	compiled := lateral + c.Dialect.QuoteIdent(s.Name.String())
 	if !s.Alias.IsZero() {
-		compiled += " AS " + c.Dialect.QuoteIdent(s.Alias.String())
+		compiled += " AS " + c.Dialect.QuoteName(s.Alias.String())
 	}
 	return compiled, nil, nil
 }
@@ -752,7 +752,7 @@ func (c *Compiler) compileValuesSource(s SourceExpression) (string, []any, error
 	sb.WriteString(")")
 	if !s.Alias.IsZero() {
 		sb.WriteString(" AS ")
-		sb.WriteString(c.Dialect.QuoteIdent(s.Alias.String()))
+		sb.WriteString(c.Dialect.QuoteName(s.Alias.String()))
 		if !union && len(v.Columns) == width {
 			sb.WriteString("(")
 			for ci, col := range v.Columns {
@@ -1509,6 +1509,13 @@ func (c *Compiler) compileSubscript(e SubscriptExpression) (string, []any, error
 	if err != nil {
 		return "", nil, err
 	}
+	// Only a column/field reference (or another subscript) can be subscripted
+	// bare; any other operand — an array constructor, a function call, a cast —
+	// must be parenthesized, or "ARRAY[1,2,3][1]" parses as a malformed array
+	// type rather than an index into the constructed array.
+	if !bareSubscriptable(e.Operand) {
+		operandSQL = "(" + operandSQL + ")"
+	}
 	var sb strings.Builder
 	sb.WriteString(operandSQL)
 	for _, idx := range e.Indices {
@@ -1545,6 +1552,21 @@ func (c *Compiler) compileSubscript(e SubscriptExpression) (string, []any, error
 		sb.WriteString("]")
 	}
 	return sb.String(), args, nil
+}
+
+// bareSubscriptable reports whether e can carry a [...] subscript without being
+// wrapped in parentheses. A column reference renders bare ("tags"[1]) and a
+// nested subscript chains (a[1][2]); every other operand — an array constructor,
+// a function call, a cast, even a field access (which needs ((rec).f)[1], not
+// (rec).f[1], or PostgreSQL no longer reads it as a subscript) — needs explicit
+// parentheses.
+func bareSubscriptable(e Expression) bool {
+	switch e.(type) {
+	case ColumnExpression, SubscriptExpression:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *Compiler) nextPlaceholder() string {

@@ -124,3 +124,114 @@ func TestParseSyntaxError(t *testing.T) {
 		t.Fatal("Parse() of invalid SQL succeeded, want error")
 	}
 }
+
+// CREATE INDEX forms the typed builder cannot model each report Unsupported and
+// round-trip via the verbatim raw passthrough.
+func TestCreateIndexUnsupportedFormsFallBackToRaw(t *testing.T) {
+	for _, input := range []string{
+		"CREATE INDEX CONCURRENTLY i ON t (a)",
+		"CREATE INDEX i ON t USING gin (a)",
+		"CREATE INDEX i ON t (a DESC)",
+		"CREATE INDEX i ON t (lower(a))",
+		"CREATE INDEX i ON t (a) WHERE a > 0",
+		"CREATE INDEX i ON t (a) INCLUDE (b)",
+		"CREATE UNIQUE INDEX i ON t (a) NULLS NOT DISTINCT",
+	} {
+		assertRaw(t, input)
+	}
+}
+
+// CREATE VIEW options and CHECK OPTION are not modeled and round-trip raw.
+func TestCreateViewUnsupportedFormsFallBackToRaw(t *testing.T) {
+	assertRaw(t, "CREATE OR REPLACE VIEW v WITH (security_barrier) AS SELECT 1")
+	assertRaw(t, "CREATE VIEW v AS SELECT 1 WITH CHECK OPTION")
+}
+
+// COMMENT on an object type the builder does not model, and COMMENT ... IS NULL,
+// round-trip raw.
+func TestCommentUnsupportedFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "COMMENT ON SCHEMA s IS 'x'")
+	assertRaw(t, "COMMENT ON TABLE t IS NULL")
+}
+
+// A CREATE EXTENSION option other than SCHEMA (here VERSION) is unsupported and
+// round-trips raw.
+func TestCreateExtensionVersionFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "CREATE EXTENSION hstore VERSION '1.0'")
+}
+
+// DROP INDEX without IF EXISTS, and the CONCURRENTLY form, round-trip raw.
+func TestDropIndexUnsupportedFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "DROP INDEX i")
+	assertRaw(t, "DROP INDEX CONCURRENTLY i")
+}
+
+// x = ALL (subquery) maps to an ALL-quantified comparison.
+func TestExprAllQuantified(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT id FROM t WHERE x = ALL (SELECT y FROM u)",
+		selWhere(sql.All(sql.Col("x"), "=", sql.Select(sql.Col("y")).From(sql.Table{Name: sql.NewIdent("u")}))),
+		`SELECT "id" FROM "t" WHERE ("x" = ALL (SELECT "y" FROM "u"))`)
+}
+
+// x = SOME (subquery) is the synonym PostgreSQL canonicalises to IN.
+func TestExprSomeQuantifiedEqualsIn(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT id FROM t WHERE x = SOME (SELECT y FROM u)",
+		selWhere(sql.InQuery(sql.Col("x"), sql.Select(sql.Col("y")).From(sql.Table{Name: sql.NewIdent("u")}))),
+		`SELECT "id" FROM "t" WHERE ("x" IN (SELECT "y" FROM "u"))`)
+}
+
+func TestExprNotBetween(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT id FROM t WHERE age NOT BETWEEN 1 AND 5",
+		selWhere(sql.NotBetween(sql.Col("age"), 1, 5)),
+		`SELECT "id" FROM "t" WHERE ("age" NOT BETWEEN $1 AND $2)`,
+		1, 5)
+}
+
+func TestUpdateMultipleAssignments(t *testing.T) {
+	assertRoundTrip(t,
+		"UPDATE t SET a = 1, b = 2 WHERE id = 3",
+		sql.Update(sql.Table{Name: sql.NewIdent("t")}).
+			Set(sql.Set("a", 1), sql.Set("b", 2)).Where(sql.Eq(sql.Col("id"), 3)),
+		`UPDATE "t" SET "a" = $1, "b" = $2 WHERE ("id" = $3)`,
+		1, 2, 3)
+}
+
+func TestGrantUsageOnSchema(t *testing.T) {
+	assertRoundTrip(t,
+		"GRANT USAGE ON SCHEMA s TO r",
+		sql.Grant("USAGE").OnType("SCHEMA", "s").To("r"),
+		`GRANT USAGE ON SCHEMA "s" TO "r";`)
+}
+
+// A parameter reference is reproduced as written, including an out-of-range $0:
+// the grammar accepts it and only the server rejects it at execution, so the
+// parser passes it through faithfully rather than validating it.
+func TestParamRefPassthrough(t *testing.T) {
+	q, err := postgres.ParseOne("SELECT $0")
+	if err != nil {
+		t.Fatalf("ParseOne(SELECT $0) error = %v, want passthrough", err)
+	}
+	got, _, err := q.ToSQL(sql.PostgreSQLDialect{})
+	if err != nil {
+		t.Fatalf("ToSQL error = %v", err)
+	}
+	if got != "SELECT $0" {
+		t.Fatalf("ToSQL() = %q, want %q", got, "SELECT $0")
+	}
+}
+
+// A construct pg_query accepts but sqlkit does not model round-trips as a raw
+// passthrough, never a hard parse error — even when the deparse is imperfect.
+// Faithfully representing what the backing parser accepted is the contract.
+func TestUnmodeledConstructFallsBackToRaw(t *testing.T) {
+	q, err := postgres.ParseOne("SELECT !0 WHER, 0 < $0")
+	if err != nil {
+		t.Fatalf("ParseOne error = %v, want a raw passthrough", err)
+	}
+	if _, ok := q.(sql.RawQuery); !ok {
+		t.Fatalf("ParseOne returned %T, want a RawQuery", q)
+	}
+}

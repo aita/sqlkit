@@ -74,3 +74,22 @@ func TestCommentOnColumn(t *testing.T) {
 		sql.CommentOnColumn(sql.Table{Name: sql.NewIdent("users")}, "email", "contact address"),
 		`COMMENT ON COLUMN "users"."email" IS 'contact address';`)
 }
+
+// This sequence exercises the option branches the existing tests do not:
+// NO MINVALUE, an explicit MAXVALUE, NO CYCLE, and OWNED BY NONE.
+func TestCreateSequenceComplementaryOptions(t *testing.T) {
+	assertRoundTrip(t,
+		"CREATE SEQUENCE s NO MINVALUE MAXVALUE 100 NO CYCLE OWNED BY NONE",
+		sql.CreateSequence(sql.Table{Name: sql.NewIdent("s")}).
+			NoMinValue().MaxValue(100).NoCycle().OwnedBy("NONE"),
+		`CREATE SEQUENCE "s" NO MINVALUE MAXVALUE 100 NO CYCLE OWNED BY NONE;`)
+}
+
+// A COMMENT ON COLUMN whose object name carries a schema (schema.table.column)
+// exercises the qualified branch of tableColumnFromNameList.
+func TestCommentOnQualifiedColumn(t *testing.T) {
+	assertRoundTrip(t,
+		"COMMENT ON COLUMN s.t.c IS 'hi'",
+		sql.CommentOnColumn(sql.Table{Schema: sql.NewIdent("s"), Name: sql.NewIdent("t")}, "c", "hi"),
+		`COMMENT ON COLUMN "s"."t"."c" IS 'hi';`)
+}

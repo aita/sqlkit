@@ -477,6 +477,78 @@ func TestSelectForUpdateSkipLocked(t *testing.T) {
 		`SELECT "public"."users"."id" FROM "public"."users" FOR SHARE NOWAIT`, nil)
 }
 
+// TestSelectLeftJoinUsingAndNaturalJoin covers LeftJoinUsing (the LEFT variant
+// of JoinUsing) and NaturalJoin (the inner natural join), neither reached by the
+// JoinUsing/NaturalLeftJoin test above.
+func TestSelectLeftJoinUsingAndNaturalJoin(t *testing.T) {
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).LeftJoinUsing(Posts, "id"),
+		`SELECT "public"."users"."id" FROM "public"."users" LEFT JOIN "public"."posts" USING ("id")`, nil)
+
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).NaturalJoin(Posts),
+		`SELECT "public"."users"."id" FROM "public"."users" NATURAL JOIN "public"."posts"`, nil)
+}
+
+// TestSelectForNoKeyUpdateAndKeyShare covers the PostgreSQL-only ForNoKeyUpdate /
+// ForKeyShare locking clauses, and LockOf restricting the lock to a named table.
+func TestSelectForNoKeyUpdateAndKeyShare(t *testing.T) {
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).ForNoKeyUpdate(),
+		`SELECT "public"."users"."id" FROM "public"."users" FOR NO KEY UPDATE`, nil)
+
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).ForKeyShare(),
+		`SELECT "public"."users"."id" FROM "public"."users" FOR KEY SHARE`, nil)
+
+	assertToSQL(t,
+		sqlkit.Select(Users.ID).From(Users).ForUpdate(sqlkit.LockOf("public.users")),
+		`SELECT "public"."users"."id" FROM "public"."users" FOR UPDATE OF "public"."users"`, nil)
+}
+
+// TestSelectWindowClause covers the WINDOW clause: a named window definition
+// referenced from an OVER clause by name.
+func TestSelectWindowClause(t *testing.T) {
+	assertToSQL(t,
+		sqlkit.Select(Users.ID, sql.As(sql.RowNumber().Over().Named("w"), "rn")).From(Users).
+			Window(sql.WindowDef("w").PartitionBy(Users.ID)),
+		`SELECT "public"."users"."id", ROW_NUMBER() OVER "w" AS "rn" FROM "public"."users" WINDOW "w" AS (PARTITION BY "public"."users"."id")`,
+		nil)
+}
+
+// TestSelectFirstAndPageSurfaceDeferredError covers the deferred-error branch of
+// First and Page: a Filter mapping error built into the query surfaces at the
+// terminal's Scan without reaching the database.
+func TestSelectFirstAndPageSurfaceDeferredError(t *testing.T) {
+	type badFilter struct {
+		Nope sqlkit.FilterTerm
+	}
+	db := newDB()
+	q := Users.Q(db).Filter(badFilter{Nope: sqlkit.Eq(1)})
+
+	var out []MyUserDTO
+	if err := q.First(context.Background()).Scan(&out); err == nil {
+		t.Fatal("First().Scan() succeeded, want deferred Filter error")
+	}
+	if err := q.Page(context.Background(), 1, 0).Scan(&out); err == nil {
+		t.Fatal("Page().Scan() succeeded, want deferred Filter error")
+	}
+}
+
+// TestSelectIntersectAllAndExceptAll covers the *All set-operation methods on
+// SelectQuery, the multiset variants that keep duplicate rows.
+func TestSelectIntersectAllAndExceptAll(t *testing.T) {
+	a := sqlkit.Select(Users.ID).From(Users)
+	b := sqlkit.Select(Posts.ID).From(Posts)
+
+	assertToSQL(t, a.IntersectAll(b),
+		`(SELECT "public"."users"."id" FROM "public"."users") INTERSECT ALL (SELECT "public"."posts"."id" FROM "public"."posts")`,
+		nil)
+	assertToSQL(t, a.ExceptAll(b),
+		`(SELECT "public"."users"."id" FROM "public"."users") EXCEPT ALL (SELECT "public"."posts"."id" FROM "public"."posts")`,
+		nil)
+}
+
 func TestSelectGet(t *testing.T) {
 	db := newDB()
 	assertSelectSQL(t, Users.Q(db).Where(Users.Email.Eq("x")),

@@ -1032,3 +1032,18 @@ func TestDeleteInlineJoinSourceError(t *testing.T) {
 		t.Fatal("delete inline join bad source: want error")
 	}
 }
+
+// TestAliasRendersAsSingleIdentifier pins that an alias is quoted as one unit and
+// never split on a dot: an alias is always a single identifier, so ".0" must
+// render as `.0`, not the invalid qualified form “.`0`.
+func TestAliasRendersAsSingleIdentifier(t *testing.T) {
+	q := Select(As(Col("x"), ".0")).From(Table{Name: NewIdent("t")})
+	got, _, err := q.ToSQL(MySQLDialect{})
+	if err != nil {
+		t.Fatalf("ToSQL() error = %v", err)
+	}
+	const want = "SELECT `x` AS `.0` FROM `t`"
+	if got != want {
+		t.Fatalf("ToSQL() =\n  %q\nwant\n  %q", got, want)
+	}
+}

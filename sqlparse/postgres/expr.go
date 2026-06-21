@@ -22,8 +22,17 @@ func convertExpr(node *pg.Node) (sql.Expression, error) {
 	case node.GetParamRef() != nil:
 		// A positional placeholder ($N). sqlkit numbers its own placeholders from
 		// bound values, so there is no native placeholder node; pass the PostgreSQL
-		// spelling through verbatim, which round-trips under PostgreSQLDialect.
-		return sql.Raw("$" + strconv.Itoa(int(node.GetParamRef().GetNumber()))), nil
+		// spelling through verbatim, which round-trips under PostgreSQLDialect. The
+		// number is reproduced as written — including an out-of-range $0, which the
+		// grammar accepts and the server rejects only at execution; faithfully
+		// representing the input is the parser's job, not validating it. A number
+		// the raw parser's int32 overflowed (a vast literal lands negative) has no
+		// faithful spelling, so it falls back to raw.
+		num := node.GetParamRef().GetNumber()
+		if num < 0 {
+			return nil, sqlparse.Unsupportedf("parameter reference out of range")
+		}
+		return sql.Raw("$" + strconv.Itoa(int(num))), nil
 	case node.GetAExpr() != nil:
 		return convertAExpr(node.GetAExpr())
 	case node.GetBoolExpr() != nil:
@@ -61,6 +70,11 @@ func convertExpr(node *pg.Node) (sql.Expression, error) {
 		if err != nil {
 			return nil, err
 		}
+		// An empty ROW() is parseable but the compiler requires at least one
+		// element, so fall back to raw rather than build a row it must reject.
+		if len(args) == 0 {
+			return nil, sqlparse.Unsupported("empty ROW()")
+		}
 		return positioned(sql.Row(args...), node.GetRowExpr().GetLocation()), nil
 	case node.GetAArrayExpr() != nil:
 		return convertArray(node.GetAArrayExpr())
@@ -76,7 +90,16 @@ func columnRefParts(cr *pg.ColumnRef) (name string, star bool, qualifier string,
 	for _, field := range cr.GetFields() {
 		switch {
 		case field.GetString_() != nil:
-			parts = append(parts, field.GetString_().GetSval())
+			part := field.GetString_().GetSval()
+			// sqlkit stores a column as one dotted string and re-splits it on '.' to
+			// recover the qualifier, so a single identifier that itself contains a dot
+			// (the quoted "a.b") cannot be told apart from the qualified a.b and would
+			// render wrongly. Such a name has no faithful typed form; report it
+			// unsupported so the statement round-trips as raw.
+			if strings.Contains(part, ".") {
+				return "", false, "", sqlparse.Unsupportedf("column identifier with a dot: %q", part)
+			}
+			parts = append(parts, part)
 		case field.GetAStar() != nil:
 			return "", true, strings.Join(parts, "."), nil
 		default:

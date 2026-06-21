@@ -1,0 +1,2 @@
+go test fuzz v1
+string("INSERT INT.00(A)VALUE (0,'')")

@@ -42,6 +42,18 @@ func TestSelectFilter(t *testing.T) {
 		[]any{"a@x"})
 }
 
+// TestFilterMapsFieldByTag covers columnKey's `sqlkit` tag branch: a filter
+// field whose name does not match a column maps to one via its tag.
+func TestFilterMapsFieldByTag(t *testing.T) {
+	type taggedFilter struct {
+		Mail sqlkit.FilterTerm `sqlkit:"email"`
+	}
+	db := newDB()
+	assertSelectSQL(t, Users.Q(db).Filter(taggedFilter{Mail: sqlkit.Eq("a@x")}),
+		`SELECT "public"."users"."id", "public"."users"."email", "public"."users"."name" FROM "public"."users" WHERE ("public"."users"."email" = $1)`,
+		[]any{"a@x"})
+}
+
 func TestFilterRelationExists(t *testing.T) {
 	db := newDB()
 	// A nested filter on a relation narrows the base table with a correlated

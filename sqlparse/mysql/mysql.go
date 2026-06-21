@@ -29,7 +29,9 @@ package mysql
 
 import (
 	"errors"
+	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/aita/sqlkit/sql"
 	"github.com/aita/sqlkit/sqlparse"
@@ -56,7 +58,15 @@ var _ sqlparse.Parser = Parser{}
 
 // Parse parses one or more MySQL statements in source order.
 func (Parser) Parse(text string) ([]sql.Query, error) {
-	stmts, _, err := parser.New().Parse(text, "", "")
+	// SQL source is text, which is UTF-8. This is encoding validation, not a
+	// rejection of any SQL construct: the TiDB lexer does not faithfully accept an
+	// invalid byte — it silently maps it to U+FFFD/"?", so the byte is lost on the
+	// first parse and a round-trip is never stable. Reject it rather than emit the
+	// corrupted result.
+	if !utf8.ValidString(text) {
+		return nil, fmt.Errorf("sqlkit/sqlparse/mysql: input is not valid UTF-8")
+	}
+	stmts, err := parseStmts(text)
 	if err != nil {
 		return nil, err
 	}
@@ -92,9 +102,65 @@ func (Parser) Parse(text string) ([]sql.Query, error) {
 	return queries, nil
 }
 
+// parseStmts runs the TiDB parser, converting a panic into an error. The
+// reference value driver (test_driver) panics on inputs that exercise an
+// unimplemented MyDecimal branch — e.g. an over-long numeric literal — and a
+// library must not crash the process on untrusted input.
+func parseStmts(text string) (stmts []ast.StmtNode, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			stmts, err = nil, fmt.Errorf("sqlkit/sqlparse/mysql: parser panic: %v", r)
+		}
+	}()
+	stmts, _, err = parser.New().Parse(text, "", "")
+	return stmts, err
+}
+
 // deparseStmt renders a single parsed statement back to MySQL SQL text via the
 // TiDB parser's own restore, using backtick-quoted names and upper-case keywords.
+//
+// TiDB's restore is not always idempotent: for a SET system variable, the first
+// restore of "SET A=0" keeps the source case ("SET @@SESSION.`A`=0") while a
+// restore of *that* lower-cases the (case-insensitive) variable to `a`. A raw
+// passthrough must be stable under re-parsing, so restore once more and keep the
+// settled form. The extra pass is a no-op for the already-stable majority.
 func deparseStmt(node ast.StmtNode) (string, error) {
+	first, err := restoreStmt(node)
+	if err != nil {
+		return "", err
+	}
+	// Settle the restore to a re-parse fixpoint (see the SET note above). The
+	// re-parse can also panic in the value driver on an over-long numeric literal
+	// the first restore happened to emit; on a panic, error, or restore failure
+	// keep the first form rather than crash.
+	if second, ok := settledRestore(first); ok {
+		return second, nil
+	}
+	return first, nil
+}
+
+// settledRestore re-parses and re-restores restored SQL, returning the settled
+// form. It recovers a value-driver panic and reports ok=false on any failure so
+// the caller keeps the first restore.
+func settledRestore(restored string) (out string, ok bool) {
+	defer func() {
+		if recover() != nil {
+			out, ok = "", false
+		}
+	}()
+	stmt, err := parser.New().ParseOneStmt(restored, "", "")
+	if err != nil {
+		return "", false
+	}
+	second, err := restoreStmt(stmt)
+	if err != nil {
+		return "", false
+	}
+	return second, true
+}
+
+// restoreStmt renders one statement node to SQL via the TiDB restore.
+func restoreStmt(node ast.StmtNode) (string, error) {
 	var sb strings.Builder
 	ctx := format.NewRestoreCtx(format.DefaultRestoreFlags, &sb)
 	if err := node.Restore(ctx); err != nil {
