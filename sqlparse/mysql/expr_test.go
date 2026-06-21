@@ -467,3 +467,13 @@ func TestExprBareCountFallsBackToRaw(t *testing.T) {
 		t.Fatalf("ParseOne returned %T, want a RawQuery", q)
 	}
 }
+
+// MySQL treats a backslash as an escape character, so a string literal rendered
+// inline (here in the select list) must double it, or SELECT '\' is an
+// unterminated string.
+func TestExprBackslashStringLiteral(t *testing.T) {
+	assertRoundTrip(t,
+		`SELECT '\\' FROM t`,
+		sql.Select(sql.Raw(`'\\'`)).From(sql.Table{Name: sql.NewIdent("t")}),
+		"SELECT '\\\\' FROM `t`")
+}

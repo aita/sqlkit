@@ -537,6 +537,12 @@ func stringLiteral(node ast.ExprNode) (string, error) {
 	return s, nil
 }
 
+// escapeStringLiteral escapes a string for a single-quoted MySQL literal. MySQL
+// treats a backslash as an escape character by default, so a literal backslash
+// must be doubled (or "SELECT '\'" is an unterminated string); the quote is
+// doubled too. Backslashes are escaped first so the doubled quote is not then
+// re-escaped.
 func escapeStringLiteral(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
 	return strings.ReplaceAll(s, "'", "''")
 }
