@@ -310,10 +310,14 @@ func TestExprUnaryMinusDecimal(t *testing.T) {
 		`SELECT "id" FROM "t" WHERE ("a" = -1.5)`)
 }
 
-// A unary operator applied to a non-constant (a column reference) is not
-// representable, so the statement falls back to raw.
-func TestExprUnaryMinusColumnFallsBackToRaw(t *testing.T) {
-	assertRaw(t, "SELECT id FROM t WHERE a = -b")
+// A unary operator applied to a non-constant (a column reference) is modeled as
+// a UnaryExpression so the typed shape round-trips — matching the compiler,
+// which emits sql.Neg/sql.Pos as "(-x)".
+func TestExprUnaryMinusColumn(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT id FROM t WHERE a = -b",
+		selWhere(sql.Eq(sql.Col("a"), sql.Neg(sql.Col("b")))),
+		`SELECT "id" FROM "t" WHERE ("a" = (-"b"))`)
 }
 
 // GREATEST/LEAST map to the corresponding lower-cased function calls.

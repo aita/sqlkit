@@ -387,6 +387,14 @@ func convertUnaryOp(op string, operand *pg.Node) (sql.Expression, error) {
 				return sql.Raw("-" + string(v)), nil
 			}
 		}
+		// Unary +/- on a non-constant operand (column, parameter, expression):
+		// model it as a UnaryExpression so the typed shape round-trips, rather
+		// than falling back to a raw passthrough for the whole statement.
+		operandExpr, err := convertExpr(operand)
+		if err != nil {
+			return nil, err
+		}
+		return sql.Unary(op, operandExpr), nil
 	}
 	return nil, sqlparse.Unsupportedf("unary operator %q", op)
 }
