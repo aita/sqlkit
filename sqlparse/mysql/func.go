@@ -27,11 +27,11 @@ func convertFuncCall(fc *ast.FuncCallExpr) (sql.Expression, error) {
 	// rejects them, so rebuild the dedicated nodes that emit the keyword form.
 	switch fc.FnName.L {
 	case "count":
-		// COUNT normally arrives as an aggregate; reaching here (e.g. "Count ()")
-		// with no argument would render the bare COUNT(), which MySQL rejects.
-		if len(fc.Args) == 0 {
-			return nil, sqlparse.Unsupported("COUNT() without an argument")
-		}
+		// COUNT is modeled as an aggregate (AggregateFuncExpr). Reaching here means
+		// the degenerate call form (e.g. the spaced "Count (0)"), which renders as a
+		// plain COUNT(arg) that re-parses as the aggregate with different semantics
+		// (COUNT(0) folds to COUNT(*)); fall back to raw rather than mis-render it.
+		return nil, sqlparse.Unsupported("COUNT in non-aggregate call form")
 	case "char_func":
 		// TiDB names CHAR(...) "char_func" internally and even its own deparse emits
 		// the non-standard CHAR_FUNC; rebuild the real CHAR(...) spelling.
