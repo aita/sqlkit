@@ -12,9 +12,13 @@
 // any candidate marks it PII — so the redactor errs toward over-masking rather than
 // leaking. Masking is confined to string literals (ValueExpression holding a
 // string): numbers, bind placeholders, and column references are never touched.
+// A string literal wrapped in an expression — a cast, concatenation, function
+// call, collation, row constructor, or CASE result — is reached too, so a value
+// composed through such a wrapper does not survive into the rendered SQL.
 //
-// CTE bodies are a known gap: they are a separate scope the public AST cannot
-// rebuild from outside the sql package, so literals inside a WITH body are left
+// Two scopes remain a known gap, both because the public AST cannot rebuild them
+// from outside the sql package: literals inside a WITH (CTE) body, and a
+// sensitive column re-exposed through a derived (subquery) FROM source, are left
 // unmasked.
 package redaction
 
