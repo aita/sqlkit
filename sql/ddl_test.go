@@ -683,3 +683,59 @@ func TestDDLBuilderPlumbing(t *testing.T) {
 		}
 	}
 }
+
+// TestDDLCompileColumnAndAlterCoverage drives the column-definition and
+// alteration compile branches (defaults, references, generated, identity,
+// collate, auto-increment, ON UPDATE) across both dialects.
+func TestDDLCompileColumnAndAlterCoverage(t *testing.T) {
+	pg, my := PostgreSQLDialect{}, MySQLDialect{}
+	mustCompile := func(d Dialect, q Query) {
+		t.Helper()
+		if _, _, err := q.ToSQL(d); err != nil {
+			t.Fatalf("%T on %s: %v", q, d.Name(), err)
+		}
+	}
+	tbl := Table{Name: NewIdent("t")}
+
+	// PostgreSQL CREATE TABLE exercising the column-definition branches.
+	mustCompile(pg, CreateTable(tbl).IfNotExists().
+		Column(ColumnDef{Name: NewIdent("id"), Type: EngineType{Name: "bigint"}, Identity: IdentityByDefault, NotNull: true}).
+		Column(ColumnDef{Name: NewIdent("email"), Type: EngineType{Name: "text"}, NotNull: true, Unique: true, Collate: NewIdent("\"C\"")}).
+		Column(ColumnDef{Name: NewIdent("author_id"), Type: EngineType{Name: "bigint"},
+			References: &ColumnReference{Table: NewIdent("users"), Column: NewIdent("id"), OnDelete: "CASCADE", OnUpdate: "RESTRICT"}}).
+		Column(ColumnDef{Name: NewIdent("status"), Type: EngineType{Name: "text"}, Default: Raw("'active'"), Comment: "the status"}).
+		Column(ColumnDef{Name: NewIdent("search"), Type: EngineType{Name: "text"}, Generated: &GeneratedColumn{Expression: Raw("lower(email)"), Stored: true}}).
+		PrimaryKey("id").
+		Check("c_author", Raw("author_id > 0")).
+		Unique("u_email", "email").
+		ForeignKey(ForeignKeyConstraint{Name: NewIdent("fk"), Columns: []Ident{NewIdent("author_id")}, RefTable: NewIdent("users"), RefColumns: []Ident{NewIdent("id")}, OnDelete: "SET NULL"}).
+		Comment("a table").
+		Stmt())
+
+	// Temporary table and a MySQL table with AUTO_INCREMENT, ON UPDATE, inline index.
+	mustCompile(pg, CreateTable(tbl).Temporary().Column(ColumnDef{Name: NewIdent("a"), Type: EngineType{Name: "int"}}).Stmt())
+	mustCompile(my, CreateTable(tbl).
+		Column(ColumnDef{Name: NewIdent("id"), Type: EngineType{Name: "int"}, AutoIncrement: true, NotNull: true}).
+		Column(ColumnDef{Name: NewIdent("updated"), Type: EngineType{Name: "datetime"}, OnUpdate: Raw("CURRENT_TIMESTAMP")}).
+		PrimaryKey("id").Index("i_updated", "updated").Stmt())
+
+	// ALTER TABLE exercising every alteration kind.
+	mustCompile(pg, AlterTable(tbl).
+		AddColumn(ColumnDef{Name: NewIdent("n"), Type: EngineType{Name: "int"}, NotNull: true, Default: Raw("0")}).
+		DropColumn("old").
+		AddForeignKey(ForeignKeyConstraint{Name: NewIdent("fk2"), Columns: []Ident{NewIdent("n")}, RefTable: NewIdent("users"), RefColumns: []Ident{NewIdent("id")}, OnUpdate: "CASCADE"}).
+		AddCheck("c2", Raw("n >= 0")).
+		AddUnique("u2", "n").
+		DropConstraint("c2").
+		AlterColumnType("n", EngineType{Name: "bigint"}).
+		SetNotNull("n").
+		DropNotNull("n").
+		SetDefault("n", Raw("1")).
+		DropDefault("n").
+		RestateColumn(ColumnDef{Name: NewIdent("n"), Type: EngineType{Name: "bigint"}, NotNull: true, Default: Raw("2")}).
+		AddPrimaryKey("n").
+		RenameColumn("n", "m").
+		Stmt())
+	mustCompile(pg, AlterTable(tbl).DropPrimaryKey().Stmt())
+	mustCompile(pg, AlterTable(tbl).RenameTo("t2").Stmt())
+}
