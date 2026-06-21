@@ -1,6 +1,7 @@
 # Testing (sqltest)
 
-The `sqltest` package is sqlkit's toolkit for testing SQL code. It cuts the
+The [`sqltest`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest) package is
+sqlkit's toolkit for testing SQL code. It cuts the
 boilerplate of seeding fixtures and managing the schema, leaving the connection
 (and any test container) to the caller, and it spies on the queries your code
 issues. Every helper takes `*testing.T` and fails the test with `t.Fatalf` on
@@ -9,8 +10,10 @@ test-container dependencies.
 
 ## Seeding and schema
 
-`sqltest.New` wraps a `*sqlkit.Database` you opened against a disposable test
-database and returns a `*sqltest.DB` whose methods reset, isolate, and seed it.
+[`sqltest.New`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#New) wraps a
+`*`[`sqlkit.Database`](https://pkg.go.dev/github.com/aita/sqlkit#Database) you
+opened against a disposable test database and returns a
+`*`[`sqltest.DB`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#DB) whose methods reset, isolate, and seed it.
 `New` issues no SQL — it only builds the handle — so the schema is applied by an
 explicit `SetupSchema` (apply now, drop on `t.Cleanup`), never as a side effect
 of construction:
@@ -45,16 +48,22 @@ What `DB` and the surrounding helpers give you:
   cycle (`CASCADE` on PostgreSQL, foreign-key checks toggled on MySQL).
 - **Isolation** — `db.Tx` gives each case its own transaction, rolled back on
   `t.Cleanup`, so cases that share one schema stay independent and can run with
-  `t.Parallel()`. `Snapshot` (and `Fixture.LoadSnapshot`) instead capture the
+  `t.Parallel()`. [`Snapshot`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#Snapshot)
+  (and `Fixture.LoadSnapshot`) instead capture the
   seeded state of one session as a `SAVEPOINT` and return a restore function, so
   many *serial* cases reuse one seed by rolling back between them.
 - **Data insertion** — `db.InsertRows` / `db.InsertID` / `db.Load` seed through
-  auto-commit; the `InsertRows`, `InsertID`, `InsertReturning`, and `Fixture.Load`
-  functions take any `sqlkit.Querier`, so they seed into a `Tx` session (rolled
+  auto-commit; the
+  [`InsertRows`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#InsertRows),
+  [`InsertID`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#InsertID),
+  [`InsertReturning`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#InsertReturning),
+  and `Fixture.Load`
+  functions take any [`sqlkit.Querier`](https://pkg.go.dev/github.com/aita/sqlkit#Querier),
+  so they seed into a `Tx` session (rolled
   back with the case) just as well. `InsertID` smooths over the cross-dialect
   wrinkle of reading back a generated key (`RETURNING` on PostgreSQL,
   `Result.LastInsertId` on MySQL).
-- **Fixtures** — `NewFixture` builds a named, ordered set of rows across tables.
+- **Fixtures** — [`NewFixture`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#NewFixture) builds a named, ordered set of rows across tables.
 
 For a suite of parallel cases, apply the schema once and give each case its own
 rolled-back transaction:
@@ -79,7 +88,7 @@ insert parent rows before the children that reference them.
 ## Query spy
 
 The same package turns a [`querytrace.Trace`](observability.md) into a **query
-spy** — `sqltest.Expect(t, trace)` asserts on a query budget, no writes, no N+1,
+spy** — [`sqltest.Expect`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#Expect)`(t, trace)` asserts on a query budget, no writes, no N+1,
 or that a specific statement runs an exact number of times:
 
 ```go
@@ -96,7 +105,7 @@ sqltest.Expect(t, trace).
 
 ## Mock database
 
-`sqltest.NewDB` is a programmable mock `*sql.DB` for unit tests that should not
+[`sqltest.NewDB`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#NewDB) is a programmable mock `*sql.DB` for unit tests that should not
 touch a real database — queue up rows and assert on the statements issued:
 
 ```go

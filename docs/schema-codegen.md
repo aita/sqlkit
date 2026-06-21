@@ -1,6 +1,7 @@
 # Schema as code & code generation
 
-The schema is the source of truth. You author it once — as a `decl` catalog in
+The schema is the source of truth. You author it once — as a
+[`decl`](https://pkg.go.dev/github.com/aita/sqlkit/decl) catalog in
 Go, or bootstrapped from a live database — and generate the typed bindings and
 the DDL from it.
 
@@ -14,7 +15,8 @@ the DDL from it.
 
 A binding is the typed handle the query builder starts from —
 `db.Select().From(Users)`, `Users.ID.Eq(42)`. It is a plain Go value: a
-`sqlkit.TableInfo` identity, one `sqlkit.Column[T]` field per column, and a small
+[`sqlkit.TableInfo`](https://pkg.go.dev/github.com/aita/sqlkit#TableInfo) identity,
+one [`sqlkit.Column[T]`](https://pkg.go.dev/github.com/aita/sqlkit#Column) field per column, and a small
 set of methods the builder reads for metadata (`Info`, `SQLSource`, `Columns`,
 `PrimaryKey`, `Defaulted`). There is no ORM and no query-time reflection — the
 binding is just data describing the table, which is why `Users.ID.Eq("foo")` is a
@@ -54,7 +56,8 @@ rest of this page.
 
 ## Declaring the schema (decl)
 
-Declare the schema as plain Go values, no live database required. A `Catalog` is
+Declare the schema as plain Go values, no live database required. A
+[`Catalog`](https://pkg.go.dev/github.com/aita/sqlkit/decl#Catalog) is
 the reusable root; `Catalog.Table(...)` returns a value you store and reference
 from foreign keys.
 
@@ -86,19 +89,24 @@ var Posts = Public.Table("posts",
 )
 ```
 
-Columns are NOT NULL unless marked `Nullable()` (nullable columns map to pointer
+Columns are NOT NULL unless marked
+[`Nullable()`](https://pkg.go.dev/github.com/aita/sqlkit/decl#Nullable) (nullable columns map to pointer
 types). A primary-key column cannot be nullable. Types are **portable**
-(`BigInt`, `Timestamp`, `VarChar(n)`, …): one canonical kind resolves to each
+([`BigInt`](https://pkg.go.dev/github.com/aita/sqlkit/decl#BigInt),
+[`Timestamp`](https://pkg.go.dev/github.com/aita/sqlkit/decl#Timestamp),
+[`VarChar(n)`](https://pkg.go.dev/github.com/aita/sqlkit/decl#VarChar), …): one canonical kind resolves to each
 engine's name, so a single catalog targets PostgreSQL and MySQL. Foreign keys
 name their target table (`References("users", "id")`, or `"schema.users"` to
 cross schemas) and are resolved when the catalog `Build`s, so a table may
 reference one declared after it or itself; add referential actions with
-`OnDelete`/`OnUpdate`. Indexes (`Index`/`UniqueIndex`), constraints
-(`Unique`/`Check`), and comments (`Comment`/`TableComment`) round out the catalog
+[`OnDelete`](https://pkg.go.dev/github.com/aita/sqlkit/decl#OnDelete)/[`OnUpdate`](https://pkg.go.dev/github.com/aita/sqlkit/decl#OnUpdate).
+Indexes ([`Index`](https://pkg.go.dev/github.com/aita/sqlkit/decl#Index)/[`UniqueIndex`](https://pkg.go.dev/github.com/aita/sqlkit/decl#UniqueIndex)), constraints
+([`Unique`](https://pkg.go.dev/github.com/aita/sqlkit/decl#Unique)/[`Check`](https://pkg.go.dev/github.com/aita/sqlkit/decl#Check)),
+and comments ([`Comment`](https://pkg.go.dev/github.com/aita/sqlkit/decl#Comment)/[`TableComment`](https://pkg.go.dev/github.com/aita/sqlkit/decl#TableComment)) round out the catalog
 and carry through to the generated code. Because declarations are values, they
 compose.
 
-`Array(elem)` declares a PostgreSQL **array** column, e.g.
+[`Array(elem)`](https://pkg.go.dev/github.com/aita/sqlkit/decl#Array) declares a PostgreSQL **array** column, e.g.
 `decl.Column("tags", decl.Array(decl.Text))` for `text[]`. The DDL renders
 `elem[]`, the introspection reads array columns back, and the code generator maps
 the column to a Go slice of the element's type (`[]string`, `[]int32`, …). A
@@ -138,11 +146,11 @@ statements start from the db handle with the table as an argument
 relation metadata (enables `JoinRel`, `Preload`, and the typed filter bundles —
 see [Query builder](query-builder.md#relation-aware-queries)) and `--emit-dto`
 to also generate a row struct per table. For full control over the SQL→Go type
-mapping, call the `codegen` library directly.
+mapping, call the [`codegen`](https://pkg.go.dev/github.com/aita/sqlkit/codegen) library directly.
 
 ## Customizing generation (codegen as a library)
 
-The CLI calls `codegen.Generate(md, codegen.Options{...})` for you with a fixed
+The CLI calls [`codegen.Generate`](https://pkg.go.dev/github.com/aita/sqlkit/codegen#Generate)`(md, `[`codegen.Options`](https://pkg.go.dev/github.com/aita/sqlkit/codegen#Options)`{...})` for you with a fixed
 set of options. Call it yourself when you need the parts the flags can't
 express — chiefly the SQL→Go **type mapping** and the **DTO naming** scheme.
 Build the schema model with the catalog's `Build` (or the inspector), then
@@ -200,8 +208,8 @@ go run github.com/aita/sqlkit/cmd/sqlkit@latest inspect \
   --dsn "$DATABASE_URL" --schema public --package schema --out schema/schema.go
 ```
 
-The same reader is available as a library — `introspect.Schema(ctx, db, dialect,
-schemaName)` returns a `meta.Metadata` you can feed straight into `codegen` or
+The same reader is available as a library — [`introspect.Schema`](https://pkg.go.dev/github.com/aita/sqlkit/introspect#Schema)`(ctx, db, dialect,
+schemaName)` returns a [`meta.Metadata`](https://pkg.go.dev/github.com/aita/sqlkit/meta#Metadata) you can feed straight into `codegen` or
 [`redact`](redaction.md). Constructs the metadata model cannot represent are
 skipped on import (see [Limitations](limitations.md)).
 
