@@ -7,6 +7,26 @@ import (
 	"github.com/aita/sqlkit/sqlparse/mysql"
 )
 
+// EXTRACT(unit FROM x) reaches the parser as extract(TimeUnit, x); it must
+// rebuild as the dedicated node so it renders with the keyword syntax rather than
+// the call form EXTRACT(unit, x), which MySQL's grammar rejects.
+func TestExprExtract(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT EXTRACT(YEAR FROM d) FROM t",
+		sql.Select(sql.Extract("YEAR", sql.Col("d"))).From(sql.Table{Name: sql.NewIdent("t")}),
+		"SELECT EXTRACT(YEAR FROM `d`) FROM `t`")
+}
+
+// POSITION(sub IN str) keeps the source operand order in TiDB (unlike
+// PostgreSQL) and renders back with the IN keyword syntax.
+func TestExprPosition(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT POSITION('a' IN s) FROM t",
+		sql.Select(sql.Position("a", sql.Col("s"))).From(sql.Table{Name: sql.NewIdent("t")}),
+		"SELECT POSITION(? IN `s`) FROM `t`",
+		"a")
+}
+
 func TestExprLiterals(t *testing.T) {
 	assertRoundTrip(t,
 		"SELECT id FROM t WHERE a = 1 AND b = 'x' AND c = 2.5 AND d IS NULL",

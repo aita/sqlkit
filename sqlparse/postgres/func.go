@@ -32,6 +32,12 @@ func convertFuncCall(fc *pg.FuncCall) (sql.Expression, error) {
 	}
 	var base sql.Expression
 	switch {
+	case fc.GetFuncformat() == pg.CoercionForm_COERCE_SQL_SYNTAX && isSQLSyntaxFunc(name):
+		// EXTRACT(field FROM x), POSITION(sub IN str), and similar keyword-syntax
+		// functions are reported as ordinary calls (pg_catalog.extract, ...) tagged
+		// COERCE_SQL_SYNTAX. They must be rebuilt as their dedicated nodes, or they
+		// render as extract($1, x) — a call form PostgreSQL's grammar rejects.
+		base, err = convertSQLSyntaxFunc(name, fc)
 	case strings.EqualFold(name, "count"):
 		base, err = convertCount(fc)
 	default:
@@ -46,6 +52,52 @@ func convertFuncCall(fc *pg.FuncCall) (sql.Expression, error) {
 		return convertWindow(base, fc.GetOver())
 	}
 	return base, nil
+}
+
+// isSQLSyntaxFunc reports whether name is a keyword-syntax function sqlkit models
+// with a dedicated node. Only these are diverted from the generic call path;
+// other COERCE_SQL_SYNTAX functions (substring, trim, overlay) render acceptably
+// as ordinary calls, so they fall through.
+func isSQLSyntaxFunc(name string) bool {
+	return strings.EqualFold(name, "extract") || strings.EqualFold(name, "position")
+}
+
+// convertSQLSyntaxFunc rebuilds the dedicated node for a keyword-syntax function.
+func convertSQLSyntaxFunc(name string, fc *pg.FuncCall) (sql.Expression, error) {
+	args := fc.GetArgs()
+	switch {
+	case strings.EqualFold(name, "extract"):
+		// extract(field_const, source): the field is a bare string constant.
+		if len(args) != 2 {
+			return nil, sqlparse.Unsupportedf("EXTRACT with %d arguments", len(args))
+		}
+		field := args[0].GetAConst().GetSval()
+		if field == nil {
+			return nil, sqlparse.Unsupported("EXTRACT field is not a constant")
+		}
+		operand, err := convertExpr(args[1])
+		if err != nil {
+			return nil, err
+		}
+		return sql.Extract(field.GetSval(), operand), nil
+	case strings.EqualFold(name, "position"):
+		// position(str, sub): PostgreSQL stores the operands swapped relative to the
+		// POSITION(sub IN str) source order.
+		if len(args) != 2 {
+			return nil, sqlparse.Unsupportedf("POSITION with %d arguments", len(args))
+		}
+		str, err := convertExpr(args[0])
+		if err != nil {
+			return nil, err
+		}
+		substring, err := convertExpr(args[1])
+		if err != nil {
+			return nil, err
+		}
+		return sql.Position(substring, str), nil
+	default:
+		return nil, sqlparse.Unsupportedf("SQL-syntax function %q", name)
+	}
 }
 
 func convertCount(fc *pg.FuncCall) (sql.Expression, error) {

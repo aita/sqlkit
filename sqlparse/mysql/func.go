@@ -16,11 +16,64 @@ func convertFuncCall(fc *ast.FuncCallExpr) (sql.Expression, error) {
 	if fc.Schema.O != "" {
 		return nil, sqlparse.Unsupportedf("schema-qualified function %s.%s", fc.Schema.O, fc.FnName.O)
 	}
+	// EXTRACT(unit FROM x) and POSITION(sub IN str) keep keyword syntax: rendered
+	// as the call form EXTRACT(unit, x) / POSITION(sub, str), MySQL's grammar
+	// rejects them, so rebuild the dedicated nodes that emit the keyword form.
+	switch fc.FnName.L {
+	case "extract":
+		if expr, err := convertExtract(fc); err != nil {
+			return nil, err
+		} else if expr != nil {
+			return expr, nil
+		}
+	case "position":
+		if expr, err := convertPosition(fc); err != nil {
+			return nil, err
+		} else if expr != nil {
+			return expr, nil
+		}
+	}
 	args, err := convertExprAnys(fc.Args)
 	if err != nil {
 		return nil, err
 	}
 	return sql.Func(strings.ToUpper(fc.FnName.L), args...), nil
+}
+
+// convertExtract rebuilds EXTRACT(unit FROM operand) from its call form
+// extract(TimeUnit, operand). It returns a nil expression (not an error) for any
+// shape it does not recognize, so the caller falls back to a generic call.
+func convertExtract(fc *ast.FuncCallExpr) (sql.Expression, error) {
+	if len(fc.Args) != 2 {
+		return nil, nil
+	}
+	unit, ok := fc.Args[0].(*ast.TimeUnitExpr)
+	if !ok {
+		return nil, nil
+	}
+	operand, err := convertExpr(fc.Args[1])
+	if err != nil {
+		return nil, err
+	}
+	return sql.Extract(unit.Unit.String(), operand), nil
+}
+
+// convertPosition rebuilds POSITION(substring IN str) from its call form
+// position(substring, str). TiDB keeps the source operand order, unlike
+// PostgreSQL.
+func convertPosition(fc *ast.FuncCallExpr) (sql.Expression, error) {
+	if len(fc.Args) != 2 {
+		return nil, nil
+	}
+	substring, err := convertExpr(fc.Args[0])
+	if err != nil {
+		return nil, err
+	}
+	str, err := convertExpr(fc.Args[1])
+	if err != nil {
+		return nil, err
+	}
+	return sql.Position(substring, str), nil
 }
 
 // convertAggregate converts an aggregate function. COUNT maps to sqlkit's
