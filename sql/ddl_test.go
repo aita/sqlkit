@@ -768,3 +768,43 @@ func TestDDLMorePlumbing(t *testing.T) {
 		}
 	}
 }
+
+// TestDDLCompileErrors covers the validation/error branches of the DDL compiler.
+func TestDDLCompileErrors(t *testing.T) {
+	pg, my := PostgreSQLDialect{}, MySQLDialect{}
+	tbl := Table{Name: NewIdent("t")}
+	intCol := func(n string) ColumnDef { return ColumnDef{Name: NewIdent(n), Type: EngineType{Name: "int"}} }
+	errOn := func(name string, d Dialect, q Query) {
+		t.Helper()
+		if _, _, err := q.ToSQL(d); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+	}
+
+	errOn("unique no cols", pg, CreateTable(tbl).Column(intCol("a")).Unique("u"))
+	errOn("index no cols", my, CreateTable(tbl).Column(intCol("a")).Index("i"))
+	errOn("col no type", pg, CreateTable(tbl).Column(ColumnDef{Name: NewIdent("a")}))
+	errOn("default+generated", pg, CreateTable(tbl).Column(ColumnDef{Name: NewIdent("a"),
+		Type: EngineType{Name: "int"}, Default: Raw("0"), Generated: &GeneratedColumn{Expression: Raw("1"), Stored: true}}))
+	errOn("onupdate on pg", pg, CreateTable(tbl).Column(ColumnDef{Name: NewIdent("a"),
+		Type: EngineType{Name: "timestamp"}, OnUpdate: Raw("CURRENT_TIMESTAMP")}))
+	errOn("ref empty", pg, CreateTable(tbl).Column(ColumnDef{Name: NewIdent("a"),
+		Type: EngineType{Name: "int"}, References: &ColumnReference{}}))
+	errOn("bad default expr", pg, CreateTable(tbl).Column(ColumnDef{Name: NewIdent("a"),
+		Type: EngineType{Name: "int"}, Default: UnaryExpression{Operand: Col("x")}}))
+	errOn("drop no tables", pg, DropTable())
+	errOn("view no query", pg, CreateView(tbl, nil))
+	errOn("view binds values", pg, CreateView(tbl, Select(Col("a")).From(orgs).Where(Eq(Col("a"), Val(1)))))
+	errOn("truncate no tables", pg, Truncate())
+	errOn("truncate multi mysql", my, Truncate(tbl, Table{Name: NewIdent("u")}))
+	errOn("truncate cascade mysql", my, Truncate(tbl).Cascade())
+	errOn("alter empty", pg, AlterTable(tbl))
+	errOn("add unique no cols", pg, AlterTable(tbl).AddUnique("u"))
+	errOn("column modify on mysql", my, AlterTable(tbl).SetNotNull("a"))
+
+	// Raw alterations for the no-definition / unsupported-kind guards.
+	errOn("add column nil def", pg, AlterTableStmt{Table: tbl, Alterations: []Alteration{{Kind: AlterAddColumn}}})
+	errOn("restate nil def", pg, AlterTableStmt{Table: tbl, Alterations: []Alteration{{Kind: AlterRestateColumn}}})
+	errOn("add fk nil", pg, AlterTableStmt{Table: tbl, Alterations: []Alteration{{Kind: AlterAddForeignKey}}})
+	errOn("unsupported kind", pg, AlterTableStmt{Table: tbl, Alterations: []Alteration{{Kind: AlterationKind(9999)}}})
+}
