@@ -1,6 +1,7 @@
 package mysql
 
 import (
+	"math"
 	"strconv"
 
 	"github.com/aita/sqlkit/sql"
@@ -493,6 +494,11 @@ func intLiteral(node ast.ExprNode) (int, error) {
 	case int64:
 		return int(n), nil
 	case uint64:
+		// A value past the int range overflows to a negative LIMIT/OFFSET (invalid
+		// SQL); it cannot be modeled, so fall back to raw.
+		if n > math.MaxInt {
+			return 0, sqlparse.Unsupported("LIMIT/OFFSET out of range")
+		}
 		return int(n), nil
 	default:
 		return 0, sqlparse.Unsupported("non-integer LIMIT/OFFSET")

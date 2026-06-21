@@ -436,3 +436,9 @@ func TestSelectPlaceholderPreserved(t *testing.T) {
 func TestColumnIdentifierWithDotFallsBackToRaw(t *testing.T) {
 	assertRaw(t, "SELECT `a.b` FROM t")
 }
+
+// A LIMIT value past the int range overflows to a negative LIMIT, which MySQL
+// rejects; such a statement falls back to raw rather than mis-render it.
+func TestLimitOutOfRangeFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT a FROM t LIMIT 9227000000000000000")
+}
