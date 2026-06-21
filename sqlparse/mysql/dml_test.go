@@ -160,3 +160,14 @@ func TestDMLReturningFallsBackToRaw(t *testing.T) {
 func TestDeleteTargetDistinctFromBaseFallsBackToRaw(t *testing.T) {
 	assertRaw(t, "DELETE users FROM orders JOIN users ON orders.uid = users.id")
 }
+
+// TiDB accepts an INSERT whose row arity differs from its column list, or one
+// with no column list at all; sqlkit's compiler requires a column list and a
+// matching arity, so both fall back to raw rather than fail to compile.
+func TestInsertColumnValueMismatchFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "INSERT INTO t (a) VALUES (1, 2)")
+}
+
+func TestInsertWithoutColumnsFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "INSERT INTO t VALUES (1, 2, 3)")
+}

@@ -44,10 +44,20 @@ func convertInsert(s *pg.InsertStmt) (sql.Query, error) {
 			return nil, sqlparse.Unsupportedf("insert source %T", src.GetNode())
 		}
 		if values := inner.GetValuesLists(); len(values) > 0 {
+			// sqlkit's compiler requires an explicit column list for a VALUES insert,
+			// and a row whose arity differs from it cannot be compiled. Fall back to
+			// raw rather than build an INSERT the compiler must reject.
+			ncols := len(s.GetCols())
+			if ncols == 0 {
+				return nil, sqlparse.Unsupported("INSERT without a column list")
+			}
 			for _, rowNode := range values {
 				row := rowNode.GetList()
 				if row == nil {
 					return nil, sqlparse.Unsupportedf("VALUES row %T", rowNode.GetNode())
+				}
+				if len(row.GetItems()) != ncols {
+					return nil, sqlparse.Unsupportedf("INSERT row has %d values for %d columns", len(row.GetItems()), ncols)
 				}
 				cells := make([]any, 0, len(row.GetItems()))
 				for _, item := range row.GetItems() {
