@@ -134,3 +134,16 @@ func TestTablesSubqueriesAndCTEs(t *testing.T) {
 		})
 	}
 }
+
+func TestTablesCompoundWithOrderBy(t *testing.T) {
+	users := sql.Table{Name: sql.NewIdent("users")}
+	orders := sql.Table{Name: sql.NewIdent("orders")}
+	// A UNION (CompoundStmt) with a top-level ORDER BY: tables come from both arms,
+	// and the ORDER BY term is walked for embedded subqueries.
+	q := sql.Select(sql.Col("id")).From(users).
+		Union(sql.Select(sql.Col("user_id")).From(orders)).
+		OrderBy(sql.Asc(sql.Col("id")))
+	if got := analyze.Tables(q); !reflect.DeepEqual(got, []string{"users", "orders"}) {
+		t.Errorf("Tables(union) = %v, want [users orders]", got)
+	}
+}

@@ -1,6 +1,7 @@
 package analyze_test
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/aita/sqlkit/analyze"
@@ -50,5 +51,51 @@ func TestKindHelpers(t *testing.T) {
 		if k.IsRead() {
 			t.Errorf("%s.IsRead() = true, want false", k)
 		}
+	}
+}
+
+func TestKindOfAndTablesDDL(t *testing.T) {
+	users := sql.Table{Name: sql.NewIdent("users")}
+	orders := sql.Table{Name: sql.NewIdent("orders")}
+	sub := sql.Select(sql.Col("id")).From(users)
+
+	tests := []struct {
+		name       string
+		query      sql.Query
+		wantTables []string
+	}{
+		{"create table", sql.CreateTable(users).Column(sql.ColumnDef{Name: sql.NewIdent("id"), Type: sql.EngineType{Name: "int8"}}), []string{"users"}},
+		{"create view", sql.CreateView(sql.Table{Name: sql.NewIdent("v")}, sub), []string{"v"}},
+		{"create index", sql.CreateIndex("idx", users, "id"), []string{"users"}},
+		{"drop index", sql.DropIndex("idx", users), []string{"users"}},
+		{"drop foreign key", sql.DropForeignKey(users, "fk"), []string{"users"}},
+		{"comment on table", sql.CommentOnTable(users, "c"), []string{"users"}},
+		{"comment on column", sql.CommentOnColumn(users, "id", "c"), []string{"users"}},
+		{"alter table", sql.AlterTable(users).DropColumn("old"), []string{"users"}},
+		{"drop table multiple", sql.DropTable(users, orders), []string{"users", "orders"}},
+		{"drop view", sql.DropView(sql.Table{Name: sql.NewIdent("v")}), []string{"v"}},
+		{"truncate multiple", sql.Truncate(users, orders), []string{"users", "orders"}},
+		{"create schema", sql.CreateSchema("s"), nil},
+		{"drop schema", sql.DropSchema("s"), nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			kind, ok := analyze.KindOf(tt.query)
+			if !ok || kind != analyze.StmtDDL {
+				t.Errorf("KindOf = (%v, %v), want (ddl, true)", kind, ok)
+			}
+			if got := analyze.Tables(tt.query); !reflect.DeepEqual(got, tt.wantTables) {
+				t.Errorf("Tables = %v, want %v", got, tt.wantTables)
+			}
+		})
+	}
+}
+
+func TestKindOfUnknown(t *testing.T) {
+	// A statement of an unrecognized, non-DDL type yields ok=false. ValuesQuery is
+	// a SELECT-kind read, so use it to confirm the StmtSelect arm via Tables=nil.
+	if got := analyze.Tables(sql.Values([]sql.Expression{sql.Expr(1)})); got != nil {
+		t.Errorf("Tables(values) = %v, want nil", got)
 	}
 }

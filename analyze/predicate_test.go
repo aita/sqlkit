@@ -167,3 +167,25 @@ func TestNullEqualityPredicate(t *testing.T) {
 		})
 	}
 }
+
+func TestNullEqualityOperators(t *testing.T) {
+	users := sql.Table{Name: sql.NewIdent("users")}
+	tests := []struct {
+		name  string
+		where sql.Expression
+		want  bool
+	}{
+		{"equals null", sql.Eq(sql.Col("deleted_at"), sql.Val(nil)), true},
+		{"not-equals null", sql.Ne(sql.Col("deleted_at"), sql.Val(nil)), true},
+		{"equals non-null", sql.Eq(sql.Col("id"), sql.Val(1)), false},
+		{"less-than null is not eq", sql.Lt(sql.Col("id"), sql.Val(nil)), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			q := sql.Select(sql.Col("id")).From(users).Where(tt.where)
+			if got := analyze.NullEqualityPredicate(q); got != tt.want {
+				t.Errorf("NullEqualityPredicate = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
