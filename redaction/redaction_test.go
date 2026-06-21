@@ -213,7 +213,7 @@ var (
 )
 
 // TestRewriteDelete covers the DELETE path: WHERE, JOIN, USING, and RETURNING all
-// run through the masker, and only the sensitive column's literal is masked.
+// run through the redactor, and only the sensitive column's literal is masked.
 func TestRewriteDelete(t *testing.T) {
 	m := redaction.New(redaction.Columns("users.name"))
 
@@ -370,7 +370,7 @@ func TestRewriteExprForms(t *testing.T) {
 }
 
 // TestRewriteSelectClauses pins that HAVING, GROUP BY, ORDER BY, and DISTINCT ON
-// each pass through the masker.
+// each pass through the redactor.
 func TestRewriteSelectClauses(t *testing.T) {
 	m := redaction.New(redaction.Columns("users.name"))
 

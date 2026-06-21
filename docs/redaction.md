@@ -3,7 +3,7 @@
 The [`redaction`](https://pkg.go.dev/github.com/aita/sqlkit/redaction) package masks the
 sensitive string literals embedded in a built statement, so a query can be logged
 or forwarded without leaking PII. A
-[`Masker`](https://pkg.go.dev/github.com/aita/sqlkit/redaction#Masker)
+[`Redactor`](https://pkg.go.dev/github.com/aita/sqlkit/redaction#Redactor)
 rewrites the statement's AST — across `SELECT`, `INSERT`, `UPDATE`, `DELETE`,
 and `MERGE` — replacing every string literal compared or assigned to a PII
 column with a fixed mask, while leaving the statement's shape and every

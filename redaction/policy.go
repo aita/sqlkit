@@ -9,11 +9,11 @@ import (
 
 // Policy is the hint that decides which columns are sensitive (PII) and so have
 // their embedded string literals masked. It answers a single question — is this
-// table's column sensitive? — so a Masker can ask it of every resolved column.
+// table's column sensitive? — so a Redactor can ask it of every resolved column.
 //
 // Implementations come from the source of the knowledge: Columns from an explicit
 // list (no schema needed), CommentMarker from a schema's column comments (which
-// carries its own metadata). Combine merges several into one, so a Masker can be
+// carries its own metadata). Combine merges several into one, so a Redactor can be
 // driven by any mix, and none of them forces metadata on a caller that does not
 // have it.
 type Policy interface {

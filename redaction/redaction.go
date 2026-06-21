@@ -1,6 +1,6 @@
 // Package redact masks the sensitive string literals embedded in a parsed SQL
 // statement. Given an introspected schema (meta.Metadata) and a Policy that names
-// the PII columns, a Masker rewrites a statement's AST so that every string
+// the PII columns, a Redactor rewrites a statement's AST so that every string
 // literal compared or assigned to a sensitive column is replaced with a fixed
 // mask value, leaving the statement's shape — and every non-sensitive value —
 // intact.
@@ -9,7 +9,7 @@
 // table sources, resolve ties a column reference to its table, and Policy says
 // whether that column is sensitive. Resolution failing safe is the default —
 // an unqualified column that is ambiguous across in-scope tables is masked when
-// any candidate marks it PII — so the masker errs toward over-masking rather than
+// any candidate marks it PII — so the redactor errs toward over-masking rather than
 // leaking. Masking is confined to string literals (ValueExpression holding a
 // string): numbers, bind placeholders, and column references are never touched.
 //
@@ -26,29 +26,29 @@ import (
 // DefaultMask is the replacement used for a masked string when none is configured.
 const DefaultMask = "*****"
 
-// Masker rewrites the sensitive string literals of a statement. Build one with
+// Redactor rewrites the sensitive string literals of a statement. Build one with
 // New and reuse it across statements; it is read-only and safe for concurrent use.
-type Masker struct {
+type Redactor struct {
 	policy Policy
 	mask   string
 }
 
-// Option configures a Masker.
-type Option func(*Masker)
+// Option configures a Redactor.
+type Option func(*Redactor)
 
 // WithMask sets the string a masked literal is replaced with (the default is
 // DefaultMask).
 func WithMask(mask string) Option {
-	return func(m *Masker) { m.mask = mask }
+	return func(m *Redactor) { m.mask = mask }
 }
 
-// New builds a Masker for policy, configured by opts. It needs no schema:
+// New builds a Redactor for policy, configured by opts. It needs no schema:
 // columns are resolved structurally (by alias and FROM scope) through analyze,
 // and the policy decides sensitivity — an unqualified column that does not
 // resolve to a single table is masked when any in-scope table marks it sensitive.
 // String literals tied to a sensitive column are replaced with the mask value.
-func New(policy Policy, opts ...Option) *Masker {
-	m := &Masker{policy: policy, mask: DefaultMask}
+func New(policy Policy, opts ...Option) *Redactor {
+	m := &Redactor{policy: policy, mask: DefaultMask}
 	for _, o := range opts {
 		o(m)
 	}
@@ -59,14 +59,14 @@ func New(policy Policy, opts ...Option) *Masker {
 // does not mutate q: rewritten clauses are rebuilt on copies, and an unchanged
 // statement is returned as-is. A nil query, or one with no policy, passes through
 // unchanged.
-func (m *Masker) Apply(q sql.Query) sql.Query {
+func (m *Redactor) Apply(q sql.Query) sql.Query {
 	if q == nil || m.policy == nil {
 		return q
 	}
 	return m.rewriteQuery(q)
 }
 
-func (m *Masker) rewriteQuery(q sql.Query) sql.Query {
+func (m *Redactor) rewriteQuery(q sql.Query) sql.Query {
 	if q == nil {
 		return nil
 	}
@@ -92,7 +92,7 @@ func (m *Masker) rewriteQuery(q sql.Query) sql.Query {
 	}
 }
 
-func (m *Masker) rewriteSelect(v sql.SelectStmt, scope []analysis.SourceRef) sql.Query {
+func (m *Redactor) rewriteSelect(v sql.SelectStmt, scope []analysis.SourceRef) sql.Query {
 	v.From = m.rewriteSource(v.From)
 	v.Joins = m.rewriteJoins(v.Joins, scope)
 	if len(v.Columns) > 0 {
@@ -110,7 +110,7 @@ func (m *Masker) rewriteSelect(v sql.SelectStmt, scope []analysis.SourceRef) sql
 	return v
 }
 
-func (m *Masker) rewriteInsert(v sql.InsertStmt, scope []analysis.SourceRef) sql.Query {
+func (m *Redactor) rewriteInsert(v sql.InsertStmt, scope []analysis.SourceRef) sql.Query {
 	if len(v.Rows) > 0 {
 		// The target's columns are named positionally by v.Columns; mask the value
 		// in each row whose column is sensitive. Without a column list the positions
@@ -147,7 +147,7 @@ func (m *Masker) rewriteInsert(v sql.InsertStmt, scope []analysis.SourceRef) sql
 	return v
 }
 
-func (m *Masker) rewriteUpdate(v sql.UpdateStmt, scope []analysis.SourceRef) sql.Query {
+func (m *Redactor) rewriteUpdate(v sql.UpdateStmt, scope []analysis.SourceRef) sql.Query {
 	// SET targets are the update target's own columns; resolve them against it
 	// alone so a same-named column on a joined table cannot make them ambiguous.
 	v.Sets = m.rewriteAssignments(v.Sets, analysis.TargetScope(v.Table))
@@ -158,7 +158,7 @@ func (m *Masker) rewriteUpdate(v sql.UpdateStmt, scope []analysis.SourceRef) sql
 	return v
 }
 
-func (m *Masker) rewriteDelete(v sql.DeleteStmt, scope []analysis.SourceRef) sql.Query {
+func (m *Redactor) rewriteDelete(v sql.DeleteStmt, scope []analysis.SourceRef) sql.Query {
 	v.Using = m.rewriteSources(v.Using)
 	v.Joins = m.rewriteJoins(v.Joins, scope)
 	v.Where = m.rewriteExpr(v.Where, scope)
@@ -166,7 +166,7 @@ func (m *Masker) rewriteDelete(v sql.DeleteStmt, scope []analysis.SourceRef) sql
 	return v
 }
 
-func (m *Masker) rewriteMerge(v sql.MergeStmt, scope []analysis.SourceRef) sql.Query {
+func (m *Redactor) rewriteMerge(v sql.MergeStmt, scope []analysis.SourceRef) sql.Query {
 	target := analysis.TargetScope(v.Target)
 	v.Using = m.rewriteSource(v.Using)
 	v.On = m.rewriteExpr(v.On, scope)
@@ -185,7 +185,7 @@ func (m *Masker) rewriteMerge(v sql.MergeStmt, scope []analysis.SourceRef) sql.Q
 
 // rewriteInsertValues masks the values whose paired InsertColumns are sensitive
 // (the MERGE ... WHEN NOT MATCHED THEN INSERT form), recursing through the rest.
-func (m *Masker) rewriteInsertValues(columns []sql.Ident, values []sql.Expression, scope []analysis.SourceRef) []sql.Expression {
+func (m *Redactor) rewriteInsertValues(columns []sql.Ident, values []sql.Expression, scope []analysis.SourceRef) []sql.Expression {
 	if len(values) == 0 {
 		return values
 	}
@@ -202,7 +202,7 @@ func (m *Masker) rewriteInsertValues(columns []sql.Ident, values []sql.Expressio
 
 // rewriteAssignments masks the value of each assignment whose target column is
 // sensitive, recursing through targets and values otherwise.
-func (m *Masker) rewriteAssignments(as []sql.Assignment, scope []analysis.SourceRef) []sql.Assignment {
+func (m *Redactor) rewriteAssignments(as []sql.Assignment, scope []analysis.SourceRef) []sql.Assignment {
 	if len(as) == 0 {
 		return as
 	}
@@ -217,7 +217,7 @@ func (m *Masker) rewriteAssignments(as []sql.Assignment, scope []analysis.Source
 	return out
 }
 
-func (m *Masker) rewriteJoins(joins []sql.JoinClause, scope []analysis.SourceRef) []sql.JoinClause {
+func (m *Redactor) rewriteJoins(joins []sql.JoinClause, scope []analysis.SourceRef) []sql.JoinClause {
 	if len(joins) == 0 {
 		return joins
 	}
@@ -229,7 +229,7 @@ func (m *Masker) rewriteJoins(joins []sql.JoinClause, scope []analysis.SourceRef
 	return out
 }
 
-func (m *Masker) rewriteSources(sources []sql.Source) []sql.Source {
+func (m *Redactor) rewriteSources(sources []sql.Source) []sql.Source {
 	if len(sources) == 0 {
 		return sources
 	}
@@ -242,7 +242,7 @@ func (m *Masker) rewriteSources(sources []sql.Source) []sql.Source {
 
 // rewriteSource rewrites a subquery source's inner query; a base table or VALUES
 // source is returned unchanged.
-func (m *Masker) rewriteSource(src sql.Source) sql.Source {
+func (m *Redactor) rewriteSource(src sql.Source) sql.Source {
 	if src == nil {
 		return nil
 	}
@@ -254,7 +254,7 @@ func (m *Masker) rewriteSource(src sql.Source) sql.Source {
 	return src
 }
 
-func (m *Masker) rewriteSelections(ss []sql.Selection, scope []analysis.SourceRef) []sql.Selection {
+func (m *Redactor) rewriteSelections(ss []sql.Selection, scope []analysis.SourceRef) []sql.Selection {
 	if len(ss) == 0 {
 		return ss
 	}
@@ -268,7 +268,7 @@ func (m *Masker) rewriteSelections(ss []sql.Selection, scope []analysis.SourceRe
 // rewriteSelection rewrites a SELECT-list item, looking through an AS alias and
 // recursing into any subquery the item embeds. A non-expression item (a "*") is
 // unchanged.
-func (m *Masker) rewriteSelection(s sql.Selection, scope []analysis.SourceRef) sql.Selection {
+func (m *Redactor) rewriteSelection(s sql.Selection, scope []analysis.SourceRef) sql.Selection {
 	switch x := s.(type) {
 	case sql.AliasedSelection:
 		x.Selection = m.rewriteSelection(x.Selection, scope)
@@ -283,7 +283,7 @@ func (m *Masker) rewriteSelection(s sql.Selection, scope []analysis.SourceRef) s
 	}
 }
 
-func (m *Masker) rewriteOrderTerms(terms []sql.OrderTerm, scope []analysis.SourceRef) []sql.OrderTerm {
+func (m *Redactor) rewriteOrderTerms(terms []sql.OrderTerm, scope []analysis.SourceRef) []sql.OrderTerm {
 	if len(terms) == 0 {
 		return terms
 	}
