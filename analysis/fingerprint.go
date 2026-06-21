@@ -18,14 +18,26 @@ var (
 	numberLiteralRe = regexp.MustCompile(`\b\d+(\.\d+)?\b`)
 	// whitespaceRe matches a run of whitespace.
 	whitespaceRe = regexp.MustCompile(`\s+`)
+	// limitOffsetRe matches the numeric operand of a LIMIT or OFFSET clause.
+	// LIMIT/OFFSET counts are compiled straight into the SQL as integer literals
+	// (never as bind placeholders), so two otherwise-identical paginated reads
+	// that differ only in page size or offset would fingerprint differently
+	// unless those numerals are canonicalized here. Only the operand is captured
+	// for rewriting (the keyword is preserved), so structural numbers elsewhere
+	// in the statement are left untouched.
+	limitOffsetRe = regexp.MustCompile(`(?i)(\b(?:LIMIT|OFFSET)\s+)\d+`)
 )
 
 // Fingerprint returns the normalized form of a parsed query used to group
 // repeats. It recompiles the AST through a dialect that emits a constant "?" for
 // every bind placeholder (the parser has already collapsed literals to
-// placeholders), so the result is numbering- and dialect-placeholder-independent
-// with no text post-processing. ok is false when q is nil or fails to compile,
-// in which case callers fall back to FingerprintRaw on the SQL text.
+// placeholders). Two text passes then canonicalize the values that do not flow
+// through Placeholder: a $N/?/:name placeholder that arrived verbatim as a raw
+// fragment (sql.Raw, as the postgres frontend produces) is collapsed to the
+// canonical "?", and LIMIT/OFFSET counts (compiled as plain integers) are
+// collapsed too. The result is therefore numbering- and value-independent. ok is
+// false when q is nil or fails to compile, in which case callers fall back to
+// FingerprintRaw on the SQL text.
 func Fingerprint(q sql.Query, dialect sql.Dialect) (string, bool) {
 	if q == nil {
 		return "", false
@@ -34,6 +46,14 @@ func Fingerprint(q sql.Query, dialect sql.Dialect) (string, bool) {
 	if err != nil {
 		return "", false
 	}
+	// A placeholder that reached the AST as a raw fragment (e.g. sql.Raw("$1"))
+	// is re-emitted verbatim and never calls Placeholder, so collapse any such
+	// $N/?/:name to the same canonical "?" that the dialect emits.
+	normalized = placeholderRe.ReplaceAllString(normalized, "?")
+	// LIMIT/OFFSET counts are integer literals in the SQL, not placeholders;
+	// collapse their operands so paginated reads that differ only in page size
+	// or offset share a fingerprint.
+	normalized = limitOffsetRe.ReplaceAllString(normalized, "${1}?")
 	return collapse(normalized), true
 }
 
