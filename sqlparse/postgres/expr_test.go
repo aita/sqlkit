@@ -266,3 +266,274 @@ func TestExprSimilarTo(t *testing.T) {
 		`SELECT "id" FROM "t" WHERE (("name" SIMILAR TO $1) AND ("x" NOT SIMILAR TO $2))`,
 		"a%", "b%")
 }
+
+// A unary minus written with a space (so PostgreSQL does not fold it into a
+// single signed constant) reaches convertUnaryOp, which negates the literal in
+// place. A plain integer becomes a signed value parameter.
+func TestExprUnaryMinusInteger(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT id FROM t WHERE a = - 5",
+		selWhere(sql.Eq(sql.Col("a"), -5)),
+		`SELECT "id" FROM "t" WHERE ("a" = $1)`,
+		-5)
+}
+
+// A unary plus on a constant is a no-op: the value is returned unchanged.
+func TestExprUnaryPlusInteger(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT id FROM t WHERE a = +5",
+		selWhere(sql.Eq(sql.Col("a"), 5)),
+		`SELECT "id" FROM "t" WHERE ("a" = $1)`,
+		5)
+}
+
+// A unary minus on a decimal literal keeps the verbatim spelling, prefixing the
+// minus rather than evaluating it.
+func TestExprUnaryMinusDecimal(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT id FROM t WHERE a = - 1.5",
+		selWhere(sql.Eq(sql.Col("a"), sql.Raw("-1.5"))),
+		`SELECT "id" FROM "t" WHERE ("a" = -1.5)`)
+}
+
+// A unary operator applied to a non-constant (a column reference) is not
+// representable, so the statement falls back to raw.
+func TestExprUnaryMinusColumnFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT id FROM t WHERE a = -b")
+}
+
+// GREATEST/LEAST map to the corresponding lower-cased function calls.
+func TestExprGreatestLeast(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT GREATEST(a, b), LEAST(c, d) FROM t",
+		sql.Select(sql.Func("greatest", sql.Col("a"), sql.Col("b")), sql.Func("least", sql.Col("c"), sql.Col("d"))).
+			From(sql.Table{Name: sql.NewIdent("t")}),
+		`SELECT greatest("a", "b"), least("c", "d") FROM "t"`)
+}
+
+// The remaining niladic SQL value functions round-trip as their verbatim
+// keyword (the common subset is already covered in expr_test.go).
+func TestExprMoreSQLValueFunctions(t *testing.T) {
+	for _, kw := range []string{
+		"LOCALTIME",
+		"LOCALTIMESTAMP",
+		"CURRENT_ROLE",
+		"CURRENT_CATALOG",
+		"CURRENT_SCHEMA",
+		"USER",
+	} {
+		assertRoundTrip(t,
+			"SELECT id FROM t WHERE x = "+kw,
+			selWhere(sql.Eq(sql.Col("x"), sql.Raw(kw))),
+			`SELECT "id" FROM "t" WHERE ("x" = `+kw+`)`)
+	}
+}
+
+// PostgreSQL parses a 'false' boolean literal as a 'bool' typecast of the
+// string 'f', which convertTypeCast folds back to a boolean value.
+func TestExprBooleanFalseLiteral(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT id FROM t WHERE active = false",
+		selWhere(sql.Eq(sql.Col("active"), false)),
+		`SELECT "id" FROM "t" WHERE ("active" = $1)`,
+		false)
+}
+
+// NULLIF(a, b) maps to a nullif function call.
+func TestExprNullIf(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT NULLIF(a, b) FROM t",
+		sql.Select(sql.Func("nullif", sql.Col("a"), sql.Col("b"))).From(sql.Table{Name: sql.NewIdent("t")}),
+		`SELECT nullif("a", "b") FROM "t"`)
+}
+
+// x <> ALL(ARRAY[...]) maps to an ALL-quantified array comparison.
+func TestExprArrayAllQuantified(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT id FROM t WHERE x <> ALL(ARRAY[1, 2])",
+		selWhere(sql.AllArray(sql.Col("x"), "<>", sql.Array(1, 2))),
+		`SELECT "id" FROM "t" WHERE ("x" <> ALL(ARRAY[$1, $2]))`,
+		1, 2)
+}
+
+// IN with a list of string literals binds each as a parameter.
+func TestExprInStringList(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT id FROM t WHERE a IN ('x', 'y')",
+		selWhere(sql.In(sql.Col("a"), "x", "y")),
+		`SELECT "id" FROM "t" WHERE ("a" IN ($1, $2))`,
+		"x", "y")
+}
+
+// NOT ILIKE (the !~~* operator) maps to a negated ILIKE.
+func TestExprNotILike(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT id FROM t WHERE a NOT ILIKE 'x'",
+		selWhere(sql.Not(sql.ILike(sql.Col("a"), "x"))),
+		`SELECT "id" FROM "t" WHERE (NOT ("a" ILIKE $1))`,
+		"x")
+}
+
+// FROM ONLY t drops the ONLY qualifier (the builder does not model inheritance
+// control) and parses to a plain table source.
+func TestSelectFromOnly(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT a FROM ONLY t",
+		sql.Select(sql.Col("a")).From(sql.Table{Name: sql.NewIdent("t")}),
+		`SELECT "a" FROM "t"`)
+}
+
+// A set-returning function in FROM is not modeled and round-trips raw.
+func TestSelectFunctionSourceFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT * FROM generate_series(1, 5)")
+}
+
+// BETWEEN SYMMETRIC is not modeled and round-trips raw.
+func TestExprBetweenSymmetricFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT id FROM t WHERE x BETWEEN SYMMETRIC 1 AND 5")
+}
+
+// IS FALSE / IS UNKNOWN map to IS comparisons against the verbatim truth-value
+// keyword (the TRUE cases are covered in expr_test.go).
+func TestExprBooleanTestFalseUnknown(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT id FROM t WHERE a IS FALSE AND b IS UNKNOWN",
+		selWhere(sql.And(
+			sql.BinaryExpression{Left: sql.Col("a"), Operator: "IS", Right: sql.Raw("FALSE")},
+			sql.BinaryExpression{Left: sql.Col("b"), Operator: "IS", Right: sql.Raw("UNKNOWN")},
+		)),
+		`SELECT "id" FROM "t" WHERE (("a" IS FALSE) AND ("b" IS UNKNOWN))`)
+}
+
+// IS NOT FALSE / IS NOT UNKNOWN map to IS NOT comparisons.
+func TestExprBooleanTestNotFalseNotUnknown(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT id FROM t WHERE a IS NOT FALSE AND b IS NOT UNKNOWN",
+		selWhere(sql.And(
+			sql.BinaryExpression{Left: sql.Col("a"), Operator: "IS NOT", Right: sql.Raw("FALSE")},
+			sql.BinaryExpression{Left: sql.Col("b"), Operator: "IS NOT", Right: sql.Raw("UNKNOWN")},
+		)),
+		`SELECT "id" FROM "t" WHERE (("a" IS NOT FALSE) AND ("b" IS NOT UNKNOWN))`)
+}
+
+// An ON CONFLICT target listing several parenthesised columns is treated as an
+// expression target (each column becomes a reference).
+func TestInsertOnConflictMultipleExprTargets(t *testing.T) {
+	assertRoundTrip(t,
+		"INSERT INTO t (a) VALUES (1) ON CONFLICT ((a), (b)) DO NOTHING",
+		sql.InsertInto(sql.Table{Name: sql.NewIdent("t")}).Columns("a").Values(1).
+			OnConflictExpr(sql.Col("a"), sql.Col("b")).DoNothing(),
+		`INSERT INTO "t" ("a") VALUES ($1) ON CONFLICT (("a"), ("b")) DO NOTHING`,
+		1)
+}
+
+// An array typecast renders the element type with a trailing [] suffix.
+func TestExprArrayCast(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT a::int[] FROM t",
+		sql.Select(sql.Cast(sql.Col("a"), "integer[]")).From(sql.Table{Name: sql.NewIdent("t")}),
+		`SELECT CAST("a" AS integer[]) FROM "t"`)
+}
+
+// A string literal cast to boolean is not the t/f form PostgreSQL uses for
+// TRUE/FALSE, so it stays a plain CAST with the value bound.
+func TestExprStringCastToBoolean(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT '1'::boolean FROM t",
+		sql.Select(sql.Cast(sql.Val("1"), "boolean")).From(sql.Table{Name: sql.NewIdent("t")}),
+		`SELECT CAST($1 AS boolean) FROM "t"`,
+		"1")
+}
+
+// ALTER TABLE ... ADD CONSTRAINT CHECK with a boolean predicate exercises the
+// CHECK branch of applyAddConstraint together with staticExpr's BoolExpr path.
+func TestAlterTableAddCheckBooleanExpr(t *testing.T) {
+	assertRoundTrip(t,
+		"ALTER TABLE t ADD CONSTRAINT c CHECK (a > 0 AND b > 0)",
+		sql.AlterTable(sql.Table{Name: sql.NewIdent("t")}).AddCheck("c", sql.And(
+			sql.BinaryExpression{Left: sql.Col("a"), Operator: ">", Right: sql.Raw("0")},
+			sql.BinaryExpression{Left: sql.Col("b"), Operator: ">", Right: sql.Raw("0")},
+		)),
+		`ALTER TABLE "t" ADD CONSTRAINT "c" CHECK ((("a" > 0) AND ("b" > 0)));`)
+}
+
+// ALTER TABLE ... ADD PRIMARY KEY is not modeled by the typed builder and
+// round-trips raw.
+func TestAlterTableAddPrimaryKeyFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "ALTER TABLE t ADD PRIMARY KEY (a)")
+}
+
+// An inline column REFERENCES that names multiple referenced columns is not a
+// valid column-level foreign key and keeps the whole statement raw.
+func TestCreateTableMultiColumnInlineReferenceFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "CREATE TABLE t (a int, b int, uid int REFERENCES users (a, b))")
+}
+
+// The string concatenation operator parses to a binary "||" expression.
+func TestExprConcatOperator(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT a || b FROM t",
+		sql.Select(sql.BinaryExpression{Left: sql.Col("a"), Operator: "||", Right: sql.Col("b")}).
+			From(sql.Table{Name: sql.NewIdent("t")}),
+		`SELECT ("a" || "b") FROM "t"`)
+}
+
+// The POSIX regular-expression match operators each parse to a binary
+// expression carrying the verbatim operator.
+func TestExprRegexpOperators(t *testing.T) {
+	for _, op := range []string{"~", "!~", "~*", "!~*"} {
+		assertRoundTrip(t,
+			"SELECT id FROM t WHERE name "+op+" 'x'",
+			selWhere(sql.BinaryExpression{Left: sql.Col("name"), Operator: op, Right: sql.Val("x")}),
+			`SELECT "id" FROM "t" WHERE ("name" `+op+` $1)`,
+			"x")
+	}
+}
+
+// The JSON/JSONB accessor operators parse to binary expressions; the right
+// operand is bound as a parameter.
+func TestExprJSONAccessOperators(t *testing.T) {
+	cases := []struct {
+		op  string
+		arg string
+	}{
+		{"->", "a"},
+		{"->>", "a"},
+		{"#>", "{a,b}"},
+		{"#>>", "{a}"},
+	}
+	for _, tc := range cases {
+		assertRoundTrip(t,
+			"SELECT data"+tc.op+"'"+tc.arg+"' FROM t",
+			sql.Select(sql.BinaryExpression{Left: sql.Col("data"), Operator: tc.op, Right: sql.Val(tc.arg)}).
+				From(sql.Table{Name: sql.NewIdent("t")}),
+			`SELECT ("data" `+tc.op+` $1) FROM "t"`,
+			tc.arg)
+	}
+}
+
+// x <> ALL (subquery) is the canonical spelling of NOT IN with a subquery.
+func TestExprNotInSubquery(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT id FROM t WHERE x <> ALL (SELECT y FROM u)",
+		selWhere(sql.NotInQuery(sql.Col("x"), sql.Select(sql.Col("y")).From(sql.Table{Name: sql.NewIdent("u")}))),
+		`SELECT "id" FROM "t" WHERE ("x" NOT IN (SELECT "y" FROM "u"))`)
+}
+
+// x <> ANY (subquery) keeps the operator as an ANY-quantified comparison.
+func TestExprAnyQuantifiedOperator(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT id FROM t WHERE x <> ANY (SELECT y FROM u)",
+		selWhere(sql.Any(sql.Col("x"), "<>", sql.Select(sql.Col("y")).From(sql.Table{Name: sql.NewIdent("u")}))),
+		`SELECT "id" FROM "t" WHERE ("x" <> ANY (SELECT "y" FROM "u"))`)
+}
+
+// A GROUPING SETS element that nests ROLLUP is not modeled and round-trips raw.
+func TestGroupByNestedGroupingSetFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT a FROM t GROUP BY GROUPING SETS (ROLLUP (a, b))")
+}
+
+// An empty grouping set GROUP BY () is not modeled and round-trips raw.
+func TestGroupByEmptySetFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT a FROM t GROUP BY ()")
+}
