@@ -12,4 +12,4 @@
 // functions it needs into its own type. querytrace, for instance, uses them to
 // fill its QueryInfo, and they are equally the foundation other AST passes
 // (column resolution, masking) build on.
-package analyze
+package analysis

@@ -8,7 +8,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
-	"github.com/aita/sqlkit/analyze"
+	"github.com/aita/sqlkit/analysis"
 	qt "github.com/aita/sqlkit/querytrace"
 	"github.com/aita/sqlkit/querytrace/otelquery"
 )
@@ -20,17 +20,17 @@ func metricsTrace() *qt.Trace {
 	trace.RecordStatement(ctx, qt.Event{
 		Kind:     qt.EventQuery,
 		Duration: 10 * time.Millisecond,
-		Query:    &qt.QueryInfo{Analysis: analyze.Analysis{Fingerprint: "SELECT * FROM users", Kind: qt.StmtSelect}},
+		Query:    &qt.QueryInfo{Analysis: analysis.Analysis{Fingerprint: "SELECT * FROM users", Kind: qt.StmtSelect}},
 	})
 	trace.RecordStatement(ctx, qt.Event{
 		Kind:     qt.EventQuery,
 		Duration: 5 * time.Millisecond,
-		Query:    &qt.QueryInfo{Analysis: analyze.Analysis{Fingerprint: "SELECT * FROM users", Kind: qt.StmtSelect}},
+		Query:    &qt.QueryInfo{Analysis: analysis.Analysis{Fingerprint: "SELECT * FROM users", Kind: qt.StmtSelect}},
 	})
 	trace.RecordStatement(ctx, qt.Event{
 		Kind:     qt.EventExec,
 		Duration: 7 * time.Millisecond,
-		Query:    &qt.QueryInfo{Analysis: analyze.Analysis{Fingerprint: "INSERT INTO users", Kind: qt.StmtInsert}},
+		Query:    &qt.QueryInfo{Analysis: analysis.Analysis{Fingerprint: "INSERT INTO users", Kind: qt.StmtInsert}},
 	})
 	trace.RecordTxEnd(qt.TxCommit, txID)
 	return trace

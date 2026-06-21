@@ -1,4 +1,4 @@
-package introspect
+package introspection
 
 import (
 	"context"

@@ -1,4 +1,4 @@
-package redact_test
+package redaction_test
 
 import (
 	"reflect"
@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit/meta"
-	"github.com/aita/sqlkit/redact"
+	"github.com/aita/sqlkit/redaction"
 	"github.com/aita/sqlkit/sql"
 )
 
@@ -23,7 +23,7 @@ func args(t *testing.T, q sql.Query) []any {
 func TestApplyMasksSensitiveLiterals(t *testing.T) {
 	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
 	accounts := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("accounts")}
-	m := redact.New(redact.Columns("users.name"))
+	m := redaction.New(redaction.Columns("users.name"))
 
 	tests := []struct {
 		name string
@@ -91,7 +91,7 @@ func TestApplyMasksSensitiveLiterals(t *testing.T) {
 // still carries its real values after masking.
 func TestApplyDoesNotMutateInput(t *testing.T) {
 	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
-	m := redact.New(redact.Columns("users.name"))
+	m := redaction.New(redaction.Columns("users.name"))
 	q := sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Val("taro")))
 
 	_ = m.Apply(q)
@@ -104,7 +104,7 @@ func TestApplyDoesNotMutateInput(t *testing.T) {
 func TestApplyMasksSubquery(t *testing.T) {
 	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
 	accounts := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("accounts")}
-	m := redact.New(redact.Columns("users.name"))
+	m := redaction.New(redaction.Columns("users.name"))
 
 	q := sql.Select(sql.Star()).From(accounts).
 		Where(sql.InQuery(sql.Col("id"), sql.Select(sql.Col("id")).From(users).Where(sql.Eq(sql.Col("name"), sql.Val("taro")))))
@@ -116,7 +116,7 @@ func TestApplyMasksSubquery(t *testing.T) {
 // TestNumbersAndPlaceholdersNotMasked pins that only string literals are masked.
 func TestNumbersAndPlaceholdersNotMasked(t *testing.T) {
 	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
-	m := redact.New(redact.Columns("users.id"))
+	m := redaction.New(redaction.Columns("users.id"))
 	// id is PII here, but compared to a number: the number is not a string literal.
 	q := sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("id"), sql.Val(42)))
 	if got := args(t, m.Apply(q)); !reflect.DeepEqual(got, []any{42}) {
@@ -130,7 +130,7 @@ func TestPolicyFromCommentMarker(t *testing.T) {
 		Name:    "users",
 		Columns: []meta.Column{{Name: "id"}, {Name: "name", Comment: "the user's PII name"}, {Name: "email"}},
 	}}}
-	m := redact.New(redact.CommentMarker(md, func(_, _, comment string) bool {
+	m := redaction.New(redaction.CommentMarker(md, func(_, _, comment string) bool {
 		return strings.Contains(strings.ToLower(comment), "pii")
 	}))
 	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
@@ -145,7 +145,7 @@ func TestPolicyFromCommentMarker(t *testing.T) {
 
 func TestApplyEmptyPolicyPassesThrough(t *testing.T) {
 	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
-	m := redact.New(redact.Columns())
+	m := redaction.New(redaction.Columns())
 	q := sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Val("taro")))
 	if got := args(t, m.Apply(q)); !reflect.DeepEqual(got, []any{"taro"}) {
 		t.Errorf("empty policy changed args = %v, want [taro]", got)
@@ -190,7 +190,7 @@ func TestColumnsGlob(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := redact.New(redact.Columns(tt.spec))
+			m := redaction.New(redaction.Columns(tt.spec))
 			if got := args(t, m.Apply(tt.q)); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("args = %v, want %v", got, tt.want)
 			}
@@ -200,7 +200,7 @@ func TestColumnsGlob(t *testing.T) {
 
 func TestWithMaskCustomValue(t *testing.T) {
 	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
-	m := redact.New(redact.Columns("users.name"), redact.WithMask("REDACTED"))
+	m := redaction.New(redaction.Columns("users.name"), redaction.WithMask("REDACTED"))
 	q := sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Val("taro")))
 	if got := args(t, m.Apply(q)); !reflect.DeepEqual(got, []any{"REDACTED"}) {
 		t.Errorf("custom mask args = %v, want [REDACTED]", got)
@@ -213,9 +213,9 @@ var (
 )
 
 // TestRewriteDelete covers the DELETE path: WHERE, JOIN, USING, and RETURNING all
-// run through the masker, and only the sensitive column's literal is masked.
+// run through the redactor, and only the sensitive column's literal is masked.
 func TestRewriteDelete(t *testing.T) {
-	m := redact.New(redact.Columns("users.name"))
+	m := redaction.New(redaction.Columns("users.name"))
 
 	tests := []struct {
 		name string
@@ -260,7 +260,7 @@ func TestRewriteDelete(t *testing.T) {
 // UPDATE assignments, and WHEN NOT MATCHED THEN INSERT values are each masked
 // against the target's columns.
 func TestRewriteMerge(t *testing.T) {
-	m := redact.New(redact.Columns("users.name"))
+	m := redaction.New(redaction.Columns("users.name"))
 
 	q := sql.MergeInto(tblUsers).
 		Using(tblAccounts).
@@ -282,7 +282,7 @@ func TestRewriteMerge(t *testing.T) {
 // TestRewriteMergeOnCondition pins that a sensitive literal in the ON clause is
 // masked.
 func TestRewriteMergeOnCondition(t *testing.T) {
-	m := redact.New(redact.Columns("users.name"))
+	m := redaction.New(redaction.Columns("users.name"))
 	q := sql.MergeInto(tblUsers).
 		Using(tblAccounts).
 		On(sql.And(sql.Eq(sql.Col("users.id"), sql.Col("accounts.id")), sql.Eq(sql.Col("users.name"), sql.Val("taro")))).
@@ -295,7 +295,7 @@ func TestRewriteMergeOnCondition(t *testing.T) {
 // TestMaskArray covers the col = ANY(ARRAY[...]) form: every string element of the
 // array tied to a sensitive column is masked.
 func TestMaskArray(t *testing.T) {
-	m := redact.New(redact.Columns("users.name"))
+	m := redaction.New(redaction.Columns("users.name"))
 
 	tests := []struct {
 		name string
@@ -326,7 +326,7 @@ func TestMaskArray(t *testing.T) {
 // TestRewriteExprForms exercises the comparison and predicate nodes that carry a
 // column-bound literal: BETWEEN, SIMILAR TO, regexp, IS DISTINCT FROM, and ILIKE.
 func TestRewriteExprForms(t *testing.T) {
-	m := redact.New(redact.Columns("users.name"))
+	m := redaction.New(redaction.Columns("users.name"))
 
 	tests := []struct {
 		name string
@@ -370,9 +370,9 @@ func TestRewriteExprForms(t *testing.T) {
 }
 
 // TestRewriteSelectClauses pins that HAVING, GROUP BY, ORDER BY, and DISTINCT ON
-// each pass through the masker.
+// each pass through the redactor.
 func TestRewriteSelectClauses(t *testing.T) {
-	m := redact.New(redact.Columns("users.name"))
+	m := redaction.New(redaction.Columns("users.name"))
 
 	q := sql.Select(sql.Col("id")).From(tblUsers).
 		Where(sql.Eq(sql.Col("id"), sql.Val(1))).
@@ -384,7 +384,7 @@ func TestRewriteSelectClauses(t *testing.T) {
 
 // TestRewriteCompound pins that both arms of a UNION are masked.
 func TestRewriteCompound(t *testing.T) {
-	m := redact.New(redact.Columns("users.name"))
+	m := redaction.New(redaction.Columns("users.name"))
 	left := sql.Select(sql.Star()).From(tblUsers).Where(sql.Eq(sql.Col("name"), sql.Val("taro")))
 	right := sql.Select(sql.Star()).From(tblUsers).Where(sql.Eq(sql.Col("name"), sql.Val("jiro")))
 	q := left.Union(right)
@@ -396,8 +396,8 @@ func TestRewriteCompound(t *testing.T) {
 // TestCombinePolicy covers Combine: a column is masked when any member policy
 // marks it sensitive, and nil members are ignored.
 func TestCombinePolicy(t *testing.T) {
-	policy := redact.Combine(nil, redact.Columns("users.name"), redact.Columns("users.ssn"))
-	m := redact.New(policy)
+	policy := redaction.Combine(nil, redaction.Columns("users.name"), redaction.Columns("users.ssn"))
+	m := redaction.New(policy)
 	q := sql.Select(sql.Star()).From(tblUsers).Where(sql.And(
 		sql.Eq(sql.Col("name"), sql.Val("taro")),
 		sql.Eq(sql.Col("ssn"), sql.Val("123-45")),
@@ -411,7 +411,7 @@ func TestCombinePolicy(t *testing.T) {
 
 // TestCombineEmptyMatchesNothing pins Combine() of nothing masks nothing.
 func TestCombineEmptyMatchesNothing(t *testing.T) {
-	m := redact.New(redact.Combine())
+	m := redaction.New(redaction.Combine())
 	q := sql.Select(sql.Star()).From(tblUsers).Where(sql.Eq(sql.Col("name"), sql.Val("taro")))
 	if got := args(t, m.Apply(q)); !reflect.DeepEqual(got, []any{"taro"}) {
 		t.Errorf("empty combine changed args = %v, want [taro]", got)
@@ -421,7 +421,7 @@ func TestCombineEmptyMatchesNothing(t *testing.T) {
 // TestRewriteReturningAndOrder covers RETURNING selections, ORDER BY terms, and a
 // FROM subquery source, each carrying a sensitive literal that must be masked.
 func TestRewriteReturningAndOrder(t *testing.T) {
-	m := redact.New(redact.Columns("users.name"))
+	m := redaction.New(redaction.Columns("users.name"))
 
 	tests := []struct {
 		name string
@@ -460,7 +460,7 @@ func TestRewriteReturningAndOrder(t *testing.T) {
 // TestRewriteInsertSelect pins that an INSERT ... SELECT masks literals inside the
 // SELECT source.
 func TestRewriteInsertSelect(t *testing.T) {
-	m := redact.New(redact.Columns("users.name"))
+	m := redaction.New(redaction.Columns("users.name"))
 	q := sql.InsertInto(tblAccounts).Columns("id").
 		FromSelect(sql.Select(sql.Col("id")).From(tblUsers).Where(sql.Eq(sql.Col("name"), sql.Val("taro"))))
 	if got := args(t, m.Apply(q)); !reflect.DeepEqual(got, []any{"*****"}) {
@@ -471,7 +471,7 @@ func TestRewriteInsertSelect(t *testing.T) {
 // TestRewriteExprNested exercises the recursive container nodes: a sensitive
 // comparison wrapped in NOT, a CASE arm, and a function argument.
 func TestRewriteExprNested(t *testing.T) {
-	m := redact.New(redact.Columns("users.name"))
+	m := redaction.New(redaction.Columns("users.name"))
 
 	tests := []struct {
 		name string
@@ -501,7 +501,7 @@ func TestRewriteExprNested(t *testing.T) {
 
 // TestApplyNilQuery pins the nil-query and nil-policy guards.
 func TestApplyNilQuery(t *testing.T) {
-	m := redact.New(redact.Columns("users.name"))
+	m := redaction.New(redaction.Columns("users.name"))
 	if got := m.Apply(nil); got != nil {
 		t.Errorf("Apply(nil) = %v, want nil", got)
 	}

@@ -1,11 +1,11 @@
-package analyze_test
+package analysis_test
 
 import (
 	"reflect"
 	"sort"
 	"testing"
 
-	"github.com/aita/sqlkit/analyze"
+	"github.com/aita/sqlkit/analysis"
 	"github.com/aita/sqlkit/sql"
 )
 
@@ -47,7 +47,7 @@ func TestFilterColumns(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := analyze.FilterColumns(tc.query)
+			got := analysis.FilterColumns(tc.query)
 			sort.Strings(got)
 			want := append([]string(nil), tc.want...)
 			sort.Strings(want)
@@ -71,8 +71,8 @@ func TestWherePredicates(t *testing.T) {
 		sql.Update(users).Set(sql.Set("name", sql.Expr("x"))).Where(sql.Eq(sql.Col("org_id"), sql.Expr(7))),
 	}
 	for _, q := range queries {
-		gotCols, gotMax := analyze.WherePredicates(q)
-		wantCols, wantMax := analyze.FilterColumns(q), analyze.MaxInList(q)
+		gotCols, gotMax := analysis.WherePredicates(q)
+		wantCols, wantMax := analysis.FilterColumns(q), analysis.MaxInList(q)
 		if !reflect.DeepEqual(gotCols, wantCols) {
 			t.Errorf("WherePredicates columns = %v, want %v (FilterColumns)", gotCols, wantCols)
 		}
@@ -116,7 +116,7 @@ func TestMaxInList(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := analyze.MaxInList(tc.query); got != tc.want {
+			if got := analysis.MaxInList(tc.query); got != tc.want {
 				t.Errorf("MaxInList = %d, want %d", got, tc.want)
 			}
 		})
@@ -161,7 +161,7 @@ func TestNullEqualityPredicate(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := analyze.NullEqualityPredicate(tc.query); got != tc.want {
+			if got := analysis.NullEqualityPredicate(tc.query); got != tc.want {
 				t.Errorf("NullEqualityPredicate = %v, want %v", got, tc.want)
 			}
 		})
@@ -183,7 +183,7 @@ func TestNullEqualityOperators(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			q := sql.Select(sql.Col("id")).From(users).Where(tt.where)
-			if got := analyze.NullEqualityPredicate(q); got != tt.want {
+			if got := analysis.NullEqualityPredicate(q); got != tt.want {
 				t.Errorf("NullEqualityPredicate = %v, want %v", got, tt.want)
 			}
 		})

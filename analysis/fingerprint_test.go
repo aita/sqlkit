@@ -1,10 +1,10 @@
-package analyze_test
+package analysis_test
 
 import (
 	"strings"
 	"testing"
 
-	"github.com/aita/sqlkit/analyze"
+	"github.com/aita/sqlkit/analysis"
 	"github.com/aita/sqlkit/sql"
 )
 
@@ -18,8 +18,8 @@ func TestFingerprintUnifiesPlaceholders(t *testing.T) {
 	q2 := sql.Select(sql.Col("id")).From(users).
 		Where(sql.And(sql.Eq(sql.Col("id"), sql.Val(999)), sql.Eq(sql.Col("name"), sql.Val("z"))))
 
-	f1, ok1 := analyze.Fingerprint(q1, sql.PostgreSQLDialect{})
-	f2, ok2 := analyze.Fingerprint(q2, sql.PostgreSQLDialect{})
+	f1, ok1 := analysis.Fingerprint(q1, sql.PostgreSQLDialect{})
+	f2, ok2 := analysis.Fingerprint(q2, sql.PostgreSQLDialect{})
 	if !ok1 || !ok2 {
 		t.Fatalf("Fingerprint ok = %v, %v, want both true", ok1, ok2)
 	}
@@ -35,7 +35,7 @@ func TestFingerprintUnifiesPlaceholders(t *testing.T) {
 }
 
 func TestFingerprintNil(t *testing.T) {
-	if _, ok := analyze.Fingerprint(nil, sql.PostgreSQLDialect{}); ok {
+	if _, ok := analysis.Fingerprint(nil, sql.PostgreSQLDialect{}); ok {
 		t.Error("Fingerprint(nil) ok = true, want false")
 	}
 }
@@ -69,7 +69,7 @@ func TestFingerprintRaw(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := analyze.FingerprintRaw(tt.in); got != tt.want {
+			if got := analysis.FingerprintRaw(tt.in); got != tt.want {
 				t.Errorf("FingerprintRaw(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
@@ -79,21 +79,21 @@ func TestFingerprintRaw(t *testing.T) {
 func TestDetectKind(t *testing.T) {
 	tests := []struct {
 		in   string
-		want analyze.StmtKind
+		want analysis.StmtKind
 	}{
-		{"SELECT 1", analyze.StmtSelect},
-		{"  select * from t", analyze.StmtSelect},
-		{"WITH x AS (SELECT 1) SELECT * FROM x", analyze.StmtSelect},
-		{"INSERT INTO t VALUES (1)", analyze.StmtInsert},
-		{"UPDATE t SET x = 1", analyze.StmtUpdate},
-		{"DELETE FROM t", analyze.StmtDelete},
-		{"CREATE TABLE t (id int)", analyze.StmtDDL},
-		{"-- a comment\nSELECT 1", analyze.StmtSelect},
-		{"/* c */ DELETE FROM t", analyze.StmtDelete},
-		{"EXPLAIN SELECT 1", analyze.StmtUnknown},
+		{"SELECT 1", analysis.StmtSelect},
+		{"  select * from t", analysis.StmtSelect},
+		{"WITH x AS (SELECT 1) SELECT * FROM x", analysis.StmtSelect},
+		{"INSERT INTO t VALUES (1)", analysis.StmtInsert},
+		{"UPDATE t SET x = 1", analysis.StmtUpdate},
+		{"DELETE FROM t", analysis.StmtDelete},
+		{"CREATE TABLE t (id int)", analysis.StmtDDL},
+		{"-- a comment\nSELECT 1", analysis.StmtSelect},
+		{"/* c */ DELETE FROM t", analysis.StmtDelete},
+		{"EXPLAIN SELECT 1", analysis.StmtUnknown},
 	}
 	for _, tt := range tests {
-		if got := analyze.DetectKind(tt.in); got != tt.want {
+		if got := analysis.DetectKind(tt.in); got != tt.want {
 			t.Errorf("DetectKind(%q) = %v, want %v", tt.in, got, tt.want)
 		}
 	}

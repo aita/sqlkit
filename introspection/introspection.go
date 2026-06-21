@@ -1,7 +1,7 @@
 // Package introspect reads database schema metadata into the schema model. Both
 // PostgreSQL and MySQL are supported; the dialect switch is the extension point
 // for other engines.
-package introspect
+package introspection
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 	sqlast "github.com/aita/sqlkit/sql"
 )
 
-// Querier is the subset of *sql.DB used by the introspect.
+// Querier is the subset of *sql.DB used by the introspection.
 type Querier interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }

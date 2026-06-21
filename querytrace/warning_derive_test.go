@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/aita/sqlkit/analyze"
+	"github.com/aita/sqlkit/analysis"
 	querytrace "github.com/aita/sqlkit/querytrace"
 	"github.com/aita/sqlkit/sqltest"
 )
@@ -26,7 +26,7 @@ func at(file string, line int) *querytrace.Caller {
 func recordQuery(t *querytrace.Trace, fp string, op querytrace.StmtKind, c *querytrace.Caller) {
 	t.RecordStatement(context.Background(), querytrace.Event{
 		Kind:   querytrace.EventQuery,
-		Query:  &querytrace.QueryInfo{Analysis: analyze.Analysis{Fingerprint: fp, Kind: op}},
+		Query:  &querytrace.QueryInfo{Analysis: analysis.Analysis{Fingerprint: fp, Kind: op}},
 		Caller: c,
 	})
 }

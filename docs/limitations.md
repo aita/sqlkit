@@ -49,7 +49,7 @@ PostgreSQL); override with `WithDialect`.
 | `DISTINCT ON (col)` | ✅ | ❌ | No MySQL equivalent. |
 | Multi-table `UPDATE … FROM` / `DELETE … USING` | ✅ | ⚠️ | Some shapes error ("multi-table UPDATE/DELETE is unsupported for this dialect"). |
 | Aliased `VALUES` derived-table source | ✅ | ⚠️ | MySQL can't alias `VALUES` columns, so sqlkit renders it as a `UNION ALL` of `SELECT`s (equivalent result, different SQL text). |
-| Schema introspection — [`introspect.Schema`](https://pkg.go.dev/github.com/aita/sqlkit/introspect#Schema) | ✅ | ✅ | Constructs the [`meta`](https://pkg.go.dev/github.com/aita/sqlkit/meta) model can't represent are skipped on import. |
+| Schema introspection — [`introspection.Schema`](https://pkg.go.dev/github.com/aita/sqlkit/introspection#Schema) | ✅ | ✅ | Constructs the [`meta`](https://pkg.go.dev/github.com/aita/sqlkit/meta) model can't represent are skipped on import. |
 | Transactional (atomic) migrations | ✅ | ❌ | MySQL commits DDL implicitly and can't roll a partly-applied migration back — see [Migrations](#migrations). |
 
 The matrix records engine *capabilities*, so a ❌/⚠️ cell is 🔒 inherent (the
@@ -160,7 +160,7 @@ build-then-compile flow, turning SQL text back into
 
 ## Introspection
 
-🚧 `introspect.Schema` reads **PostgreSQL and MySQL** live schemas. Constructs
+🚧 `introspection.Schema` reads **PostgreSQL and MySQL** live schemas. Constructs
 the `meta` metadata model has no type for are skipped on import — introspection
 yields a faithful but not byte-exact model of the database. (Coverage grows as
 the `meta` model gains types.)

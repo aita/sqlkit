@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/aita/sqlkit/analyze"
+	"github.com/aita/sqlkit/analysis"
 	querytrace "github.com/aita/sqlkit/querytrace"
 	"github.com/aita/sqlkit/sqltest"
 )
@@ -46,7 +46,7 @@ func (q fpQuery) event() querytrace.Event {
 	return querytrace.Event{
 		Kind: kindEv,
 		Query: &querytrace.QueryInfo{
-			Analysis: analyze.Analysis{
+			Analysis: analysis.Analysis{
 				Kind:          q.kind,
 				Fingerprint:   fp,
 				Parsed:        q.parsed,

@@ -157,7 +157,7 @@ type Column struct {
 	HasDefault bool
 	// DefaultExpr is the default's SQL expression when known (catalogs declare
 	// it with Default(sql.Raw("now()"))); it is nil when HasDefault is set
-	// without one, e.g. by the introspect. The DDL generator renders integer
+	// without one, e.g. by the introspection. The DDL generator renders integer
 	// primary keys that have a default but no expression as serial/auto-increment
 	// columns, and compiles the expression for the target dialect otherwise.
 	DefaultExpr sql.Expression

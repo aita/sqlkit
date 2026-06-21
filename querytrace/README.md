@@ -89,8 +89,8 @@ frontend's parser (for example `postgres.New()` from
 `github.com/aita/sqlkit/sqlparse/postgres`) via `WithParser`, or set
 `Config.Parser` directly. A parse failure or a `nil` parser falls back to
 lightweight string analysis and **never** aborts execution. The parser produces
-a `sql.Query`, which the `analyze` package
-(`github.com/aita/sqlkit/analyze`) introspects for the analysis and `ToSQL`
+a `sql.Query`, which the `analysis` package
+(`github.com/aita/sqlkit/analysis`) introspects for the analysis and `ToSQL`
 recompiles into a normalized fingerprint.
 
 ## Usage

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aita/sqlkit/analyze"
+	"github.com/aita/sqlkit/analysis"
 	querytrace "github.com/aita/sqlkit/querytrace"
 )
 
@@ -23,7 +23,7 @@ func newLogTrace(t *testing.T, op string, events ...querytrace.Event) *querytrac
 func logQueryEvent(fingerprint string, op querytrace.StmtKind) querytrace.Event {
 	return querytrace.Event{
 		Kind:  querytrace.EventQuery,
-		Query: &querytrace.QueryInfo{Analysis: analyze.Analysis{Kind: op, Fingerprint: fingerprint}},
+		Query: &querytrace.QueryInfo{Analysis: analysis.Analysis{Kind: op, Fingerprint: fingerprint}},
 	}
 }
 

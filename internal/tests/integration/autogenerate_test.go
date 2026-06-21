@@ -1,7 +1,7 @@
 package integration
 
 // These tests exercise the autogenerate pipeline end to end against real
-// databases: a source schema read from a live database by introspect.Schema is
+// databases: a source schema read from a live database by introspection.Schema is
 // diffed against a target decl catalog by autogen.Render, the same wiring the
 // `sqlkit migrate autogenerate --from-db` command uses. The autogen unit tests
 // (migrate/autogen/render_test.go) fabricate both sides as in-memory catalogs and
@@ -40,7 +40,7 @@ import (
 
 	"github.com/aita/sqlkit"
 	"github.com/aita/sqlkit/decl"
-	"github.com/aita/sqlkit/introspect"
+	"github.com/aita/sqlkit/introspection"
 	"github.com/aita/sqlkit/migrate/autogen"
 	"github.com/aita/sqlkit/sql"
 )
@@ -77,7 +77,7 @@ func TestAutogenerateForwardDiff(t *testing.T) {
 			decl.Column("widget_id", decl.BigInt, decl.References("widgets", "id")),
 		)
 
-		source, err := introspect.Schema(ctx, db.SQL(), eng.name, testSchema)
+		source, err := introspection.Schema(ctx, db.SQL(), eng.name, testSchema)
 		if err != nil {
 			t.Fatalf("inspect source: %v", err)
 		}
@@ -142,7 +142,7 @@ func TestAutogenerateRoundTripIdempotent(t *testing.T) {
 		applyCatalog(t, db, eng, safeCatalog)
 		t.Cleanup(func() { dropTables(t, db, eng, "accounts") })
 
-		source, err := introspect.Schema(ctx, db.SQL(), eng.name, testSchema)
+		source, err := introspection.Schema(ctx, db.SQL(), eng.name, testSchema)
 		if err != nil {
 			t.Fatalf("inspect: %v", err)
 		}
@@ -203,7 +203,7 @@ func applyCatalog(t *testing.T, db *sqlkit.Database, eng engine, cat *decl.Catal
 func resetSchema(t *testing.T, db *sqlkit.Database, eng engine) {
 	t.Helper()
 	ctx := context.Background()
-	model, err := introspect.Schema(ctx, db.SQL(), eng.name, testSchema)
+	model, err := introspection.Schema(ctx, db.SQL(), eng.name, testSchema)
 	if err != nil {
 		t.Fatalf("inspect for reset: %v", err)
 	}

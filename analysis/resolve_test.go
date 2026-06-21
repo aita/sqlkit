@@ -1,95 +1,95 @@
-package analyze_test
+package analysis_test
 
 import (
 	"testing"
 
-	"github.com/aita/sqlkit/analyze"
+	"github.com/aita/sqlkit/analysis"
 	"github.com/aita/sqlkit/sql"
 )
 
 func TestResolveColumn(t *testing.T) {
-	joined := []analyze.SourceRef{
+	joined := []analysis.SourceRef{
 		{Schema: sql.NewIdent("public"), Table: sql.NewIdent("users"), Alias: sql.NewIdent("u")},
 		{Schema: sql.NewIdent("public"), Table: sql.NewIdent("orders"), Alias: sql.NewIdent("o")},
 	}
-	single := []analyze.SourceRef{{Schema: sql.NewIdent("public"), Table: sql.NewIdent("users")}}
-	selfJoin := []analyze.SourceRef{
+	single := []analysis.SourceRef{{Schema: sql.NewIdent("public"), Table: sql.NewIdent("users")}}
+	selfJoin := []analysis.SourceRef{
 		{Table: sql.NewIdent("employees"), Alias: sql.NewIdent("e")},
 		{Table: sql.NewIdent("employees"), Alias: sql.NewIdent("m")},
 	}
 
 	tests := []struct {
 		name       string
-		scope      []analyze.SourceRef
-		col        analyze.ColumnRef
+		scope      []analysis.SourceRef
+		col        analysis.ColumnRef
 		wantTable  sql.Ident
-		wantStatus analyze.Status
+		wantStatus analysis.Status
 	}{
 		{
 			name:       "qualified by alias",
 			scope:      joined,
-			col:        analyze.ColumnRef{Qualifier: sql.NewIdent("u"), Name: sql.NewIdent("name")},
+			col:        analysis.ColumnRef{Qualifier: sql.NewIdent("u"), Name: sql.NewIdent("name")},
 			wantTable:  sql.NewIdent("users"),
-			wantStatus: analyze.Resolved,
+			wantStatus: analysis.Resolved,
 		},
 		{
 			name:       "qualified by alias, other side",
 			scope:      joined,
-			col:        analyze.ColumnRef{Qualifier: sql.NewIdent("o"), Name: sql.NewIdent("amount")},
+			col:        analysis.ColumnRef{Qualifier: sql.NewIdent("o"), Name: sql.NewIdent("amount")},
 			wantTable:  sql.NewIdent("orders"),
-			wantStatus: analyze.Resolved,
+			wantStatus: analysis.Resolved,
 		},
 		{
 			name:       "qualified by table name when unaliased",
 			scope:      single,
-			col:        analyze.ColumnRef{Qualifier: sql.NewIdent("users"), Name: sql.NewIdent("id")},
+			col:        analysis.ColumnRef{Qualifier: sql.NewIdent("users"), Name: sql.NewIdent("id")},
 			wantTable:  sql.NewIdent("users"),
-			wantStatus: analyze.Resolved,
+			wantStatus: analysis.Resolved,
 		},
 		{
 			name:       "unqualified in single-table scope resolves",
 			scope:      single,
-			col:        analyze.ColumnRef{Name: sql.NewIdent("email")},
+			col:        analysis.ColumnRef{Name: sql.NewIdent("email")},
 			wantTable:  sql.NewIdent("users"),
-			wantStatus: analyze.Resolved,
+			wantStatus: analysis.Resolved,
 		},
 		{
 			name:       "unqualified across distinct tables is ambiguous",
 			scope:      joined,
-			col:        analyze.ColumnRef{Name: sql.NewIdent("id")},
-			wantStatus: analyze.Ambiguous,
+			col:        analysis.ColumnRef{Name: sql.NewIdent("id")},
+			wantStatus: analysis.Ambiguous,
 		},
 		{
 			name:       "unqualified self-join resolves to the shared table",
 			scope:      selfJoin,
-			col:        analyze.ColumnRef{Name: sql.NewIdent("id")},
+			col:        analysis.ColumnRef{Name: sql.NewIdent("id")},
 			wantTable:  sql.NewIdent("employees"),
-			wantStatus: analyze.Resolved,
+			wantStatus: analysis.Resolved,
 		},
 		{
 			name:       "qualifier matching no source is unknown",
 			scope:      joined,
-			col:        analyze.ColumnRef{Qualifier: sql.NewIdent("x"), Name: sql.NewIdent("id")},
-			wantStatus: analyze.Unknown,
+			col:        analysis.ColumnRef{Qualifier: sql.NewIdent("x"), Name: sql.NewIdent("id")},
+			wantStatus: analysis.Unknown,
 		},
 		{
 			name:       "no base-table source is unknown",
-			scope:      []analyze.SourceRef{{Alias: sql.NewIdent("sub")}}, // derived source only
-			col:        analyze.ColumnRef{Name: sql.NewIdent("id")},
-			wantStatus: analyze.Unknown,
+			scope:      []analysis.SourceRef{{Alias: sql.NewIdent("sub")}}, // derived source only
+			col:        analysis.ColumnRef{Name: sql.NewIdent("id")},
+			wantStatus: analysis.Unknown,
 		},
 		{
 			name:       "case-insensitive alias",
 			scope:      joined,
-			col:        analyze.ColumnRef{Qualifier: sql.NewIdent("U"), Name: sql.NewIdent("name")},
+			col:        analysis.ColumnRef{Qualifier: sql.NewIdent("U"), Name: sql.NewIdent("name")},
 			wantTable:  sql.NewIdent("users"),
-			wantStatus: analyze.Resolved,
+			wantStatus: analysis.Resolved,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := analyze.ResolveColumn(tt.scope, tt.col)
+			got := analysis.ResolveColumn(tt.scope, tt.col)
 			if got.Status != tt.wantStatus {
 				t.Errorf("Status = %v, want %v", got.Status, tt.wantStatus)
 			}
@@ -108,14 +108,14 @@ func TestResolveReportsClauseAndAccess(t *testing.T) {
 	q := sql.Update(users).Set(sql.Set("name", sql.Val("x"))).Where(sql.Eq(sql.Col("id"), sql.Val(1)))
 
 	var sawWrite, sawWhere bool
-	for _, r := range analyze.Resolve(q) {
+	for _, r := range analysis.Resolve(q) {
 		switch r.Column.Name.String() {
 		case "name":
-			if r.Clause == analyze.ClauseSet && r.Access == analyze.Write && r.Table.String() == "users" {
+			if r.Clause == analysis.ClauseSet && r.Access == analysis.Write && r.Table.String() == "users" {
 				sawWrite = true
 			}
 		case "id":
-			if r.Clause == analyze.ClauseWhere && r.Access == analyze.Read && r.Table.String() == "users" {
+			if r.Clause == analysis.ClauseWhere && r.Access == analysis.Read && r.Table.String() == "users" {
 				sawWhere = true
 			}
 		}
@@ -139,7 +139,7 @@ func TestResolveSubqueryScope(t *testing.T) {
 		Where(sql.InQuery(sql.Col("id"), sql.Select(sql.Col("user_id")).From(orders)))
 
 	var inUser, inOrders bool
-	for _, res := range analyze.Resolve(q) {
+	for _, res := range analysis.Resolve(q) {
 		switch res.Column.Name.String() {
 		case "id":
 			if res.Table.String() == "users" {

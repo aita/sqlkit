@@ -15,7 +15,7 @@ a separate module that runs against an in-memory SQLite database.
 | [`generated`](generated) | The end-to-end flow: declare a schema, generate bindings with the CLI, run typed queries | yes (PostgreSQL) |
 | [`custom`](custom) | Driving the `codegen` package as a library to customize the SQL→Go type mapping and DTO naming | no |
 | [`migrate`](migrate) | Shipping migrations as your own standalone binary | yes (PostgreSQL) |
-| [`redact`](redact) | Masking sensitive literals in SQL, driven by column comments | yes (PostgreSQL) |
+| [`redaction`](redact) | Masking sensitive literals in SQL, driven by column comments | yes (PostgreSQL) |
 | [`querytrace`](querytrace) | Catching bad query patterns (N+1, missing WHERE, …) at runtime | no (in-memory SQLite) |
 
 ## minimal
@@ -87,7 +87,7 @@ DATABASE_URL=postgres://localhost/app go run ./migrate status
 
 ## redact
 
-Masking sensitive string literals in SQL with the [`redact`](../redact) package.
+Masking sensitive string literals in SQL with the [`redaction`](../redact) package.
 It applies a schema, introspects it, and treats **the database as the source of
 truth** for what is sensitive: every column whose comment contains `pii` is
 masked. See [docs/redaction.md](../docs/redaction.md).

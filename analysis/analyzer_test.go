@@ -1,20 +1,20 @@
-package analyze_test
+package analysis_test
 
 import (
 	"errors"
 	"reflect"
 	"testing"
 
-	"github.com/aita/sqlkit/analyze"
+	"github.com/aita/sqlkit/analysis"
 	"github.com/aita/sqlkit/sql"
 )
 
 func TestAnalyzerDelegates(t *testing.T) {
 	users := sql.Table{Name: sql.NewIdent("users")}
 	q := sql.Select(sql.Star()).From(users).Where(sql.In(sql.Col("tenant_id"), 1, 2, 3))
-	a := analyze.New()
+	a := analysis.New()
 
-	if kind, ok := a.Kind(q); !ok || kind != analyze.StmtSelect {
+	if kind, ok := a.Kind(q); !ok || kind != analysis.StmtSelect {
 		t.Errorf("Kind = (%v, %v), want (select, true)", kind, ok)
 	}
 	if !a.HasTopLevelWhere(q) || a.HasTopLevelJoin(q) || !a.SelectsStar(q) {
@@ -30,11 +30,11 @@ func TestAnalyzerFingerprintNeedsDialect(t *testing.T) {
 	q := sql.Select(sql.Col("id")).From(sql.Table{Name: sql.NewIdent("users")}).Where(sql.Eq(sql.Col("id"), sql.Val(1)))
 
 	// Without a dialect, Fingerprint cannot recompile and reports ok=false.
-	if _, ok := analyze.New().Fingerprint(q); ok {
+	if _, ok := analysis.New().Fingerprint(q); ok {
 		t.Error("Fingerprint ok = true without a dialect, want false")
 	}
 
-	a := analyze.New(analyze.WithDialect(sql.PostgreSQLDialect{}))
+	a := analysis.New(analysis.WithDialect(sql.PostgreSQLDialect{}))
 	fp, ok := a.Fingerprint(q)
 	if !ok || fp == "" {
 		t.Errorf("Fingerprint = (%q, %v), want a non-empty string and true", fp, ok)
@@ -43,16 +43,16 @@ func TestAnalyzerFingerprintNeedsDialect(t *testing.T) {
 
 func TestStmtKindString(t *testing.T) {
 	tests := []struct {
-		kind analyze.StmtKind
+		kind analysis.StmtKind
 		want string
 	}{
-		{analyze.StmtSelect, "select"},
-		{analyze.StmtInsert, "insert"},
-		{analyze.StmtUpdate, "update"},
-		{analyze.StmtDelete, "delete"},
-		{analyze.StmtDDL, "ddl"},
-		{analyze.StmtUnknown, "unknown"},
-		{analyze.StmtKind(99), "unknown"},
+		{analysis.StmtSelect, "select"},
+		{analysis.StmtInsert, "insert"},
+		{analysis.StmtUpdate, "update"},
+		{analysis.StmtDelete, "delete"},
+		{analysis.StmtDDL, "ddl"},
+		{analysis.StmtUnknown, "unknown"},
+		{analysis.StmtKind(99), "unknown"},
 	}
 	for _, tt := range tests {
 		if got := tt.kind.String(); got != tt.want {
@@ -63,15 +63,15 @@ func TestStmtKindString(t *testing.T) {
 
 func TestStmtKindFiltersRows(t *testing.T) {
 	tests := []struct {
-		kind analyze.StmtKind
+		kind analysis.StmtKind
 		want bool
 	}{
-		{analyze.StmtSelect, true},
-		{analyze.StmtUpdate, true},
-		{analyze.StmtDelete, true},
-		{analyze.StmtInsert, false},
-		{analyze.StmtDDL, false},
-		{analyze.StmtUnknown, false},
+		{analysis.StmtSelect, true},
+		{analysis.StmtUpdate, true},
+		{analysis.StmtDelete, true},
+		{analysis.StmtInsert, false},
+		{analysis.StmtDDL, false},
+		{analysis.StmtUnknown, false},
 	}
 	for _, tt := range tests {
 		if got := tt.kind.FiltersRows(); got != tt.want {
@@ -88,12 +88,12 @@ func TestAnalyzerAnalyzeParsed(t *testing.T) {
 		Join(sql.SourceAlias(orders, "o"), sql.Eq(sql.Col("u.id"), sql.Col("o.user_id"))).
 		Where(sql.And(sql.In(sql.Col("tenant_id"), 1, 2, 3), sql.Eq(sql.Col("deleted_at"), sql.Val(nil))))
 
-	got := analyze.New().Analyze("SELECT ...", q)
+	got := analysis.New().Analyze("SELECT ...", q)
 
 	if !got.Parsed {
 		t.Fatal("Parsed = false, want true")
 	}
-	if got.Kind != analyze.StmtSelect {
+	if got.Kind != analysis.StmtSelect {
 		t.Errorf("Kind = %v, want select", got.Kind)
 	}
 	if !reflect.DeepEqual(got.Tables, []string{"users", "orders"}) {
@@ -120,11 +120,11 @@ func TestAnalyzerAnalyzeParsed(t *testing.T) {
 func TestAnalyzerAnalyzeFallback(t *testing.T) {
 	// q is nil (a parse failure), so Analyze falls back to a keyword guess on the
 	// SQL text: only Kind is set, from DetectKind, and Parsed is false.
-	got := analyze.New().Analyze("UPDATE users SET x = 1", nil)
+	got := analysis.New().Analyze("UPDATE users SET x = 1", nil)
 	if got.Parsed {
 		t.Error("Parsed = true, want false on the fallback path")
 	}
-	if got.Kind != analyze.StmtUpdate {
+	if got.Kind != analysis.StmtUpdate {
 		t.Errorf("Kind = %v, want update", got.Kind)
 	}
 	if got.Tables != nil || got.HasTopLevelWhere || got.HasTopLevelJoin || got.SelectStar {
@@ -135,7 +135,7 @@ func TestAnalyzerAnalyzeFallback(t *testing.T) {
 func TestAnalyzerTables(t *testing.T) {
 	users := sql.Table{Name: sql.NewIdent("users")}
 	q := sql.Select(sql.Col("id")).From(users)
-	if got := analyze.New().Tables(q); !reflect.DeepEqual(got, []string{"users"}) {
+	if got := analysis.New().Tables(q); !reflect.DeepEqual(got, []string{"users"}) {
 		t.Errorf("Analyzer.Tables = %v, want [users]", got)
 	}
 }
@@ -143,7 +143,7 @@ func TestAnalyzerTables(t *testing.T) {
 // TestAnalysisErrField pins that an Err set by the producer survives — Analyze
 // itself leaves it nil, but the struct carries it for the caller.
 func TestAnalysisErrField(t *testing.T) {
-	a := analyze.Analysis{Err: errors.New("boom")}
+	a := analysis.Analysis{Err: errors.New("boom")}
 	if a.Err == nil {
 		t.Error("Analysis.Err = nil, want the producer's error")
 	}

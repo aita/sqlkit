@@ -13,7 +13,7 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/aita/sqlkit/introspect"
+	"github.com/aita/sqlkit/introspection"
 	"github.com/aita/sqlkit/meta"
 	"github.com/aita/sqlkit/migrate"
 	"github.com/aita/sqlkit/migrate/autogen"
@@ -165,7 +165,7 @@ func (c *autogenerateCmd) sourceMetadata(ctx context.Context, importPath, dialec
 			return meta.Metadata{}, err
 		}
 		defer db.Close() //nolint:errcheck // best-effort close
-		return introspect.Schema(ctx, db, dialect, c.Schema)
+		return introspection.Schema(ctx, db, dialect, c.Schema)
 	}
 
 	// --from-git: build the catalog at the given revision in a temporary worktree.

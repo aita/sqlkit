@@ -3,7 +3,7 @@ package querytrace
 import (
 	"reflect"
 
-	"github.com/aita/sqlkit/analyze"
+	"github.com/aita/sqlkit/analysis"
 	"github.com/aita/sqlkit/sql"
 	"github.com/aita/sqlkit/sqlparse"
 )
@@ -22,7 +22,7 @@ func (c Config) Analyze(sqlText string, args []any) *QueryInfo {
 		qi.ParamTypes = argTypeNames(args)
 	}
 
-	a := analyze.New(analyze.WithDialect(c.Dialect()))
+	a := analysis.New(analysis.WithDialect(c.Dialect()))
 
 	var parsed sql.Query
 	var parseErr error
@@ -52,11 +52,11 @@ func (c Config) Analyze(sqlText string, args []any) *QueryInfo {
 // It prefers the parsed AST (recompiled through the analyzer's dialect, with every
 // bind collapsed to "?") and falls back to normalizing the raw SQL text when no
 // AST is available or it fails to recompile.
-func fingerprint(a *analyze.Analyzer, sqlText string, parsed sql.Query) string {
+func fingerprint(a *analysis.Analyzer, sqlText string, parsed sql.Query) string {
 	if fp, ok := a.Fingerprint(parsed); ok {
 		return fp
 	}
-	return analyze.FingerprintRaw(sqlText)
+	return analysis.FingerprintRaw(sqlText)
 }
 
 // argTypeNames returns the Go type name of each argument, or "nil" for a nil.

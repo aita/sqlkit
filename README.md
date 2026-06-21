@@ -89,7 +89,7 @@ The narrative guides live in [`docs/`](docs/); the per-package API reference is 
   PostgreSQL and MySQL frontends, so the analysis and redaction passes work on
   hand-written SQL too.
 - **[Observability](docs/observability.md)** — hooks, `querytrace` tracing, and
-  the `analyze` AST framework.
+  the `analysis` AST framework.
 - **[Redaction](docs/redaction.md)** — mask PII literals before logging a
   statement.
 - **[Query routing](docs/routing.md)** — read/write splitting, sharding, pinned

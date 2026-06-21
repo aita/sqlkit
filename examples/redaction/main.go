@@ -19,8 +19,8 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
-	"github.com/aita/sqlkit/introspect"
-	"github.com/aita/sqlkit/redact"
+	"github.com/aita/sqlkit/introspection"
+	"github.com/aita/sqlkit/redaction"
 	"github.com/aita/sqlkit/sql"
 	"github.com/aita/sqlkit/sqlparse/postgres"
 )
@@ -58,14 +58,14 @@ func main() {
 	defer db.Close() //nolint:errcheck // best-effort close
 
 	// Introspect the schema into metadata, carrying each column's comment.
-	md, err := introspect.Schema(context.Background(), db, "postgres", "public")
+	md, err := introspection.Schema(context.Background(), db, "postgres", "public")
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	// The PII columns are those whose comment contains "pii"; the predicate also
 	// receives the table and column name in case you want to match on those.
-	masker := redact.New(redact.CommentMarker(md, func(table, column, comment string) bool {
+	redactor := redaction.New(redaction.CommentMarker(md, func(table, column, comment string) bool {
 		return strings.Contains(strings.ToLower(comment), "pii")
 	}))
 
@@ -77,7 +77,7 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		text, err := sql.CompileInline(sql.PostgreSQLDialect{}, masker.Apply(q))
+		text, err := sql.CompileInline(sql.PostgreSQLDialect{}, redactor.Apply(q))
 		if err != nil {
 			log.Fatal(err)
 		}

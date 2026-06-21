@@ -9,7 +9,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
-	"github.com/aita/sqlkit/analyze"
+	"github.com/aita/sqlkit/analysis"
 	qt "github.com/aita/sqlkit/querytrace"
 	"github.com/aita/sqlkit/querytrace/otelquery"
 )
@@ -27,7 +27,7 @@ func queryEvent() qt.Event {
 	return qt.Event{
 		Kind: qt.EventQuery,
 		Query: &qt.QueryInfo{
-			Analysis: analyze.Analysis{
+			Analysis: analysis.Analysis{
 				Kind:        qt.StmtSelect,
 				Tables:      []string{"users"},
 				Fingerprint: "SELECT * FROM users WHERE id = ?",

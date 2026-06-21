@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aita/sqlkit/analyze"
+	"github.com/aita/sqlkit/analysis"
 	querytrace "github.com/aita/sqlkit/querytrace"
 )
 
@@ -44,18 +44,18 @@ func TestMetricsAggregatesTrace(t *testing.T) {
 	trace.RecordStatement(ctx, querytrace.Event{
 		Kind:     querytrace.EventQuery,
 		Duration: 10 * time.Millisecond,
-		Query:    &querytrace.QueryInfo{Analysis: analyze.Analysis{Fingerprint: "SELECT * FROM users", Kind: querytrace.StmtSelect}},
+		Query:    &querytrace.QueryInfo{Analysis: analysis.Analysis{Fingerprint: "SELECT * FROM users", Kind: querytrace.StmtSelect}},
 		Rows:     &querytrace.RowsInfo{IterationDuration: 4 * time.Millisecond},
 	})
 	trace.RecordStatement(ctx, querytrace.Event{
 		Kind:     querytrace.EventQuery,
 		Duration: 5 * time.Millisecond,
-		Query:    &querytrace.QueryInfo{Analysis: analyze.Analysis{Fingerprint: "SELECT * FROM users", Kind: querytrace.StmtSelect}},
+		Query:    &querytrace.QueryInfo{Analysis: analysis.Analysis{Fingerprint: "SELECT * FROM users", Kind: querytrace.StmtSelect}},
 	})
 	trace.RecordStatement(ctx, querytrace.Event{
 		Kind:     querytrace.EventExec,
 		Duration: 7 * time.Millisecond,
-		Query:    &querytrace.QueryInfo{Analysis: analyze.Analysis{Fingerprint: "INSERT INTO users", Kind: querytrace.StmtInsert}},
+		Query:    &querytrace.QueryInfo{Analysis: analysis.Analysis{Fingerprint: "INSERT INTO users", Kind: querytrace.StmtInsert}},
 	})
 	trace.RecordTxEnd(querytrace.TxCommit, txID)
 
@@ -90,7 +90,7 @@ func TestMetricsEmit(t *testing.T) {
 	trace.RecordStatement(ctx, querytrace.Event{
 		Kind:     querytrace.EventQuery,
 		Duration: 3 * time.Millisecond,
-		Query:    &querytrace.QueryInfo{Analysis: analyze.Analysis{Fingerprint: "SELECT 1", Kind: querytrace.StmtSelect}},
+		Query:    &querytrace.QueryInfo{Analysis: analysis.Analysis{Fingerprint: "SELECT 1", Kind: querytrace.StmtSelect}},
 	})
 
 	rec := newRecordingRecorder()
@@ -113,7 +113,7 @@ func TestMetricsEmitNoOperationOmitsLabel(t *testing.T) {
 	trace := querytrace.New("")
 	trace.RecordStatement(context.Background(), querytrace.Event{
 		Kind:  querytrace.EventQuery,
-		Query: &querytrace.QueryInfo{Analysis: analyze.Analysis{Kind: querytrace.StmtSelect}},
+		Query: &querytrace.QueryInfo{Analysis: analysis.Analysis{Kind: querytrace.StmtSelect}},
 	})
 
 	rec := newRecordingRecorder()
