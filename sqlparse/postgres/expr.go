@@ -394,6 +394,12 @@ func convertUnaryOp(op string, operand *pg.Node) (sql.Expression, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Unary plus is identity. Drop it rather than emit (+x): PostgreSQL folds a
+		// leading + (e.g. ++2 renders the inner as +2, which re-parses without the
+		// plus), so keeping it would break the round-trip fixpoint.
+		if op == "+" {
+			return operandExpr, nil
+		}
 		return sql.Unary(op, operandExpr), nil
 	}
 	return nil, sqlparse.Unsupportedf("unary operator %q", op)
