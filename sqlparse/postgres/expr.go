@@ -25,8 +25,14 @@ func convertExpr(node *pg.Node) (sql.Expression, error) {
 		// spelling through verbatim, which round-trips under PostgreSQLDialect. The
 		// number is reproduced as written — including an out-of-range $0, which the
 		// grammar accepts and the server rejects only at execution; faithfully
-		// representing the input is the parser's job, not validating it.
-		return sql.Raw("$" + strconv.Itoa(int(node.GetParamRef().GetNumber()))), nil
+		// representing the input is the parser's job, not validating it. A number
+		// the raw parser's int32 overflowed (a vast literal lands negative) has no
+		// faithful spelling, so it falls back to raw.
+		num := node.GetParamRef().GetNumber()
+		if num < 0 {
+			return nil, sqlparse.Unsupportedf("parameter reference out of range")
+		}
+		return sql.Raw("$" + strconv.Itoa(int(num))), nil
 	case node.GetAExpr() != nil:
 		return convertAExpr(node.GetAExpr())
 	case node.GetBoolExpr() != nil:
