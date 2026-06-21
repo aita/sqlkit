@@ -232,3 +232,105 @@ jobs:
       - name: Integration tests
         working-directory: internal/tests/integration
         run: go test -v ./...
+
+  # Latency gate for the hot paths a production workload exercises on every
+  # request: the root module's build/compile/scan/write/paginate/preload paths
+  # and the two SQL parser frontends (postgres, mysql), which are on the request
+  # path for anyone who accepts SQL text. Two layers:
+  #
+  #   1. A hard gate: the benchmarks must still compile and run to completion.
+  #      `go test -bench` fails the job if a hot path panics or a benchmark stops
+  #      compiling, so a latency-path regression that breaks outright can never
+  #      merge. This is deterministic — it does not depend on timing.
+  #
+  #   2. An informational comparison against the base branch with benchstat,
+  #      written to the job summary. It surfaces ns/op and allocation deltas for
+  #      human review WITHOUT failing the build: shared CI runners have too much
+  #      timing variance for a threshold gate to be trustworthy, and a flaky
+  #      latency gate is itself the kind of low-quality signal we want to avoid.
+  #
+  # The parser frontends are separate modules (cgo / TiDB deps that stay out of
+  # the root module), so each module is benchmarked in its own directory.
+  bench:
+    name: bench
+    runs-on: ubuntu-latest
+    # Space-separated module directories to benchmark. Keep the root module
+    # first; the parser frontends carry the cgo / TiDB parser dependencies.
+    env:
+      BENCH_MODULES: '. sqlparse/postgres sqlparse/mysql'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so the base branch is available for the comparison.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+
+      - name: Install benchstat
+        run: go install golang.org/x/perf/cmd/benchstat@latest
+
+      # The hard gate, one module at a time. -count=6 gives benchstat enough
+      # samples to estimate variance; -benchtime=100x keeps each sample short
+      # (the hot paths are microbenchmarks). A non-zero exit (panic / build
+      # failure) fails the job. Output is slugged per module (./ -> root).
+      - name: Benchmark (head)
+        run: |
+          for dir in $BENCH_MODULES; do
+            slug=$(echo "$dir" | sed 's#^\.$#root#; s#/#-#g')
+            echo "::group::bench head $dir"
+            (cd "$dir" && go test -run='^$' -bench=. -benchmem -benchtime=100x -count=6 ./...) \
+              | tee "bench-head-$slug.txt"
+            echo "::endgroup::"
+          done
+
+      # Benchmark the merge base on the same runner, so the comparison cancels
+      # out the machine. Tolerate a base that cannot benchmark a module (e.g. a
+      # benchmark added only in this branch) — the comparison is informational.
+      - name: Benchmark (base)
+        run: |
+          base="${{ github.event.before }}"
+          # On a new branch github.event.before is all-zeros; fall back to main.
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            base="origin/main"
+          fi
+          if ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
+            base="origin/main"
+          fi
+          echo "Comparing against $base"
+          # The bench-head-*.txt files are untracked, so they survive the
+          # checkout; the base's source replaces the working tree's tracked files.
+          git checkout -q "$base"
+          for dir in $BENCH_MODULES; do
+            slug=$(echo "$dir" | sed 's#^\.$#root#; s#/#-#g')
+            echo "::group::bench base $dir"
+            (cd "$dir" && go test -run='^$' -bench=. -benchmem -benchtime=100x -count=6 ./...) \
+              | tee "bench-base-$slug.txt" || true
+            echo "::endgroup::"
+          done
+          git checkout -q -
+
+      - name: Compare with benchstat
+        run: |
+          benchstat="$(go env GOPATH)/bin/benchstat"
+          {
+            echo '## Benchmark comparison (base → head)'
+            echo
+            echo 'ns/op and allocations for the hot paths. Informational — this'
+            echo 'step never fails the build (see the bench job comment).'
+            for dir in $BENCH_MODULES; do
+              slug=$(echo "$dir" | sed 's#^\.$#root#; s#/#-#g')
+              echo
+              echo "### $dir"
+              echo '```'
+              if [ -s "bench-base-$slug.txt" ]; then
+                "$benchstat" "bench-base-$slug.txt" "bench-head-$slug.txt" 2>&1 || true
+              else
+                echo '(no base benchmarks to compare against)'
+                "$benchstat" "bench-head-$slug.txt" 2>&1 || true
+              fi
+              echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
