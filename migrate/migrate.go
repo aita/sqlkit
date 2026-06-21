@@ -346,6 +346,14 @@ func (m *Migrator) Downgrade(ctx context.Context, target string) error {
 		return err
 	}
 	applied := appliedFromEvents(events)
+	// Refuse to downgrade when the database is at a revision the migrator no
+	// longer knows about (its migration was removed from the code). Rolling such
+	// a revision back is impossible — its Down is gone — and silently skipping it
+	// would report success while leaving the schema untouched. Erroring here
+	// matches established tools (Alembic's "Can't locate revision").
+	if unknown := m.unknownApplied(applied); len(unknown) > 0 {
+		return fmt.Errorf("migrate: cannot downgrade: applied revision(s) %v are not in the migration set", unknown)
+	}
 
 	switch {
 	case target == "" || target == "base":
@@ -396,7 +404,8 @@ func (m *Migrator) rollbackRecent(ctx context.Context, events []MigrationEvent, 
 	for _, rev := range recent[:n] {
 		mig, ok := m.byRev[rev]
 		if !ok {
-			continue
+			// Guarded against by Downgrade's unknownApplied check; kept defensive.
+			return fmt.Errorf("migrate: cannot roll back revision %q: not in the migration set", rev)
 		}
 		if err := m.applyDown(ctx, mig); err != nil {
 			return fmt.Errorf("migrate: rolling back %s (%s): %w", mig.Revision, mig.Name, err)
@@ -735,6 +744,20 @@ func (m *Migrator) appliedRevisions(ctx context.Context) (map[string]bool, error
 		return nil, err
 	}
 	return appliedFromEvents(events), nil
+}
+
+// unknownApplied returns the currently-applied revisions the migrator has no
+// migration for — history rows whose code has since been removed. They are
+// sorted for a deterministic error message.
+func (m *Migrator) unknownApplied(applied map[string]bool) []string {
+	var unknown []string
+	for rev := range applied {
+		if _, ok := m.byRev[rev]; !ok {
+			unknown = append(unknown, rev)
+		}
+	}
+	sort.Strings(unknown)
+	return unknown
 }
 
 // appliedFromEvents folds the ordered history into the set of currently-applied
