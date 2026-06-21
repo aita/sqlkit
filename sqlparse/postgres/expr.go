@@ -70,6 +70,11 @@ func convertExpr(node *pg.Node) (sql.Expression, error) {
 		if err != nil {
 			return nil, err
 		}
+		// An empty ROW() is parseable but the compiler requires at least one
+		// element, so fall back to raw rather than build a row it must reject.
+		if len(args) == 0 {
+			return nil, sqlparse.Unsupported("empty ROW()")
+		}
 		return positioned(sql.Row(args...), node.GetRowExpr().GetLocation()), nil
 	case node.GetAArrayExpr() != nil:
 		return convertArray(node.GetAArrayExpr())

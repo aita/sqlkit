@@ -577,3 +577,9 @@ func TestExprCastToMixedCaseTypeName(t *testing.T) {
 func TestColumnIdentifierWithDotFallsBackToRaw(t *testing.T) {
 	assertRaw(t, `SELECT "a.b" FROM t`)
 }
+
+// An empty ROW() is parseable but the compiler requires at least one row
+// element, so it round-trips as raw rather than erroring.
+func TestEmptyRowFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT a FROM t WHERE r = ROW()")
+}
