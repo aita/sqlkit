@@ -668,3 +668,43 @@ func TestUpdateOrderByErrorsMySQL(t *testing.T) {
 		t.Fatalf("UPDATE ORDER BY NULLS on mysql = %v, want NULLS rejection", err)
 	}
 }
+
+// TestStatementErrorPropagation drives the sub-expression / sub-clause error
+// branches of the statement compile functions: a single failing component
+// (badExpr / badQuery) in each clause position must surface an error.
+func TestStatementErrorPropagation(t *testing.T) {
+	bad := UnaryExpression{Operand: Col("x")} // empty operator: always fails
+	badQuery := Select(bad).From(orgs)
+	tbl := Table{Name: NewIdent("t")}
+
+	stmts := []Query{
+		// SELECT clauses.
+		Select(bad).From(orgs),
+		Select(Col("a")).From(orgs).Where(bad),
+		Select(Col("a")).From(orgs).GroupBy(bad),
+		Select(Col("a")).From(orgs).GroupBy(Col("a")).Having(bad),
+		Select(Col("a")).From(orgs).OrderBy(Asc(bad)),
+		Select(Col("a")).From(orgs).Join(orgs, bad),
+		Select(Col("a")).From(Alias(badQuery, "x")),
+		Select(Col("a")).From(orgs).WithCTE(badQuery.CTE("c")),
+		// INSERT clauses.
+		InsertInto(tbl).Columns("a").Values(bad),
+		InsertInto(tbl).Columns("a").Values(1).Returning(bad),
+		InsertInto(tbl).Columns("a").Values(1).OnConflict("a").DoUpdate(Set("a", bad)),
+		InsertInto(tbl).Columns("a").FromSelect(badQuery),
+		// UPDATE clauses.
+		Update(tbl).Set(Set("a", bad)),
+		Update(tbl).Set(Set("a", 1)).Where(bad),
+		Update(tbl).Set(Set("a", 1)).From(Alias(badQuery, "x")).Where(Eq(Col("a"), 1)),
+		Update(tbl).Set(Set("a", 1)).Returning(bad),
+		// DELETE clauses.
+		DeleteFrom(tbl).Where(bad),
+		DeleteFrom(tbl).Using(Alias(badQuery, "x")).Where(Eq(Col("a"), 1)),
+		DeleteFrom(tbl).Returning(bad),
+	}
+	for i, q := range stmts {
+		if _, _, err := q.ToSQL(PostgreSQLDialect{}); err == nil {
+			t.Errorf("case %d (%T) compiled without error, want propagation", i, q)
+		}
+	}
+}
