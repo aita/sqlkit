@@ -1,6 +1,7 @@
 package sql
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -812,4 +813,72 @@ func TestDDLCompileErrors(t *testing.T) {
 	errOn("restate nil def", pg, AlterTableStmt{Table: tbl, Alterations: []Alteration{{Kind: AlterRestateColumn}}})
 	errOn("add fk nil", pg, AlterTableStmt{Table: tbl, Alterations: []Alteration{{Kind: AlterAddForeignKey}}})
 	errOn("unsupported kind", pg, AlterTableStmt{Table: tbl, Alterations: []Alteration{{Kind: AlterationKind(9999)}}})
+}
+
+// errColumnType is a ColumnType whose RenderType always fails, driving the
+// type-render error branches of compileColumnDef, compileRestateColumn, and
+// compileAlteration.
+type errColumnType struct{}
+
+func (errColumnType) RenderType(Dialect) (string, error) {
+	return "", fmt.Errorf("render boom")
+}
+
+// TestDDLCompileRemainingBranches covers the remaining ddl_compile.go branches:
+// the CREATE TABLE CHECK error, the column type-render / generated / on-update
+// errors, every compileRestateColumn arm, the CREATE VIEW nil-query guard, and
+// the compileAlteration ADD COLUMN / ADD CHECK / column-modify / type-render
+// branches.
+func TestDDLCompileRemainingBranches(t *testing.T) {
+	pg, my := PostgreSQLDialect{}, MySQLDialect{}
+	tbl := Table{Name: NewIdent("t")}
+	bad := UnaryExpression{Operand: Col("x")}
+	errOn := func(name string, d Dialect, q Query) {
+		t.Helper()
+		if _, _, err := q.ToSQL(d); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+	}
+
+	// CREATE TABLE: a CHECK with a bad expression, a column whose type fails to
+	// render, a bad GENERATED expression, and a bad ON UPDATE (MySQL).
+	errOn("check bad expr", pg, CreateTable(tbl).
+		Column(ColumnDef{Name: NewIdent("a"), Type: EngineType{Name: "int"}}).Check("c", bad))
+	errOn("col render error", pg, CreateTable(tbl).
+		Column(ColumnDef{Name: NewIdent("a"), Type: errColumnType{}}))
+	errOn("generated bad expr", pg, CreateTable(tbl).Column(ColumnDef{Name: NewIdent("a"),
+		Type: EngineType{Name: "int"}, Generated: &GeneratedColumn{Expression: bad, Stored: true}}))
+	errOn("onupdate bad expr", my, CreateTable(tbl).Column(ColumnDef{Name: NewIdent("a"),
+		Type: EngineType{Name: "timestamp"}, OnUpdate: bad}))
+
+	// compileRestateColumn: nil type, a MySQL MODIFY whose column fails, a
+	// PostgreSQL type-render error, and a bad DEFAULT.
+	errOn("restate nil type", pg, AlterTable(tbl).RestateColumn(ColumnDef{Name: NewIdent("a")}))
+	errOn("restate mysql bad", my, AlterTable(tbl).RestateColumn(ColumnDef{Name: NewIdent("a"), Type: errColumnType{}}))
+	errOn("restate render error", pg, AlterTable(tbl).RestateColumn(ColumnDef{Name: NewIdent("a"), Type: errColumnType{}}))
+	errOn("restate bad default", pg, AlterTable(tbl).RestateColumn(ColumnDef{
+		Name: NewIdent("a"), Type: EngineType{Name: "int"}, Default: bad}))
+
+	// A restate that keeps NOT NULL and no default drives the DROP DEFAULT arm.
+	if _, _, err := AlterTable(tbl).RestateColumn(ColumnDef{
+		Name: NewIdent("a"), Type: EngineType{Name: "int"}, NotNull: true}).ToSQL(pg); err != nil {
+		t.Errorf("restate drop default: %v", err)
+	}
+
+	// CREATE VIEW without a query.
+	errOn("view nil query", pg, CreateView(tbl, nil))
+
+	// compileAlteration: ADD COLUMN render error, ADD CHECK bad expr, ALTER
+	// COLUMN TYPE on MySQL (unsupported) and with a render error, and SET
+	// DEFAULT / SET NOT NULL on MySQL (unsupported).
+	errOn("add column render error", pg, AlterTable(tbl).AddColumn(ColumnDef{Name: NewIdent("a"), Type: errColumnType{}}))
+	errOn("add check bad expr", pg, AlterTable(tbl).AddCheck("c", bad))
+	errOn("alter type on mysql", my, AlterTable(tbl).AlterColumnType("a", EngineType{Name: "int"}))
+	errOn("alter type render error", pg, AlterTable(tbl).AlterColumnType("a", errColumnType{}))
+	errOn("set default on mysql", my, AlterTable(tbl).SetDefault("a", Raw("0")))
+	errOn("set default bad expr", pg, AlterTable(tbl).SetDefault("a", bad))
+	errOn("set not null on mysql", my, AlterTable(tbl).SetNotNull("a"))
+
+	// CREATE VIEW whose body fails to compile.
+	errOn("view bad body", pg, CreateView(tbl, Select(bad).From(orgs)))
 }
