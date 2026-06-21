@@ -594,3 +594,19 @@ func TestEmptyRowFallsBackToRaw(t *testing.T) {
 func TestNonBareFunctionNameFallsBackToRaw(t *testing.T) {
 	assertRaw(t, `SELECT "My Func"()`)
 }
+
+// A field-qualified INTERVAL stores its field set as a bitmask typmod, not a
+// precision; rendering it as interval(N) loses the field restriction, so it
+// round-trips as raw rather than a meaning-changed CAST.
+func TestExprIntervalFieldQualifierFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT INTERVAL '1' HOUR")
+}
+
+// The internal single-byte "char" type must keep its quotes: unquoted char is
+// the alias for character(1)/bpchar, a different type.
+func TestExprInternalCharTypeKeepsQuotes(t *testing.T) {
+	assertRoundTrip(t,
+		`SELECT x::"char" FROM t`,
+		sql.Select(sql.Cast(sql.Col("x"), `"char"`)).From(sql.Table{Name: sql.NewIdent("t")}),
+		`SELECT CAST("x" AS "char") FROM "t"`)
+}
