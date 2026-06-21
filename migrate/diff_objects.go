@@ -22,6 +22,10 @@ type objectChanges struct {
 	dropSequences    []sql.Statement
 	dropMatviews     []sql.Statement
 	dropGrants       []sql.Statement
+	// alterEnums are ALTER TYPE ... ADD VALUE statements for enums whose labels
+	// were only appended (old is a prefix of new). They run in the alter phase,
+	// not the pre-table drop phase, so a column using the type is undisturbed.
+	alterEnums []sql.Statement
 }
 
 // diffObjects compares the non-table objects of old and next and returns the
@@ -51,7 +55,10 @@ func diffObjects(old, next meta.Metadata, dialect sql.Dialect) (objectChanges, e
 		}
 	}
 
-	// Enums, keyed by qualified name; a label change recreates the type.
+	// Enums, keyed by qualified name. A pure append (the old labels are a prefix
+	// of the new ones, same order) becomes one ALTER TYPE ... ADD VALUE per added
+	// label, which keeps any column using the type usable. Any other change
+	// (reordered, removed, or renamed labels) still drops and recreates the type.
 	oldEnum := map[string]meta.Enum{}
 	for _, e := range old.Enums {
 		oldEnum[e.QualifiedName()] = e
@@ -61,12 +68,33 @@ func diffObjects(old, next meta.Metadata, dialect sql.Dialect) (objectChanges, e
 		newEnum[e.QualifiedName()] = e
 	}
 	for _, e := range old.Enums {
-		if n, ok := newEnum[e.QualifiedName()]; !ok || !e.Equal(n) {
+		n, ok := newEnum[e.QualifiedName()]
+		if !ok {
 			c.dropEnums = append(c.dropEnums, e.DropStatement())
+			continue
 		}
+		if e.Equal(n) {
+			continue
+		}
+		if appended, ok := appendedEnumValues(e.Values, n.Values); ok {
+			for _, v := range appended {
+				c.alterEnums = append(c.alterEnums, sql.AlterTypeAddValue(e.QualifiedName(), v))
+			}
+			continue
+		}
+		c.dropEnums = append(c.dropEnums, e.DropStatement())
 	}
 	for _, e := range next.Enums {
-		if o, ok := oldEnum[e.QualifiedName()]; !ok || !o.Equal(e) {
+		o, ok := oldEnum[e.QualifiedName()]
+		if !ok {
+			c.createEnums = append(c.createEnums, e.CreateStatement())
+			continue
+		}
+		if o.Equal(e) {
+			continue
+		}
+		// Recreate only when it is not a pure append (handled via ALTER above).
+		if _, isAppend := appendedEnumValues(o.Values, e.Values); !isAppend {
 			c.createEnums = append(c.createEnums, e.CreateStatement())
 		}
 	}
@@ -169,4 +197,21 @@ func matviewEqual(a, b meta.MaterializedView, dialect sql.Dialect) (bool, error)
 // than an unrelated add and drop.
 func grantKey(g meta.Grant) string {
 	return g.ObjectType + "\x00" + strings.Join(g.Objects, ",")
+}
+
+// appendedEnumValues reports whether next is old with only labels appended (old
+// is a prefix of next, in the same order), and if so returns the appended
+// labels. A reordered, removed, or renamed label makes it report false, so the
+// caller falls back to drop+create. Equal slices report (nil, true) but yield no
+// appended labels.
+func appendedEnumValues(old, next []string) ([]string, bool) {
+	if len(next) < len(old) {
+		return nil, false
+	}
+	for i := range old {
+		if old[i] != next[i] {
+			return nil, false
+		}
+	}
+	return next[len(old):], true
 }

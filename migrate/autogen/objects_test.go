@@ -41,6 +41,37 @@ func TestRenderObjects(t *testing.T) {
 	}
 }
 
+// TestRenderAppendedEnum covers the common enum change in the codegen-ops path:
+// appending a label renders op.AddEnumValue (one per added label, in order), not
+// op.DropEnum + op.CreateEnum. The reverse direction (Down) removes the label,
+// which is not a pure append, so it falls back to drop+create.
+func TestRenderAppendedEnum(t *testing.T) {
+	source := meta.Metadata{Enums: []meta.Enum{{Schema: "public", Name: "mood", Values: []string{"happy", "sad"}}}}
+	target := meta.Metadata{Enums: []meta.Enum{{Schema: "public", Name: "mood", Values: []string{"happy", "sad", "neutral", "excited"}}}}
+	res := render(t, source, target, "postgres", Renames{})
+
+	for _, want := range []string{
+		`op.AddEnumValue("mood", "neutral")`,
+		`op.AddEnumValue("mood", "excited")`,
+	} {
+		if !strings.Contains(res.Up, want) {
+			t.Fatalf("Up missing %q in:\n%s", want, res.Up)
+		}
+	}
+	if strings.Contains(res.Up, "op.DropEnum") || strings.Contains(res.Up, "op.CreateEnum") {
+		t.Fatalf("appended enum must not drop/create in Up:\n%s", res.Up)
+	}
+	// Down removes labels (not a pure append): drop + create.
+	for _, want := range []string{`op.DropEnum("mood")`, `op.CreateEnum("mood", "happy", "sad")`} {
+		if !strings.Contains(res.Down, want) {
+			t.Fatalf("Down missing %q in:\n%s", want, res.Down)
+		}
+	}
+	if strings.Contains(res.Down, "op.AddEnumValue") {
+		t.Fatalf("Down must not ADD VALUE:\n%s", res.Down)
+	}
+}
+
 func TestSnapshotRoundTripObjects(t *testing.T) {
 	c := decl.NewCatalog(decl.DefaultSchema("public"))
 	c.Extension("pg_trgm", decl.ExtensionSchema("public"))

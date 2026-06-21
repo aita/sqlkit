@@ -103,6 +103,9 @@ func Diff(old, next meta.Metadata, dialect sql.Dialect) ([]sql.Statement, error)
 	out = append(out, objs.createEnums...)
 	out = append(out, objs.createSequences...)
 	out = append(out, createTables...)
+	// Appended enum labels (ALTER TYPE ... ADD VALUE) run in the alter phase, not
+	// the pre-table drop phase, so a column using the type is never dropped.
+	out = append(out, objs.alterEnums...)
 	out = append(out, alters...)
 	out = append(out, createIndexes...)
 	out = append(out, addFKs...)
