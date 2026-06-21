@@ -223,6 +223,12 @@ func TestRowExpression(t *testing.T) {
 	assertSQL(t, Select(Col("id")).From(Table{Name: NewIdent("t")}).
 		Where(In(Row(Col("a"), Col("b")), Row(1, 2), Row(3, 4))),
 		`SELECT "id" FROM "t" WHERE (("a", "b") IN (($1, $2), ($3, $4)))`, []any{1, 2, 3, 4})
+
+	// A single-element row keeps the ROW keyword: (x) alone is a parenthesized
+	// scalar, not a one-field row, so it must render as ROW(x).
+	assertSQL(t, Select(Col("id")).From(Table{Name: NewIdent("t")}).
+		Where(Eq(Col("a"), Row(Int(1)))),
+		`SELECT "id" FROM "t" WHERE ("a" = ROW($1))`, []any{1})
 }
 
 func TestIsDistinctFrom(t *testing.T) {
