@@ -49,7 +49,7 @@ func (Parser) Parse(text string) ([]sql.Query, error) {
 	if !utf8.ValidString(text) {
 		return nil, fmt.Errorf("sqlkit/sqlparse/mysql: input is not valid UTF-8")
 	}
-	stmts, _, err := parser.New().Parse(text, "", "")
+	stmts, err := parseStmts(text)
 	if err != nil {
 		return nil, err
 	}
@@ -83,6 +83,20 @@ func (Parser) Parse(text string) ([]sql.Query, error) {
 		queries = append(queries, sql.SetPos(query, stmtOffset+1))
 	}
 	return queries, nil
+}
+
+// parseStmts runs the TiDB parser, converting a panic into an error. The
+// reference value driver (test_driver) panics on inputs that exercise an
+// unimplemented MyDecimal branch — e.g. an over-long numeric literal — and a
+// library must not crash the process on untrusted input.
+func parseStmts(text string) (stmts []ast.StmtNode, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			stmts, err = nil, fmt.Errorf("sqlkit/sqlparse/mysql: parser panic: %v", r)
+		}
+	}()
+	stmts, _, err = parser.New().Parse(text, "", "")
+	return stmts, err
 }
 
 // deparseStmt renders a single parsed statement back to MySQL SQL text via the

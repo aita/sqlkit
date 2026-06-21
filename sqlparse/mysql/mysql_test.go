@@ -180,3 +180,13 @@ func TestSetSystemVariableRawIsFixpoint(t *testing.T) {
 		t.Fatalf("raw SET is not a fixpoint:\n  first:  %s\n  second: %s", first, second)
 	}
 }
+
+// The reference value driver panics on inputs that exercise an unimplemented
+// MyDecimal branch (e.g. an over-long numeric literal); Parse must recover and
+// return an error rather than let the panic escape.
+func TestParseRecoversFromDriverPanic(t *testing.T) {
+	long := "0000000000000000000000000000000000000000000000000000000000000018700000000000000000"
+	if _, err := mysql.ParseOne(long); err == nil {
+		t.Fatal("ParseOne(over-long numeric) error = nil, want a recovered parser error")
+	}
+}
