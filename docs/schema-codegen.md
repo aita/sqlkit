@@ -182,9 +182,9 @@ A column with a SQL type that has no Go mapping is an error: add an `Overrides`,
 `ColumnOverrides`, or pin a Go type in the `decl` column.
 
 A runnable end-to-end version — custom type mapper, programmatic enum types, and
-a custom DTO namer — lives in [`examples/codegen`](../examples/codegen), with its
+a custom DTO namer — lives in [`examples/custom`](../examples/custom), with its
 committed generated output under
-[`examples/codegen/appdb`](../examples/codegen/appdb). (To stay dependency-free
+[`examples/custom/blogdb`](../examples/custom/blogdb). (To stay dependency-free
 it maps to domain types declared in that package rather than `decimal`/`uuid`,
 but the hooks take third-party types the same way.)
 

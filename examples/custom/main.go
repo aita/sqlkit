@@ -1,4 +1,4 @@
-// Command codegen demonstrates using the codegen package as a library to
+// Command custom demonstrates using the codegen package as a library to
 // customize binding generation, instead of driving it through the
 // `sqlkit generate` CLI.
 //
@@ -7,14 +7,16 @@
 // the CLI can't express — most importantly full control over the SQL→Go type
 // mapping (codegen.TypeMapper) and the DTO naming scheme (Options.DTOName).
 //
-// This program declares a small catalog, then generates bindings + DTOs from it
-// with a customized type mapper and DTO namer, and writes them to the appdb
-// package next to this file. The customizations map columns to the domain types
-// declared by hand in appdb/types.go (UUID, Decimal, UserStatus, OrderStatus)
-// and to encoding/json.RawMessage, so the generated package compiles with no
-// extra dependencies. Regenerate them with:
+// The schema is the same blog schema as examples/generated, declared as a
+// decl.Catalog in the schema package next to this file. Generating it through
+// the CLI (examples/generated) yields the default types; generating it here with
+// a customized mapper yields different bindings — uuid/numeric/jsonb columns and
+// a status enum mapped to the domain types declared by hand in blogdb/types.go
+// (UUID, Decimal, UserStatus) and to encoding/json.RawMessage, with a "Record"
+// suffix on the DTOs. The local domain types keep the generated package
+// compiling with no extra dependencies. Regenerate them with:
 //
-//	go generate ./examples/codegen
+//	go generate ./examples/custom
 //
 // The same hooks accept third-party types just as well, e.g.
 // {ImportPath: "github.com/google/uuid", Name: "uuid.UUID"}; this example sticks
@@ -31,45 +33,9 @@ import (
 	"strings"
 
 	"github.com/aita/sqlkit/codegen"
-	"github.com/aita/sqlkit/decl"
+	"github.com/aita/sqlkit/examples/custom/schema"
 	"github.com/aita/sqlkit/meta"
-	"github.com/aita/sqlkit/sql"
 )
-
-// catalog declares the schema we generate from. In a real project this is its
-// own package (see examples/generated/schema) and the source of truth for both the
-// bindings and the DDL.
-func catalog() *decl.Catalog {
-	cat := decl.NewCatalog()
-	public := cat.Schema("public")
-
-	public.Table("users",
-		decl.TableComment("Registered accounts"),
-		// A uuid primary key: by default codegen maps uuid -> string. We override
-		// it to the appdb.UUID domain type below via ColumnOverrides.
-		decl.Column("id", decl.UUID, decl.PrimaryKey()),
-		decl.Column("email", decl.VarChar(255), decl.Unique()),
-		// A money amount: numeric defaults to string. We map every numeric column
-		// to appdb.Decimal below via Overrides.
-		decl.Column("balance", decl.Decimal(18, 2), decl.Default(sql.Raw("0"))),
-		// A free-form JSON blob: jsonb defaults to []byte. We map it to
-		// json.RawMessage below via ColumnOverrides.
-		decl.Column("metadata", decl.JSON, decl.Default(sql.Raw("'{}'"))),
-		// A status column we map to a typed Go enum via OverrideFunc.
-		decl.Column("status", decl.VarChar(32), decl.Default(sql.Raw("'active'"))),
-		decl.Column("created_at", decl.Timestamp, decl.Default(sql.Raw("now()"))),
-	)
-
-	public.Table("orders",
-		decl.Column("id", decl.UUID, decl.PrimaryKey()),
-		decl.Column("user_id", decl.UUID, decl.References("users", "id")),
-		decl.Column("total", decl.Decimal(18, 2)),
-		decl.Column("status", decl.VarChar(32), decl.Default(sql.Raw("'pending'"))),
-		decl.Index("user_id"),
-	)
-
-	return cat
-}
 
 // typeMapper customizes the SQL→Go type mapping. It layers the three override
 // hooks of the default mapper, which are consulted most-specific first:
@@ -83,26 +49,25 @@ func catalog() *decl.Catalog {
 // resolved type (a nullable column becomes a pointer), so overrides pin the
 // bare type. A type whose GoType has no ImportPath is emitted unqualified, so it
 // resolves to a type declared in the generated package itself — that is how the
-// appdb.UUID / appdb.Decimal / *Status domain types below are wired in.
+// blogdb.UUID / blogdb.Decimal / UserStatus domain types are wired in.
 func typeMapper() codegen.TypeMapper {
 	return codegen.NewDefaultTypeMapper(codegen.TypeMapperConfig{
-		// Map every numeric/decimal column to the appdb.Decimal domain type
-		// rather than string.
+		// Map by SQL type: every uuid column to blogdb.UUID (rather than the
+		// default string) and every numeric/decimal column to blogdb.Decimal.
 		Overrides: map[string]codegen.GoType{
+			"uuid":    {Name: "UUID"},
 			"numeric": {Name: "Decimal"},
 			"decimal": {Name: "Decimal"},
 		},
 		// Pin specific columns regardless of their SQL type. Keys may be fully
-		// qualified or bare; the most specific match wins.
+		// qualified or bare; the most specific match wins. Here the jsonb
+		// metadata column (a []byte by default) becomes json.RawMessage.
 		ColumnOverrides: map[string]codegen.GoType{
-			"users.id":       {Name: "UUID"},
-			"orders.id":      {Name: "UUID"},
-			"orders.user_id": {Name: "UUID"},
-			"metadata":       {ImportPath: "encoding/json", Name: "json.RawMessage"},
+			"metadata": {ImportPath: "encoding/json", Name: "json.RawMessage"},
 		},
 		// Decide programmatically: map any column named "status" to a typed enum
-		// named after its table (UserStatus, OrderStatus), keeping the SQL type a
-		// plain varchar. Returning ok=false falls through to the maps above.
+		// named after its table (UserStatus), keeping the SQL type a plain
+		// varchar. Returning ok=false falls through to the maps above.
 		OverrideFunc: func(table meta.Table, column meta.Column, _ string) (codegen.GoType, bool, error) {
 			if column.Name == "status" {
 				return codegen.GoType{Name: goName(singular(table.Name)) + "Status"}, true, nil
@@ -123,14 +88,14 @@ func main() {
 	// 1. Build the schema model from the catalog. The CLI does this for you; as
 	//    a library you call Build yourself (or feed in a model from the inspector
 	//    or one you assemble by hand).
-	md, err := catalog().Build()
+	md, err := schema.Catalog.Build()
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	// 2. Generate with our customizations wired into Options.
 	files, err := codegen.Generate(md, codegen.Options{
-		PackageName:     "appdb",
+		PackageName:     "blogdb",
 		Dialect:         "postgres",
 		EmitRelations:   true, // FK relation metadata + Query/Q entry points.
 		EmitDTO:         true, // a row struct per table…
@@ -142,19 +107,19 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// 3. Write the result next to this source file, into the appdb package whose
+	// 3. Write the result next to this source file, into the blogdb package whose
 	//    hand-written types.go declares the domain types the bindings reference.
-	outDir := filepath.Join(sourceDir(), "appdb")
+	outDir := filepath.Join(sourceDir(), "blogdb")
 	if err := codegen.Write(outDir, files); err != nil {
 		log.Fatal(err)
 	}
 	for _, file := range files {
-		fmt.Printf("wrote %s\n", filepath.Join("appdb", file.Name))
+		fmt.Printf("wrote %s\n", filepath.Join("blogdb", file.Name))
 	}
 }
 
 // sourceDir returns the directory of this source file, so generation targets the
-// example's appdb package regardless of the working directory it runs from.
+// example's blogdb package regardless of the working directory it runs from.
 func sourceDir() string {
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
