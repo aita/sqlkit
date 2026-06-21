@@ -232,3 +232,77 @@ jobs:
       - name: Integration tests
         working-directory: internal/tests/integration
         run: go test -v ./...
+
+  # Latency gate for the hot paths a production workload exercises on every
+  # request (compile, scan, write, paginate, preload). Two layers:
+  #
+  #   1. A hard gate: the benchmarks must still compile and run to completion.
+  #      `go test -bench` fails the job if a hot path panics or a benchmark stops
+  #      compiling, so a latency-path regression that breaks outright can never
+  #      merge. This is deterministic — it does not depend on timing.
+  #
+  #   2. An informational comparison against the base branch with benchstat,
+  #      written to the job summary. It surfaces ns/op and allocation deltas for
+  #      human review WITHOUT failing the build: shared CI runners have too much
+  #      timing variance for a threshold gate to be trustworthy, and a flaky
+  #      latency gate is itself the kind of low-quality signal we want to avoid.
+  bench:
+    name: bench
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so the base branch is available for the comparison.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+
+      - name: Install benchstat
+        run: go install golang.org/x/perf/cmd/benchstat@latest
+
+      # The hard gate. -count=6 gives benchstat enough samples to estimate
+      # variance; -benchtime=100x keeps each sample short and the whole step
+      # well under a minute (the hot paths are microbenchmarks).
+      - name: Benchmark (head)
+        run: go test -run='^$' -bench=. -benchmem -benchtime=100x -count=6 ./... | tee bench-head.txt
+
+      # Benchmark the merge base on the same runner, so the comparison cancels
+      # out the machine. Tolerate a base that cannot benchmark (e.g. a benchmark
+      # added in this branch) — the comparison is informational.
+      - name: Benchmark (base)
+        run: |
+          base="${{ github.event.before }}"
+          # On a new branch github.event.before is all-zeros; fall back to main.
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            base="origin/main"
+          fi
+          if ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
+            base="origin/main"
+          fi
+          echo "Comparing against $base"
+          # bench-head.txt is untracked, so it survives the checkout; the base's
+          # source replaces the working tree's tracked files for the benchmark.
+          git checkout -q "$base"
+          go test -run='^$' -bench=. -benchmem -benchtime=100x -count=6 ./... | tee bench-base.txt || true
+          git checkout -q -
+
+      - name: Compare with benchstat
+        run: |
+          {
+            echo '## Benchmark comparison (base → head)'
+            echo
+            echo 'ns/op and allocations for the hot paths. Informational — this'
+            echo 'step never fails the build (see the bench job comment).'
+            echo
+            echo '```'
+            if [ -s bench-base.txt ]; then
+              "$(go env GOPATH)/bin/benchstat" bench-base.txt bench-head.txt 2>&1 || true
+            else
+              echo '(no base benchmarks to compare against)'
+              "$(go env GOPATH)/bin/benchstat" bench-head.txt 2>&1 || true
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
