@@ -560,3 +560,12 @@ func TestExprCastToQuotedTypeName(t *testing.T) {
 		sql.Select(sql.Cast(sql.Col("a"), `"0"`)).From(sql.Table{Name: sql.NewIdent("t")}),
 		`SELECT CAST("a" AS "0") FROM "t"`)
 }
+
+// A cast to a quoted, mixed-case type name must keep its quotes, or an unquoted
+// upper-case identifier folds to lower case on re-parse and breaks the fixpoint.
+func TestExprCastToMixedCaseTypeName(t *testing.T) {
+	assertRoundTrip(t,
+		`SELECT CAST(a AS "MyType") FROM t`,
+		sql.Select(sql.Cast(sql.Col("a"), `"MyType"`)).From(sql.Table{Name: sql.NewIdent("t")}),
+		`SELECT CAST("a" AS "MyType") FROM "t"`)
+}

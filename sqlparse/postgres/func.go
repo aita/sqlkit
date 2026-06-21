@@ -374,9 +374,10 @@ var canonicalTypes = map[string]string{
 	"timetz":      "time with time zone",
 }
 
-// quoteTypeIdent double-quotes a type-name part that is not a valid bare
-// identifier (e.g. one starting with a digit, like a "0" type), leaving an
-// ordinary identifier unquoted so built-in and user types render as written.
+// quoteTypeIdent double-quotes a type-name part that would not render verbatim
+// unquoted — one starting with a digit (a "0" type) or carrying an upper-case
+// letter (which PostgreSQL folds to lower case on re-parse) — leaving a plain
+// lower-case identifier unquoted so built-in and ordinary types render as is.
 func quoteTypeIdent(s string) string {
 	if isBareIdent(s) {
 		return s
@@ -384,12 +385,13 @@ func quoteTypeIdent(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 }
 
-// isBareIdent reports whether s is a non-empty identifier that needs no quoting:
-// a letter or underscore, then letters, digits, underscores, or dollars.
+// isBareIdent reports whether s renders unquoted without changing: a lower-case
+// letter or underscore, then lower-case letters, digits, underscores, or dollars.
+// Upper case is excluded because an unquoted identifier folds to lower case.
 func isBareIdent(s string) bool {
 	for i, r := range s {
 		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r == '_':
+		case r >= 'a' && r <= 'z', r == '_':
 		case (r >= '0' && r <= '9' || r == '$') && i > 0:
 		default:
 			return false
