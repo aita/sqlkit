@@ -8,3 +8,17 @@ func TestRenameColumnStmt(t *testing.T) {
 		t.Errorf("RenameColumnStmt = %+v", r)
 	}
 }
+
+// TestRenameCoverage exercises RENAME TABLE/COLUMN rendering and plumbing.
+func TestRenameCoverage(t *testing.T) {
+	pg := PostgreSQLDialect{}
+	tbl := Table{Name: NewIdent("t")}
+	for _, q := range []Query{RenameTable(tbl, "t2"), RenameColumn(tbl, "a", "b")} {
+		if _, _, err := q.ToSQL(pg); err != nil {
+			t.Fatalf("%T: %v", q, err)
+		}
+		if sp, ok := q.(interface{ setPos(int) Query }); ok {
+			sp.setPos(2)
+		}
+	}
+}

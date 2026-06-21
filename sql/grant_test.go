@@ -56,3 +56,27 @@ func TestGrantStmt(t *testing.T) {
 		t.Errorf("GrantStmt = %+v", g)
 	}
 }
+
+// TestGrantCoverage exercises the GRANT/REVOKE builder options and plumbing.
+func TestGrantCoverage(t *testing.T) {
+	pg := PostgreSQLDialect{}
+	mustCompile := func(q Query) {
+		t.Helper()
+		if _, _, err := q.ToSQL(pg); err != nil {
+			t.Fatalf("%T: %v", q, err)
+		}
+	}
+	mustCompile(Grant("SELECT").On("t").To("u").WithGrantOption())
+	mustCompile(Grant("USAGE").OnType("SCHEMA", "public").To("u"))
+	mustCompile(Revoke("SELECT").GrantOptionFor().On("t").From("u").Cascade())
+	mustCompile(Revoke("USAGE").OnType("SCHEMA", "public").From("u").Restrict())
+
+	for _, q := range []Query{
+		Grant("SELECT").On("t").To("u"), Grant("SELECT").On("t").To("u").Stmt(),
+		Revoke("SELECT").On("t").From("u"), Revoke("SELECT").On("t").From("u").Stmt(),
+	} {
+		if sp, ok := q.(interface{ setPos(int) Query }); ok {
+			sp.setPos(2)
+		}
+	}
+}

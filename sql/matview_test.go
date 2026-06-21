@@ -30,3 +30,33 @@ func TestMaterializedViewRejectsBoundValues(t *testing.T) {
 		t.Fatal("materialized view with a bound value compiled, want error")
 	}
 }
+
+// TestMatviewCoverage exercises the materialized-view builder options and plumbing.
+func TestMatviewCoverage(t *testing.T) {
+	pg := PostgreSQLDialect{}
+	mustCompile := func(q Query) {
+		t.Helper()
+		if _, _, err := q.ToSQL(pg); err != nil {
+			t.Fatalf("%T: %v", q, err)
+		}
+	}
+	mv := Table{Name: NewIdent("mv")}
+	body := Select(Col("id")).From(orgs)
+	mustCompile(CreateMaterializedView(mv, body).IfNotExists().Columns("id").WithNoData())
+	mustCompile(DropMaterializedView(mv).IfExists().Cascade())
+	mustCompile(RefreshMaterializedView(mv).Concurrently())
+	mustCompile(RefreshMaterializedView(mv).WithNoData())
+
+	for _, q := range []Query{
+		CreateMaterializedView(mv, body), CreateMaterializedView(mv, body).Stmt(),
+		DropMaterializedView(mv), DropMaterializedView(mv).Stmt(),
+		RefreshMaterializedView(mv), RefreshMaterializedView(mv).Stmt(),
+	} {
+		if sp, ok := q.(interface{ setPos(int) Query }); ok {
+			sp.setPos(2)
+		}
+	}
+	_ = CreateMaterializedView(mv, body).buildStmt()
+	_ = DropMaterializedView(mv).buildStmt()
+	_ = RefreshMaterializedView(mv).buildStmt()
+}

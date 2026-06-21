@@ -34,3 +34,32 @@ func TestSequenceCompile(t *testing.T) {
 		}
 	}
 }
+
+// TestSequenceCoverage exercises the sequence builder options and plumbing.
+func TestSequenceCoverage(t *testing.T) {
+	pg := PostgreSQLDialect{}
+	mustCompile := func(q Query) {
+		t.Helper()
+		if _, _, err := q.ToSQL(pg); err != nil {
+			t.Fatalf("%T: %v", q, err)
+		}
+	}
+	seq := Table{Name: NewIdent("s")}
+	mustCompile(CreateSequence(seq).IfNotExists().Increment(2).Start(1).Cache(10).
+		MinValue(1).MaxValue(100).Cycle().OwnedBy("t.c"))
+	mustCompile(CreateSequence(seq).NoMinValue().NoMaxValue().NoCycle())
+	mustCompile(DropSequence("s").IfExists().Cascade())
+
+	_ = CreateSequence(seq).Stmt()
+	_ = CreateSequence(seq).buildStmt()
+	_ = DropSequence("s").Stmt()
+	_ = DropSequence("s").buildStmt()
+	for _, q := range []Query{
+		CreateSequence(seq), CreateSequence(seq).Stmt(),
+		DropSequence("s"), DropSequence("s").Stmt(),
+	} {
+		if sp, ok := q.(interface{ setPos(int) Query }); ok {
+			sp.setPos(2)
+		}
+	}
+}
