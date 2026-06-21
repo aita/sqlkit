@@ -1,6 +1,7 @@
 package redact
 
 import (
+	"path"
 	"strings"
 
 	"github.com/aita/sqlkit/meta"
@@ -35,18 +36,49 @@ func (s columnSet) add(table, column string) {
 	s[piiKey{fold(table), fold(column)}] = struct{}{}
 }
 
-// Columns is a Policy of explicitly named columns. Each spec is "table.column" or
-// "schema.table.column"; the schema is accepted but not required, since a column
-// is matched by table and column name. A spec without a table part is ignored. It
-// needs no metadata.
+// Columns is a Policy of named columns. Each spec is "table.column" or
+// "schema.table.column" (the schema is accepted but ignored, since a column is
+// matched by table and column name), and both the table and column halves accept
+// glob wildcards (* ? [..]), matched case-insensitively:
+//
+//	Columns("users.email")    // exactly users.email
+//	Columns("users.*")        // every column of users
+//	Columns("*.email")        // an email column on any table
+//	Columns("*.*_token")      // any column ending in _token, any table
+//
+// A spec without a table part is ignored. It needs no metadata.
 func Columns(specs ...string) Policy {
-	s := columnSet{}
+	var ps patternPolicy
 	for _, spec := range specs {
 		if table, column, ok := splitTableColumn(spec); ok {
-			s.add(table, column)
+			ps = append(ps, piiPattern{table: table, column: column})
 		}
 	}
-	return s
+	return ps
+}
+
+// piiPattern is one Columns spec: a table glob and a column glob.
+type piiPattern struct{ table, column string }
+
+// patternPolicy is the Policy backing Columns: a column is sensitive when its
+// table and name match any pattern's globs.
+type patternPolicy []piiPattern
+
+func (ps patternPolicy) IsSensitive(_, table, column string) bool {
+	for _, p := range ps {
+		if globMatch(p.table, table) && globMatch(p.column, column) {
+			return true
+		}
+	}
+	return false
+}
+
+// globMatch reports whether value matches the glob pattern, case-insensitively. A
+// malformed pattern matches nothing. A pattern with no wildcards is an exact
+// (folded) comparison, so a plain "table.column" spec behaves as before.
+func globMatch(pattern, value string) bool {
+	ok, err := path.Match(fold(pattern), fold(value))
+	return err == nil && ok
 }
 
 // CommentPredicate reports whether a column is PII, given its table, column, and

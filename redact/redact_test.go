@@ -152,6 +152,52 @@ func TestApplyEmptyPolicyPassesThrough(t *testing.T) {
 	}
 }
 
+func TestColumnsGlob(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	accounts := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("accounts")}
+
+	tests := []struct {
+		name string
+		spec string
+		q    sql.Query
+		want []any
+	}{
+		{
+			name: "column glob masks a family of columns",
+			spec: "users.*_token",
+			q:    sql.Select(sql.Star()).From(users).Where(sql.And(sql.Eq(sql.Col("api_token"), sql.Val("secret")), sql.Eq(sql.Col("id"), sql.Val(1)))),
+			want: []any{"*****", 1},
+		},
+		{
+			name: "table glob masks the column on any table",
+			spec: "*.email",
+			q:    sql.Select(sql.Star()).From(accounts).Where(sql.Eq(sql.Col("email"), sql.Val("x@y.z"))),
+			want: []any{"*****"},
+		},
+		{
+			name: "non-matching column is left intact",
+			spec: "users.*_token",
+			q:    sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Val("taro"))),
+			want: []any{"taro"},
+		},
+		{
+			name: "plain spec still matches exactly",
+			spec: "users.name",
+			q:    sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Val("taro"))),
+			want: []any{"*****"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := redact.New(redact.Columns(tt.spec))
+			if got := args(t, m.Apply(tt.q)); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("args = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestWithMaskCustomValue(t *testing.T) {
 	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
 	m := redact.New(redact.Columns("users.name"), redact.WithMask("REDACTED"))
