@@ -3,17 +3,17 @@ package integration
 // This file holds the test data the whole integration suite shares: the schema
 // catalog applySchema materializes before every subtest, and the migration set
 // the migrator tests drive. Keeping both here means every test works against
-// one definition instead of borrowing the blog example's catalog or repeating
-// migrations inline, so a schema change touches exactly one place.
+// one definition instead of repeating tables or migrations inline, so a schema
+// change touches exactly one place.
 //
-// testCatalog mirrors the generated examples/generated/blogdb bindings the typed
-// query tests reference (same tables, columns, keys), so the DDL this catalog
-// renders matches the columns those bindings name.
+// The blog catalog itself lives in the suite's own ./schema package, and the
+// blogdb bindings the typed query tests reference are generated from it, so the
+// DDL this catalog renders matches the columns those bindings name.
 
 import (
 	"github.com/aita/sqlkit/decl"
+	"github.com/aita/sqlkit/internal/integration/schema"
 	"github.com/aita/sqlkit/migrate"
-	"github.com/aita/sqlkit/sql"
 )
 
 // testSchema is the schema (PostgreSQL schema / MySQL database) the suite's
@@ -21,48 +21,10 @@ import (
 // migrator writes its history table into it.
 const testSchema = "public"
 
-// testCatalog is the shared schema definition. applySchema builds it into the
-// meta model and executes the rendered CREATE statements for each engine.
-var testCatalog = newTestCatalog()
-
-// newTestCatalog declares the blog schema: users authored posts (has-many) and
-// own at most one profile (has-one). It matches the blogdb bindings exactly so
-// the same schema backs both the DDL path and the typed query path.
-func newTestCatalog() *decl.Catalog {
-	cat := decl.NewCatalog()
-	public := cat.Schema(testSchema)
-
-	// Registered blog authors.
-	public.Table("users",
-		decl.TableComment("Registered blog authors"),
-		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
-		decl.Column("email", decl.VarChar(255), decl.Unique(), decl.Comment("Unique login address")),
-		decl.Column("name", decl.Text, decl.Nullable()),
-		decl.Column("created_at", decl.Timestamp, decl.Default(sql.Raw("now()"))),
-	)
-
-	// Posts reference the user that wrote them (has-many).
-	public.Table("posts",
-		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
-		decl.Column("user_id", decl.BigInt, decl.References("users", "id")),
-		decl.Column("title", decl.Text),
-		decl.Column("body", decl.Text, decl.Nullable()),
-		decl.Column("published", decl.Bool, decl.Default(sql.Raw("false"))),
-		decl.Index("user_id"),
-		decl.Check(sql.Raw("title <> ''")),
-	)
-
-	// Profiles hold one optional profile per user; the unique user_id makes it a
-	// has-one relation.
-	public.Table("profiles",
-		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
-		decl.Column("user_id", decl.BigInt, decl.References("users", "id"), decl.Unique()),
-		decl.Column("bio", decl.Text, decl.Nullable()),
-		decl.Column("public", decl.Bool, decl.Default(sql.Raw("false"))),
-	)
-
-	return cat
-}
+// testCatalog is the shared schema definition: the same blog catalog the blogdb
+// bindings are generated from. applySchema builds it into the meta model and
+// executes the rendered CREATE statements for each engine.
+var testCatalog = schema.Catalog
 
 // testMigrationTables names the tables the migration set owns, outside the
 // shared catalog. The migrator tests drop these (plus the history table) to

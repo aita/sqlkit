@@ -13,12 +13,17 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0
 )
 
+// The sqlkit command generates the suite's own blogdb bindings from
+// ./schema (go generate ./schema).
+tool github.com/aita/sqlkit/cmd/sqlkit
+
 require (
 	dario.cat/mergo v1.0.2 // indirect
 	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
-	github.com/aita/sqlkit/examples v0.0.0
+	github.com/aita/sqlkit/cmd/sqlkit v0.0.0 // indirect
+	github.com/alecthomas/kong v1.15.0 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/containerd/errdefs v1.0.0 // indirect
@@ -75,4 +80,4 @@ require (
 
 replace github.com/aita/sqlkit => ../../..
 
-replace github.com/aita/sqlkit/examples => ../../../examples
+replace github.com/aita/sqlkit/cmd/sqlkit => ../../../cmd/sqlkit
