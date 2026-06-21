@@ -26,18 +26,42 @@ var (
 	// for rewriting (the keyword is preserved), so structural numbers elsewhere
 	// in the statement are left untouched.
 	limitOffsetRe = regexp.MustCompile(`(?i)(\b(?:LIMIT|OFFSET)\s+)\d+`)
+	// commaRe matches a list separator together with any surrounding spaces. The
+	// value passes ahead collapse every literal to "?", so a comma in normalized
+	// text is always a separator (SELECT list, IN list, VALUES row, call args),
+	// never string content; rewriting it to a single ", " makes separator spacing
+	// canonical so the value-list passes below can assume one form.
+	commaRe = regexp.MustCompile(`\s*,\s*`)
+	// inListRe matches an "IN (?, ?, …)" list of two or more placeholders and is
+	// rewritten to the single-item "IN (?)", so that membership tests differing
+	// only in the number of values share a fingerprint. The keyword anchor keeps
+	// it from touching a function call's argument list, and requiring every item
+	// to be the canonical "?" leaves "IN (col_a, col_b)" — a structural list of
+	// non-values — untouched and excludes "IN (SELECT …)" subqueries. It runs
+	// after placeholders are unified to "?", so it covers IN, NOT IN, and the
+	// raw-fragment placeholders collapsed above alike.
+	inListRe = regexp.MustCompile(`(?i)\bIN\s*\(\?(?:, \?)+\)`)
+	// valuesRowsRe matches a "VALUES (…), (…), …" run of two or more rows whose
+	// values are all placeholders and keeps only the first row, so inserts (and
+	// standalone VALUES queries) that differ only in row count share a
+	// fingerprint. The first row is captured so its width — the column count,
+	// which is structural — is preserved; rows holding a non-placeholder value
+	// do not match, mirroring the IN guard.
+	valuesRowsRe = regexp.MustCompile(`(?i)(\bVALUES\s*\(\?(?:, \?)*\))(?:, \(\?(?:, \?)*\))+`)
 )
 
 // Fingerprint returns the normalized form of a parsed query used to group
 // repeats. It recompiles the AST through a dialect that emits a constant "?" for
 // every bind placeholder (the parser has already collapsed literals to
-// placeholders). Two text passes then canonicalize the values that do not flow
+// placeholders). Text passes then canonicalize the values that do not flow
 // through Placeholder: a $N/?/:name placeholder that arrived verbatim as a raw
 // fragment (sql.Raw, as the postgres frontend produces) is collapsed to the
-// canonical "?", and LIMIT/OFFSET counts (compiled as plain integers) are
-// collapsed too. The result is therefore numbering- and value-independent. ok is
-// false when q is nil or fails to compile, in which case callers fall back to
-// FingerprintRaw on the SQL text.
+// canonical "?", LIMIT/OFFSET counts (compiled as plain integers) are collapsed,
+// and variable-length value lists are made count-insensitive — an "IN (?, …)" of
+// placeholders and a "VALUES (…), (…), …" run of placeholder rows each collapse
+// to a single element. The result is therefore numbering-, value-, and
+// arity-independent. ok is false when q is nil or fails to compile, in which
+// case callers fall back to FingerprintRaw on the SQL text.
 func Fingerprint(q sql.Query, dialect sql.Dialect) (string, bool) {
 	if q == nil {
 		return "", false
@@ -54,7 +78,21 @@ func Fingerprint(q sql.Query, dialect sql.Dialect) (string, bool) {
 	// collapse their operands so paginated reads that differ only in page size
 	// or offset share a fingerprint.
 	normalized = limitOffsetRe.ReplaceAllString(normalized, "${1}?")
-	return collapse(normalized), true
+	// Squeeze whitespace and canonicalize separator spacing first so the
+	// value-list passes see one form, then make IN/VALUES arity-insensitive.
+	return collapseValueLists(collapse(normalized)), true
+}
+
+// collapseValueLists makes IN lists and VALUES row sets count-insensitive in an
+// already placeholder-unified, comma-canonicalized statement: "IN (?, ?, …)"
+// becomes "IN (?)" and a "VALUES (…), (…), …" run keeps only its first row. Both
+// passes match only runs of the canonical "?", so structural lists such as
+// IN (col_a, col_b) and IN (SELECT …) subqueries are left intact. It is shared
+// by Fingerprint and FingerprintRaw so both paths normalize arity identically.
+func collapseValueLists(s string) string {
+	s = inListRe.ReplaceAllString(s, "IN (?)")
+	s = valuesRowsRe.ReplaceAllString(s, "${1}")
+	return s
 }
 
 // fingerprintDialect renders a query for fingerprinting: it follows the
@@ -67,8 +105,9 @@ type fingerprintDialect struct{ sql.Dialect }
 func (fingerprintDialect) Placeholder(int) string { return "?" }
 
 // FingerprintRaw normalizes SQL text without a parser: string and numeric
-// literals and bind placeholders all collapse to ?, and whitespace is squeezed.
-// It is the fallback for FingerprintRaw when no parsed AST is available.
+// literals and bind placeholders all collapse to ?, whitespace is squeezed, and
+// IN/VALUES lists are made count-insensitive. It is the fallback for Fingerprint
+// when no parsed AST is available.
 func FingerprintRaw(sqlText string) string {
 	// Order matters: collapse string literals first (their contents may contain
 	// digits), then placeholders such as $1 (before the numeric pass would
@@ -76,10 +115,13 @@ func FingerprintRaw(sqlText string) string {
 	s := stringLiteralRe.ReplaceAllString(sqlText, "?")
 	s = placeholderRe.ReplaceAllString(s, "?")
 	s = numberLiteralRe.ReplaceAllString(s, "?")
-	return collapse(s)
+	return collapseValueLists(collapse(s))
 }
 
-// collapse squeezes runs of whitespace to single spaces and trims the result.
+// collapse squeezes runs of whitespace to single spaces, canonicalizes list
+// separators to a single ", ", and trims the result.
 func collapse(s string) string {
-	return strings.TrimSpace(whitespaceRe.ReplaceAllString(s, " "))
+	s = whitespaceRe.ReplaceAllString(s, " ")
+	s = commaRe.ReplaceAllString(s, ", ")
+	return strings.TrimSpace(s)
 }
