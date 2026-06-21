@@ -320,6 +320,35 @@ func FuzzFingerprintRaw(f *testing.F) {
 	})
 }
 
+// TestFingerprintInSubqueryPreserved checks that the arity collapse only touches
+// value lists: an IN (SELECT …) subquery is left whole (it never starts with the
+// canonical "?", so the IN pass cannot match it), while a value list nested
+// inside that subquery still collapses. NOT IN (SELECT …) is preserved likewise.
+func TestFingerprintInSubqueryPreserved(t *testing.T) {
+	users := sql.Table{Name: sql.NewIdent("users")}
+	posts := sql.Table{Name: sql.NewIdent("posts")}
+	d := sql.PostgreSQLDialect{}
+
+	sub := sql.Select(sql.Col("user_id")).From(posts).Where(sql.Eq(sql.Col("views"), 5))
+	inSubq, _ := analysis.Fingerprint(sql.Select(sql.Col("id")).From(users).Where(sql.InQuery(sql.Col("id"), sub)), d)
+	if !strings.Contains(inSubq, "IN (SELECT") {
+		t.Errorf("IN subquery was collapsed or altered: %q", inSubq)
+	}
+
+	notInSubq, _ := analysis.Fingerprint(sql.Select(sql.Col("id")).From(users).Where(sql.NotInQuery(sql.Col("id"), sub)), d)
+	if !strings.Contains(notInSubq, "NOT IN (SELECT") {
+		t.Errorf("NOT IN subquery was collapsed or altered: %q", notInSubq)
+	}
+
+	// A value list inside the subquery must still collapse, even though the outer
+	// IN (SELECT …) is preserved.
+	innerList := sql.Select(sql.Col("user_id")).From(posts).Where(sql.In(sql.Col("tag"), 7, 8, 9, 10))
+	nested, _ := analysis.Fingerprint(sql.Select(sql.Col("id")).From(users).Where(sql.InQuery(sql.Col("id"), innerList)), d)
+	if !strings.Contains(nested, "IN (SELECT") || strings.Contains(nested, "?, ?") {
+		t.Errorf("nested subquery handling wrong (outer kept, inner collapsed expected): %q", nested)
+	}
+}
+
 func TestFingerprintNil(t *testing.T) {
 	if _, ok := analysis.Fingerprint(nil, sql.PostgreSQLDialect{}); ok {
 		t.Error("Fingerprint(nil) ok = true, want false")
