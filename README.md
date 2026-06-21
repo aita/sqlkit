@@ -76,9 +76,6 @@ The narrative guides live in [`docs/`](docs/); the per-package API reference is 
 
 - **[Getting started](docs/getting-started.md)** — schema → bindings → typed
   queries, end to end.
-
-The build side — the DSL, the schema it comes from, and how that schema evolves:
-
 - **[Query builder](docs/query-builder.md)** — the typed DSL in full: joins,
   subqueries, CTEs, window functions, upserts, `RETURNING`, preload, transactions,
   and the standalone `ToSQL` builder.
@@ -87,9 +84,6 @@ The build side — the DSL, the schema it comes from, and how that schema evolve
   bootstrap from a live database.
 - **[Migrations](docs/migrations.md)** — DAG-ordered up/down migrations, a CLI,
   and Alembic-style autogeneration.
-
-The AST side — getting SQL into the AST and working over it:
-
 - **[Parser](https://pkg.go.dev/github.com/aita/sqlkit/sqlparse)** — `sqlparse`
   turns raw SQL text back into the AST (the inverse of build-then-compile), with
   PostgreSQL and MySQL frontends, so the analysis and redaction passes work on
@@ -98,9 +92,6 @@ The AST side — getting SQL into the AST and working over it:
   the `analyze` AST framework.
 - **[Redaction](docs/redaction.md)** — mask PII literals before logging a
   statement.
-
-Running and verifying it:
-
 - **[Query routing](docs/routing.md)** — read/write splitting, sharding, pinned
   sessions.
 - **[Testing](docs/testing.md)** — the `sqltest` seeding helpers, query spy, and
