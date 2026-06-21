@@ -196,6 +196,20 @@ func TestExprCast(t *testing.T) {
 		`SELECT CAST("a" AS integer), CAST("b" AS text) FROM "t"`)
 }
 
+// A length-less bpchar must stay bpchar, not canonicalize to char: bare char is
+// char(1), so rendering bpchar as char would change its meaning and re-parsing
+// would add the (1). bpchar canonicalizes to char only when it carries a length.
+func TestExprBpcharCast(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT CAST(a AS bpchar) FROM t",
+		sql.Select(sql.Cast(sql.Col("a"), "bpchar")).From(sql.Table{Name: sql.NewIdent("t")}),
+		`SELECT CAST("a" AS bpchar) FROM "t"`)
+	assertRoundTrip(t,
+		"SELECT CAST(a AS bpchar(5)) FROM t",
+		sql.Select(sql.Cast(sql.Col("a"), "char(5)")).From(sql.Table{Name: sql.NewIdent("t")}),
+		`SELECT CAST("a" AS char(5)) FROM "t"`)
+}
+
 func TestExprFunctionCall(t *testing.T) {
 	assertRoundTrip(t,
 		"SELECT coalesce(a, b), lower(name) FROM t",
