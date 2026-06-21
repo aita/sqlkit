@@ -19,7 +19,7 @@ type UsersColumns struct {
 }
 
 func newUsersColumns() UsersColumns {
-	info := sqlkit.TableInfo{Schema: "public", Name: "users", Checksum: "27c08a2ef030b324de75d12893731e1f715f77c27f58e0b23e5b110af27c05de", Generator: "fmt1+tpla0357d1a159f+sqlkit(devel)"}
+	info := sqlkit.TableInfo{Schema: "public", Name: "users", Checksum: "f087e616d5c00404595cd35ba2faae6e701fc7343a7f32f8a909ce7d05b9bb37", Generator: "fmt1+tpla0357d1a159f+sqlkit(devel)"}
 	return UsersColumns{
 		info:      info,
 		ID:        sqlkit.NewColumn[int64](info, "id"),

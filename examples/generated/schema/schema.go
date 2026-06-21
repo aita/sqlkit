@@ -20,7 +20,7 @@ var Users = Public.Table("users",
 	decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
 	decl.Column("email", decl.VarChar(255), decl.Unique(), decl.Comment("Unique login address")),
 	decl.Column("name", decl.Text, decl.Nullable()),
-	decl.Column("created_at", decl.Timestamp, decl.Default(sql.Raw("now()"))),
+	decl.Column("created_at", decl.Timestamp, decl.Default(sql.Now())),
 )
 
 // Posts reference the user that wrote them.

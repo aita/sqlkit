@@ -4,7 +4,7 @@ CREATE TABLE "public"."users" (
     "id" bigserial,
     "email" varchar(255) NOT NULL,
     "name" text,
-    "created_at" timestamptz NOT NULL DEFAULT now(),
+    "created_at" timestamptz NOT NULL DEFAULT NOW(),
     PRIMARY KEY ("id")
 );
 

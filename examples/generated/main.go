@@ -122,7 +122,7 @@ func run(ctx context.Context, db *sqlkit.Database) error {
 		query := sql.Select(
 			sql.Col("u.email"),
 			sql.As(sql.Count(sql.Col("p.id")), "post_count"),
-			sql.As(sql.Rank().Over().OrderBy(sql.Desc(sql.Raw("COUNT(p.id)"))), "rank"),
+			sql.As(sql.Rank().Over().OrderBy(sql.Desc(sql.Count(sql.Col("p.id")))), "rank"),
 		).
 			From(sql.SourceAlias(sql.Table{Name: sql.NewIdent("users")}, "u")).
 			LeftJoin(sql.SourceAlias(sql.Table{Name: sql.NewIdent("posts")}, "p"), sql.Eq(sql.Col("p.user_id"), sql.Col("u.id"))).
