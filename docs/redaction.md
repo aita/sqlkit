@@ -36,7 +36,7 @@ m = redaction.New(redaction.CommentMarker(md, func(_, _, comment string) bool {
 }), redaction.WithMask("[redacted]"))
 ```
 
-See [`examples/redact`](../examples/redact) for a runnable CLI that applies a
+See [`examples/redaction`](../examples/redaction) for a runnable CLI that applies a
 `schema.sql`, introspects it, and shows the literals of `SELECT` (and its
 `WHERE`), `INSERT`, and `UPDATE` masked entirely from the schema's PII column
 comments. It pairs naturally with [`sql.CompileInline`](https://pkg.go.dev/github.com/aita/sqlkit/sql#CompileInline) (see

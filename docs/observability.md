@@ -6,7 +6,7 @@ database:
 - [Hooks](#hooks) — rewrite or observe every statement around execution.
 - [querytrace](#querytrace) — application-level SQL tracing (N+1, query budgets,
   forbidden access).
-- [analyze](#analyze) — read-only structural analysis over the SQL AST.
+- [analysis](#analysis) — read-only structural analysis over the SQL AST.
 
 ## Hooks
 
@@ -75,7 +75,7 @@ fmt.Println(querytrace.TextReport(report))
 See the [querytrace README](../querytrace/README.md) for the full feature list,
 configuration, and integration details.
 
-## analyze
+## analysis
 
 [`analysis`](https://pkg.go.dev/github.com/aita/sqlkit/analysis) is a small,
 read-only analysis framework over the sqlkit SQL AST. It answers focused

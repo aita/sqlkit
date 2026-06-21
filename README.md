@@ -21,7 +21,7 @@ Two features sit at the center, and everything else builds on them:
 Everything else is opt-in, and much of it works without the typed builder at all.
 **querytrace** is standalone `database/sql` tracing — it observes hand-written
 SQL, an ORM, or any other builder just as well as sqlkit's, and the **sqltest**
-query spy is built on it — while **sqlparse**, **analyze**, and **redact** operate
+query spy is built on it — while **sqlparse**, **analysis**, and **redaction** operate
 on any SQL once it is in the AST, whoever wrote it. Schema-as-code and codegen,
 migrations, and routing are the parts that lean on the builder and the declared
 schema.
@@ -55,7 +55,7 @@ in the middle is what lets the blades compose.
    v
 +----------------------------------------------------------------------+
 | AST passes  ->  read / rewrite the AST                               |
-|   analyze (structural facts)   +   redact (mask PII)                 |
+|   analysis (structural facts)   +   redaction (mask PII)             |
 +----------------------------------------------------------------------+
    |
    v
