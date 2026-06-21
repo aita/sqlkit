@@ -206,11 +206,20 @@ func TestGrantUsageOnSchema(t *testing.T) {
 		`GRANT USAGE ON SCHEMA "s" TO "r";`)
 }
 
-// PostgreSQL numbers parameters from $1; $0, which the raw parser tolerates, is
-// not valid SQL, so a typed query carrying it is rejected outright.
-func TestParamRefZeroRejected(t *testing.T) {
-	if _, err := postgres.ParseOne("SELECT $0"); err == nil {
-		t.Fatal("ParseOne(SELECT $0) error = nil, want a parse error")
+// A parameter reference is reproduced as written, including an out-of-range $0:
+// the grammar accepts it and only the server rejects it at execution, so the
+// parser passes it through faithfully rather than validating it.
+func TestParamRefPassthrough(t *testing.T) {
+	q, err := postgres.ParseOne("SELECT $0")
+	if err != nil {
+		t.Fatalf("ParseOne(SELECT $0) error = %v, want passthrough", err)
+	}
+	got, _, err := q.ToSQL(sql.PostgreSQLDialect{})
+	if err != nil {
+		t.Fatalf("ToSQL error = %v", err)
+	}
+	if got != "SELECT $0" {
+		t.Fatalf("ToSQL() = %q, want %q", got, "SELECT $0")
 	}
 }
 
