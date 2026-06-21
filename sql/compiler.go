@@ -1555,12 +1555,14 @@ func (c *Compiler) compileSubscript(e SubscriptExpression) (string, []any, error
 }
 
 // bareSubscriptable reports whether e can carry a [...] subscript without being
-// wrapped in parentheses. A column reference renders bare ("tags"[1]); a field
-// access already parenthesizes itself ((rec).name[1]); a nested subscript chains
-// (a[1][2]). Every other operand needs explicit parentheses.
+// wrapped in parentheses. A column reference renders bare ("tags"[1]) and a
+// nested subscript chains (a[1][2]); every other operand — an array constructor,
+// a function call, a cast, even a field access (which needs ((rec).f)[1], not
+// (rec).f[1], or PostgreSQL no longer reads it as a subscript) — needs explicit
+// parentheses.
 func bareSubscriptable(e Expression) bool {
 	switch e.(type) {
-	case ColumnExpression, FieldExpression, SubscriptExpression:
+	case ColumnExpression, SubscriptExpression:
 		return true
 	default:
 		return false

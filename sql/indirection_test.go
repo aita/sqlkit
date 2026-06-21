@@ -31,8 +31,9 @@ func TestIndirectionCompile(t *testing.T) {
 		// A non-column operand (an array constructor) must be parenthesized before
 		// the subscript, or "ARRAY[1,2,3][1]" is invalid SQL.
 		{Subscript(Array(1, 2, 3), 1), `(ARRAY[$1, $2, $3])[$4]`, 4},
-		// A field access already parenthesizes itself, so it subscripts bare.
-		{Subscript(Field(Col("rec"), "tags"), 1), `("rec")."tags"[$1]`, 1},
+		// A field access must be fully parenthesized before the subscript, or
+		// PostgreSQL reads (rec).tags[1] as something other than a subscript.
+		{Subscript(Field(Col("rec"), "tags"), 1), `(("rec")."tags")[$1]`, 1},
 	}
 	for _, tc := range cases {
 		got, args, err := NewCompiler(PostgreSQLDialect{}).CompileExpression(tc.expr)
