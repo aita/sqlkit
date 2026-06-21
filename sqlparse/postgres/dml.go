@@ -41,6 +41,11 @@ func convertInsert(s *pg.InsertStmt) (sql.Query, error) {
 			if rt == nil {
 				return nil, sqlparse.Unsupportedf("insert column %T", col.GetNode())
 			}
+			// A column name is re-split on '.' to recover a qualifier, so a single
+			// quoted name with a dot ("x.y") would name the wrong column; raw.
+			if strings.Contains(rt.GetName(), ".") {
+				return nil, sqlparse.Unsupportedf("insert column with a dot: %q", rt.GetName())
+			}
 			names = append(names, rt.GetName())
 		}
 		q = q.Columns(names...)
@@ -423,6 +428,12 @@ func convertAssignments(targets []*pg.Node, excluded bool) ([]sql.Assignment, er
 		rt := target.GetResTarget()
 		if rt == nil {
 			return nil, sqlparse.Unsupportedf("assignment %T", target.GetNode())
+		}
+		// A SET target column is re-split on '.' to recover a qualifier, so a single
+		// quoted name with a dot ("x.y") would assign to the wrong column; round-trip
+		// it as raw.
+		if strings.Contains(rt.GetName(), ".") {
+			return nil, sqlparse.Unsupportedf("assignment target with a dot: %q", rt.GetName())
 		}
 		value, err := convertAssignmentValue(rt.GetVal(), excluded)
 		if err != nil {
