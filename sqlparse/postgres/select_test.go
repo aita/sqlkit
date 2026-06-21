@@ -20,6 +20,13 @@ func TestSelectStar(t *testing.T) {
 		`SELECT * FROM "users"`)
 }
 
+// A bare SELECT with no target list is degenerate (libpg_query accepts it, but it
+// has nothing to render and is not valid standalone SQL), so it falls back to a
+// raw statement rather than a select the compiler would reject.
+func TestSelectWithoutTargetListFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT")
+}
+
 func TestSelectWhereAndArgs(t *testing.T) {
 	assertRoundTrip(t,
 		"SELECT id FROM users WHERE a = 1 AND b > 2",

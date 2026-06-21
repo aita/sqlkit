@@ -35,6 +35,12 @@ func convertSelect(s *pg.SelectStmt) (sql.Query, error) {
 	if len(s.GetValuesLists()) > 0 {
 		return convertValuesList(s.GetValuesLists())
 	}
+	// A SELECT with no target list (the degenerate bare "SELECT" libpg_query still
+	// accepts) has nothing to render and is not valid standalone SQL; fall back to
+	// a raw statement rather than build a select the compiler must reject.
+	if len(s.GetTargetList()) == 0 {
+		return nil, sqlparse.Unsupported("SELECT without a target list")
+	}
 
 	columns, err := convertTargetList(s.GetTargetList())
 	if err != nil {
