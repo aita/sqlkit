@@ -50,3 +50,14 @@ func TestMatchUnsupportedDialect(t *testing.T) {
 		}
 	}
 }
+
+// TestDialectMatchEmptyColumns covers the empty-column guard on the PostgreSQL
+// and MySQL Match renderers, reached directly since the builder requires a column.
+func TestDialectMatchEmptyColumns(t *testing.T) {
+	if _, err := (PostgreSQLDialect{}).Match(nil, "q", false, ""); err == nil {
+		t.Error("postgres Match with no columns: want error")
+	}
+	if _, err := (MySQLDialect{}).Match(nil, "q", false, ""); err == nil {
+		t.Error("mysql Match with no columns: want error")
+	}
+}

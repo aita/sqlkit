@@ -22,3 +22,15 @@ func TestRenameCoverage(t *testing.T) {
 		}
 	}
 }
+
+// TestRenameTableRequiresNames covers the guard that both the source table and
+// the new name must be present.
+func TestRenameTableRequiresNames(t *testing.T) {
+	pg := PostgreSQLDialect{}
+	if _, _, err := RenameTable(Table{}, "b").ToSQL(pg); err == nil {
+		t.Error("rename with zero table: want error")
+	}
+	if _, _, err := RenameTable(Table{Name: NewIdent("a")}, "").ToSQL(pg); err == nil {
+		t.Error("rename with empty new name: want error")
+	}
+}

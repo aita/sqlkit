@@ -369,9 +369,28 @@ func TestInsertUpdateDeletePlumbing(t *testing.T) {
 	}
 
 	c := NewCompiler(pg)
-	_, _, _ = InsertInto(tbl).Columns("a").Values(1).Stmt().compile(c)
-	_, _, _ = Update(tbl).Set(Set("a", 1)).Stmt().compile(c)
-	_, _, _ = DeleteFrom(tbl).Where(Gt(Col("a"), 0)).Stmt().compile(c)
+	// Compile via the builder methods, which delegate to the statement form.
+	_, _, _ = InsertInto(tbl).Columns("a").Values(1).compile(c)
+	_, _, _ = Update(tbl).Set(Set("a", 1)).compile(c)
+	_, _, _ = DeleteFrom(tbl).Where(Gt(Col("a"), 0)).compile(c)
+
+	// ColumnCount falls back to the first row width when no columns are named,
+	// and reports zero when neither columns nor rows are present.
+	if got := InsertInto(tbl).Values(1, 2).ColumnCount(); got != 2 {
+		t.Fatalf("ColumnCount from rows = %d, want 2", got)
+	}
+	if got := InsertInto(tbl).Stmt().ColumnCount(); got != 0 {
+		t.Fatalf("ColumnCount empty = %d, want 0", got)
+	}
+
+	// SplitRows returns the builder unchanged for n <= 0 and when the row count
+	// does not exceed n.
+	if got := InsertInto(tbl).Columns("a").Values(1).Values(2).SplitRows(0); len(got) != 1 {
+		t.Fatalf("SplitRows(0) = %d batches, want 1", len(got))
+	}
+	if got := InsertInto(tbl).Columns("a").Values(1).SplitRows(5); len(got) != 1 {
+		t.Fatalf("SplitRows(5) over 1 row = %d batches, want 1", len(got))
+	}
 
 	_ = InsertInto(tbl).Columns("a").Values(1).buildStmt()
 	_ = Update(tbl).Set(Set("a", 1)).buildStmt()

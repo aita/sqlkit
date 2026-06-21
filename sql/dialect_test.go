@@ -1,8 +1,11 @@
 package sql
 
 import (
+	"database/sql/driver"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPostgreSQLDialectQuoteIdent(t *testing.T) {
@@ -367,5 +370,84 @@ func TestDialectHelpersCoverage(t *testing.T) {
 	// ValuesCastType over a range of value kinds.
 	for _, v := range []any{int(1), int64(2), float64(1.5), "s", true, []byte("b"), nil} {
 		_, _ = pg.ValuesCastType(v)
+	}
+}
+
+type castValuer struct {
+	v  int64
+	ok bool
+}
+
+func (c castValuer) Value() (driver.Value, error) {
+	if !c.ok {
+		return nil, nil
+	}
+	return c.v, nil
+}
+
+type castErrValuer struct{}
+
+func (castErrValuer) Value() (driver.Value, error) {
+	return nil, errors.New("boom")
+}
+
+// TestValuesCastTypeBranches exercises the pointer-deref, driver.Valuer unwrap,
+// time.Time, and unrecognized-kind branches of ValuesCastType.
+func TestValuesCastTypeBranches(t *testing.T) {
+	pg := PostgreSQLDialect{}
+	var nilPtr *int
+	n := 7
+	cases := []struct {
+		name    string
+		value   any
+		wantTyp string
+		wantOK  bool
+	}{
+		{"nil pointer", nilPtr, "", false},
+		{"non-nil pointer", &n, "bigint", true},
+		{"untyped nil", nil, "", false},
+		{"time", time.Unix(0, 0), "timestamptz", true},
+		{"valuer valid", castValuer{v: 1, ok: true}, "bigint", true},
+		{"valuer null", castValuer{ok: false}, "", false},
+		{"valuer error", castErrValuer{}, "", false},
+		{"byte slice", []byte("x"), "bytea", true},
+		{"non-byte slice", []int{1}, "", false},
+		{"unrecognized struct", struct{ A int }{}, "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			typ, ok := pg.ValuesCastType(tc.value)
+			if typ != tc.wantTyp || ok != tc.wantOK {
+				t.Errorf("ValuesCastType(%#v) = (%q, %v), want (%q, %v)", tc.value, typ, ok, tc.wantTyp, tc.wantOK)
+			}
+		})
+	}
+}
+
+// TestJSONAccessErrorsAndKeyForms covers the empty-path and invalid-step error
+// branches across all three dialects, plus the quoted-key path for keys that are
+// not simple identifiers.
+func TestJSONAccessErrorsAndKeyForms(t *testing.T) {
+	dialects := []JSONAccessor{PostgreSQLDialect{}, MySQLDialect{}, StandardSQLDialect{}}
+	for i, d := range dialects {
+		if _, err := d.JSONAccess(`"data"`, nil, false); err == nil {
+			t.Errorf("dialect %d: empty path should error", i)
+		}
+		if _, err := d.JSONAccess(`"data"`, []any{1.5}, false); err == nil {
+			t.Errorf("dialect %d: invalid step should error", i)
+		}
+	}
+
+	if isSimpleJSONKey("") {
+		t.Fatal("empty key should not be simple")
+	}
+
+	// A key that needs quoting drives the non-simple branch of buildJSONPath.
+	got, err := MySQLDialect{}.JSONAccess("`data`", []any{"a b", 0}, true)
+	if err != nil {
+		t.Fatalf("JSONAccess: %v", err)
+	}
+	if !strings.Contains(got, `"a b"`) {
+		t.Errorf("expected quoted key in %q", got)
 	}
 }

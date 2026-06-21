@@ -39,3 +39,21 @@ func TestValuesSourceCoverage(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestValuesQueryEmptyAndZeroWidth covers the empty-rows and zero-width guards
+// of CompileValues.
+func TestValuesQueryEmptyAndZeroWidth(t *testing.T) {
+	pg := PostgreSQLDialect{}
+	if _, _, err := Values().ToSQL(pg); err == nil {
+		t.Error("VALUES with no rows: want error")
+	}
+	if _, _, err := Values([]Expression{}).ToSQL(pg); err == nil {
+		t.Error("VALUES with a zero-width row: want error")
+	}
+	if _, _, err := Values([]Expression{Val(1)}, []Expression{Val(1), Val(2)}).ToSQL(pg); err == nil {
+		t.Error("VALUES with ragged rows: want error")
+	}
+	if _, _, err := Values([]Expression{UnaryExpression{Operand: Col("x")}}).ToSQL(pg); err == nil {
+		t.Error("VALUES with a bad value expression: want error")
+	}
+}

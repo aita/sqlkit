@@ -105,7 +105,8 @@ func TestCompoundCoverage(t *testing.T) {
 	mustOK(a.Union(b).IntersectAll(b))
 	mustOK(a.Union(b).ExceptAll(b))
 	mustOK(Select(Col("id")).From(Alias(a.Union(b), "u")))
-	mustOK(a.Union(rawTestQuery{})) // operand compiled via the ToSQL fallback
+	mustOK(a.Union(rawTestQuery{}))                           // operand compiled via the ToSQL fallback
+	mustOK(a.Union(b).OrderBy(Asc(Col("id")), Asc(Col("v")))) // multi-term compound ORDER BY
 
 	c := a.Union(b)
 	_ = c.Stmt()
@@ -120,9 +121,17 @@ func TestCompoundCoverage(t *testing.T) {
 
 	bad := Select(UnaryExpression{Operand: Col("x")}).From(orgs)
 	if _, _, err := a.Union(bad).ToSQL(pg); err == nil {
-		t.Fatal("bad operand should error")
+		t.Fatal("bad right operand should error")
+	}
+	if _, _, err := bad.Union(a).ToSQL(pg); err == nil {
+		t.Fatal("bad left operand should error")
 	}
 	if _, _, err := a.Union(b).OrderBy(Asc(UnaryExpression{Operand: Col("x")})).ToSQL(pg); err == nil {
-		t.Fatal("bad compound order should error")
+		t.Fatal("bad compound order expr should error")
+	}
+	// NULLS ordering on a dialect that does not support it errors while rendering
+	// the compound's ORDER BY modifiers.
+	if _, _, err := a.Union(b).OrderBy(OrderTerm{Expr: Col("id"), Nulls: "FIRST"}).ToSQL(MySQLDialect{}); err == nil {
+		t.Fatal("compound NULLS ordering on MySQL should error")
 	}
 }

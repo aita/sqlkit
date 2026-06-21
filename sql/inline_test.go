@@ -132,4 +132,17 @@ func TestCompileInlineErrorsAndSuccess(t *testing.T) {
 	if got == "" {
 		t.Fatal("inline produced empty SQL")
 	}
+
+	// A query whose AST fails to compile propagates the error.
+	bad := sql.Select(sql.UnaryExpression{Operand: sql.Col("x")}).
+		From(sql.Table{Name: sql.NewIdent("t")})
+	if _, err := sql.CompileInline(pg, bad); err == nil {
+		t.Fatal("compile error: want error")
+	}
+
+	// A RawQuery keeps its own bind args even in inline mode, which inline
+	// rejects because it cannot fold them into the text.
+	if _, err := sql.CompileInline(pg, sql.RawSQL("SELECT $1", 1)); err == nil {
+		t.Fatal("residual bind args: want error")
+	}
 }
