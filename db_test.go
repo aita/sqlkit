@@ -36,7 +36,7 @@ func TestOpenInfersDialectFromDriver(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	defer db.SQL().Close()
+	defer func() { _ = db.SQL().Close() }()
 	if _, ok := db.Dialect().(sqlkit.MySQLDialect); !ok {
 		t.Fatalf("Dialect() = %T, want MySQLDialect inferred from the driver", db.Dialect())
 	}

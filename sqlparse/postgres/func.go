@@ -393,7 +393,7 @@ func typeNameString(tn *pg.TypeName) (string, error) {
 	// bare "bpchar" is the unbounded blank-padded type; rendering a length-less
 	// bpchar as char would change its meaning and break the round-trip, since
 	// re-parsing bare char re-adds the (1).
-	if !(base == "bpchar" && !hasTypmods) {
+	if base != "bpchar" || hasTypmods {
 		if canonical, ok := canonicalTypes[base]; ok {
 			base = canonical
 		}
