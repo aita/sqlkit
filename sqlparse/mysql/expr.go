@@ -124,6 +124,18 @@ func columnRefName(name *ast.ColumnName) (string, error) {
 	return strings.Join(parts, "."), nil
 }
 
+// decimalDigits counts the digits in a numeric literal's text, ignoring a sign,
+// decimal point, and exponent marker — the precision MySQL's DECIMAL bounds at 65.
+func decimalDigits(text string) int {
+	n := 0
+	for _, r := range text {
+		if r >= '0' && r <= '9' {
+			n++
+		}
+	}
+	return n
+}
+
 // convertValue maps a literal value. MySQL has no boolean literal type: TRUE and
 // FALSE parse as the integers 1 and 0.
 func convertValue(v ast.ValueExpr) (sql.Expression, error) {
@@ -153,6 +165,11 @@ func convertValue(v ast.ValueExpr) (sql.Expression, error) {
 			// always non-empty, so this only catches the empty binary literal.
 			if text == "" {
 				return sql.Raw("x''"), nil
+			}
+			// A decimal beyond MySQL's 65-digit precision is out of range, and the
+			// value driver can panic re-parsing such a literal; fall back to raw.
+			if decimalDigits(text) > 65 {
+				return nil, sqlparse.Unsupported("decimal literal out of range")
 			}
 			return sql.Val(Decimal(text)), nil
 		}

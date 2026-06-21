@@ -1,6 +1,7 @@
 package mysql_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/aita/sqlkit/sql"
@@ -476,4 +477,16 @@ func TestExprBackslashStringLiteral(t *testing.T) {
 		`SELECT '\\' FROM t`,
 		sql.Select(sql.Raw(`'\\'`)).From(sql.Table{Name: sql.NewIdent("t")}),
 		"SELECT '\\\\' FROM `t`")
+}
+
+// A decimal literal beyond MySQL's 65-digit precision is out of range, and the
+// value driver can panic re-parsing such a literal, so it falls back to raw.
+func TestExprOverlongDecimalFallsBackToRaw(t *testing.T) {
+	q, err := mysql.ParseOne("SELECT ." + strings.Repeat("0", 73))
+	if err != nil {
+		t.Fatalf("ParseOne error = %v, want a raw passthrough", err)
+	}
+	if _, ok := q.(sql.RawQuery); !ok {
+		t.Fatalf("ParseOne returned %T, want a RawQuery", q)
+	}
 }

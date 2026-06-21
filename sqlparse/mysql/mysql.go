@@ -112,15 +112,34 @@ func deparseStmt(node ast.StmtNode) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	stmt, err := parser.New().ParseOneStmt(first, "", "")
+	// Settle the restore to a re-parse fixpoint (see the SET note above). The
+	// re-parse can also panic in the value driver on an over-long numeric literal
+	// the first restore happened to emit; on a panic, error, or restore failure
+	// keep the first form rather than crash.
+	if second, ok := settledRestore(first); ok {
+		return second, nil
+	}
+	return first, nil
+}
+
+// settledRestore re-parses and re-restores restored SQL, returning the settled
+// form. It recovers a value-driver panic and reports ok=false on any failure so
+// the caller keeps the first restore.
+func settledRestore(restored string) (out string, ok bool) {
+	defer func() {
+		if recover() != nil {
+			out, ok = "", false
+		}
+	}()
+	stmt, err := parser.New().ParseOneStmt(restored, "", "")
 	if err != nil {
-		return first, nil //nolint:nilerr // restored text TiDB cannot re-parse is unexpected; keep the first form
+		return "", false
 	}
 	second, err := restoreStmt(stmt)
 	if err != nil {
-		return first, nil //nolint:nilerr // fall back to the first restore on a restore error
+		return "", false
 	}
-	return second, nil
+	return second, true
 }
 
 // restoreStmt renders one statement node to SQL via the TiDB restore.
