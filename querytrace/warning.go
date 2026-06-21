@@ -79,6 +79,20 @@ const (
 	// without referencing a soft-delete marker column in its top-level WHERE, so
 	// it may return logically deleted rows.
 	WarnMissingSoftDeletePredicate WarningCode = "missing_soft_delete_predicate"
+	// WarnEqNull marks a comparison against a NULL literal with = or <>
+	// (x = NULL / x <> NULL), which SQL evaluates to unknown rather than matching
+	// NULL, so the predicate silently drops every row; IS NULL / IS NOT NULL is
+	// meant.
+	WarnEqNull WarningCode = "eq_null"
+	// WarnWriteOutsideTransaction marks two or more writes issued outside any
+	// transaction within one Trace — statements that cannot roll back together if
+	// one fails, a consistency risk a single autocommit write does not carry.
+	WarnWriteOutsideTransaction WarningCode = "write_outside_transaction"
+	// WarnExternalCallInTransaction marks a Mark (an application step such as an
+	// external API call) recorded while a transaction was open: work that holds the
+	// transaction — and its locks and pinned connection — open across a
+	// non-database operation.
+	WarnExternalCallInTransaction WarningCode = "external_call_in_transaction"
 )
 
 // Warning is one problem querytrace found in a Trace. Warnings are advisory: a

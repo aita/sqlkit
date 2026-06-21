@@ -122,3 +122,48 @@ func TestMaxInList(t *testing.T) {
 		})
 	}
 }
+
+func TestNullEqualityPredicate(t *testing.T) {
+	users := sql.Table{Name: sql.NewIdent("users")}
+	tests := []struct {
+		name  string
+		query sql.Query
+		want  bool
+	}{
+		{
+			name:  "= NULL",
+			query: sql.Select(sql.Col("id")).From(users).Where(sql.Eq(sql.Col("deleted_at"), sql.Expr(nil))),
+			want:  true,
+		},
+		{
+			name: "<> NULL nested under AND",
+			query: sql.Select(sql.Col("id")).From(users).Where(sql.And(
+				sql.Eq(sql.Col("a"), sql.Expr(1)),
+				sql.Ne(sql.Col("b"), sql.Expr(nil)),
+			)),
+			want: true,
+		},
+		{
+			name:  "IS NULL is fine",
+			query: sql.Select(sql.Col("id")).From(users).Where(sql.IsNull(sql.Col("deleted_at"))),
+			want:  false,
+		},
+		{
+			name:  "= value is fine",
+			query: sql.Select(sql.Col("id")).From(users).Where(sql.Eq(sql.Col("id"), sql.Expr(1))),
+			want:  false,
+		},
+		{
+			name:  "no where",
+			query: sql.Select(sql.Col("id")).From(users),
+			want:  false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := analyze.NullEqualityPredicate(tc.query); got != tc.want {
+				t.Errorf("NullEqualityPredicate = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // deriveWarnings computes the whole-trace warnings from the recorded events:
@@ -16,6 +17,116 @@ func (t *Trace) deriveWarnings() []Warning {
 	out = append(out, t.deriveRepeated()...)
 	out = append(out, t.deriveRowsNotClosed()...)
 	out = append(out, t.derivePerStatement()...)
+	out = append(out, t.deriveWriteOutsideTx()...)
+	out = append(out, t.deriveExternalCallInTx()...)
+	return out
+}
+
+// deriveWriteOutsideTx reports two or more writes issued outside any transaction
+// in the Trace. A single autocommit write is unremarkable; multiple unbatched
+// writes are statements that cannot roll back together if one of them fails.
+//
+// Whether a statement is inside a transaction is read from the event timeline,
+// not from QueryInfo.TxID: a write run between a begin and its commit is in the
+// transaction regardless of whether the id was stamped on it. The scan tracks how
+// many transactions are open at each point and counts a write only when none is.
+// The caller holds t.mu.
+func (t *Trace) deriveWriteOutsideTx() []Warning {
+	depth := 0
+	var count int
+	var first *Caller
+	for _, ev := range t.events {
+		switch ev.Kind {
+		case EventTx:
+			if ev.Tx == nil {
+				continue
+			}
+			switch ev.Tx.Action {
+			case TxBegin:
+				depth++
+			case TxCommit, TxRollback:
+				if depth > 0 {
+					depth--
+				}
+			}
+		case EventExec, EventQuery:
+			q := ev.Query
+			if q == nil || !q.Kind.IsWrite() || depth > 0 {
+				continue
+			}
+			count++
+			if first == nil {
+				first = ev.Caller
+			}
+		}
+	}
+	if count < 2 {
+		return nil
+	}
+	return []Warning{{
+		Code:     WarnWriteOutsideTransaction,
+		Message:  fmt.Sprintf("%d writes executed outside a transaction", count),
+		Severity: SeverityWarn,
+		Caller:   first,
+		Details:  map[string]any{"count": count},
+	}}
+}
+
+// deriveExternalCallInTx reports a Mark recorded while a transaction was open: an
+// application step — typically an external call — that held the transaction, its
+// locks, and its pinned connection across a non-database operation. It pairs each
+// transaction's begin and end on the timeline, then checks every Mark against the
+// resulting open intervals. The caller holds t.mu.
+func (t *Trace) deriveExternalCallInTx() []Warning {
+	if len(t.marks) == 0 {
+		return nil
+	}
+
+	type span struct {
+		txID       string
+		begin, end time.Time
+	}
+	var spans []span
+	open := make(map[string]time.Time)
+	for _, ev := range t.events {
+		if ev.Kind != EventTx || ev.Tx == nil {
+			continue
+		}
+		switch ev.Tx.Action {
+		case TxBegin:
+			open[ev.Tx.TxID] = ev.StartedAt
+		case TxCommit, TxRollback:
+			begin, ok := open[ev.Tx.TxID]
+			if !ok {
+				begin = ev.Tx.StartedAt // begin time carried on the end event
+			}
+			spans = append(spans, span{ev.Tx.TxID, begin, ev.StartedAt})
+			delete(open, ev.Tx.TxID)
+		}
+	}
+	// Transactions still open at trace end stay open for the rest of the timeline.
+	for id, begin := range open {
+		spans = append(spans, span{id, begin, time.Time{}})
+	}
+
+	var out []Warning
+	for _, m := range t.marks {
+		for _, s := range spans {
+			if m.At.Before(s.begin) {
+				continue
+			}
+			if !s.end.IsZero() && !m.At.Before(s.end) {
+				continue
+			}
+			out = append(out, Warning{
+				Code:     WarnExternalCallInTransaction,
+				Message:  fmt.Sprintf("mark %q occurred inside transaction %s, holding it open across a non-database step", m.Name, s.txID),
+				Severity: SeverityWarn,
+				Details:  map[string]any{"mark": m.Name, "tx_id": s.txID},
+			})
+			break // one warning per mark
+		}
+	}
 	return out
 }
 

@@ -292,3 +292,36 @@ func (analyzerTestParser) Parse(string) ([]sql.Query, error) {
 		Where(sql.In(sql.Col("tenant_id"), 1, 2, 3))
 	return []sql.Query{q}, nil
 }
+
+// TestEqNullWarning covers the always-on correctness check: a = NULL / <> NULL
+// predicate raises eq_null whenever analysis saw it, with no policy to enable.
+func TestEqNullWarning(t *testing.T) {
+	warned := recordAnalyzed(t, NewConfig(), QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, NullEquality: true}})
+	if !hasCode(warned, WarnEqNull) {
+		t.Error("= NULL comparison should warn")
+	}
+
+	clean := recordAnalyzed(t, NewConfig(), QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, NullEquality: false}})
+	if hasCode(clean, WarnEqNull) {
+		t.Error("clean predicate should not warn")
+	}
+}
+
+// TestAnalyzeWiresNullEquality checks the parse → analyze path sets NullEquality
+// from a parsed = NULL predicate.
+func TestAnalyzeWiresNullEquality(t *testing.T) {
+	cfg := NewConfig(WithParser(eqNullTestParser{}))
+	if qi := cfg.Analyze("anything", nil); !qi.NullEquality {
+		t.Error("NullEquality not set from the parsed = NULL predicate")
+	}
+}
+
+// eqNullTestParser returns a fixed SELECT ... WHERE deleted_at = NULL AST so the
+// wiring of NullEquality can be tested without a real parser.
+type eqNullTestParser struct{}
+
+func (eqNullTestParser) Parse(string) ([]sql.Query, error) {
+	q := sql.Select(sql.Col("id")).From(sql.Table{Name: sql.NewIdent("users")}).
+		Where(sql.Eq(sql.Col("deleted_at"), sql.Expr(nil)))
+	return []sql.Query{q}, nil
+}

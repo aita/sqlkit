@@ -281,6 +281,18 @@ func (t *Trace) checkStatement(ev Event, exp expectations) {
 			})
 		}
 	}
+
+	// A = NULL / <> NULL predicate never matches; trustworthy only from the AST.
+	if q.Parsed && q.NullEquality {
+		t.addWarning(Warning{
+			Code:     WarnEqNull,
+			Message:  "comparison against NULL with = or <> never matches; use IS NULL / IS NOT NULL",
+			Severity: SeverityWarn,
+			EventID:  ev.ID,
+			Caller:   ev.Caller,
+			Details:  fingerprintDetails(q),
+		})
+	}
 }
 
 // Events returns a copy of the recorded statement and transaction events, in

@@ -61,6 +61,10 @@ type Analysis struct {
 	// unless Parsed. They back the tenant/soft-delete and large-IN checks.
 	FilterColumns []string
 	MaxInList     int
+	// NullEquality reports whether the top-level WHERE compares against a NULL
+	// literal with = or <> (NullEqualityPredicate); false unless Parsed. It backs
+	// the eq_null check.
+	NullEquality bool
 	// Fingerprint is the normalized SQL used to group repeats; empty unless the
 	// caller asked for it. See Analyzer.Fingerprint and FingerprintRaw.
 	Fingerprint string
@@ -96,6 +100,7 @@ func (a *Analyzer) Analyze(sqlText string, q sql.Query) Analysis {
 		SelectStar:       SelectsStar(q),
 		FilterColumns:    cols,
 		MaxInList:        maxIn,
+		NullEquality:     NullEqualityPredicate(q),
 		Parsed:           true,
 	}
 }
