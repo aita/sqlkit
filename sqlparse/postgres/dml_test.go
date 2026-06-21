@@ -198,3 +198,10 @@ func TestInsertColumnValueMismatchFallsBackToRaw(t *testing.T) {
 func TestInsertWithoutColumnsFallsBackToRaw(t *testing.T) {
 	assertRaw(t, "INSERT INTO t VALUES (1, 2, 3)")
 }
+
+// ON CONFLICT DO UPDATE requires a conflict target in PostgreSQL (only DO NOTHING
+// may omit it). The raw parser tolerates its absence, but the result cannot be
+// compiled, so it falls back to raw.
+func TestOnConflictDoUpdateWithoutTargetFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "INSERT INTO t (a) VALUES (1) ON CONFLICT DO UPDATE SET a = 0")
+}

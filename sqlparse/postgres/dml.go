@@ -96,14 +96,17 @@ func convertInsert(s *pg.InsertStmt) (sql.Query, error) {
 }
 
 func applyOnConflict(q sql.InsertBuilder, oc *pg.OnConflictClause) (sql.InsertBuilder, error) {
+	hasTarget := false
 	if infer := oc.GetInfer(); infer != nil {
 		if name := infer.GetConname(); name != "" {
 			q = q.OnConflictConstraint(name)
+			hasTarget = true
 		} else if elems := infer.GetIndexElems(); len(elems) > 0 {
 			var err error
 			if q, err = applyInferTarget(q, elems); err != nil {
 				return q, err
 			}
+			hasTarget = true
 		}
 	}
 
@@ -111,6 +114,12 @@ func applyOnConflict(q sql.InsertBuilder, oc *pg.OnConflictClause) (sql.InsertBu
 	case pg.OnConflictAction_ONCONFLICT_NOTHING:
 		return q.DoNothing(), nil
 	case pg.OnConflictAction_ONCONFLICT_UPDATE:
+		// PostgreSQL requires a conflict target for DO UPDATE (only DO NOTHING may
+		// omit it); the raw parser tolerates its absence, but the result cannot be
+		// compiled, so fall back to raw.
+		if !hasTarget {
+			return q, sqlparse.Unsupported("ON CONFLICT DO UPDATE without a conflict target")
+		}
 		assignments, err := convertAssignments(oc.GetTargetList(), true)
 		if err != nil {
 			return q, err
