@@ -27,6 +27,17 @@ func TestExprPosition(t *testing.T) {
 		"a")
 }
 
+// CONVERT(x USING charset) and TRIM(... FROM x) carry keyword syntax that does
+// not survive as a generic call, so they fall back to a raw statement rather than
+// render the invalid call forms CONVERT(x, charset) / TRIM(x, remstr).
+func TestConvertUsingFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT CONVERT(a USING utf8) FROM t")
+}
+
+func TestTrimSpecificationFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT TRIM(' ' FROM a) FROM t")
+}
+
 func TestExprLiterals(t *testing.T) {
 	assertRoundTrip(t,
 		"SELECT id FROM t WHERE a = 1 AND b = 'x' AND c = 2.5 AND d IS NULL",

@@ -32,6 +32,17 @@ func convertFuncCall(fc *ast.FuncCallExpr) (sql.Expression, error) {
 		} else if expr != nil {
 			return expr, nil
 		}
+	case "convert":
+		// CONVERT(x USING charset) renders as the call form CONVERT(x, charset),
+		// which MySQL rejects. Fall back to a raw statement, whose deparse keeps the
+		// USING keyword. (CONVERT(x, type) is a cast and never reaches here.)
+		return nil, sqlparse.Unsupported("CONVERT(x USING charset)")
+	case "trim":
+		// TRIM(x) is an ordinary call, but TRIM([spec] [remstr] FROM x) renders as
+		// TRIM(x, remstr), which MySQL rejects; let those forms fall back to raw.
+		if len(fc.Args) != 1 {
+			return nil, sqlparse.Unsupported("TRIM with a trim specification")
+		}
 	}
 	args, err := convertExprAnys(fc.Args)
 	if err != nil {
