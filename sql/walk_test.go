@@ -240,3 +240,59 @@ func TestWalkCoversEveryNodeKind(t *testing.T) {
 	// Decompose with nil callbacks exercises the orNoop substitution.
 	Decompose(Unwrap(rich), nil, nil, nil)
 }
+
+// TestWalkLoopBodies walks rich statements so the slice/loop bodies inside
+// walkChildren's arms run (columns, checks, alterations, tables, vars, locks,
+// MERGE WHEN clauses, compound operands, JSON path steps).
+func TestWalkLoopBodies(t *testing.T) {
+	n := 0
+	v := countingVisitor{&n}
+	walk := func(q Query) { Walk(v, Unwrap(q).(Node)) }
+
+	tbl := Table{Name: NewIdent("t")}
+	walk(CreateTable(tbl).
+		Column(ColumnDef{Name: NewIdent("a"), Type: EngineType{Name: "int"}, Default: Raw("0")}).
+		Check("c", Raw("a > 0")))
+	walk(AlterTable(tbl).AddColumn(ColumnDef{Name: NewIdent("b"), Type: EngineType{Name: "int"}}).DropColumn("x"))
+	walk(DropTable(tbl, Table{Name: NewIdent("u")}))
+	walk(Truncate(tbl, Table{Name: NewIdent("u")}))
+	walk(SetVariables(SetVar{Name: "x", Value: Raw("1")}, SetVar{Name: "y", Value: Raw("2")}))
+	walk(LockTables(TableLock{Table: tbl, Mode: LockRead}, TableLock{Table: Table{Name: NewIdent("u")}, Mode: LockWrite}))
+
+	src := SourceAlias(Table{Name: NewIdent("s")}, "s")
+	walk(MergeInto(tbl).Using(src).On(Eq(Col("t.id"), Col("s.id"))).
+		When(WhenMatched().And(Gt(Col("s.v"), 0)).ThenUpdate(Set("v", Col("s.v"))),
+			WhenNotMatched().ThenInsert([]string{"id"}, Col("s.id"))))
+
+	a := Select(Col("id")).From(Table{Name: NewIdent("a")})
+	b := Select(Col("id")).From(Table{Name: NewIdent("b")})
+	walk(a.Union(b))
+
+	// JSON access with a multi-step path.
+	walk(Select(Col("id")).From(orgs).Where(Func("noop", JSONGet(Col("data"), "k", 0))))
+
+	if n == 0 {
+		t.Fatal("walked nothing")
+	}
+}
+
+// TestWalkRemainingArms covers the last walkChildren/Decompose branches: the
+// UPDATE/DELETE join loops, a materialized-view body, an expression-valued JSON
+// path step, and Decompose over a plain-table FROM and a non-Node query.
+func TestWalkRemainingArms(t *testing.T) {
+	n := 0
+	v := countingVisitor{&n}
+	walk := func(q Query) { Walk(v, Unwrap(q).(Node)) }
+	tbl := Table{Name: NewIdent("t")}
+	join := Table{Name: NewIdent("j")}
+
+	walk(Update(tbl).Set(Set("a", 1)).Join(join, Eq(Col("t.id"), Col("j.id"))).Where(Eq(Col("a"), 1)))
+	walk(DeleteFrom(tbl).Join(join, Eq(Col("t.id"), Col("j.id"))).Where(Eq(Col("a"), 1)))
+	walk(CreateMaterializedView(Table{Name: NewIdent("mv")}, Select(Col("id")).From(orgs)))
+	walk(Select(Col("id")).From(orgs).Where(Func("noop", JSONGet(Col("data"), Col("dynkey")))))
+
+	// Decompose over a plain-table FROM (the case Table branch).
+	Decompose(Unwrap(Select(Col("id")).From(Table{Name: NewIdent("plain")})), nil, nil, nil)
+	// Decompose over a query whose AST is not a Node returns early.
+	Decompose(rawTestQuery{}, nil, nil, nil)
+}
