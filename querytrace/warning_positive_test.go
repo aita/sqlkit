@@ -54,7 +54,7 @@ func TestNoFalseNegatives(t *testing.T) {
 		{
 			// Over the query budget (3 > 2).
 			name: "over_query_budget",
-			cfg:  querytrace.Config{Enabled: true, Warnings: querytrace.WarningConfig{MaxQueries: 2}},
+			cfg:  querytrace.NewConfig(querytrace.WithMaxQueries(2)),
 			events: []querytrace.Event{
 				fpQuery{fp: "SELECT 1", kind: querytrace.StmtSelect}.event(),
 				fpQuery{fp: "SELECT 2", kind: querytrace.StmtSelect}.event(),
@@ -65,7 +65,7 @@ func TestNoFalseNegatives(t *testing.T) {
 		{
 			// An unclosed cursor.
 			name: "unclosed_cursor",
-			cfg:  querytrace.Config{Enabled: true},
+			cfg:  querytrace.NewConfig(),
 			events: []querytrace.Event{
 				fpQuery{
 					fp:   "SELECT * FROM t",
@@ -78,7 +78,7 @@ func TestNoFalseNegatives(t *testing.T) {
 		{
 			// A large IN list at the budget (4 >= 4).
 			name: "large_in_list",
-			cfg:  querytrace.Config{Enabled: true, Warnings: querytrace.WarningConfig{MaxInListLen: 4}},
+			cfg:  querytrace.NewConfig(querytrace.WithMaxInList(4)),
 			events: []querytrace.Event{
 				fpQuery{
 					fp:     "SELECT id FROM t WHERE x IN (?, ?, ?, ?)",
@@ -93,7 +93,7 @@ func TestNoFalseNegatives(t *testing.T) {
 		{
 			// A SELECT * projection.
 			name: "select_star",
-			cfg:  querytrace.Config{Enabled: true, Warnings: querytrace.WarningConfig{SelectStar: true}},
+			cfg:  querytrace.NewConfig(querytrace.WithSelectStarWarning()),
 			events: []querytrace.Event{
 				fpQuery{
 					fp:     "SELECT * FROM t",
@@ -108,9 +108,7 @@ func TestNoFalseNegatives(t *testing.T) {
 		{
 			// A SELECT touching a base table with no tenant predicate.
 			name: "missing_tenant_predicate",
-			cfg: querytrace.Config{Enabled: true, Warnings: querytrace.WarningConfig{
-				RequireTenantColumns: []string{"tenant_id"},
-			}},
+			cfg:  querytrace.NewConfig(querytrace.WithTenantCheck(querytrace.Columns("tenant_id"))),
 			events: []querytrace.Event{
 				fpQuery{
 					fp:     "SELECT id FROM orders WHERE total > ?",
@@ -125,9 +123,7 @@ func TestNoFalseNegatives(t *testing.T) {
 		{
 			// A SELECT touching a base table with no soft-delete predicate.
 			name: "missing_soft_delete_predicate",
-			cfg: querytrace.Config{Enabled: true, Warnings: querytrace.WarningConfig{
-				SoftDeleteColumns: []string{"deleted_at"},
-			}},
+			cfg:  querytrace.NewConfig(querytrace.WithSoftDeleteCheck(querytrace.Columns("deleted_at"))),
 			events: []querytrace.Event{
 				fpQuery{
 					fp:     "SELECT id FROM orders WHERE id = ?",
@@ -142,7 +138,7 @@ func TestNoFalseNegatives(t *testing.T) {
 		{
 			// Over the bind-parameter budget (at the budget, 100 >= 100).
 			name: "over_bind_param_budget",
-			cfg:  querytrace.Config{Enabled: true, Warnings: querytrace.WarningConfig{MaxParams: 100}},
+			cfg:  querytrace.NewConfig(querytrace.WithMaxParams(100)),
 			events: []querytrace.Event{
 				fpQuery{
 					fp:     "SELECT id FROM t WHERE x IN (?)",
@@ -155,7 +151,7 @@ func TestNoFalseNegatives(t *testing.T) {
 		{
 			// Context canceled mid-iteration.
 			name: "context_canceled_during_iteration",
-			cfg:  querytrace.Config{Enabled: true},
+			cfg:  querytrace.NewConfig(),
 			events: []querytrace.Event{
 				fpQuery{
 					fp:   "SELECT * FROM t",
@@ -168,7 +164,7 @@ func TestNoFalseNegatives(t *testing.T) {
 		{
 			// Context deadline exceeded mid-iteration.
 			name: "context_deadline_during_iteration",
-			cfg:  querytrace.Config{Enabled: true},
+			cfg:  querytrace.NewConfig(),
 			events: []querytrace.Event{
 				fpQuery{
 					fp:   "SELECT * FROM t",

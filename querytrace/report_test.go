@@ -19,11 +19,7 @@ func queryInfo(fp string, kind querytrace.StmtKind) *querytrace.QueryInfo {
 // end: the header counts, the warnings block, and the merged event/mark/tx
 // timeline. It both covers the rendering paths and pins their output shape.
 func TestTextReportRendersTimelineAndWarnings(t *testing.T) {
-	cfg := querytrace.Config{
-		Enabled:  true,
-		NPlusOne: querytrace.NPlusOneConfig{Enabled: true, MinCount: 2},
-	}
-	trace := querytrace.New("checkout", querytrace.WithConfig(cfg))
+	trace := querytrace.New("checkout", querytrace.WithConfig(nplusOneConfig(2)))
 	ctx := querytrace.WithTrace(context.Background(), trace)
 
 	base := time.Now()
@@ -83,7 +79,7 @@ func TestTextReportRendersTimelineAndWarnings(t *testing.T) {
 // TestReportCountsAndDurations checks the aggregate fields the renderer reads:
 // query/write/unique counts and the summed durations.
 func TestReportCountsAndDurations(t *testing.T) {
-	trace := querytrace.New("op", querytrace.WithConfig(querytrace.Config{Enabled: true}))
+	trace := querytrace.New("op", querytrace.WithConfig(querytrace.NewConfig()))
 	ctx := context.Background()
 
 	trace.RecordStatement(ctx, querytrace.Event{
@@ -124,7 +120,7 @@ func TestReportCountsAndDurations(t *testing.T) {
 
 // TestEmptyReportRendersHeaderOnly covers the no-warnings, no-timeline branches.
 func TestEmptyReportRendersHeaderOnly(t *testing.T) {
-	trace := querytrace.New("empty", querytrace.WithConfig(querytrace.Config{Enabled: true}))
+	trace := querytrace.New("empty", querytrace.WithConfig(querytrace.NewConfig()))
 	out := querytrace.TextReport(trace)
 	if !strings.Contains(out, "SQL trace: empty") {
 		t.Errorf("missing header: %q", out)
