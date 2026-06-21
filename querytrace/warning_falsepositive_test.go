@@ -74,15 +74,12 @@ type fpCase struct {
 // analyzerCfg enables every AST-policy check at a tight threshold so a benign
 // trace has the maximum chance to (wrongly) trip one. Used across the corpus.
 func analyzerCfg() querytrace.Config {
-	return querytrace.Config{
-		Enabled: true,
-		Warnings: querytrace.WarningConfig{
-			MaxInListLen:         3,
-			SelectStar:           true,
-			RequireTenantColumns: []string{"tenant_id"},
-			SoftDeleteColumns:    []string{"deleted_at"},
-		},
-	}
+	return querytrace.NewConfig(
+		querytrace.WithMaxInList(3),
+		querytrace.WithSelectStarWarning(),
+		querytrace.WithTenantCheck(querytrace.Columns("tenant_id")),
+		querytrace.WithSoftDeleteCheck(querytrace.Columns("deleted_at")),
+	)
 }
 
 func TestNoFalsePositives(t *testing.T) {
@@ -155,9 +152,7 @@ func TestNoFalsePositives(t *testing.T) {
 			// A qualified tenant column name ("o.tenant_id") must still match the
 			// bare "tenant_id" requirement through BareColumn normalization.
 			name: "qualified_tenant_column_matches",
-			cfg: querytrace.Config{Enabled: true, Warnings: querytrace.WarningConfig{
-				RequireTenantColumns: []string{"o.tenant_id"},
-			}},
+			cfg:  querytrace.NewConfig(querytrace.WithTenantCheck(querytrace.Columns("o.tenant_id"))),
 			events: []querytrace.Event{
 				fpQuery{
 					fp:     "SELECT id FROM orders WHERE tenant_id = ?",
@@ -212,10 +207,7 @@ func TestNoFalsePositives(t *testing.T) {
 		{
 			// An IN list and a parameter count both below their budgets.
 			name: "in_list_and_params_below_budget",
-			cfg: querytrace.Config{Enabled: true, Warnings: querytrace.WarningConfig{
-				MaxInListLen: 5,
-				MaxParams:    100,
-			}},
+			cfg:  querytrace.NewConfig(querytrace.WithMaxInList(5), querytrace.WithMaxParams(100)),
 			events: []querytrace.Event{
 				fpQuery{
 					fp:     "SELECT id FROM t WHERE x IN (?, ?, ?, ?)",
@@ -231,7 +223,7 @@ func TestNoFalsePositives(t *testing.T) {
 		{
 			// A query count exactly at the budget (not over) must not warn.
 			name: "query_count_at_budget",
-			cfg:  querytrace.Config{Enabled: true, Warnings: querytrace.WarningConfig{MaxQueries: 2}},
+			cfg:  querytrace.NewConfig(querytrace.WithMaxQueries(2)),
 			events: []querytrace.Event{
 				fpQuery{fp: "SELECT 1", kind: querytrace.StmtSelect}.event(),
 				fpQuery{fp: "SELECT 2", kind: querytrace.StmtSelect}.event(),
@@ -241,7 +233,7 @@ func TestNoFalsePositives(t *testing.T) {
 		{
 			// A properly closed cursor must not raise rows-not-closed.
 			name: "closed_rows_are_clean",
-			cfg:  querytrace.Config{Enabled: true},
+			cfg:  querytrace.NewConfig(),
 			events: []querytrace.Event{
 				fpQuery{
 					fp:   "SELECT * FROM t",
@@ -255,7 +247,7 @@ func TestNoFalsePositives(t *testing.T) {
 			// A clean cursor that was drained to completion (IterErr nil) must not
 			// raise a context-cancel / deadline warning.
 			name: "drained_cursor_no_ctx_warning",
-			cfg:  querytrace.Config{Enabled: true},
+			cfg:  querytrace.NewConfig(),
 			events: []querytrace.Event{
 				fpQuery{
 					fp:   "SELECT * FROM t",
@@ -270,11 +262,7 @@ func TestNoFalsePositives(t *testing.T) {
 		{
 			// With N+1 detection disabled, even a clearly looping query is silent.
 			name: "n_plus_one_disabled",
-			cfg: func() querytrace.Config {
-				c := nplusOneConfig(2)
-				c.NPlusOne.Enabled = false
-				return c
-			}(),
+			cfg:  querytrace.NewConfig(querytrace.WithoutNPlusOne()),
 			events: []querytrace.Event{
 				fpQuery{fp: "SELECT * FROM t WHERE id = ?", kind: querytrace.StmtSelect, caller: siteA}.event(),
 				fpQuery{fp: "SELECT * FROM t WHERE id = ?", kind: querytrace.StmtSelect, caller: siteA}.event(),
@@ -315,15 +303,12 @@ func TestNoFalsePositives(t *testing.T) {
 // every category at once: calling Warnings() and Report() repeatedly must return
 // the same set, never accumulating or duplicating warnings.
 func TestWarningsAreRecomputedFresh(t *testing.T) {
-	cfg := querytrace.Config{
-		Enabled:  true,
-		NPlusOne: querytrace.NPlusOneConfig{Enabled: true, MinCount: 2},
-		Warnings: querytrace.WarningConfig{
-			MaxQueries:   1,
-			MaxInListLen: 2,
-			SelectStar:   true,
-		},
-	}
+	cfg := querytrace.NewConfig(
+		querytrace.WithNPlusOneThreshold(2),
+		querytrace.WithMaxQueries(1),
+		querytrace.WithMaxInList(2),
+		querytrace.WithSelectStarWarning(),
+	)
 	trace := querytrace.New("op", querytrace.WithConfig(cfg))
 	loop := at("svc.go", 9)
 	for i := 0; i < 3; i++ {
