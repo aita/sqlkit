@@ -34,14 +34,14 @@ func FromContext(ctx context.Context) (*Trace, bool) {
 	return t, ok && t != nil
 }
 
-// WithOperation sets the operation name on the context's Trace, naming the unit
+// SetOperation sets the operation name on the context's Trace, naming the unit
 // of work after it has been created (for example once an HTTP route is known).
-// It is a no-op when ctx carries no Trace.
-func WithOperation(ctx context.Context, name string) context.Context {
+// Like Mark, it acts on the Trace already carried by ctx rather than returning a
+// new context, and is a no-op when ctx carries no Trace.
+func SetOperation(ctx context.Context, name string) {
 	if t, ok := FromContext(ctx); ok {
 		t.setOperation(name)
 	}
-	return ctx
 }
 
 // WithQueryName attaches a query name to ctx, applied to the statements run
