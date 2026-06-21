@@ -28,6 +28,11 @@ func TestIndirectionCompile(t *testing.T) {
 		{Slice(Col("tags"), nil, Val(3)), `"tags"[:$1]`, 1},
 		{Field(Col("rec"), "name"), `("rec")."name"`, 0},
 		{Collate(Col("name"), "C"), `"name" COLLATE "C"`, 0},
+		// A non-column operand (an array constructor) must be parenthesized before
+		// the subscript, or "ARRAY[1,2,3][1]" is invalid SQL.
+		{Subscript(Array(1, 2, 3), 1), `(ARRAY[$1, $2, $3])[$4]`, 4},
+		// A field access already parenthesizes itself, so it subscripts bare.
+		{Subscript(Field(Col("rec"), "tags"), 1), `("rec")."tags"[$1]`, 1},
 	}
 	for _, tc := range cases {
 		got, args, err := NewCompiler(PostgreSQLDialect{}).CompileExpression(tc.expr)
