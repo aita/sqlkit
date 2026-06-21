@@ -374,6 +374,30 @@ var canonicalTypes = map[string]string{
 	"timetz":      "time with time zone",
 }
 
+// quoteTypeIdent double-quotes a type-name part that is not a valid bare
+// identifier (e.g. one starting with a digit, like a "0" type), leaving an
+// ordinary identifier unquoted so built-in and user types render as written.
+func quoteTypeIdent(s string) string {
+	if isBareIdent(s) {
+		return s
+	}
+	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+}
+
+// isBareIdent reports whether s is a non-empty identifier that needs no quoting:
+// a letter or underscore, then letters, digits, underscores, or dollars.
+func isBareIdent(s string) bool {
+	for i, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r == '_':
+		case (r >= '0' && r <= '9' || r == '$') && i > 0:
+		default:
+			return false
+		}
+	}
+	return s != ""
+}
+
 // typeNameString renders a TypeName as a CAST target type, e.g. "integer",
 // "numeric(10, 2)", or "text[]".
 func typeNameString(tn *pg.TypeName) (string, error) {
@@ -389,14 +413,22 @@ func typeNameString(tn *pg.TypeName) (string, error) {
 	}
 	base := strings.Join(parts, ".")
 	hasTypmods := len(tn.GetTypmods()) > 0
+	canonical, isCanonical := canonicalTypes[base]
+	switch {
 	// bpchar canonicalizes to char only with a length. Bare "char" is char(1), but
 	// bare "bpchar" is the unbounded blank-padded type; rendering a length-less
 	// bpchar as char would change its meaning and break the round-trip, since
 	// re-parsing bare char re-adds the (1).
-	if base != "bpchar" || hasTypmods {
-		if canonical, ok := canonicalTypes[base]; ok {
-			base = canonical
+	case isCanonical && (base != "bpchar" || hasTypmods):
+		base = canonical
+	case !isCanonical:
+		// A non-built-in type: quote any part that is not a valid bare identifier
+		// (e.g. a quoted type name like "0"), or it renders as invalid SQL.
+		quoted := make([]string, len(parts))
+		for i, p := range parts {
+			quoted[i] = quoteTypeIdent(p)
 		}
+		base = strings.Join(quoted, ".")
 	}
 
 	if mods := tn.GetTypmods(); len(mods) > 0 {

@@ -551,3 +551,12 @@ func TestGroupByNestedGroupingSetFallsBackToRaw(t *testing.T) {
 func TestGroupByEmptySetFallsBackToRaw(t *testing.T) {
 	assertRaw(t, "SELECT a FROM t GROUP BY ()")
 }
+
+// A cast to a quoted type name that is not a valid bare identifier (e.g. "0")
+// must keep its quotes, or CAST(x AS 0) is invalid SQL.
+func TestExprCastToQuotedTypeName(t *testing.T) {
+	assertRoundTrip(t,
+		`SELECT CAST(a AS "0") FROM t`,
+		sql.Select(sql.Cast(sql.Col("a"), `"0"`)).From(sql.Table{Name: sql.NewIdent("t")}),
+		`SELECT CAST("a" AS "0") FROM "t"`)
+}
