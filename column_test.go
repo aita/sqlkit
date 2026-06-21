@@ -24,6 +24,15 @@ func TestColumnReferenceQualifiesByAlias(t *testing.T) {
 	}
 }
 
+// TestColumnReferenceBareWithoutTable covers Reference's unqualified branch: a
+// column on a table with neither name nor alias renders as just the column name.
+func TestColumnReferenceBareWithoutTable(t *testing.T) {
+	bare := sqlkit.NewColumn[int64](sqlkit.TableInfo{}, "id")
+	if got, want := bare.Reference(), "id"; got != want {
+		t.Fatalf("Reference() = %q, want %q", got, want)
+	}
+}
+
 func TestTableInfoSQLSourceAlias(t *testing.T) {
 	base := sqlkit.TableInfo{Schema: "public", Name: "employees"}
 	if src := base.SQLSource(); !src.Alias.IsZero() || src.Name.String() != "public.employees" {
@@ -214,4 +223,23 @@ func TestColumnMatch(t *testing.T) {
 	where(t, sqlkit.Match("alice", Users.Email),
 		`(to_tsvector("public"."users"."email") @@ plainto_tsquery($1))`,
 		[]any{"alice"})
+}
+
+// TestColumnDistinctFromExprPredicates covers the *Expr null-safe comparison
+// methods (against another column) and the value form of IsNotDistinctFrom,
+// which the existing IS DISTINCT FROM test does not reach.
+func TestColumnDistinctFromExprPredicates(t *testing.T) {
+	id := `"public"."users"."id"`
+	other := `"public"."posts"."user_id"`
+	where(t, Users.ID.IsDistinctFromExpr(Posts.UserID),
+		`(`+id+` IS DISTINCT FROM `+other+`)`, nil)
+	where(t, Users.ID.IsNotDistinctFrom(5),
+		`(`+id+` IS NOT DISTINCT FROM $1)`, []any{int64(5)})
+}
+
+// TestColumnNotSimilarTo covers the package-level NOT SIMILAR TO predicate, the
+// negated counterpart of SimilarTo.
+func TestColumnNotSimilarTo(t *testing.T) {
+	where(t, sqlkit.NotSimilarTo(Users.Email, "%@x.com"),
+		`("public"."users"."email" NOT SIMILAR TO $1)`, []any{"%@x.com"})
 }

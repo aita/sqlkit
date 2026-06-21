@@ -3,8 +3,24 @@ package sqlkit_test
 import (
 	"testing"
 
+	"github.com/aita/sqlkit"
 	"github.com/aita/sqlkit/sql"
 )
+
+// TestCardinalityString covers Cardinality.String over both kinds plus an
+// out-of-range value, which renders the diagnostic placeholder.
+func TestCardinalityString(t *testing.T) {
+	cases := map[sqlkit.Cardinality]string{
+		sqlkit.ToOne:           "ToOne",
+		sqlkit.ToMany:          "ToMany",
+		sqlkit.Cardinality(99): "Cardinality(?)",
+	}
+	for c, want := range cases {
+		if got := c.String(); got != want {
+			t.Fatalf("Cardinality(%d).String() = %q, want %q", c, got, want)
+		}
+	}
+}
 
 func TestSelectJoinRel(t *testing.T) {
 	db := newDB()
