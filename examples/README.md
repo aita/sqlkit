@@ -7,7 +7,7 @@ consumers import.
 
 Most examples expect a PostgreSQL database and read its connection string from
 `DATABASE_URL`; `minimal` and `custom` need no database, and `querytrace` is
-a separate module that runs against an in-memory SQLite database.
+a separate module that also runs against PostgreSQL.
 
 | Example | What it shows | Needs a database |
 | --- | --- | --- |
@@ -15,8 +15,8 @@ a separate module that runs against an in-memory SQLite database.
 | [`generated`](generated) | The end-to-end flow: declare a schema, generate bindings with the CLI, run typed queries | yes (PostgreSQL) |
 | [`custom`](custom) | Driving the `codegen` package as a library to customize the SQL→Go type mapping and DTO naming | no |
 | [`migrate`](migrate) | Shipping migrations as your own standalone binary | yes (PostgreSQL) |
-| [`redaction`](redact) | Masking sensitive literals in SQL, driven by column comments | yes (PostgreSQL) |
-| [`querytrace`](querytrace) | Catching bad query patterns (N+1, missing WHERE, …) at runtime | no (in-memory SQLite) |
+| [`redaction`](redaction) | Masking sensitive literals in SQL, driven by column comments | yes (PostgreSQL) |
+| [`querytrace`](querytrace) | Catching bad query patterns (N+1, missing WHERE, …) at runtime | yes (PostgreSQL) |
 
 ## minimal
 
@@ -85,29 +85,31 @@ DATABASE_URL=postgres://localhost/app go run ./migrate up
 DATABASE_URL=postgres://localhost/app go run ./migrate status
 ```
 
-## redact
+## redaction
 
-Masking sensitive string literals in SQL with the [`redaction`](../redact) package.
+Masking sensitive string literals in SQL with the [`redaction`](../redaction) package.
 It applies a schema, introspects it, and treats **the database as the source of
 truth** for what is sensitive: every column whose comment contains `pii` is
 masked. See [docs/redaction.md](../docs/redaction.md).
 
 ```sh
-createdb redact_demo
-DATABASE_URL=postgres://localhost/redact_demo go run ./redact
+createdb redaction_demo
+DATABASE_URL=postgres://localhost/redaction_demo go run ./redaction
 ```
 
 ## querytrace
 
-A self-contained web server that shows what the [`querytrace`](../querytrace)
+A web server that shows what the [`querytrace`](../querytrace)
 package catches. Each endpoint deliberately runs a different bad pattern — an
 N+1, a missing `WHERE`, an unexpected write, a blown query budget, a leaked
 cursor, an oversized `IN` list — and renders the request's trace (warnings +
-timeline) as an HTML page. It needs no external database: it runs an in-memory
-SQLite database wrapped by the querytrace driver. It is its **own module** (it
-has its own `go.mod`), so run it from inside the directory:
+timeline) as an HTML page. It runs against a real PostgreSQL database (wrapped
+by the querytrace driver) and (re)creates its own small schema on startup. It is
+its **own module** (it has its own `go.mod`), so run it from inside the
+directory:
 
 ```sh
-cd querytrace && go run .
+createdb querytrace_demo
+cd querytrace && DATABASE_URL=postgres://localhost/querytrace_demo go run .
 # open http://localhost:8080/
 ```

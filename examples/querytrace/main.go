@@ -5,14 +5,14 @@
 // for the request is rendered as an HTML page (warnings + timeline), so you can
 // see the warning each one raises right in the browser.
 //
-// It needs no external database: it runs an in-memory SQLite database (the
-// pure-Go modernc driver) wrapped by the querytrace driver, and wires the
-// PostgreSQL parser for full structural analysis (the SQL here is plain enough
-// that SQLite executes it and the PostgreSQL grammar parses it).
+// It runs against a real PostgreSQL database (wrapped by the querytrace driver)
+// and wires the PostgreSQL parser for full structural analysis. Point it at a
+// database with DATABASE_URL; it (re)creates its own small schema on startup.
 //
 // Run it and open the index in a browser:
 //
-//	go run .
+//	createdb querytrace_demo
+//	DATABASE_URL=postgres://localhost/querytrace_demo go run .
 //	open http://localhost:8080/
 package main
 
@@ -20,7 +20,6 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	stddriver "database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -36,11 +35,11 @@ import (
 
 	// The PostgreSQL parser, wired into the config with WithParser so structural
 	// analysis works (the missing-WHERE checks need a real parse, not a keyword
-	// guess). The SQL here is plain enough that SQLite executes it and the
-	// PostgreSQL grammar parses it.
+	// guess).
 	"github.com/aita/sqlkit/sqlparse/postgres"
 
-	"modernc.org/sqlite"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 )
 
 // demo is one endpoint: its route, a description for the index, the warnings it
@@ -100,7 +99,12 @@ var demos = []demo{
 }
 
 func main() {
-	db, err := openTracedDB()
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		log.Fatal("set DATABASE_URL to a PostgreSQL connection string")
+	}
+
+	db, err := openTracedDB(dsn)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -123,9 +127,9 @@ func main() {
 	log.Fatal(http.ListenAndServe(addr, mux))
 }
 
-// openTracedDB opens an in-memory SQLite database behind the querytrace driver
+// openTracedDB opens the PostgreSQL database at dsn behind the querytrace driver
 // wrapper, so every statement run under a request's Trace is recorded.
-func openTracedDB() (*sql.DB, error) {
+func openTracedDB(dsn string) (*sql.DB, error) {
 	// Wire the PostgreSQL parser (for structural analysis), turn on
 	// development-grade capture (raw SQL + a caller for every statement), and
 	// tighten a couple of thresholds so the demo data is enough to trip the
@@ -138,19 +142,15 @@ func openTracedDB() (*sql.DB, error) {
 		querytrace.WithMaxParams(50),
 	)
 
-	connector := &sqliteConnector{dsn: "file::memory:?cache=shared", drv: &sqlite.Driver{}}
+	// Wrap the pgx stdlib connector so the querytrace driver sees every
+	// statement that runs through database/sql.
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("parse DATABASE_URL: %w", err)
+	}
+	connector := stdlib.GetConnector(*config)
 	return sql.OpenDB(qtdriver.WrapConnector(connector, cfg)), nil
 }
-
-// sqliteConnector adapts the modernc SQLite driver to a driver.Connector so the
-// querytrace wrapper has something to wrap.
-type sqliteConnector struct {
-	dsn string
-	drv *sqlite.Driver
-}
-
-func (c *sqliteConnector) Connect(context.Context) (stddriver.Conn, error) { return c.drv.Open(c.dsn) }
-func (c *sqliteConnector) Driver() stddriver.Driver                        { return c.drv }
 
 type server struct {
 	db  *sql.DB
@@ -404,12 +404,15 @@ func (s *server) listUsers(ctx context.Context) ([]user, error) {
 	return users, rows.Err()
 }
 
-// seed creates the schema and a little data. It runs without a Trace in the
-// context, so none of it is recorded against a request.
+// seed (re)creates the schema and a little data. It drops the tables first so a
+// rerun starts clean, and runs without a Trace in the context, so none of it is
+// recorded against a request.
 func seed(ctx context.Context, db *sql.DB) error {
 	stmts := []string{
+		`DROP TABLE IF EXISTS posts`,
+		`DROP TABLE IF EXISTS users`,
 		`CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL)`,
-		`CREATE TABLE posts (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, title TEXT NOT NULL, published INTEGER NOT NULL DEFAULT 0)`,
+		`CREATE TABLE posts (id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY, user_id INTEGER NOT NULL, title TEXT NOT NULL, published INTEGER NOT NULL DEFAULT 0)`,
 	}
 	for _, q := range stmts {
 		if _, err := db.ExecContext(ctx, q); err != nil {
