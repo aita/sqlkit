@@ -26,3 +26,35 @@ func TestAlterTypeCompile(t *testing.T) {
 		}
 	}
 }
+
+// TestEnumCoverage exercises the enum/type builders' options and the
+// Stmt/buildStmt/setPos plumbing.
+func TestEnumCoverage(t *testing.T) {
+	pg := PostgreSQLDialect{}
+	mustCompile := func(q Query) {
+		t.Helper()
+		if _, _, err := q.ToSQL(pg); err != nil {
+			t.Fatalf("%T: %v", q, err)
+		}
+	}
+	mustCompile(CreateEnum("mood", "happy", "sad"))
+	mustCompile(DropType("mood").IfExists().Cascade())
+	mustCompile(AlterTypeAddValue("mood", "meh").IfNotExists().After("happy"))
+	mustCompile(AlterTypeAddValue("mood", "x").Before("sad"))
+	mustCompile(AlterTypeRenameValue("mood", "sad", "down"))
+
+	_ = DropType("m").Stmt()
+	_ = DropType("m").buildStmt()
+	_ = AlterTypeAddValue("m", "v").Stmt()
+	_ = AlterTypeAddValue("m", "v").buildStmt()
+	for _, q := range []Query{
+		CreateEnum("m", "a"),
+		DropType("m"), DropType("m").Stmt(),
+		AlterTypeAddValue("m", "v"), AlterTypeAddValue("m", "v").Stmt(),
+		AlterTypeRenameValue("m", "a", "b"),
+	} {
+		if sp, ok := q.(interface{ setPos(int) Query }); ok {
+			sp.setPos(3)
+		}
+	}
+}
