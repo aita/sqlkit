@@ -401,6 +401,15 @@ func TestExprSchemaQualifiedFunctionFallsBackToRaw(t *testing.T) {
 // Hexadecimal and bit-string literals decode to the driver's binary-literal type,
 // a fmt.Stringer, so the converter preserves their exact text in a Decimal rather
 // than rounding through a float.
+// An empty hex/bit literal stringifies to "", which would vanish from the output
+// (rendering an empty select list); it must render as the explicit x” instead.
+func TestExprEmptyBinaryLiteral(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT B'' FROM t",
+		sql.Select(sql.Raw("x''")).From(sql.Table{Name: sql.NewIdent("t")}),
+		"SELECT x'' FROM `t`")
+}
+
 func TestExprHexAndBitLiterals(t *testing.T) {
 	assertRoundTrip(t,
 		"SELECT id FROM t WHERE a = 0x1F AND b = b'101'",

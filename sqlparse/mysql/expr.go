@@ -137,7 +137,15 @@ func convertValue(v ast.ValueExpr) (sql.Expression, error) {
 		// fmt.Stringer; keep its precise text (scale and all) in a Decimal rather
 		// than rounding through a float.
 		if s, ok := val.(fmt.Stringer); ok {
-			return sql.Val(Decimal(s.String())), nil
+			text := s.String()
+			// An empty hex/bit literal (x'' / b'') stringifies to "", which would
+			// vanish from the output (and a Decimal never does). Render it as the
+			// explicit empty hex literal so it stays valid SQL. A decimal value is
+			// always non-empty, so this only catches the empty binary literal.
+			if text == "" {
+				return sql.Raw("x''"), nil
+			}
+			return sql.Val(Decimal(text)), nil
 		}
 		return nil, sqlparse.Unsupportedf("literal value %T", val)
 	}

@@ -389,7 +389,14 @@ func rawLiteral(v ast.ValueExpr) (sql.Selection, error) {
 		return sql.Raw("'" + escapeStringLiteral(x) + "'"), nil
 	default:
 		if s, ok := v.GetValue().(interface{ String() string }); ok {
-			return sql.Raw(s.String()), nil
+			// An empty hex/bit literal (x'' / b'') stringifies to "", which would
+			// vanish from the select list; render it as the explicit empty hex
+			// literal. A decimal value is always non-empty, so this only catches the
+			// empty binary literal.
+			if text := s.String(); text != "" {
+				return sql.Raw(text), nil
+			}
+			return sql.Raw("x''"), nil
 		}
 		return nil, sqlparse.Unsupportedf("select-list literal %T", v.GetValue())
 	}
