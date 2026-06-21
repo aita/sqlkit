@@ -36,6 +36,35 @@ builder ──ToSQL──▶ SQL text ──┬──▶ roundtrip:    does a re
 A fault that slips past one is usually caught by the other: `roundtrip` proves
 the SQL is *well-formed*, `integration` proves it is *correct when run*.
 
+## Scope: what `roundtrip` is — and is not — for
+
+`roundtrip` overlaps, on the surface, with the parser frontends' own tests
+(`sqlparse/postgres`, `sqlparse/mysql`), which already parse SQL and assert the
+exact AST and the exact `ToSQL` output. To keep responsibilities clear:
+
+- **Per-statement parser correctness** (this text parses to this AST and renders
+  to this exact SQL) belongs to the `sqlparse/*` tests. They are the precise,
+  authoritative round-trip checks for each construct.
+- **Compiler (`ToSQL`) coverage** belongs to the **builder-driven unit tests** in
+  the root `sql` / `sqlkit` packages. Building queries with the fluent API and
+  rendering them is the production path, and it reaches branches no parsed corpus
+  can — so it carries the bulk of the compiler's statement coverage.
+- **`roundtrip` is a property + fuzz oracle, not a coverage corpus.** Its job is
+  to assert one invariant broadly and across *both* dialects — the compiler never
+  emits SQL its own grammar rejects, and rendering is a fixpoint — and to seed
+  `FuzzRoundTrip`. It earns its keep by *catching specific bugs* (e.g. a bare
+  `SELECT` that parses but fails `ToSQL`, and a MySQL `ORDER BY … NULLS …` that
+  renders invalid SQL), not by maximizing a coverage number.
+
+Do **not** grow the `testdata/` corpus to chase compiler coverage: it tops out
+fast and has a structural ceiling. The corpus is text→parse→`ToSQL`, so it can
+only reach what the parser can model — it is DML-only (so it covers none of the
+DDL compiler), and constructs the parser can't model fall back to a raw
+passthrough that skips the typed renderer entirely. Measured: expanding it by
+~110 statements moved `sql`-package coverage only ~19.5% → ~24%, while the
+builder-driven unit tests already sit above 80%. Add a builder unit test (or, for
+arbitrary inputs, a fuzz seed) instead.
+
 ## Why separate modules (not one `internal/tests` module)
 
 Their heavy dependencies are disjoint — `roundtrip` pulls the SQL parsers,
