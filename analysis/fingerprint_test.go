@@ -349,6 +349,94 @@ func TestFingerprintInSubqueryPreserved(t *testing.T) {
 	}
 }
 
+// FuzzFingerprintParsed drives the parsed path with fuzzed values and IN arity,
+// asserting its core invariants as properties rather than fixed examples:
+//   - a numbered placeholder never leaks (every bind becomes "?"),
+//   - the fingerprint is deterministic,
+//   - two statements of the same shape share a fingerprint regardless of their
+//     bound values or IN-list length, and
+//   - two statements of different shape (one with an IN clause, one without) do
+//     not collide.
+//
+// Values flow through the AST as binds, so even hostile strings (quotes, "$3",
+// keywords) render as "?" and cannot perturb the result — exactly the guarantee
+// under test.
+func FuzzFingerprintParsed(f *testing.F) {
+	f.Add(1, 2, "a", "z", 3, 5)
+	f.Add(0, 0, "", "", 0, 0)
+	f.Add(-7, 99, "O'Brien", "x$3y", 1, 8)
+
+	clamp := func(n int) int {
+		n %= 8
+		if n < 0 {
+			n = -n
+		}
+		return n
+	}
+	users := sql.Table{Name: sql.NewIdent("users")}
+	build := func(id int, name string, inCount int) sql.Query {
+		where := sql.And(sql.Eq(sql.Col("id"), id), sql.Eq(sql.Col("name"), name))
+		if n := clamp(inCount); n > 0 {
+			items := make([]any, n)
+			for i := range items {
+				items[i] = id + i
+			}
+			where = sql.And(where, sql.In(sql.Col("tag"), items...))
+		}
+		return sql.Select(sql.Col("id")).From(users).Where(where)
+	}
+
+	f.Fuzz(func(t *testing.T, idA, idB int, nameA, nameB string, inA, inB int) {
+		d := sql.PostgreSQLDialect{}
+		fa, oka := analysis.Fingerprint(build(idA, nameA, inA), d)
+		fb, okb := analysis.Fingerprint(build(idB, nameB, inB), d)
+		if !oka || !okb {
+			t.Fatalf("Fingerprint ok = %v, %v, want both true", oka, okb)
+		}
+		if strings.ContainsAny(fa, "$") {
+			t.Errorf("leaked numbered placeholder: %q", fa)
+		}
+		if again, _ := analysis.Fingerprint(build(idA, nameA, inA), d); again != fa {
+			t.Errorf("not deterministic:\n %q\n %q", fa, again)
+		}
+		sameShape := (clamp(inA) > 0) == (clamp(inB) > 0)
+		if sameShape && fa != fb {
+			t.Errorf("value/arity-only difference changed fingerprint:\n %q\n %q", fa, fb)
+		}
+		if !sameShape && fa == fb {
+			t.Errorf("different shapes collided onto %q", fa)
+		}
+	})
+}
+
+// TestFingerprintRawMultiSyntax broadens the parser-free fallback beyond the
+// simple statements TestFingerprintRaw covers, pinning how it normalizes IN and
+// VALUES lists, function-call arguments (which must NOT collapse), irregular
+// spacing, and mixed keyword case across a range of statement shapes.
+func TestFingerprintRawMultiSyntax(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"in_list", "SELECT id FROM t WHERE id IN (1, 2, 3)", "SELECT id FROM t WHERE id IN (?)"},
+		{"in_list_no_spaces", "SELECT id FROM t WHERE id in(1,2,3)", "SELECT id FROM t WHERE id in (?)"},
+		{"not_in_list", "DELETE FROM t WHERE id NOT IN ($1, $2, $3)", "DELETE FROM t WHERE id NOT IN (?)"},
+		{"insert_rows", "INSERT INTO t (a,b) VALUES (1,2),(3,4),(5,6)", "INSERT INTO t (a, b) VALUES (?, ?)"},
+		{"values_query", "values (1),(2),(3)", "values (?)"},
+		{"func_args_kept", "SELECT coalesce(a, 1), b FROM t", "SELECT coalesce(a, ?), b FROM t"},
+		{"two_in_lists", "SELECT * FROM t WHERE x IN (1,2) OR y IN (3,4,5)", "SELECT * FROM t WHERE x IN (?) OR y IN (?)"},
+		{"single_in_unchanged", "SELECT * FROM t WHERE id IN (1)", "SELECT * FROM t WHERE id IN (?)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := analysis.FingerprintRaw(tt.in); got != tt.want {
+				t.Errorf("FingerprintRaw(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFingerprintNil(t *testing.T) {
 	if _, ok := analysis.Fingerprint(nil, sql.PostgreSQLDialect{}); ok {
 		t.Error("Fingerprint(nil) ok = true, want false")

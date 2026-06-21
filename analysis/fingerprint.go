@@ -39,8 +39,9 @@ var (
 	// to be the canonical "?" leaves "IN (col_a, col_b)" — a structural list of
 	// non-values — untouched and excludes "IN (SELECT …)" subqueries. It runs
 	// after placeholders are unified to "?", so it covers IN, NOT IN, and the
-	// raw-fragment placeholders collapsed above alike.
-	inListRe = regexp.MustCompile(`(?i)\bIN\s*\(\?(?:, \?)+\)`)
+	// raw-fragment placeholders collapsed above alike. The keyword is captured and
+	// re-emitted so its original case survives on the parser-free path.
+	inListRe = regexp.MustCompile(`(?i)\b(IN)\s*\(\?(?:, \?)+\)`)
 	// valuesRowsRe matches a "VALUES (…), (…), …" run of two or more rows whose
 	// values are all placeholders and keeps only the first row, so inserts (and
 	// standalone VALUES queries) that differ only in row count share a
@@ -90,7 +91,7 @@ func Fingerprint(q sql.Query, dialect sql.Dialect) (string, bool) {
 // IN (col_a, col_b) and IN (SELECT …) subqueries are left intact. It is shared
 // by Fingerprint and FingerprintRaw so both paths normalize arity identically.
 func collapseValueLists(s string) string {
-	s = inListRe.ReplaceAllString(s, "IN (?)")
+	s = inListRe.ReplaceAllString(s, "${1} (?)")
 	s = valuesRowsRe.ReplaceAllString(s, "${1}")
 	return s
 }
