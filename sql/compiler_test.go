@@ -638,3 +638,33 @@ func TestCompileExpressionSubqueryAndCapabilityErrors(t *testing.T) {
 		t.Errorf("Array on standard: err = %v, want arrays rejection", err)
 	}
 }
+
+// rawTestQuery is a minimal Query (ToSQL only, not compilable), so compiling it
+// as a subquery exercises compileSubquery's ToSQL fallback.
+type rawTestQuery struct{}
+
+func (rawTestQuery) ToSQL(Dialect) (string, []any, error) { return "SELECT 1", nil, nil }
+
+func TestCompileSubqueryToSQLFallback(t *testing.T) {
+	got, _, err := NewCompiler(PostgreSQLDialect{}).
+		CompileExpression(ScalarSubqueryExpression{Query: rawTestQuery{}})
+	if err != nil || got != "(SELECT 1)" {
+		t.Fatalf("scalar subquery over non-compilable query = %q, %v; want (SELECT 1)", got, err)
+	}
+}
+
+// TestUpdateOrderByErrorsMySQL covers writeOrderBy's error branches, reached via
+// the MySQL UPDATE row-limit path (writeRowLimit -> writeOrderBy).
+func TestUpdateOrderByErrorsMySQL(t *testing.T) {
+	bad := UnaryExpression{Operand: Col("x")}
+	q := Update(Table{Name: NewIdent("t")}).Set(Set("a", 1)).OrderBy(Asc(bad)).Limit(1)
+	if _, _, err := q.ToSQL(MySQLDialect{}); err == nil {
+		t.Fatal("UPDATE ORDER BY bad expr compiled, want error")
+	}
+	q2 := Update(Table{Name: NewIdent("t")}).Set(Set("a", 1)).
+		OrderBy(Desc(Col("x")).NullsLast()).Limit(1)
+	if _, _, err := q2.ToSQL(MySQLDialect{}); err == nil ||
+		!strings.Contains(err.Error(), "does not support NULLS ordering") {
+		t.Fatalf("UPDATE ORDER BY NULLS on mysql = %v, want NULLS rejection", err)
+	}
+}
