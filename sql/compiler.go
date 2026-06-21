@@ -1021,6 +1021,11 @@ func (c *Compiler) CompileSelect(q SelectStmt) (string, []any, error) {
 	if q.HasLimit {
 		sb.WriteString(" LIMIT ")
 		sb.WriteString(strconv.Itoa(q.Limit))
+	} else if q.HasOffset && c.Dialect.Name() == "mysql" {
+		// MySQL has no bare OFFSET — OFFSET is only valid after a LIMIT. Emit
+		// MySQL's documented "all rows" sentinel count so the OFFSET is accepted;
+		// LIMIT <count> OFFSET <offset> is valid MySQL syntax.
+		sb.WriteString(" LIMIT 18446744073709551615")
 	}
 	if q.HasOffset {
 		sb.WriteString(" OFFSET ")
