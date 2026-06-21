@@ -292,3 +292,8 @@ func TestNamedWindowExtended(t *testing.T) {
 		`SELECT ROW_NUMBER() OVER ("w" ORDER BY "score" DESC) AS "rn" FROM "games" WINDOW "w" AS (PARTITION BY "team")`,
 		nil)
 }
+
+// TestCurrentTimeKeyword covers the CURRENT_TIME keyword helper.
+func TestCurrentTimeKeyword(t *testing.T) {
+	assertSQL(t, Select(CurrentTime()).From(orgs), `SELECT CURRENT_TIME FROM "orgs"`, nil)
+}

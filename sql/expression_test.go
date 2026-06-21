@@ -342,3 +342,27 @@ func TestSimilarToRejectedOnMySQL(t *testing.T) {
 		t.Fatalf("ToSQL(mysql) error = %v, want SIMILAR TO rejection", err)
 	}
 }
+
+// TestComparisonAndArithmeticHelpers covers the free comparison/arithmetic
+// helpers and a few small expression accessors.
+func TestComparisonAndArithmeticHelpers(t *testing.T) {
+	assertSQL(t, Select(Lt(Col("a"), Val(1))).From(orgs), `SELECT ("a" < $1) FROM "orgs"`, []any{1})
+	assertSQL(t, Select(Le(Col("a"), Val(1))).From(orgs), `SELECT ("a" <= $1) FROM "orgs"`, []any{1})
+	assertSQL(t, Select(Sub(Col("a"), Val(1))).From(orgs), `SELECT ("a" - $1) FROM "orgs"`, []any{1})
+	assertSQL(t, Select(Div(Col("a"), Val(1))).From(orgs), `SELECT ("a" / $1) FROM "orgs"`, []any{1})
+	assertSQL(t, Select(Mod(Col("a"), Val(1))).From(orgs), `SELECT ("a" % $1) FROM "orgs"`, []any{1})
+
+	// NotIn renders NOT IN as a WHERE predicate.
+	assertSQL(t, Select(Col("a")).From(orgs).Where(NotIn(Col("a"), 1, 2)),
+		`SELECT "a" FROM "orgs" WHERE ("a" NOT IN ($1, $2))`, []any{1, 2})
+
+	// A raw expression reports NoPos.
+	if Raw("x").Pos() != NoPos {
+		t.Fatalf("Raw.Pos() = %d, want NoPos", Raw("x").Pos())
+	}
+
+	// NamedWindow.Frame sets a raw frame clause.
+	w := WindowDef("w").PartitionBy(Col("a")).Frame("ROWS BETWEEN 1 PRECEDING AND CURRENT ROW")
+	assertSQL(t, Select(Over(Func("sum", Col("x"))).Named("w")).From(orgs).Window(w),
+		`SELECT sum("x") OVER "w" FROM "orgs" WINDOW "w" AS (PARTITION BY "a" ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)`, nil)
+}
