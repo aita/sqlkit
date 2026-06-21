@@ -625,7 +625,7 @@ func (c *Compiler) CompileSelection(selection Selection) (string, []any, error) 
 		if err != nil {
 			return "", nil, err
 		}
-		return inner + " AS " + c.Dialect.QuoteIdent(s.Alias.String()), args, nil
+		return inner + " AS " + c.Dialect.QuoteName(s.Alias.String()), args, nil
 	case interface{ Reference() string }:
 		return c.Dialect.QuoteIdent(s.Reference()), nil, nil
 	case interface{ UnwrapSelection() Selection }:
@@ -661,7 +661,7 @@ func (c *Compiler) CompileSource(source Source) (string, []any, error) {
 		}
 		compiled := lateral + "(" + sql + ")"
 		if !s.Alias.IsZero() {
-			compiled += " AS " + c.Dialect.QuoteIdent(s.Alias.String())
+			compiled += " AS " + c.Dialect.QuoteName(s.Alias.String())
 		}
 		return compiled, args, nil
 	}
@@ -670,7 +670,7 @@ func (c *Compiler) CompileSource(source Source) (string, []any, error) {
 	}
 	compiled := lateral + c.Dialect.QuoteIdent(s.Name.String())
 	if !s.Alias.IsZero() {
-		compiled += " AS " + c.Dialect.QuoteIdent(s.Alias.String())
+		compiled += " AS " + c.Dialect.QuoteName(s.Alias.String())
 	}
 	return compiled, nil, nil
 }
@@ -752,7 +752,7 @@ func (c *Compiler) compileValuesSource(s SourceExpression) (string, []any, error
 	sb.WriteString(")")
 	if !s.Alias.IsZero() {
 		sb.WriteString(" AS ")
-		sb.WriteString(c.Dialect.QuoteIdent(s.Alias.String()))
+		sb.WriteString(c.Dialect.QuoteName(s.Alias.String()))
 		if !union && len(v.Columns) == width {
 			sb.WriteString("(")
 			for ci, col := range v.Columns {
