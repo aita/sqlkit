@@ -490,3 +490,16 @@ func TestExprOverlongDecimalFallsBackToRaw(t *testing.T) {
 		t.Fatalf("ParseOne returned %T, want a RawQuery", q)
 	}
 }
+
+// Negating a literal that does not convert to a ValueExpression — an empty bit
+// literal renders as a raw x” — must not panic on the constant-fold path; it
+// falls through to the generic negation.
+func TestExprNegatedNonValueLiteral(t *testing.T) {
+	q, err := mysql.ParseOne("SELECT -B''")
+	if err != nil {
+		t.Fatalf("ParseOne error = %v", err)
+	}
+	if _, _, err := q.ToSQL(sql.MySQLDialect{}); err != nil {
+		t.Fatalf("ToSQL error = %v", err)
+	}
+}
