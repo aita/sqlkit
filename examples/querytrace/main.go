@@ -133,8 +133,9 @@ func openTracedDB() (*sql.DB, error) {
 	cfg := querytrace.NewConfig(
 		querytrace.WithParser(postgres.New()),
 		querytrace.WithVerboseCapture(),
-		querytrace.WithNPlusOne(querytrace.NPlusOneConfig{Enabled: true, MinCount: 3}),
-		querytrace.WithWarnings(querytrace.WarningConfig{MaxQueries: 8, MaxParams: 50}),
+		querytrace.WithNPlusOneThreshold(3),
+		querytrace.WithMaxQueries(8),
+		querytrace.WithMaxParams(50),
 	)
 
 	connector := &sqliteConnector{dsn: "file::memory:?cache=shared", drv: &sqlite.Driver{}}

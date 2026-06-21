@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-
-	"github.com/aita/sqlkit/analyze"
 )
 
 // deriveWarnings computes the whole-trace warnings from the recorded events:
@@ -29,7 +27,7 @@ func (t *Trace) deriveWarnings() []Warning {
 // statement at or above the bind-parameter budget. Execution latency and
 // errors are left to tracing. The caller holds t.mu.
 func (t *Trace) derivePerStatement() []Warning {
-	wc := t.cfg.Warnings
+	wc := t.cfg.warnings
 
 	var out []Warning
 	for _, ev := range t.events {
@@ -45,13 +43,13 @@ func (t *Trace) derivePerStatement() []Warning {
 				out = append(out, w)
 			}
 		}
-		if wc.MaxParams > 0 && ev.Query != nil && ev.Query.ParamCount >= wc.MaxParams {
+		if wc.maxParams > 0 && ev.Query != nil && ev.Query.ParamCount >= wc.maxParams {
 			d := fingerprintDetails(ev.Query)
 			d["param_count"] = ev.Query.ParamCount
-			d["budget"] = wc.MaxParams
+			d["budget"] = wc.maxParams
 			out = append(out, Warning{
 				Code:     WarnTooManyParameters,
-				Message:  fmt.Sprintf("statement carries %d bind parameters, at or above the budget of %d", ev.Query.ParamCount, wc.MaxParams),
+				Message:  fmt.Sprintf("statement carries %d bind parameters, at or above the budget of %d", ev.Query.ParamCount, wc.maxParams),
 				Severity: SeverityWarn,
 				EventID:  ev.ID,
 				Caller:   ev.Caller,
@@ -68,20 +66,20 @@ func (t *Trace) derivePerStatement() []Warning {
 // Each is gated on a configured policy and on analysis having succeeded (the
 // fields it reads are empty on the keyword-fallback path), so a parse failure
 // silently yields no analyzer warnings rather than a false positive.
-func deriveAnalyzerWarnings(ev Event, wc WarningConfig) []Warning {
+func deriveAnalyzerWarnings(ev Event, wc warningConfig) []Warning {
 	q := ev.Query
 	if q == nil {
 		return nil
 	}
 	var out []Warning
 
-	if wc.MaxInListLen > 0 && q.MaxInList >= wc.MaxInListLen {
+	if wc.maxInListLen > 0 && q.MaxInList >= wc.maxInListLen {
 		d := fingerprintDetails(q)
 		d["in_list_len"] = q.MaxInList
-		d["budget"] = wc.MaxInListLen
+		d["budget"] = wc.maxInListLen
 		out = append(out, Warning{
 			Code:     WarnLargeInList,
-			Message:  fmt.Sprintf("IN list of %d items is at or above the budget of %d", q.MaxInList, wc.MaxInListLen),
+			Message:  fmt.Sprintf("IN list of %d items is at or above the budget of %d", q.MaxInList, wc.maxInListLen),
 			Severity: SeverityWarn,
 			EventID:  ev.ID,
 			Caller:   ev.Caller,
@@ -89,7 +87,7 @@ func deriveAnalyzerWarnings(ev Event, wc WarningConfig) []Warning {
 		})
 	}
 
-	if wc.SelectStar && q.SelectStar {
+	if wc.selectStar && q.SelectStar {
 		out = append(out, Warning{
 			Code:     WarnSelectStar,
 			Message:  "SELECT * projects every column",
@@ -104,39 +102,57 @@ func deriveAnalyzerWarnings(ev Event, wc WarningConfig) []Warning {
 	// rows of a base table. INSERT carries its tenant value in the row, not a
 	// WHERE, so it is out of scope.
 	if q.Parsed && len(q.Tables) > 0 {
-		if len(wc.RequireTenantColumns) > 0 && q.Kind.FiltersRows() &&
-			!containsAny(q.FilterColumns, wc.RequireTenantColumns) {
-			d := fingerprintDetails(q)
-			d["required_any_of"] = wc.RequireTenantColumns
-			out = append(out, Warning{
-				Code:     WarnMissingTenantPredicate,
-				Message:  "statement touches a table without a tenant-scoping predicate",
-				Severity: SeverityWarn,
-				EventID:  ev.ID,
-				Caller:   ev.Caller,
-				Details:  d,
-			})
+		if len(wc.tenant.patterns) > 0 && q.Kind.FiltersRows() {
+			out = append(out, predicateWarnings(ev, wc.tenant,
+				WarnMissingTenantPredicate, "statement touches table %q without a tenant-scoping predicate")...)
 		}
-		if len(wc.SoftDeleteColumns) > 0 && q.Kind == StmtSelect &&
-			!containsAny(q.FilterColumns, wc.SoftDeleteColumns) {
-			d := fingerprintDetails(q)
-			d["required_any_of"] = wc.SoftDeleteColumns
-			out = append(out, Warning{
-				Code:     WarnMissingSoftDeletePredicate,
-				Message:  "SELECT touches a table without a soft-delete predicate",
-				Severity: SeverityWarn,
-				EventID:  ev.ID,
-				Caller:   ev.Caller,
-				Details:  d,
-			})
+		if len(wc.softDelete.patterns) > 0 && q.Kind == StmtSelect {
+			out = append(out, predicateWarnings(ev, wc.softDelete,
+				WarnMissingSoftDeletePredicate, "SELECT touches table %q without a soft-delete predicate")...)
 		}
 	}
 
 	return out
 }
 
+// predicateWarnings raises one missing-predicate warning per base table that the
+// check governs but whose top-level WHERE references none of its marker columns.
+// A table is governed when a column pattern's table glob matches it; a bare spec
+// governs every table, a table-qualified spec only the tables it names. With a
+// schema scope a governed table is skipped unless it actually has a matching
+// marker column, so a reference table never false-positives. The offending table
+// name is recorded so a JOIN that misses on one table points at it.
+func predicateWarnings(ev Event, p predicateConfig, code WarningCode, msgFmt string) []Warning {
+	q := ev.Query
+	var out []Warning
+	for _, table := range q.Tables {
+		globs := p.columnGlobsFor(table)
+		if len(globs) == 0 {
+			continue // no marker pattern governs this table
+		}
+		if p.schema != nil && !p.schema.hasColumnMatching(table, globs) {
+			continue // the table has none of the marker columns: not in scope
+		}
+		if anyGlobMatch(q.FilterColumns, globs) {
+			continue
+		}
+		d := fingerprintDetails(q)
+		d["table"] = table
+		d["required_any_of"] = globs
+		out = append(out, Warning{
+			Code:     code,
+			Message:  fmt.Sprintf(msgFmt, table),
+			Severity: SeverityWarn,
+			EventID:  ev.ID,
+			Caller:   ev.Caller,
+			Details:  d,
+		})
+	}
+	return out
+}
+
 func (t *Trace) deriveTooManyQueries() []Warning {
-	budget := t.cfg.Warnings.MaxQueries
+	budget := t.cfg.warnings.maxQueries
 	if budget <= 0 {
 		return nil
 	}
@@ -166,11 +182,11 @@ type repeatGroup struct {
 // A group whose repeats all come from a single caller site is a query in a loop;
 // a group spread across call sites is a possible N+1.
 func (t *Trace) deriveRepeated() []Warning {
-	if !t.cfg.NPlusOne.Enabled {
+	if !t.cfg.nplusOne.enabled {
 		return nil
 	}
 	min := t.cfg.nPlusOneMinCount()
-	ignored := ignoredOps(t.cfg.NPlusOne.IgnoreOperations)
+	ignored := ignoredOps(t.cfg.nplusOne.ignoreOperations)
 
 	groups := make(map[string]*repeatGroup)
 	var order []string
@@ -305,25 +321,6 @@ func fingerprintDetails(q *QueryInfo) map[string]any {
 		d["fingerprint"] = q.Fingerprint
 	}
 	return d
-}
-
-// containsAny reports whether cols contains any of the bare column names in
-// want. Both sides are compared as bare, lower-cased names through
-// analyze.BareColumn.
-func containsAny(cols, want []string) bool {
-	if len(cols) == 0 || len(want) == 0 {
-		return false
-	}
-	set := make(map[string]struct{}, len(cols))
-	for _, c := range cols {
-		set[c] = struct{}{}
-	}
-	for _, w := range want {
-		if _, ok := set[analyze.BareColumn(w)]; ok {
-			return true
-		}
-	}
-	return false
 }
 
 // classifyCtxErr maps a context cancellation or deadline error to its warning

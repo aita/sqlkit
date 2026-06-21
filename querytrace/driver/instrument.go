@@ -27,7 +27,7 @@ import (
 // (driver.ErrSkip), so database/sql can fall back to the prepare path.
 func instrumentQuery(ctx context.Context, cfg qt.Config, txID, sqlText string, args []stddriver.NamedValue, run func() (stddriver.Rows, error)) (stddriver.Rows, error) {
 	tr, ok := qt.FromContext(ctx)
-	if !ok || !cfg.Enabled || !tr.Sampled() {
+	if !ok || !cfg.Enabled() || !tr.Sampled() {
 		return run()
 	}
 	tr.EnsureConfig(cfg)
@@ -50,7 +50,7 @@ func instrumentQuery(ctx context.Context, cfg qt.Config, txID, sqlText string, a
 	if ev.Query != nil {
 		ev.Query.TxID = txID
 	}
-	if qt.WantCaller(cfg.CaptureCaller, err, dur, cfg.SlowQueryThreshold) {
+	if cfg.WantCaller(err, dur) {
 		ev.Caller = qt.CaptureCaller()
 	}
 
@@ -68,7 +68,7 @@ func instrumentQuery(ctx context.Context, cfg qt.Config, txID, sqlText string, a
 // conditions as instrumentQuery.
 func instrumentExec(ctx context.Context, cfg qt.Config, txID, sqlText string, args []stddriver.NamedValue, run func() (stddriver.Result, error)) (stddriver.Result, error) {
 	tr, ok := qt.FromContext(ctx)
-	if !ok || !cfg.Enabled || !tr.Sampled() {
+	if !ok || !cfg.Enabled() || !tr.Sampled() {
 		return run()
 	}
 	tr.EnsureConfig(cfg)
@@ -91,7 +91,7 @@ func instrumentExec(ctx context.Context, cfg qt.Config, txID, sqlText string, ar
 	if ev.Query != nil {
 		ev.Query.TxID = txID
 	}
-	if qt.WantCaller(cfg.CaptureCaller, err, dur, cfg.SlowQueryThreshold) {
+	if cfg.WantCaller(err, dur) {
 		ev.Caller = qt.CaptureCaller()
 	}
 	tr.RecordStatement(ctx, ev)

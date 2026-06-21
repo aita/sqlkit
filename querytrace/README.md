@@ -37,19 +37,21 @@ separate module so the OpenTelemetry SDK stays out of the core.
   cancellation or its deadline *while its rows were still being iterated*: the
   request gave up after the database had begun streaming rows, work it then
   threw away.
-- **Too many parameters** — a statement carrying at or above
-  `Warnings.MaxParams` bind arguments, the signature of an oversized `IN` list
-  or batch.
+- **Too many parameters** — a statement carrying at or above the
+  `WithMaxParams` budget of bind arguments, the signature of an oversized `IN`
+  list or batch.
 - **Large `IN` list** — a top-level `WHERE` carrying an `IN (...)` value list at
-  or above `Warnings.MaxInListLen`, a shape better expressed as a join or a
+  or above the `WithMaxInList` budget, a shape better expressed as a join or a
   temporary table.
-- **`SELECT *`** — a query that projects every column (`Warnings.SelectStar`),
+- **`SELECT *`** — a query that projects every column (`WithSelectStarWarning`),
   which over-fetches and couples the caller to the table's column set.
 - **Missing tenant / soft-delete predicate** — a read or write that touches a
   base table without filtering on a required tenant column
-  (`Warnings.RequireTenantColumns`), or a `SELECT` that does not filter on a
-  soft-delete marker (`Warnings.SoftDeleteColumns`) — the signature of a query
-  that can cross tenant boundaries or return logically deleted rows.
+  (`WithTenantColumns`), or a `SELECT` that does not filter on a soft-delete
+  marker (`WithSoftDeleteColumns`) — the signature of a query that can cross
+  tenant boundaries or return logically deleted rows. Each check can be scoped to
+  the tables that actually have the column — by table-qualified specs or
+  `ScopedToSchema` — so a reference table never false-positives (see below).
 
 These last three read predicate structure from the parsed AST, so they need a
 parser (see below) and stay silent on the string-analysis fallback.
@@ -340,32 +342,75 @@ unless you turn it on.
 
 ### Warnings
 
-The `WithWarnings` option holds the threshold- and policy-based checks. All are
-off when zero/empty, so you opt into each one:
+Each threshold- and policy-based check has its own option, all off by default, so
+you opt into each one:
 
 ```go
 cfg := querytrace.NewConfig(
     querytrace.WithParser(postgres.New()),
-    querytrace.WithWarnings(querytrace.WarningConfig{
-        MaxQueries:           50,                     // too_many_queries
-        MaxParams:            900,                    // too_many_parameters
-        MaxInListLen:         100,                    // large_in_list
-        SelectStar:           true,                   // select_star
-        RequireTenantColumns: []string{"tenant_id"},  // missing_tenant_predicate
-        SoftDeleteColumns:    []string{"deleted_at"}, // missing_soft_delete_predicate
-    }),
+    querytrace.WithMaxQueries(50),      // too_many_queries
+    querytrace.WithMaxParams(900),      // too_many_parameters
+    querytrace.WithMaxInList(100),      // large_in_list
+    querytrace.WithSelectStarWarning(), // select_star
+    querytrace.WithTenantCheck(querytrace.Columns("tenant_id")),         // missing_tenant_predicate
+    querytrace.WithSoftDeleteCheck(querytrace.Columns("deleted_at")),    // missing_soft_delete_predicate
 )
 ```
 
-The tenant and soft-delete checks match by **bare, case-insensitive column
-name** in the statement's top-level `WHERE`: any read or write touching a base
-table whose `WHERE` references none of `RequireTenantColumns` raises
-`missing_tenant_predicate` (an `INSERT` is exempt — it carries its tenant value
-in the row, not a filter), and any `SELECT` whose `WHERE` references none of
-`SoftDeleteColumns` raises `missing_soft_delete_predicate`. They are deliberately
-a blunt instrument applied across every analyzed statement, so scope them to the
-columns your schema actually uses. Like `large_in_list` and `select_star`, they
-read the parsed AST and stay silent when no parser is wired.
+The tenant and soft-delete checks are each configured by one option that takes
+sub-options: `Columns` names the marker columns to look for, and `ScopedToSchema`
+(below) limits the check to the tables that have them. They match
+**case-insensitively** in the statement's top-level `WHERE`: any read or write
+touching a base table whose `WHERE` references none of the tenant columns raises
+`missing_tenant_predicate` (an `INSERT` is exempt — it carries its tenant value in
+the row, not a filter), and any `SELECT` whose `WHERE` references none of the
+soft-delete columns raises `missing_soft_delete_predicate`. Like `large_in_list`
+and `select_star`, they read the parsed AST and stay silent when no parser is
+wired.
+
+Each `Columns` spec is a bare column or a table-qualified `table.column` (a
+leading schema is ignored), and both halves accept glob wildcards (`*` `?`
+`[..]`):
+
+```go
+querytrace.Columns("deleted_at")               // any table, column deleted_at
+querytrace.Columns("deleted_at", "deactivated_at") // either marker
+querytrace.Columns("*_at")                      // any column ending in _at
+querytrace.Columns("orders.deleted_at")         // only the orders table
+querytrace.Columns("tenant_*.tenant_id")        // tables matching tenant_*
+```
+
+A bare column governs every table; a table-qualified spec restricts the
+requirement to the matching tables and leaves the rest unchecked — a second way to
+scope the check alongside `ScopedToSchema`.
+
+#### Scoping to a schema
+
+A bare `Columns` spec governs **every** analyzed base table, which false-positives
+on a table that has no tenant or soft-delete column at all — a lookup or reference
+table (`countries`, `currencies`) that legitimately never filters on one. There
+are two ways to scope a check to the right tables:
+
+```go
+// 1. By hand, with table-qualified specs: only the named tables are checked.
+querytrace.WithSoftDeleteCheck(
+    querytrace.Columns("users.deleted_at", "orders.deleted_at"),
+)
+
+// 2. From the resolved schema: a check applies to a table only if that table
+// actually has a matching marker column, derived from the meta.Metadata your
+// decl catalog builds (or the introspect produces). Reference tables are skipped
+// automatically, and it stays correct as the schema evolves.
+querytrace.WithSoftDeleteCheck(
+    querytrace.Columns("deleted_at"),
+    querytrace.ScopedToSchema(catalog), // meta.Metadata
+)
+```
+
+Table and column names match by bare, case-insensitive name, so a schema-qualified
+statement (`public.users`) lines up with a bare declaration. A statement that
+touches several in-scope tables and misses the predicate on more than one raises a
+warning per table, naming each in `Details["table"]`.
 
 ### Transaction linking
 

@@ -19,7 +19,7 @@ func TestExecutionErrorsAreNotWarned(t *testing.T) {
 		context.Canceled,
 		context.DeadlineExceeded,
 	} {
-		trace := querytrace.New("op", querytrace.WithConfig(querytrace.Config{Enabled: true}))
+		trace := querytrace.New("op", querytrace.WithConfig(querytrace.NewConfig()))
 		trace.RecordStatement(context.Background(), querytrace.Event{
 			Kind:  querytrace.EventQuery,
 			Query: &querytrace.QueryInfo{Analysis: analyze.Analysis{Kind: querytrace.StmtSelect}},
@@ -30,7 +30,7 @@ func TestExecutionErrorsAreNotWarned(t *testing.T) {
 }
 
 func TestTooManyParametersWarns(t *testing.T) {
-	cfg := querytrace.Config{Enabled: true, Warnings: querytrace.WarningConfig{MaxParams: 100}}
+	cfg := querytrace.NewConfig(querytrace.WithMaxParams(100))
 	trace := querytrace.New("op", querytrace.WithConfig(cfg))
 
 	trace.RecordStatement(context.Background(), querytrace.Event{
@@ -41,7 +41,7 @@ func TestTooManyParametersWarns(t *testing.T) {
 }
 
 func TestParametersBelowBudgetIsClean(t *testing.T) {
-	cfg := querytrace.Config{Enabled: true, Warnings: querytrace.WarningConfig{MaxParams: 100}}
+	cfg := querytrace.NewConfig(querytrace.WithMaxParams(100))
 	trace := querytrace.New("op", querytrace.WithConfig(cfg))
 
 	trace.RecordStatement(context.Background(), querytrace.Event{
@@ -52,7 +52,7 @@ func TestParametersBelowBudgetIsClean(t *testing.T) {
 }
 
 func TestIterationCanceledWarns(t *testing.T) {
-	trace := querytrace.New("op", querytrace.WithConfig(querytrace.Config{Enabled: true}))
+	trace := querytrace.New("op", querytrace.WithConfig(querytrace.NewConfig()))
 	// The query call itself succeeded (Err nil); the cancellation ended row
 	// iteration, recorded on the cursor as IterErr.
 	trace.RecordStatement(context.Background(), querytrace.Event{
@@ -74,7 +74,7 @@ func TestIterationCanceledWarns(t *testing.T) {
 }
 
 func TestIterationDeadlineExceededWarns(t *testing.T) {
-	trace := querytrace.New("op", querytrace.WithConfig(querytrace.Config{Enabled: true}))
+	trace := querytrace.New("op", querytrace.WithConfig(querytrace.NewConfig()))
 	trace.RecordStatement(context.Background(), querytrace.Event{
 		Kind:  querytrace.EventQuery,
 		Query: &querytrace.QueryInfo{Analysis: analyze.Analysis{Kind: querytrace.StmtSelect}},
@@ -84,7 +84,7 @@ func TestIterationDeadlineExceededWarns(t *testing.T) {
 }
 
 func TestCleanIterationIsQuiet(t *testing.T) {
-	trace := querytrace.New("op", querytrace.WithConfig(querytrace.Config{Enabled: true}))
+	trace := querytrace.New("op", querytrace.WithConfig(querytrace.NewConfig()))
 	trace.RecordStatement(context.Background(), querytrace.Event{
 		Kind:  querytrace.EventQuery,
 		Query: &querytrace.QueryInfo{Analysis: analyze.Analysis{Kind: querytrace.StmtSelect}},
@@ -96,7 +96,7 @@ func TestCleanIterationIsQuiet(t *testing.T) {
 // TestIterationWarningsAreIdempotent guards the derived-warning contract:
 // repeated Warnings calls must not accumulate duplicates.
 func TestIterationWarningsAreIdempotent(t *testing.T) {
-	trace := querytrace.New("op", querytrace.WithConfig(querytrace.Config{Enabled: true}))
+	trace := querytrace.New("op", querytrace.WithConfig(querytrace.NewConfig()))
 	trace.RecordStatement(context.Background(), querytrace.Event{
 		Kind:  querytrace.EventQuery,
 		Query: &querytrace.QueryInfo{Analysis: analyze.Analysis{Kind: querytrace.StmtSelect}},

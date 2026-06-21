@@ -16,51 +16,51 @@ func (stubParser) Parse(string) ([]sql.Query, error) { return nil, nil }
 func TestNewConfigDefaults(t *testing.T) {
 	cfg := NewConfig()
 
-	if !cfg.Enabled {
-		t.Error("Enabled = false, want true by default")
+	if !cfg.enabled {
+		t.Error("enabled = false, want true by default")
 	}
-	if _, ok := cfg.Dialect.(sql.PostgreSQLDialect); !ok {
-		t.Errorf("Dialect = %T, want sql.PostgreSQLDialect by default", cfg.Dialect)
+	if _, ok := cfg.dialect.(sql.PostgreSQLDialect); !ok {
+		t.Errorf("dialect = %T, want sql.PostgreSQLDialect by default", cfg.dialect)
 	}
-	if cfg.Parser != nil {
-		t.Errorf("Parser = %v, want nil by default", cfg.Parser)
+	if cfg.parser != nil {
+		t.Errorf("parser = %v, want nil by default", cfg.parser)
 	}
 	// Defaults are production-minded: no raw SQL, callers only on error.
-	if cfg.CaptureRawSQL {
-		t.Error("CaptureRawSQL = true, want false by default")
+	if cfg.captureRawSQL {
+		t.Error("captureRawSQL = true, want false by default")
 	}
-	if cfg.CaptureCaller != CallerOnError {
-		t.Errorf("CaptureCaller = %v, want CallerOnError by default", cfg.CaptureCaller)
+	if cfg.captureCaller != CallerOnError {
+		t.Errorf("captureCaller = %v, want CallerOnError by default", cfg.captureCaller)
 	}
-	if !cfg.Fingerprint || !cfg.AnalyzeSQL || !cfg.NPlusOne.Enabled {
-		t.Error("Fingerprint/AnalyzeSQL/NPlusOne should be on by default")
+	if !cfg.fingerprint || !cfg.analyzeSQL || !cfg.nplusOne.enabled {
+		t.Error("fingerprint/analyzeSQL/nplusOne should be on by default")
 	}
 }
 
 func TestWithDialectAndParser(t *testing.T) {
 	cfg := NewConfig(WithDialect(sql.MySQLDialect{}), WithParser(stubParser{}))
-	if _, ok := cfg.Dialect.(sql.MySQLDialect); !ok {
-		t.Errorf("Dialect = %T, want sql.MySQLDialect", cfg.Dialect)
+	if _, ok := cfg.dialect.(sql.MySQLDialect); !ok {
+		t.Errorf("dialect = %T, want sql.MySQLDialect", cfg.dialect)
 	}
-	if _, ok := cfg.Parser.(stubParser); !ok {
-		t.Errorf("Parser = %T, want stubParser", cfg.Parser)
+	if _, ok := cfg.parser.(stubParser); !ok {
+		t.Errorf("parser = %T, want stubParser", cfg.parser)
 	}
 }
 
 func TestWithDialectNilKeepsDefault(t *testing.T) {
 	cfg := NewConfig(WithDialect(nil))
-	if _, ok := cfg.Dialect.(sql.PostgreSQLDialect); !ok {
-		t.Errorf("Dialect = %T, want PostgreSQL default for nil", cfg.Dialect)
+	if _, ok := cfg.Dialect().(sql.PostgreSQLDialect); !ok {
+		t.Errorf("Dialect() = %T, want PostgreSQL default for nil", cfg.Dialect())
 	}
 }
 
 func TestWithVerboseCapture(t *testing.T) {
 	cfg := NewConfig(WithVerboseCapture())
-	if !cfg.CaptureRawSQL {
-		t.Error("WithVerboseCapture should turn on CaptureRawSQL")
+	if !cfg.captureRawSQL {
+		t.Error("WithVerboseCapture should turn on captureRawSQL")
 	}
-	if cfg.CaptureCaller != CallerAlways {
-		t.Errorf("CaptureCaller = %v, want CallerAlways", cfg.CaptureCaller)
+	if cfg.captureCaller != CallerAlways {
+		t.Errorf("captureCaller = %v, want CallerAlways", cfg.captureCaller)
 	}
 }
 
@@ -70,21 +70,48 @@ func TestConfigOptionsCompose(t *testing.T) {
 		WithArgCapture(ArgsOff),
 		WithCaller(CallerOnSlowQuery),
 		WithSlowQueryThreshold(250*time.Millisecond),
-		WithNPlusOne(NPlusOneConfig{Enabled: true, MinCount: 3}),
+		WithNPlusOneThreshold(3),
 	)
-	if !cfg.CaptureRawSQL {
+	if !cfg.captureRawSQL {
 		t.Error("WithRawSQL did not apply")
 	}
-	if cfg.CaptureArgs != ArgsOff {
-		t.Errorf("CaptureArgs = %v, want ArgsOff", cfg.CaptureArgs)
+	if cfg.captureArgs != ArgsOff {
+		t.Errorf("captureArgs = %v, want ArgsOff", cfg.captureArgs)
 	}
-	if cfg.CaptureCaller != CallerOnSlowQuery {
-		t.Errorf("CaptureCaller = %v, want CallerOnSlowQuery", cfg.CaptureCaller)
+	if cfg.captureCaller != CallerOnSlowQuery {
+		t.Errorf("captureCaller = %v, want CallerOnSlowQuery", cfg.captureCaller)
 	}
-	if cfg.SlowQueryThreshold != 250*time.Millisecond {
-		t.Errorf("SlowQueryThreshold = %v, want 250ms", cfg.SlowQueryThreshold)
+	if cfg.slowQueryThreshold != 250*time.Millisecond {
+		t.Errorf("slowQueryThreshold = %v, want 250ms", cfg.slowQueryThreshold)
 	}
-	if cfg.NPlusOne.MinCount != 3 {
-		t.Errorf("NPlusOne.MinCount = %d, want 3", cfg.NPlusOne.MinCount)
+	if cfg.nplusOne.minCount != 3 {
+		t.Errorf("nplusOne.minCount = %d, want 3", cfg.nplusOne.minCount)
+	}
+}
+
+func TestNPlusOneOptions(t *testing.T) {
+	cfg := NewConfig(WithoutNPlusOne())
+	if cfg.nplusOne.enabled {
+		t.Error("WithoutNPlusOne should disable detection")
+	}
+
+	cfg = NewConfig(WithNPlusOneIgnore(StmtInsert, StmtUpdate))
+	if len(cfg.nplusOne.ignoreOperations) != 2 {
+		t.Errorf("ignoreOperations = %v, want two kinds", cfg.nplusOne.ignoreOperations)
+	}
+
+	// A non-positive threshold falls back to the default of 10.
+	if got := NewConfig(WithNPlusOneThreshold(0)).nPlusOneMinCount(); got != 10 {
+		t.Errorf("nPlusOneMinCount() = %d, want 10 for a zero threshold", got)
+	}
+}
+
+func TestWithoutAnalyzeAndFingerprint(t *testing.T) {
+	cfg := NewConfig(WithoutAnalyze(), WithoutFingerprint())
+	if cfg.analyzeSQL {
+		t.Error("WithoutAnalyze should turn off analyzeSQL")
+	}
+	if cfg.fingerprint {
+		t.Error("WithoutFingerprint should turn off fingerprint")
 	}
 }

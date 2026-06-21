@@ -14,7 +14,7 @@ func testConfig() querytrace.Config {
 	cfg := querytrace.NewConfig(
 		querytrace.WithParser(fakeParser{}),
 		querytrace.WithVerboseCapture(),
-		querytrace.WithNPlusOne(querytrace.NPlusOneConfig{Enabled: true, MinCount: 3}),
+		querytrace.WithNPlusOneThreshold(3),
 	)
 	return cfg
 }
