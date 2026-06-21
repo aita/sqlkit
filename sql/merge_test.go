@@ -116,3 +116,33 @@ func TestMergeValidation(t *testing.T) {
 		t.Fatal("MERGE without USING/ON/WHEN succeeded, want error")
 	}
 }
+
+// TestMergeCoverage drives the MERGE compile branches (every WHEN action) plus
+// the builder plumbing (WithCTE, Returning, compile, setPos).
+func TestMergeCoverage(t *testing.T) {
+	pg := PostgreSQLDialect{}
+	tgt := Table{Name: NewIdent("t")}
+	src := SourceAlias(Table{Name: NewIdent("s")}, "s")
+	cte := Select(Col("id")).From(orgs).CTE("c")
+	m := MergeInto(tgt).As("t").Using(src).On(Eq(Col("t.id"), Col("s.id"))).
+		WithCTE(cte).
+		When(
+			WhenMatched().And(Gt(Col("s.v"), 0)).ThenUpdate(Set("v", Col("s.v"))),
+			WhenMatched().ThenDelete(),
+			WhenMatched().ThenDoNothing(),
+			WhenNotMatched().ThenInsert([]string{"id", "v"}, Col("s.id"), 1),
+			WhenNotMatched().ThenDoNothing(),
+			WhenNotMatchedBySource().ThenDelete(),
+		).
+		Returning(Col("t.id"))
+	if _, _, err := m.ToSQL(pg); err != nil {
+		t.Fatalf("merge ToSQL: %v", err)
+	}
+	_ = m.Stmt()
+	if _, _, err := m.compile(NewCompiler(pg)); err != nil {
+		t.Fatalf("merge compile: %v", err)
+	}
+	if sp, ok := Query(m).(interface{ setPos(int) Query }); ok {
+		sp.setPos(2)
+	}
+}

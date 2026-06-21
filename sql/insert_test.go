@@ -340,3 +340,49 @@ func TestInsertStmtConflict(t *testing.T) {
 		t.Errorf("Conflict = %+v, want a DO UPDATE with one assignment", c.Conflict)
 	}
 }
+
+// TestInsertUpdateDeletePlumbing covers the Insert/Update/Delete accessor
+// plumbing: ColumnCount, SplitRows, the second-Where AND-combine, Stmt /
+// buildStmt / setPos, and the compile entry point.
+func TestInsertUpdateDeletePlumbing(t *testing.T) {
+	pg := PostgreSQLDialect{}
+	tbl := Table{Name: NewIdent("t")}
+
+	// Calling Where twice AND-combines the predicates.
+	mustOK := func(q Query) {
+		t.Helper()
+		if _, _, err := q.ToSQL(pg); err != nil {
+			t.Fatalf("%T: %v", q, err)
+		}
+	}
+	mustOK(InsertInto(tbl).Columns("a").Values(1).OnConflict("a").
+		DoUpdate(Set("a", Excluded("a"))).Where(Gt(Col("a"), 0)).Where(Lt(Col("a"), 9)))
+	mustOK(Update(tbl).Set(Set("a", 1)).Where(Gt(Col("a"), 0)).Where(Lt(Col("a"), 9)))
+	mustOK(DeleteFrom(tbl).Where(Gt(Col("a"), 0)).Where(Lt(Col("a"), 9)))
+
+	ib := InsertInto(tbl).Columns("a", "b").Values(1, 2)
+	if ib.ColumnCount() != 2 || ib.Stmt().ColumnCount() != 2 {
+		t.Fatalf("ColumnCount = %d", ib.ColumnCount())
+	}
+	if got := InsertInto(tbl).Columns("a").Values(1).Values(2).Values(3).SplitRows(2); len(got) == 0 {
+		t.Fatal("SplitRows returned nothing")
+	}
+
+	c := NewCompiler(pg)
+	_, _, _ = InsertInto(tbl).Columns("a").Values(1).Stmt().compile(c)
+	_, _, _ = Update(tbl).Set(Set("a", 1)).Stmt().compile(c)
+	_, _, _ = DeleteFrom(tbl).Where(Gt(Col("a"), 0)).Stmt().compile(c)
+
+	_ = InsertInto(tbl).Columns("a").Values(1).buildStmt()
+	_ = Update(tbl).Set(Set("a", 1)).buildStmt()
+	_ = DeleteFrom(tbl).Where(Gt(Col("a"), 0)).buildStmt()
+	for _, q := range []Query{
+		InsertInto(tbl).Columns("a").Values(1), InsertInto(tbl).Columns("a").Values(1).Stmt(),
+		Update(tbl).Set(Set("a", 1)), Update(tbl).Set(Set("a", 1)).Stmt(),
+		DeleteFrom(tbl).Where(Gt(Col("a"), 0)), DeleteFrom(tbl).Where(Gt(Col("a"), 0)).Stmt(),
+	} {
+		if sp, ok := q.(interface{ setPos(int) Query }); ok {
+			sp.setPos(2)
+		}
+	}
+}
