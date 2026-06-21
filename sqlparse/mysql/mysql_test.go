@@ -158,3 +158,25 @@ func TestParseRejectsInvalidUTF8(t *testing.T) {
 		t.Fatal("ParseOne(invalid UTF-8) error = nil, want a parse error")
 	}
 }
+
+// A raw SET passthrough must be stable under re-parsing. TiDB's restore is not
+// idempotent for a SET system variable (it keeps the source case once, then
+// lower-cases the case-insensitive name), so the raw deparse settles it.
+func TestSetSystemVariableRawIsFixpoint(t *testing.T) {
+	q, err := mysql.ParseOne("SET A=0")
+	if err != nil {
+		t.Fatalf("ParseOne error = %v", err)
+	}
+	first, _, err := q.ToSQL(sql.MySQLDialect{})
+	if err != nil {
+		t.Fatalf("ToSQL error = %v", err)
+	}
+	q2, err := mysql.ParseOne(first)
+	if err != nil {
+		t.Fatalf("re-parse error = %v", err)
+	}
+	second, _, _ := q2.ToSQL(sql.MySQLDialect{})
+	if first != second {
+		t.Fatalf("raw SET is not a fixpoint:\n  first:  %s\n  second: %s", first, second)
+	}
+}

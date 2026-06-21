@@ -87,7 +87,30 @@ func (Parser) Parse(text string) ([]sql.Query, error) {
 
 // deparseStmt renders a single parsed statement back to MySQL SQL text via the
 // TiDB parser's own restore, using backtick-quoted names and upper-case keywords.
+//
+// TiDB's restore is not always idempotent: for a SET system variable, the first
+// restore of "SET A=0" keeps the source case ("SET @@SESSION.`A`=0") while a
+// restore of *that* lower-cases the (case-insensitive) variable to `a`. A raw
+// passthrough must be stable under re-parsing, so restore once more and keep the
+// settled form. The extra pass is a no-op for the already-stable majority.
 func deparseStmt(node ast.StmtNode) (string, error) {
+	first, err := restoreStmt(node)
+	if err != nil {
+		return "", err
+	}
+	stmt, err := parser.New().ParseOneStmt(first, "", "")
+	if err != nil {
+		return first, nil //nolint:nilerr // restored text TiDB cannot re-parse is unexpected; keep the first form
+	}
+	second, err := restoreStmt(stmt)
+	if err != nil {
+		return first, nil //nolint:nilerr // fall back to the first restore on a restore error
+	}
+	return second, nil
+}
+
+// restoreStmt renders one statement node to SQL via the TiDB restore.
+func restoreStmt(node ast.StmtNode) (string, error) {
 	var sb strings.Builder
 	ctx := format.NewRestoreCtx(format.DefaultRestoreFlags, &sb)
 	if err := node.Restore(ctx); err != nil {
