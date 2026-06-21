@@ -7,6 +7,19 @@
 //
 //	q, err := postgres.ParseOne("SELECT id FROM users WHERE active")
 //	text, args, err := q.ToSQL(sql.PostgreSQLDialect{})
+//
+// # Limitations
+//
+// See the [github.com/aita/sqlkit/sqlparse] package docs for the limitations
+// common to every frontend (partial mapping with a deparsed RawSQL fallback,
+// loss of comments and formatting on that fallback, and so on). Backend-specific
+// notes:
+//
+//   - cgo. pg_query_go embeds libpg_query, so this module requires cgo and a C
+//     toolchain to build; it is not pure Go.
+//
+//   - Statement positions come from the parse result's statement locations, so
+//     each Query's position points at its start in the source text.
 package postgres
 
 import (

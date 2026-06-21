@@ -8,6 +8,23 @@
 //
 //	q, err := mysql.ParseOne("SELECT id FROM users WHERE active = 1")
 //	text, args, err := q.ToSQL(sql.MySQLDialect{})
+//
+// # Limitations
+//
+// See the [github.com/aita/sqlkit/sqlparse] package docs for the limitations
+// common to every frontend (partial mapping with a deparsed RawSQL fallback,
+// loss of comments and formatting on that fallback, and so on). Backend-specific
+// notes:
+//
+//   - Positions are reconstructed, not native. The TiDB parser does not record a
+//     usable byte offset on its nodes, so a statement's position is computed from
+//     the running length of the preceding statements' verbatim text, and table
+//     offsets within a statement are recovered heuristically from that text.
+//
+//   - MySQL-only construct gaps fall back to RawSQL, including RETURNING on
+//     INSERT/UPDATE/DELETE, REPLACE ... ON DUPLICATE KEY UPDATE, LIMIT with
+//     OFFSET on UPDATE/DELETE, CREATE TABLE ... LIKE / AS SELECT and table
+//     options, functional index keys, and LIKE ... ESCAPE.
 package mysql
 
 import (
