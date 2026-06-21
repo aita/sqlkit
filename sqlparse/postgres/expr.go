@@ -85,7 +85,16 @@ func columnRefParts(cr *pg.ColumnRef) (name string, star bool, qualifier string,
 	for _, field := range cr.GetFields() {
 		switch {
 		case field.GetString_() != nil:
-			parts = append(parts, field.GetString_().GetSval())
+			part := field.GetString_().GetSval()
+			// sqlkit stores a column as one dotted string and re-splits it on '.' to
+			// recover the qualifier, so a single identifier that itself contains a dot
+			// (the quoted "a.b") cannot be told apart from the qualified a.b and would
+			// render wrongly. Such a name has no faithful typed form; report it
+			// unsupported so the statement round-trips as raw.
+			if strings.Contains(part, ".") {
+				return "", false, "", sqlparse.Unsupportedf("column identifier with a dot: %q", part)
+			}
+			parts = append(parts, part)
 		case field.GetAStar() != nil:
 			return "", true, strings.Join(parts, "."), nil
 		default:

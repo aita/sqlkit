@@ -569,3 +569,11 @@ func TestExprCastToMixedCaseTypeName(t *testing.T) {
 		sql.Select(sql.Cast(sql.Col("a"), `"MyType"`)).From(sql.Table{Name: sql.NewIdent("t")}),
 		`SELECT CAST("a" AS "MyType") FROM "t"`)
 }
+
+// A quoted identifier containing a dot ("a.b") is a single column name, but
+// sqlkit stores a column as a dotted string and re-splits it to recover the
+// qualifier, so it cannot be told apart from the qualified a.b. Such a name has
+// no faithful typed form and round-trips as raw.
+func TestColumnIdentifierWithDotFallsBackToRaw(t *testing.T) {
+	assertRaw(t, `SELECT "a.b" FROM t`)
+}
