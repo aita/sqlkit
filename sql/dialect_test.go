@@ -322,3 +322,50 @@ func TestStandardCreateTableIdentity(t *testing.T) {
 		t.Errorf("CreateTable(standard) =\n%s\nwant\n%s", got, want)
 	}
 }
+
+func TestDialectHelpersCoverage(t *testing.T) {
+	if _, err := DialectByName("postgres"); err != nil {
+		t.Fatalf("DialectByName(postgres): %v", err)
+	}
+	if _, err := DialectByName("nope-dialect"); err == nil {
+		t.Fatal("DialectByName(unknown) = nil error, want error")
+	}
+
+	pg := PostgreSQLDialect{}
+	if pg.TableCommentStatement("\"t\"", "") != "" {
+		t.Fatal("empty table comment should render nothing")
+	}
+	if pg.TableCommentStatement("\"t\"", "hi") == "" {
+		t.Fatal("non-empty table comment should render")
+	}
+	if pg.ColumnCommentStatement("\"t\"", "\"c\"", "") != "" {
+		t.Fatal("empty column comment should render nothing")
+	}
+	if pg.ColumnCommentStatement("\"t\"", "\"c\"", "hi") == "" {
+		t.Fatal("non-empty column comment should render")
+	}
+
+	// AutoIncrementColumn: integer types auto-increment, others do not.
+	if _, ok := pg.AutoIncrementColumn("int8", 0, 0, 0); !ok {
+		t.Fatal("pg int8 should auto-increment")
+	}
+	if _, ok := pg.AutoIncrementColumn("text", 0, 0, 0); ok {
+		t.Fatal("pg text should not auto-increment")
+	}
+	my := MySQLDialect{}
+	if _, ok := my.AutoIncrementColumn("int", 0, 0, 0); !ok {
+		t.Fatal("mysql int should auto-increment")
+	}
+	if _, ok := my.AutoIncrementColumn("text", 0, 0, 0); ok {
+		t.Fatal("mysql text should not auto-increment")
+	}
+
+	if !(StandardSQLDialect{}).SupportsMerge() {
+		t.Fatal("standard dialect should support MERGE")
+	}
+
+	// ValuesCastType over a range of value kinds.
+	for _, v := range []any{int(1), int64(2), float64(1.5), "s", true, []byte("b"), nil} {
+		_, _ = pg.ValuesCastType(v)
+	}
+}
