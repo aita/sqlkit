@@ -43,7 +43,11 @@ func convertCreateIndex(s *pg.IndexStmt) (sql.Query, error) {
 		}
 		columns = append(columns, ie.GetName())
 	}
-	stmt := sql.CreateIndex(s.GetIdxname(), tableFromRangeVar(s.GetRelation()), columns...)
+	table, err := tableFromRangeVar(s.GetRelation())
+	if err != nil {
+		return nil, err
+	}
+	stmt := sql.CreateIndex(s.GetIdxname(), table, columns...)
 	if s.GetUnique() {
 		stmt = stmt.Unique()
 	}
@@ -76,7 +80,11 @@ func convertCreateView(s *pg.ViewStmt) (sql.Query, error) {
 	} else if len(args) > 0 {
 		return nil, sqlparse.Unsupported("view body with bound literals")
 	}
-	stmt := sql.CreateView(tableFromRangeVar(s.GetView()), query)
+	view, err := tableFromRangeVar(s.GetView())
+	if err != nil {
+		return nil, err
+	}
+	stmt := sql.CreateView(view, query)
 	if s.GetReplace() {
 		stmt = stmt.OrReplace()
 	}
@@ -157,9 +165,17 @@ func convertCreateEnum(s *pg.CreateEnumStmt) (sql.Query, error) {
 func convertRename(s *pg.RenameStmt) (sql.Query, error) {
 	switch s.GetRenameType() {
 	case pg.ObjectType_OBJECT_TABLE:
-		return sql.RenameTable(tableFromRangeVar(s.GetRelation()), s.GetNewname()), nil
+		table, err := tableFromRangeVar(s.GetRelation())
+		if err != nil {
+			return nil, err
+		}
+		return sql.RenameTable(table, s.GetNewname()), nil
 	case pg.ObjectType_OBJECT_COLUMN:
-		return sql.RenameColumn(tableFromRangeVar(s.GetRelation()), s.GetSubname(), s.GetNewname()), nil
+		table, err := tableFromRangeVar(s.GetRelation())
+		if err != nil {
+			return nil, err
+		}
+		return sql.RenameColumn(table, s.GetSubname(), s.GetNewname()), nil
 	default:
 		return nil, sqlparse.Unsupportedf("RENAME of %s", s.GetRenameType())
 	}
@@ -213,7 +229,11 @@ func dropObjectNames(nodes []*pg.Node) ([]string, error) {
 // convertCreateSequence converts CREATE SEQUENCE with the common options. The
 // AS type and RESTART options are not modeled and round-trip raw.
 func convertCreateSequence(s *pg.CreateSeqStmt) (sql.Query, error) {
-	stmt := sql.CreateSequence(tableFromRangeVar(s.GetSequence()))
+	seq, err := tableFromRangeVar(s.GetSequence())
+	if err != nil {
+		return nil, err
+	}
+	stmt := sql.CreateSequence(seq)
 	if s.GetIfNotExists() {
 		stmt = stmt.IfNotExists()
 	}
@@ -334,7 +354,11 @@ func convertCreateTableAs(s *pg.CreateTableAsStmt) (sql.Query, error) {
 	} else if len(args) > 0 {
 		return nil, sqlparse.Unsupported("materialized view body with bound literals")
 	}
-	stmt := sql.CreateMaterializedView(tableFromRangeVar(into.GetRel()), query)
+	matview, err := tableFromRangeVar(into.GetRel())
+	if err != nil {
+		return nil, err
+	}
+	stmt := sql.CreateMaterializedView(matview, query)
 	if s.GetIfNotExists() {
 		stmt = stmt.IfNotExists()
 	}
@@ -353,7 +377,11 @@ func convertCreateTableAs(s *pg.CreateTableAsStmt) (sql.Query, error) {
 
 // convertRefreshMatView converts REFRESH MATERIALIZED VIEW.
 func convertRefreshMatView(s *pg.RefreshMatViewStmt) (sql.Query, error) {
-	stmt := sql.RefreshMaterializedView(tableFromRangeVar(s.GetRelation()))
+	table, err := tableFromRangeVar(s.GetRelation())
+	if err != nil {
+		return nil, err
+	}
+	stmt := sql.RefreshMaterializedView(table)
 	if s.GetConcurrent() {
 		stmt = stmt.Concurrently()
 	}

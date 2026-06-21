@@ -121,7 +121,7 @@ func joinKind(t pg.JoinType) (string, error) {
 func convertSource(node *pg.Node) (sql.Source, error) {
 	switch {
 	case node.GetRangeVar() != nil:
-		return convertRangeVar(node.GetRangeVar()), nil
+		return convertRangeVar(node.GetRangeVar())
 	case node.GetRangeSubselect() != nil:
 		return convertRangeSubselect(node.GetRangeSubselect())
 	default:
@@ -129,12 +129,15 @@ func convertSource(node *pg.Node) (sql.Source, error) {
 	}
 }
 
-func convertRangeVar(rv *pg.RangeVar) sql.Source {
-	table := tableFromRangeVar(rv)
-	if alias := rv.GetAlias(); alias != nil && alias.GetAliasname() != "" {
-		return sql.SourceAlias(table, alias.GetAliasname())
+func convertRangeVar(rv *pg.RangeVar) (sql.Source, error) {
+	table, err := tableFromRangeVar(rv)
+	if err != nil {
+		return nil, err
 	}
-	return table
+	if alias := rv.GetAlias(); alias != nil && alias.GetAliasname() != "" {
+		return sql.SourceAlias(table, alias.GetAliasname()), nil
+	}
+	return table, nil
 }
 
 func convertRangeSubselect(rs *pg.RangeSubselect) (sql.Source, error) {

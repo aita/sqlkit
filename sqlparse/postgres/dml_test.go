@@ -205,3 +205,10 @@ func TestInsertWithoutColumnsFallsBackToRaw(t *testing.T) {
 func TestOnConflictDoUpdateWithoutTargetFallsBackToRaw(t *testing.T) {
 	assertRaw(t, "INSERT INTO t (a) VALUES (1) ON CONFLICT DO UPDATE SET a = 0")
 }
+
+// A quoted table name containing a dot ("a.b") is a single relation name, not the
+// qualified a.b; sqlkit re-splits a table reference on '.' to recover the schema,
+// so it round-trips as raw rather than silently referencing schema "a", table "b".
+func TestTableIdentifierWithDotFallsBackToRaw(t *testing.T) {
+	assertRaw(t, `SELECT a FROM "x.y"`)
+}
