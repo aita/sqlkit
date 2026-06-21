@@ -321,12 +321,20 @@ func buildTable(table meta.Table, dialect string, mapper TypeMapper, bindingName
 		Ctor:        "new" + varName + "Columns",
 		RelsType:    varName + "Rels",
 	}
+	// Seed the per-table used set with the binding's reserved method names so a
+	// column field never collides with a binding method, then dedupe column
+	// fields against each other: distinct columns (e.g. user_id and user__id)
+	// can map to the same Go name and would otherwise redeclare a struct field.
+	used := make(map[string]bool, len(reservedFieldNames))
+	for name := range reservedFieldNames {
+		used[name] = true
+	}
 	for _, column := range table.Columns {
 		goType, err := columnGoType(table, column, dialect, mapper, enumGo)
 		if err != nil {
 			return nil, fmt.Errorf("codegen: table %s: %w", table.Name, err)
 		}
-		field := fieldName(column.Name)
+		field := uniqueName(used, fieldName(column.Name))
 		cm := columnModel{
 			Field:      field,
 			Name:       column.Name,
