@@ -38,7 +38,11 @@ func convertExprNode(node ast.ExprNode) (sql.Expression, error) {
 	case *ast.ColumnNameExpr:
 		// The column's identifier shares the reference's position, so a qualified or
 		// bare column name reports where it was written, not just the node.
-		c := sql.Col(columnRefName(e.Name))
+		name, err := columnRefName(e.Name)
+		if err != nil {
+			return nil, err
+		}
+		c := sql.Col(name)
 		c.Name = identAt(c.Name.Name, e)
 		return c, nil
 	case ast.ParamMarkerExpr:
@@ -102,17 +106,22 @@ func convertExprNode(node ast.ExprNode) (sql.Expression, error) {
 }
 
 // columnRefName joins a ColumnName's qualified parts (schema.table.column) into
-// the dotted name sqlkit's Col understands.
-func columnRefName(name *ast.ColumnName) string {
+// the dotted name sqlkit's Col understands. sqlkit re-splits that name on '.' to
+// recover the qualifier, so a single quoted identifier that itself contains a dot
+// (`a.b`) cannot be told apart from the qualified a.b and would render wrongly; an
+// individual part carrying a dot is reported unsupported so it round-trips as raw.
+func columnRefName(name *ast.ColumnName) (string, error) {
 	parts := make([]string, 0, 3)
-	if name.Schema.O != "" {
-		parts = append(parts, name.Schema.O)
+	for _, p := range []string{name.Schema.O, name.Table.O, name.Name.O} {
+		if p == "" {
+			continue
+		}
+		if strings.Contains(p, ".") {
+			return "", sqlparse.Unsupportedf("column identifier with a dot: %q", p)
+		}
+		parts = append(parts, p)
 	}
-	if name.Table.O != "" {
-		parts = append(parts, name.Table.O)
-	}
-	parts = append(parts, name.Name.O)
-	return strings.Join(parts, ".")
+	return strings.Join(parts, "."), nil
 }
 
 // convertValue maps a literal value. MySQL has no boolean literal type: TRUE and

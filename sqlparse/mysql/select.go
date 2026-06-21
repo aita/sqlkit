@@ -351,7 +351,11 @@ func convertFieldList(list *ast.FieldList) ([]sql.Selection, error) {
 // SELECT-list / aggregate target (a Selection).
 func convertSelectionExpr(node ast.ExprNode) (sql.Selection, error) {
 	if col, ok := node.(*ast.ColumnNameExpr); ok {
-		c := sql.Col(columnRefName(col.Name))
+		name, err := columnRefName(col.Name)
+		if err != nil {
+			return nil, err
+		}
+		c := sql.Col(name)
 		c.NodePos = offsetOf(col)
 		c.Name = identAt(c.Name.Name, col)
 		return c, nil

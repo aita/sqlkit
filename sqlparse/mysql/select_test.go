@@ -428,3 +428,11 @@ func TestSelectPlaceholderPreserved(t *testing.T) {
 		sql.Select(sql.As(sql.Raw("?"), "a")).From(sql.Table{Name: sql.NewIdent("t")}),
 		"SELECT ? AS `a` FROM `t`")
 }
+
+// A quoted identifier containing a dot (`a.b`) is a single column name, but
+// sqlkit stores a column as a dotted string and re-splits it to recover the
+// qualifier, so it cannot be told apart from the qualified a.b; it round-trips
+// as raw rather than rendering the wrong `a`.`b`.
+func TestColumnIdentifierWithDotFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT `a.b` FROM t")
+}

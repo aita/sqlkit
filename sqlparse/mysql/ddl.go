@@ -467,7 +467,11 @@ func staticExpr(node ast.ExprNode) (sql.Expression, error) {
 	case ast.ValueExpr:
 		return staticConst(e)
 	case *ast.ColumnNameExpr:
-		return sql.Col(columnRefName(e.Name)), nil
+		name, err := columnRefName(e.Name)
+		if err != nil {
+			return nil, err
+		}
+		return sql.Col(name), nil
 	case *ast.ParenthesesExpr:
 		return staticExpr(e.Expr)
 	case *ast.FuncCallExpr:

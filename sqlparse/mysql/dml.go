@@ -295,7 +295,11 @@ func convertAssignments(list []*ast.Assignment, duplicate bool) ([]sql.Assignmen
 		if err != nil {
 			return nil, err
 		}
-		assignments = append(assignments, sql.Set(columnRefName(a.Column), value))
+		name, err := columnRefName(a.Column)
+		if err != nil {
+			return nil, err
+		}
+		assignments = append(assignments, sql.Set(name, value))
 	}
 	return assignments, nil
 }
