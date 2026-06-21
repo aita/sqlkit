@@ -1001,7 +1001,9 @@ func (c *Compiler) CompileSelect(q SelectStmt) (string, []any, error) {
 				return "", nil, err
 			}
 			sb.WriteString(termSQL)
-			writeOrderModifiers(&sb, term)
+			if err := c.writeOrderModifiers(&sb, term); err != nil {
+				return "", nil, err
+			}
 			args = append(args, termArgs...)
 		}
 	}
@@ -1586,7 +1588,9 @@ func (c *Compiler) compileWindowParts(partitions []Expression, order []OrderTerm
 				return "", nil, err
 			}
 			b.WriteString(termSQL)
-			writeOrderModifiers(&b, term)
+			if err := c.writeOrderModifiers(&b, term); err != nil {
+				return "", nil, err
+			}
 			args = append(args, termArgs...)
 		}
 		parts = append(parts, b.String())
@@ -1598,15 +1602,21 @@ func (c *Compiler) compileWindowParts(partitions []Expression, order []OrderTerm
 }
 
 // writeOrderModifiers appends the direction and NULLS ordering of an ORDER BY
-// term (after its already-written expression) to sb.
-func writeOrderModifiers(sb *strings.Builder, term OrderTerm) {
+// term (after its already-written expression) to sb. A NULLS FIRST/LAST modifier
+// is rejected on a dialect that does not support it (MySQL) rather than emitted
+// as SQL that dialect cannot parse.
+func (c *Compiler) writeOrderModifiers(sb *strings.Builder, term OrderTerm) error {
 	if term.Desc {
 		sb.WriteString(" DESC")
 	}
 	if term.Nulls != "" {
+		if d, ok := c.Dialect.(NullsOrderingDialect); !ok || !d.SupportsNullsOrdering() {
+			return fmt.Errorf("sqlkit/sql: dialect %q does not support NULLS ordering", c.Dialect.Name())
+		}
 		sb.WriteString(" NULLS ")
 		sb.WriteString(term.Nulls)
 	}
+	return nil
 }
 
 // writeOrderBy renders an " ORDER BY ..." clause, writing nothing when empty.
@@ -1624,7 +1634,9 @@ func (c *Compiler) writeOrderBy(sb *strings.Builder, args *[]any, terms []OrderT
 			return err
 		}
 		sb.WriteString(termSQL)
-		writeOrderModifiers(sb, term)
+		if err := c.writeOrderModifiers(sb, term); err != nil {
+			return err
+		}
 		*args = append(*args, termArgs...)
 	}
 	return nil

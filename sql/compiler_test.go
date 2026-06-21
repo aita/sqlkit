@@ -5,9 +5,14 @@ import (
 	"testing"
 )
 
-// This file adds builder-driven tests that exercise compiler branches not
-// covered elsewhere, for both the PostgreSQL and MySQL dialects. Cases assert
-// the exact ToSQL text (and args, where load-bearing) like the existing suite.
+// This file tests the SQL compiler (the CompileXxx functions in compiler.go and
+// admin.go): given a built statement, it asserts the exact SQL the compiler
+// emits, and the errors it raises for constructs a dialect cannot express.
+//
+// Portable statements are checked under BOTH PostgreSQL and MySQL so the
+// compiler's per-dialect rendering (identifier quoting, $N vs ?, multi-table
+// UPDATE/DELETE shapes, ...) is explicit; dialect-specific features assert the
+// supported dialect's output and that the other dialect is rejected.
 
 // --- CompileStatic ----------------------------------------------------------
 
@@ -51,13 +56,17 @@ func TestCompileSelectionForms(t *testing.T) {
 	assertMySQL(t, Select(StarOf("u")).From(SourceAlias(users, "u")),
 		"SELECT `u`.* FROM `public`.`users` AS `u`", nil)
 
-	// Raw select item passes through verbatim.
+	// Raw select item passes through verbatim, in both dialects.
 	assertSQL(t, Select(Raw("COUNT(*) AS n")).From(orgs),
 		`SELECT COUNT(*) AS n FROM "orgs"`, nil)
+	assertMySQL(t, Select(Raw("COUNT(*) AS n")).From(orgs),
+		"SELECT COUNT(*) AS n FROM `orgs`", nil)
 
-	// Aliased expression selection.
+	// Aliased expression selection, in both dialects.
 	assertSQL(t, Select(As(Add(Col("a"), Col("b")), "sum")).From(orgs),
 		`SELECT ("a" + "b") AS "sum" FROM "orgs"`, nil)
+	assertMySQL(t, Select(As(Add(Col("a"), Col("b")), "sum")).From(orgs),
+		"SELECT (`a` + `b`) AS `sum` FROM `orgs`", nil)
 }
 
 // --- writeOrderBy / order modifiers -----------------------------------------
@@ -69,9 +78,19 @@ func TestSelectOrderByForms(t *testing.T) {
 	assertSQL(t, pg,
 		`SELECT "id" FROM "orgs" ORDER BY "a", "b" DESC NULLS LAST, "c" NULLS FIRST`, nil)
 
-	// MySQL: ASC/DESC only (no NULLS clause), multiple keys.
+	// MySQL: ASC/DESC only, multiple keys.
 	my := Select(Col("id")).From(orgs).OrderBy(Asc(Col("a")), Desc(Col("b")))
 	assertMySQL(t, my, "SELECT `id` FROM `orgs` ORDER BY `a`, `b` DESC", nil)
+
+	// MySQL does not support NULLS ordering: the compiler rejects the modifier
+	// rather than emit SQL MySQL cannot parse (it has no NULLS FIRST/LAST).
+	nulls := Select(Col("id")).From(orgs).OrderBy(Desc(Col("b")).NullsLast())
+	if _, _, err := nulls.ToSQL(MySQLDialect{}); err == nil ||
+		!strings.Contains(err.Error(), "does not support NULLS ordering") {
+		t.Fatalf("ToSQL(mysql NULLS) error = %v, want NULLS-ordering rejection", err)
+	}
+	// Standard SQL does support it.
+	assertStandard(t, nulls, `SELECT "id" FROM "orgs" ORDER BY "b" DESC NULLS LAST`, nil)
 }
 
 // writeOrderBy is reached from UPDATE/DELETE row limits on MySQL, with multiple
@@ -100,6 +119,8 @@ func TestWindowParts(t *testing.T) {
 		Window(WindowDef("w").PartitionBy(Col("team")))
 	assertSQL(t, bare,
 		`SELECT rank() OVER "w" FROM "orgs" WINDOW "w" AS (PARTITION BY "team")`, nil)
+	assertMySQL(t, bare,
+		"SELECT rank() OVER `w` FROM `orgs` WINDOW `w` AS (PARTITION BY `team`)", nil)
 
 	// Extending a named window with further ORDER BY clauses: "fn OVER (w ...)".
 	ext := Select(Over(Func("rank")).Named("w").OrderBy(Asc(Col("score")))).From(orgs).
@@ -114,6 +135,8 @@ func TestWindowParts(t *testing.T) {
 		Frame("ROWS BETWEEN 1 PRECEDING AND CURRENT ROW")).From(orgs)
 	assertSQL(t, full,
 		`SELECT sum("x") OVER (PARTITION BY "a", "b" ORDER BY "c", "d" DESC ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM "orgs"`, nil)
+	assertMySQL(t, full,
+		"SELECT sum(`x`) OVER (PARTITION BY `a`, `b` ORDER BY `c`, `d` DESC ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM `orgs`", nil)
 }
 
 // --- compileSubscript -------------------------------------------------------
@@ -497,13 +520,19 @@ func (unknownSelection) SQLSelection() {}
 
 func TestJoinFoldsAsWholeWhere(t *testing.T) {
 	// With no explicit WHERE, the folded join ON becomes the entire WHERE clause.
+	// PostgreSQL renders USING + WHERE; MySQL renders an inline JOIN instead.
 	del := DeleteFrom(users).Join(orgs, joinOn())
 	assertSQL(t, del,
 		`DELETE FROM "public"."users" USING "orgs" WHERE ("public"."users"."org_id" = "orgs"."id")`, nil)
+	assertMySQL(t, del,
+		"DELETE `public`.`users` FROM `public`.`users` JOIN `orgs` ON (`public`.`users`.`org_id` = `orgs`.`id`)", nil)
 
 	upd := Update(users).Set(Set("name", Val("x"))).Join(orgs, joinOn())
 	assertSQL(t, upd,
 		`UPDATE "public"."users" SET "name" = $1 FROM "orgs" WHERE ("public"."users"."org_id" = "orgs"."id")`,
+		[]any{"x"})
+	assertMySQL(t, upd,
+		"UPDATE `public`.`users` JOIN `orgs` ON (`public`.`users`.`org_id` = `orgs`.`id`) SET `name` = ?",
 		[]any{"x"})
 }
 
