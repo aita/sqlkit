@@ -32,30 +32,33 @@ JOIN information_schema.key_column_usage kcu
  AND kcu.constraint_schema = tc.constraint_schema
 WHERE tc.table_schema = $1 AND tc.constraint_type = 'PRIMARY KEY'`
 
-// pgForeignKeysQuery reads foreign-key column pairs. constraint_column_usage is
-// reliable for single-column foreign keys (the common case); composite keys may
-// mispair and can be corrected with a custom introspection if needed.
+// pgForeignKeysQuery reads foreign-key column pairs. Referencing and referenced
+// columns are paired by ordinal through pg_constraint's conkey/confkey arrays
+// (unnested WITH ORDINALITY), so composite (multi-column) foreign keys pair
+// correctly rather than forming the cartesian product an
+// information_schema.constraint_column_usage join produces. The result is one
+// ordinally-ordered row per FK column.
 const pgForeignKeysQuery = `
-SELECT tc.constraint_name,
-       tc.table_name,
-       kcu.column_name,
-       ccu.table_schema,
-       ccu.table_name,
-       ccu.column_name,
+SELECT con.conname,
+       c.relname,
+       ac.attname,
+       fn.nspname,
+       fc.relname,
+       af.attname,
        rc.delete_rule,
        rc.update_rule
-FROM information_schema.table_constraints tc
-JOIN information_schema.key_column_usage kcu
-  ON kcu.constraint_name = tc.constraint_name
- AND kcu.constraint_schema = tc.constraint_schema
-JOIN information_schema.constraint_column_usage ccu
-  ON ccu.constraint_name = tc.constraint_name
- AND ccu.constraint_schema = tc.constraint_schema
+FROM pg_constraint con
+JOIN pg_class c ON c.oid = con.conrelid
+JOIN pg_class fc ON fc.oid = con.confrelid
+JOIN pg_namespace n ON n.oid = c.relnamespace
+JOIN pg_namespace fn ON fn.oid = fc.relnamespace
 JOIN information_schema.referential_constraints rc
-  ON rc.constraint_name = tc.constraint_name
- AND rc.constraint_schema = tc.constraint_schema
-WHERE tc.table_schema = $1 AND tc.constraint_type = 'FOREIGN KEY'
-ORDER BY tc.constraint_name, kcu.ordinal_position`
+  ON rc.constraint_name = con.conname AND rc.constraint_schema = n.nspname
+JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS k(att, fatt, ord) ON true
+JOIN pg_attribute ac ON ac.attrelid = con.conrelid AND ac.attnum = k.att
+JOIN pg_attribute af ON af.attrelid = con.confrelid AND af.attnum = k.fatt
+WHERE n.nspname = $1 AND con.contype = 'f'
+ORDER BY con.conname, k.ord`
 
 // pgIndexesQuery reads secondary indexes (the primary key index is implied by
 // Column.PrimaryKey) with their key columns in index order. Index forms the

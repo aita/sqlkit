@@ -22,7 +22,7 @@ func TestInspectPostgres(t *testing.T) {
 	fake := &testutil.Fake{
 		QueryFunc: func(sql string, args []any) (testutil.Result, error) {
 			switch {
-			case strings.Contains(sql, "FOREIGN KEY"):
+			case strings.Contains(sql, "con.contype = 'f'"):
 				return testutil.Result{
 					Columns: []string{"constraint_name", "table_name", "column_name", "ref_schema", "ref_table", "ref_column", "delete_rule", "update_rule"},
 					Rows: [][]driver.Value{
