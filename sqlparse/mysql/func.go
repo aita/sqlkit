@@ -26,6 +26,16 @@ func convertFuncCall(fc *ast.FuncCallExpr) (sql.Expression, error) {
 	// as the call form EXTRACT(unit, x) / POSITION(sub, str), MySQL's grammar
 	// rejects them, so rebuild the dedicated nodes that emit the keyword form.
 	switch fc.FnName.L {
+	case "count":
+		// COUNT normally arrives as an aggregate; reaching here (e.g. "Count ()")
+		// with no argument would render the bare COUNT(), which MySQL rejects.
+		if len(fc.Args) == 0 {
+			return nil, sqlparse.Unsupported("COUNT() without an argument")
+		}
+	case "char_func":
+		// TiDB names CHAR(...) "char_func" internally and even its own deparse emits
+		// the non-standard CHAR_FUNC; rebuild the real CHAR(...) spelling.
+		return convertCharFunc(fc)
 	case "extract":
 		if expr, err := convertExtract(fc); err != nil {
 			return nil, err
@@ -55,6 +65,46 @@ func convertFuncCall(fc *ast.FuncCallExpr) (sql.Expression, error) {
 		return nil, err
 	}
 	return sql.Func(strings.ToUpper(fc.FnName.L), args...), nil
+}
+
+// convertCharFunc rebuilds CHAR(v1, v2, ... [USING charset]) from TiDB's internal
+// char_func form, whose trailing argument carries the charset (NULL when none).
+// The value and charset arguments are rendered via the parser's own restore so
+// the spelling matches the source; a raw passthrough covers any restore failure.
+func convertCharFunc(fc *ast.FuncCallExpr) (sql.Expression, error) {
+	args := fc.Args
+	if len(args) < 1 {
+		return nil, sqlparse.Unsupported("CHAR() without arguments")
+	}
+	values, charset := args[:len(args)-1], args[len(args)-1]
+	parts := make([]string, 0, len(values))
+	for _, v := range values {
+		text, err := restoreExpr(v)
+		if err != nil {
+			return nil, err
+		}
+		parts = append(parts, text)
+	}
+	inner := strings.Join(parts, ", ")
+	// A non-NULL trailing argument is the result charset: CHAR(... USING name).
+	if ce, ok := charset.(ast.ValueExpr); !ok || ce.GetValue() != nil {
+		text, err := restoreExpr(charset)
+		if err != nil {
+			return nil, err
+		}
+		inner += " USING " + strings.Trim(text, "'")
+	}
+	return sql.Raw("CHAR(" + inner + ")"), nil
+}
+
+// restoreExpr renders a sub-expression to SQL text via the TiDB restore, so a
+// node sqlkit rebuilds by hand keeps the source spelling of its operands.
+func restoreExpr(node ast.ExprNode) (string, error) {
+	var sb strings.Builder
+	if err := node.Restore(format.NewRestoreCtx(format.DefaultRestoreFlags, &sb)); err != nil {
+		return "", sqlparse.Unsupportedf("restore %T: %v", node, err)
+	}
+	return sb.String(), nil
 }
 
 // isPlainIdent reports whether s is a non-empty identifier of ASCII letters,

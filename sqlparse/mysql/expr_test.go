@@ -439,3 +439,31 @@ func TestDecimalValueAndString(t *testing.T) {
 func TestExprUnmodeledFallsBackToRaw(t *testing.T) {
 	assertRaw(t, "SELECT id FROM t WHERE name LIKE 'a%' ESCAPE '!'")
 }
+
+// CHAR(...) arrives as TiDB's internal char_func, whose trailing argument is the
+// charset (NULL when none); it must rebuild the standard CHAR spelling rather
+// than emit the non-standard CHAR_FUNC.
+func TestExprCharFunction(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT CHAR(65, 66) FROM t",
+		sql.Select(sql.Raw("CHAR(65, 66)")).From(sql.Table{Name: sql.NewIdent("t")}),
+		"SELECT CHAR(65, 66) FROM `t`")
+	assertRoundTrip(t,
+		"SELECT CHAR(65 USING utf8) FROM t",
+		sql.Select(sql.Raw("CHAR(65 USING utf8)")).From(sql.Table{Name: sql.NewIdent("t")}),
+		"SELECT CHAR(65 USING utf8) FROM `t`")
+}
+
+// COUNT() with no argument (the spaced "Count ()" TiDB tolerates) is not the
+// modeled aggregate and would render the bare COUNT() MySQL rejects, so it falls
+// back to a raw passthrough rather than a hard error. (TiDB's own deparse of it
+// is not re-parseable either, so this asserts only the fallback, not a round-trip.)
+func TestExprBareCountFallsBackToRaw(t *testing.T) {
+	q, err := mysql.ParseOne("SELECT Count () FROM t")
+	if err != nil {
+		t.Fatalf("ParseOne error = %v, want a raw passthrough", err)
+	}
+	if _, ok := q.(sql.RawQuery); !ok {
+		t.Fatalf("ParseOne returned %T, want a RawQuery", q)
+	}
+}
