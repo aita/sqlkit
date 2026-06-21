@@ -708,3 +708,39 @@ func TestStatementErrorPropagation(t *testing.T) {
 		}
 	}
 }
+
+// TestCompileExpressionMoreErrors covers the remaining CompileExpression error
+// and capability branches: ILIKE / regexp / SIMILAR TO / MATCH / quantified-array
+// sub-expression failures, plus the SIMILAR-TO-on-MySQL and arrays-on-standard
+// capability gates and the Excluded zero-column guard.
+func TestCompileExpressionMoreErrors(t *testing.T) {
+	pg := NewCompiler(PostgreSQLDialect{})
+	my := NewCompiler(MySQLDialect{})
+	std := NewCompiler(StandardSQLDialect{})
+	bad := UnaryExpression{Operand: Col("x")}
+	cases := []struct {
+		c *Compiler
+		e Expression
+	}{
+		{pg, ILikeExpression{Left: bad, Pattern: Val("%a%")}},
+		{pg, ILikeExpression{Left: Col("a"), Pattern: bad}},
+		{pg, RegexpExpression{Left: bad, Pattern: Val("x")}},
+		{pg, RegexpExpression{Left: Col("a"), Pattern: bad}},
+		{pg, SimilarToExpression{Left: bad, Pattern: Val("x")}},
+		{pg, SimilarToExpression{Left: Col("a"), Pattern: bad}},
+		{my, SimilarToExpression{Left: Col("a"), Pattern: Val("x")}}, // unsupported on mysql
+		{pg, MatchExpression{}},                                      // no columns
+		{pg, MatchExpression{Columns: []Expression{bad}, Query: Val("q")}},
+		{pg, MatchExpression{Columns: []Expression{Col("a")}, Query: bad}},
+		{pg, QuantifiedArrayExpression{Left: Col("a"), Operator: "=", Quantifier: "ANY"}},                        // nil array
+		{std, QuantifiedArrayExpression{Left: Col("a"), Operator: "=", Quantifier: "ANY", Array: Array(Val(1))}}, // arrays unsupported
+		{pg, QuantifiedArrayExpression{Left: bad, Operator: "=", Quantifier: "ANY", Array: Array(Val(1))}},       // left error
+		{pg, QuantifiedArrayExpression{Left: Col("a"), Operator: "=", Quantifier: "ANY", Array: bad}},            // array error
+		{pg, ExcludedExpression{}},                                                                               // zero column
+	}
+	for i, tc := range cases {
+		if _, _, err := tc.c.CompileExpression(tc.e); err == nil {
+			t.Errorf("case %d (%T): want error", i, tc.e)
+		}
+	}
+}
