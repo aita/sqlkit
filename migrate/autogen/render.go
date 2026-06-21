@@ -210,6 +210,8 @@ func (r *renderer) plan(from, to meta.Metadata) (string, error) {
 	out = append(out, objs.createEnums...)
 	out = append(out, objs.createSequences...)
 	out = append(out, createTables...)
+	// Appended enum labels run in the alter phase, not the pre-table drop phase.
+	out = append(out, objs.alterEnums...)
 	out = append(out, alters...)
 	out = append(out, createIndexes...)
 	out = append(out, addFKs...)
@@ -252,13 +254,37 @@ func (r *renderer) objectOps(from, to meta.Metadata) renderedObjects {
 	for _, e := range to.Enums {
 		newEnum[e.QualifiedName()] = e
 	}
+	// A pure append (old labels are a prefix of the new ones) becomes one
+	// op.AddEnumValue per added label, which keeps any column using the type
+	// usable. Any other change still drops and recreates the type.
 	for _, e := range from.Enums {
-		if n, ok := newEnum[e.QualifiedName()]; !ok || !e.Equal(n) {
+		n, ok := newEnum[e.QualifiedName()]
+		if !ok {
 			o.dropEnums = append(o.dropEnums, fmt.Sprintf("op.DropEnum(%q)", e.Name))
+			continue
 		}
+		if e.Equal(n) {
+			continue
+		}
+		if appended, ok := appendedEnumValues(e.Values, n.Values); ok {
+			for _, v := range appended {
+				o.alterEnums = append(o.alterEnums, fmt.Sprintf("op.AddEnumValue(%q, %q)", e.Name, v))
+			}
+			continue
+		}
+		o.dropEnums = append(o.dropEnums, fmt.Sprintf("op.DropEnum(%q)", e.Name))
 	}
 	for _, e := range to.Enums {
-		if old, ok := oldEnum[e.QualifiedName()]; !ok || !old.Equal(e) {
+		old, ok := oldEnum[e.QualifiedName()]
+		if !ok {
+			o.createEnums = append(o.createEnums, fmt.Sprintf("op.CreateEnum(%q, %s)", e.Name, quotedList(e.Values)))
+			continue
+		}
+		if old.Equal(e) {
+			continue
+		}
+		// Recreate only when it is not a pure append (handled via AddEnumValue).
+		if _, isAppend := appendedEnumValues(old.Values, e.Values); !isAppend {
 			o.createEnums = append(o.createEnums, fmt.Sprintf("op.CreateEnum(%q, %s)", e.Name, quotedList(e.Values)))
 		}
 	}
@@ -334,12 +360,31 @@ type renderedObjects struct {
 	dropSequences    []string
 	dropMatviews     []string
 	dropGrants       []string
+	// alterEnums are op.AddEnumValue calls for enums whose labels were only
+	// appended; they run in the alter phase, not the pre-table drop phase.
+	alterEnums []string
 }
 
 // grantKey identifies a grant by its target (object type and objects), so a
 // change to the privileges or grantees of the same target is one modification.
 func grantKey(g meta.Grant) string {
 	return g.ObjectType + "\x00" + strings.Join(g.Objects, ",")
+}
+
+// appendedEnumValues reports whether next is old with only labels appended (old
+// is a prefix of next, in the same order), and if so returns the appended
+// labels. Any reorder, removal, or rename reports false, so the caller falls
+// back to drop+create. Equal slices report (nil, true).
+func appendedEnumValues(old, next []string) ([]string, bool) {
+	if len(next) < len(old) {
+		return nil, false
+	}
+	for i := range old {
+		if old[i] != next[i] {
+			return nil, false
+		}
+	}
+	return next[len(old):], true
 }
 
 // matviewEqual compares two materialized views, rendering their bodies for the
