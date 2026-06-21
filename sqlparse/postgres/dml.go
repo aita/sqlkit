@@ -1,6 +1,8 @@
 package postgres
 
 import (
+	"strings"
+
 	"github.com/aita/sqlkit/sql"
 	"github.com/aita/sqlkit/sqlparse"
 	pg "github.com/pganalyze/pg_query_go/v6"
@@ -10,16 +12,27 @@ import (
 // for a statement that writes to a single relation. The table and its name
 // identifier record the relation's source position; pg_query locates the
 // RangeVar but not its schema, so the schema identifier carries no position.
-func tableFromRangeVar(rv *pg.RangeVar) sql.Table {
+func tableFromRangeVar(rv *pg.RangeVar) (sql.Table, error) {
+	// sqlkit re-splits a table reference on '.' to recover the schema, so a single
+	// quoted identifier that itself contains a dot ("a.b") cannot be told apart
+	// from the qualified a.b and would render as the wrong "a"."b"; report it
+	// unsupported so the statement round-trips as raw.
+	if strings.Contains(rv.GetRelname(), ".") || strings.Contains(rv.GetSchemaname(), ".") {
+		return sql.Table{}, sqlparse.Unsupportedf("table identifier with a dot: %q", rv.GetRelname())
+	}
 	pos := offsetOf(rv.GetLocation())
 	t := sql.Table{Schema: sql.NewIdent(rv.GetSchemaname()), Name: sql.NewIdent(rv.GetRelname())}
 	t.NodePos = pos
 	t.Name.NodePos = pos
-	return t
+	return t, nil
 }
 
 func convertInsert(s *pg.InsertStmt) (sql.Query, error) {
-	q := sql.InsertInto(tableFromRangeVar(s.GetRelation()))
+	table, err := tableFromRangeVar(s.GetRelation())
+	if err != nil {
+		return nil, err
+	}
+	q := sql.InsertInto(table)
 
 	if cols := s.GetCols(); len(cols) > 0 {
 		names := make([]string, 0, len(cols))
@@ -27,6 +40,11 @@ func convertInsert(s *pg.InsertStmt) (sql.Query, error) {
 			rt := col.GetResTarget()
 			if rt == nil {
 				return nil, sqlparse.Unsupportedf("insert column %T", col.GetNode())
+			}
+			// A column name is re-split on '.' to recover a qualifier, so a single
+			// quoted name with a dot ("x.y") would name the wrong column; raw.
+			if strings.Contains(rt.GetName(), ".") {
+				return nil, sqlparse.Unsupportedf("insert column with a dot: %q", rt.GetName())
 			}
 			names = append(names, rt.GetName())
 		}
@@ -184,7 +202,11 @@ func applyInferTarget(q sql.InsertBuilder, elems []*pg.Node) (sql.InsertBuilder,
 }
 
 func convertUpdate(s *pg.UpdateStmt) (sql.Query, error) {
-	q := sql.Update(tableFromRangeVar(s.GetRelation()))
+	table, err := tableFromRangeVar(s.GetRelation())
+	if err != nil {
+		return nil, err
+	}
+	q := sql.Update(table)
 
 	assignments, err := convertAssignments(s.GetTargetList(), false)
 	if err != nil {
@@ -237,7 +259,11 @@ func convertUpdate(s *pg.UpdateStmt) (sql.Query, error) {
 }
 
 func convertDelete(s *pg.DeleteStmt) (sql.Query, error) {
-	q := sql.DeleteFrom(tableFromRangeVar(s.GetRelation()))
+	table, err := tableFromRangeVar(s.GetRelation())
+	if err != nil {
+		return nil, err
+	}
+	q := sql.DeleteFrom(table)
 
 	if using := s.GetUsingClause(); len(using) > 0 {
 		sources, joins, err := convertSourceList(using)
@@ -284,7 +310,11 @@ func convertDelete(s *pg.DeleteStmt) (sql.Query, error) {
 }
 
 func convertMerge(s *pg.MergeStmt) (sql.Query, error) {
-	q := sql.MergeInto(tableFromRangeVar(s.GetRelation()))
+	table, err := tableFromRangeVar(s.GetRelation())
+	if err != nil {
+		return nil, err
+	}
+	q := sql.MergeInto(table)
 	if alias := s.GetRelation().GetAlias(); alias != nil && alias.GetAliasname() != "" {
 		q = q.As(alias.GetAliasname())
 	}
@@ -398,6 +428,12 @@ func convertAssignments(targets []*pg.Node, excluded bool) ([]sql.Assignment, er
 		rt := target.GetResTarget()
 		if rt == nil {
 			return nil, sqlparse.Unsupportedf("assignment %T", target.GetNode())
+		}
+		// A SET target column is re-split on '.' to recover a qualifier, so a single
+		// quoted name with a dot ("x.y") would assign to the wrong column; round-trip
+		// it as raw.
+		if strings.Contains(rt.GetName(), ".") {
+			return nil, sqlparse.Unsupportedf("assignment target with a dot: %q", rt.GetName())
 		}
 		value, err := convertAssignmentValue(rt.GetVal(), excluded)
 		if err != nil {

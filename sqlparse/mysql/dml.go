@@ -23,10 +23,8 @@ func singleTable(refs *ast.TableRefsClause, tp tablePos) (sql.Table, error) {
 	if !ok {
 		return sql.Table{}, sqlparse.Unsupportedf("table source %T", ts.Source)
 	}
-	// TiDB tolerates an empty backtick-quoted name (UPDATE ``), which the compiler
-	// cannot render; fall back to raw rather than build a table with no name.
-	if tn.Name.O == "" {
-		return sql.Table{}, sqlparse.Unsupported("table with an empty name")
+	if err := checkTableName(tn); err != nil {
+		return sql.Table{}, err
 	}
 	return tableAt(tn, tp), nil
 }
@@ -256,6 +254,9 @@ func convertDelete(s *ast.DeleteStmt, tp tablePos) (sql.Query, error) {
 func multiTableDelete(s *ast.DeleteStmt, tp tablePos) (sql.DeleteBuilder, error) {
 	if s.Tables == nil || len(s.Tables.Tables) != 1 {
 		return sql.DeleteBuilder{}, sqlparse.Unsupported("multi-target DELETE")
+	}
+	if err := checkTableName(s.Tables.Tables[0]); err != nil {
+		return sql.DeleteBuilder{}, err
 	}
 	target := tableAt(s.Tables.Tables[0], tp)
 	base, joins, err := convertFrom(s.TableRefs.TableRefs, tp)

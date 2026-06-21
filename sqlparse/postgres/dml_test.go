@@ -205,3 +205,21 @@ func TestInsertWithoutColumnsFallsBackToRaw(t *testing.T) {
 func TestOnConflictDoUpdateWithoutTargetFallsBackToRaw(t *testing.T) {
 	assertRaw(t, "INSERT INTO t (a) VALUES (1) ON CONFLICT DO UPDATE SET a = 0")
 }
+
+// A quoted table name containing a dot ("a.b") is a single relation name, not the
+// qualified a.b; sqlkit re-splits a table reference on '.' to recover the schema,
+// so it round-trips as raw rather than silently referencing schema "a", table "b".
+func TestTableIdentifierWithDotFallsBackToRaw(t *testing.T) {
+	assertRaw(t, `SELECT a FROM "x.y"`)
+}
+
+// A dotted identifier in a DML write position — an INSERT column or a SET target
+// — is a single name re-split on '.' into the wrong qualified column, so it
+// round-trips as raw rather than inserting into or assigning the wrong column.
+func TestInsertColumnWithDotFallsBackToRaw(t *testing.T) {
+	assertRaw(t, `INSERT INTO t ("x.y") VALUES (1)`)
+}
+
+func TestSetTargetWithDotFallsBackToRaw(t *testing.T) {
+	assertRaw(t, `UPDATE t SET "x.y" = 0`)
+}

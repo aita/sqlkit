@@ -264,19 +264,23 @@ func flattenLogical(e *ast.BinaryOperationExpr, op opcode.Op) ([]sql.Expression,
 func convertUnaryOp(e *ast.UnaryOperationExpr) (sql.Expression, error) {
 	switch e.Op {
 	case opcode.Minus:
-		// Fold a negated numeric constant into a signed value.
+		// Fold a negated numeric constant into a signed value. A literal that does
+		// not convert to a ValueExpression (e.g. an empty bit literal rendered as a
+		// raw x'') is not foldable; fall through to the generic negation.
 		if v, ok := e.V.(ast.ValueExpr); ok {
 			val, err := convertValue(v)
 			if err != nil {
 				return nil, err
 			}
-			switch n := val.(sql.ValueExpression).Value.(type) {
-			case int:
-				return sql.Val(-n), nil
-			case float64:
-				return sql.Val(-n), nil
-			case Decimal:
-				return sql.Val(Decimal("-" + string(n))), nil
+			if ve, ok := val.(sql.ValueExpression); ok {
+				switch n := ve.Value.(type) {
+				case int:
+					return sql.Val(-n), nil
+				case float64:
+					return sql.Val(-n), nil
+				case Decimal:
+					return sql.Val(Decimal("-" + string(n))), nil
+				}
 			}
 		}
 		operand, err := convertExpr(e.V)

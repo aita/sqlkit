@@ -126,6 +126,12 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 			parts[i] = elementSQL
 			args = append(args, elementArgs...)
 		}
+		// A multi-element row reads as a row from its commas: (a, b). A single
+		// element needs the ROW keyword — (x) alone is a parenthesized scalar, not a
+		// one-field row, and would lose its row-ness on a round-trip.
+		if len(parts) == 1 {
+			return "ROW(" + parts[0] + ")", args, nil
+		}
 		return "(" + strings.Join(parts, ", ") + ")", args, nil
 	case DistinctPredicate:
 		leftSQL, args, err := c.CompileExpression(e.Left)
