@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit/analyze"
+	"github.com/aita/sqlkit/meta"
 	"github.com/aita/sqlkit/sql"
 )
 
@@ -29,7 +30,7 @@ func hasCode(trace *Trace, code WarningCode) bool {
 }
 
 func TestLargeInListWarning(t *testing.T) {
-	cfg := NewConfig(WithWarnings(WarningConfig{MaxInListLen: 100}))
+	cfg := NewConfig(WithMaxInList(100))
 
 	over := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"users"}, MaxInList: 100}})
 	if !hasCode(over, WarnLargeInList) {
@@ -48,7 +49,7 @@ func TestLargeInListWarning(t *testing.T) {
 }
 
 func TestSelectStarWarning(t *testing.T) {
-	cfg := NewConfig(WithWarnings(WarningConfig{SelectStar: true}))
+	cfg := NewConfig(WithSelectStarWarning())
 
 	star := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"users"}, SelectStar: true}})
 	if !hasCode(star, WarnSelectStar) {
@@ -67,7 +68,7 @@ func TestSelectStarWarning(t *testing.T) {
 }
 
 func TestTenantPredicateWarning(t *testing.T) {
-	cfg := NewConfig(WithWarnings(WarningConfig{RequireTenantColumns: []string{"tenant_id"}}))
+	cfg := NewConfig(WithTenantCheck(Columns("tenant_id")))
 
 	missing := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"users"}, FilterColumns: []string{"id"}}})
 	if !hasCode(missing, WarnMissingTenantPredicate) {
@@ -93,7 +94,7 @@ func TestTenantPredicateWarning(t *testing.T) {
 }
 
 func TestSoftDeletePredicateWarning(t *testing.T) {
-	cfg := NewConfig(WithWarnings(WarningConfig{SoftDeleteColumns: []string{"deleted_at"}}))
+	cfg := NewConfig(WithSoftDeleteCheck(Columns("deleted_at")))
 
 	missing := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"users"}, FilterColumns: []string{"id"}}})
 	if !hasCode(missing, WarnMissingSoftDeletePredicate) {
@@ -109,6 +110,160 @@ func TestSoftDeletePredicateWarning(t *testing.T) {
 	del := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtDelete, Tables: []string{"users"}, FilterColumns: []string{"id"}}})
 	if hasCode(del, WarnMissingSoftDeletePredicate) {
 		t.Error("delete should be out of scope for the soft-delete check")
+	}
+}
+
+// countCode returns how many warnings on the trace carry code.
+func countCode(trace *Trace, code WarningCode) int {
+	n := 0
+	for _, w := range trace.Warnings() {
+		if w.Code == code {
+			n++
+		}
+	}
+	return n
+}
+
+// metaOf builds a meta.Metadata from a table→columns map, for the schema-scoping
+// tests.
+func metaOf(tableColumns map[string][]string) meta.Metadata {
+	var md meta.Metadata
+	for table, cols := range tableColumns {
+		columns := make([]meta.Column, len(cols))
+		for i, c := range cols {
+			columns[i] = meta.Column{Name: c}
+		}
+		md.Tables = append(md.Tables, meta.Table{Name: table, Columns: columns})
+	}
+	return md
+}
+
+// TestSchemaScopesPredicateChecks checks ScopedToSchema limits the soft-delete and
+// tenant checks to the tables that actually have a marker column.
+func TestSchemaScopesPredicateChecks(t *testing.T) {
+	md := metaOf(map[string][]string{
+		"users": {"id", "tenant_id", "deleted_at"},
+		// countries is a reference table with no soft-delete or tenant column.
+		"countries": {"code", "name"},
+	})
+	cfg := NewConfig(
+		WithTenantCheck(Columns("tenant_id"), ScopedToSchema(md)),
+		WithSoftDeleteCheck(Columns("deleted_at"), ScopedToSchema(md)),
+	)
+
+	// users has both marker columns, and this SELECT references neither: it warns.
+	users := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"users"}, FilterColumns: []string{"id"}}})
+	if !hasCode(users, WarnMissingSoftDeletePredicate) || !hasCode(users, WarnMissingTenantPredicate) {
+		t.Error("users lacks both predicates and should warn for both")
+	}
+
+	// countries has neither marker column, so the checks do not apply to it.
+	countries := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"countries"}, FilterColumns: []string{"code"}}})
+	if hasCode(countries, WarnMissingSoftDeletePredicate) || hasCode(countries, WarnMissingTenantPredicate) {
+		t.Error("a reference table without marker columns must be skipped")
+	}
+
+	// A table the schema does not cover at all is left alone too.
+	unknown := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"events"}, FilterColumns: []string{"id"}}})
+	if hasCode(unknown, WarnMissingSoftDeletePredicate) || hasCode(unknown, WarnMissingTenantPredicate) {
+		t.Error("a table absent from the schema must be skipped")
+	}
+}
+
+// TestSchemaScopeQualifiedAndCase checks table and column matching folds case and
+// strips a schema qualifier.
+func TestSchemaScopeQualifiedAndCase(t *testing.T) {
+	md := metaOf(map[string][]string{"Users": {"Deleted_At"}})
+	cfg := NewConfig(
+		WithSoftDeleteCheck(Columns("deleted_at"), ScopedToSchema(md)),
+	)
+
+	missing := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"public.users"}, FilterColumns: []string{"id"}}})
+	if !hasCode(missing, WarnMissingSoftDeletePredicate) {
+		t.Error("qualified table with the marker column should warn when unfiltered")
+	}
+	present := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"public.users"}, FilterColumns: []string{"deleted_at"}}})
+	if hasCode(present, WarnMissingSoftDeletePredicate) {
+		t.Error("filtering on the marker column should clear the warning")
+	}
+}
+
+// TestPredicateWarningPerTable checks a multi-table statement warns once per
+// in-scope table that misses the predicate, naming each in the details.
+func TestPredicateWarningPerTable(t *testing.T) {
+	md := metaOf(map[string][]string{
+		"users":  {"deleted_at"},
+		"orders": {"deleted_at"},
+	})
+	cfg := NewConfig(
+		WithSoftDeleteCheck(Columns("deleted_at"), ScopedToSchema(md)),
+	)
+
+	trace := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"users", "orders"}, FilterColumns: []string{"id"}}})
+	if got := countCode(trace, WarnMissingSoftDeletePredicate); got != 2 {
+		t.Errorf("missing predicate on two tables = %d warnings, want 2", got)
+	}
+}
+
+// TestPredicateColumnGlob checks a glob column spec matches a family of columns.
+func TestPredicateColumnGlob(t *testing.T) {
+	cfg := NewConfig(WithSoftDeleteCheck(Columns("*_at")))
+
+	missing := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"users"}, FilterColumns: []string{"id"}}})
+	if !hasCode(missing, WarnMissingSoftDeletePredicate) {
+		t.Error("no *_at column in WHERE should warn")
+	}
+	// deactivated_at matches the *_at glob, so the predicate is satisfied.
+	present := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"users"}, FilterColumns: []string{"deactivated_at"}}})
+	if hasCode(present, WarnMissingSoftDeletePredicate) {
+		t.Error("deactivated_at matches *_at and should clear the warning")
+	}
+}
+
+// TestPredicateMultipleMarkers checks any of several marker columns satisfies the
+// check.
+func TestPredicateMultipleMarkers(t *testing.T) {
+	cfg := NewConfig(WithSoftDeleteCheck(Columns("deleted_at", "deactivated_at")))
+
+	ok := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"users"}, FilterColumns: []string{"deactivated_at"}}})
+	if hasCode(ok, WarnMissingSoftDeletePredicate) {
+		t.Error("one of the markers present should clear the warning")
+	}
+}
+
+// TestPredicateTableQualifiedSpec checks a "table.column" spec governs only the
+// named table and leaves others unchecked.
+func TestPredicateTableQualifiedSpec(t *testing.T) {
+	cfg := NewConfig(WithSoftDeleteCheck(Columns("orders.deleted_at")))
+
+	// orders is governed and misses the predicate: it warns.
+	orders := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"orders"}, FilterColumns: []string{"id"}}})
+	if !hasCode(orders, WarnMissingSoftDeletePredicate) {
+		t.Error("orders is governed by the spec and should warn")
+	}
+	// users is not named by the spec, so it is not checked.
+	users := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"users"}, FilterColumns: []string{"id"}}})
+	if hasCode(users, WarnMissingSoftDeletePredicate) {
+		t.Error("users is not named by the table-qualified spec and should be skipped")
+	}
+	// A schema-qualified table name still resolves to the bare table.
+	qualified := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"public.orders"}, FilterColumns: []string{"id"}}})
+	if !hasCode(qualified, WarnMissingSoftDeletePredicate) {
+		t.Error("public.orders should match the orders spec")
+	}
+}
+
+// TestPredicateTableGlob checks a table glob governs a family of tables.
+func TestPredicateTableGlob(t *testing.T) {
+	cfg := NewConfig(WithTenantCheck(Columns("tenant_*.tenant_id")))
+
+	governed := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"tenant_orders"}, FilterColumns: []string{"id"}}})
+	if !hasCode(governed, WarnMissingTenantPredicate) {
+		t.Error("tenant_orders matches tenant_* and should warn")
+	}
+	other := recordAnalyzed(t, cfg, QueryInfo{Analysis: analyze.Analysis{Kind: StmtSelect, Tables: []string{"users"}, FilterColumns: []string{"id"}}})
+	if hasCode(other, WarnMissingTenantPredicate) {
+		t.Error("users does not match tenant_* and should be skipped")
 	}
 }
 

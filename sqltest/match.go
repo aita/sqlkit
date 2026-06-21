@@ -107,7 +107,7 @@ func ParamsAtLeast(n int) Match {
 }
 
 // Sql matches a statement whose raw SQL equals text, ignoring surrounding
-// whitespace. It needs Config.CaptureRawSQL.
+// whitespace. It needs raw SQL capture (WithRawSQL).
 func Sql(text string) Match {
 	want := strings.TrimSpace(text)
 	return query("sql="+want, func(qi *querytrace.QueryInfo) bool {
@@ -116,7 +116,7 @@ func Sql(text string) Match {
 }
 
 // SqlContains matches a statement whose raw SQL contains sub, case-insensitively.
-// It needs Config.CaptureRawSQL.
+// It needs raw SQL capture (WithRawSQL).
 func SqlContains(sub string) Match {
 	low := strings.ToLower(sub)
 	return query("sql~"+sub, func(qi *querytrace.QueryInfo) bool {
@@ -125,7 +125,7 @@ func SqlContains(sub string) Match {
 }
 
 // SqlMatches matches a statement whose raw SQL matches the regular expression
-// re. It panics if re does not compile. It needs Config.CaptureRawSQL.
+// re. It panics if re does not compile. It needs raw SQL capture (WithRawSQL).
 func SqlMatches(re string) Match {
 	rx := regexp.MustCompile(re)
 	return query("sql=~"+re, func(qi *querytrace.QueryInfo) bool { return rx.MatchString(qi.RawSQL) })
@@ -138,7 +138,7 @@ func Named(name string) Match {
 }
 
 // Caller matches a statement issued from application code whose function name or
-// file path contains sub. It needs Config.CaptureCaller.
+// file path contains sub. It needs caller capture (WithCaller).
 func Caller(sub string) Match {
 	return Match{desc: "caller~" + sub, fn: func(ev querytrace.Event) bool {
 		return ev.Caller != nil && (strings.Contains(ev.Caller.Function, sub) || strings.Contains(ev.Caller.File, sub))

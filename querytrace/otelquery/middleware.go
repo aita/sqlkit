@@ -83,7 +83,7 @@ func (e *Exporter) Middleware(opts ...HandlerOption) func(http.Handler) http.Han
 				// The route is matched by the time the handler returns, so the
 				// namer can now produce its low-cardinality name.
 				if name := cfg.name(r); name != "" {
-					qt.WithOperation(ctx, name)
+					qt.SetOperation(ctx, name)
 				}
 				// A sampled-out Trace recorded nothing; skip the export so it
 				// produces no empty operation span.

@@ -137,11 +137,7 @@ func NewDB(t testing.TB, opts ...Option) (*sql.DB, *Mock) {
 	for _, o := range opts {
 		o(&c)
 	}
-	dialect := c.cfg.Dialect
-	if dialect == nil {
-		dialect = sqlpkg.PostgreSQLDialect{}
-	}
-	m := &Mock{dialect: dialect, strict: c.strict}
+	m := &Mock{dialect: c.cfg.Dialect(), strict: c.strict}
 	db := sql.OpenDB(qtdriver.WrapConnector(&mockConnector{mock: m}, c.cfg))
 	t.Cleanup(func() {
 		m.Verify(t)

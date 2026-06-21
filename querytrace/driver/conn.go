@@ -106,7 +106,7 @@ func (cn *conn) BeginTx(ctx context.Context, opts stddriver.TxOptions) (stddrive
 		return nil, err
 	}
 	tr, ok := qt.FromContext(ctx)
-	if !ok || !cn.cfg.Enabled || !tr.Sampled() {
+	if !ok || !cn.cfg.Enabled() || !tr.Sampled() {
 		return underlying, nil
 	}
 	tr.EnsureConfig(cn.cfg)

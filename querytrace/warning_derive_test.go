@@ -10,15 +10,13 @@ import (
 )
 
 // nplusOneConfig enables repeated-query detection at the given threshold,
-// optionally ignoring some operations. MaxQueries stays 0 so only N+1 warnings
-// are observed.
+// optionally ignoring some operations. The query budget stays unset so only N+1
+// warnings are observed.
 func nplusOneConfig(min int, ignore ...querytrace.StmtKind) querytrace.Config {
-	return querytrace.Config{
-		Enabled:     true,
-		Fingerprint: true,
-		AnalyzeSQL:  true,
-		NPlusOne:    querytrace.NPlusOneConfig{Enabled: true, MinCount: min, IgnoreOperations: ignore},
-	}
+	return querytrace.NewConfig(
+		querytrace.WithNPlusOneThreshold(min),
+		querytrace.WithNPlusOneIgnore(ignore...),
+	)
 }
 
 func at(file string, line int) *querytrace.Caller {
@@ -85,8 +83,7 @@ func TestRepeatedIgnoredOperationIsClean(t *testing.T) {
 }
 
 func TestRepeatedDetectionDisabled(t *testing.T) {
-	cfg := nplusOneConfig(3)
-	cfg.NPlusOne.Enabled = false
+	cfg := querytrace.NewConfig(querytrace.WithoutNPlusOne())
 	trace := querytrace.New("op", querytrace.WithConfig(cfg))
 	loop := at("svc.go", 10)
 	for i := 0; i < 5; i++ {

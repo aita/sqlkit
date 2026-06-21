@@ -69,7 +69,7 @@ type Event struct {
 	Rows *RowsInfo
 
 	// Caller is the application code that issued the statement, captured
-	// subject to Config.CaptureCaller.
+	// subject to the configured CallerMode (WithCaller).
 	Caller *Caller
 	// Labels are context labels attached with WithLabel.
 	Labels map[string]string
@@ -91,14 +91,14 @@ type QueryInfo struct {
 	// framework. Its fields are promoted onto QueryInfo.
 	analyze.Analysis
 
-	// RawSQL is the executed SQL text, kept only when Config.CaptureRawSQL is
-	// set; otherwise empty.
+	// RawSQL is the executed SQL text, kept only when raw SQL capture is on
+	// (WithRawSQL); otherwise empty.
 	RawSQL string
 
 	// ParamCount is the number of bind arguments.
 	ParamCount int
-	// ParamTypes are the Go type names of the bind arguments, kept when
-	// Config.CaptureArgs is ArgsTypesOnly or higher.
+	// ParamTypes are the Go type names of the bind arguments, kept when argument
+	// capture is ArgsTypesOnly or higher (WithArgCapture).
 	ParamTypes []string
 
 	// TxID links the statement to its transaction, empty outside one.

@@ -3,6 +3,7 @@ package querytrace
 import (
 	"time"
 
+	"github.com/aita/sqlkit/meta"
 	"github.com/aita/sqlkit/sql"
 	"github.com/aita/sqlkit/sqlparse"
 )
@@ -18,7 +19,7 @@ const (
 	// CallerOnError captures a caller only for statements that errored.
 	CallerOnError
 	// CallerOnSlowQuery captures a caller for errors and for statements slower
-	// than Config.SlowQueryThreshold.
+	// than the slow-query threshold (WithSlowQueryThreshold).
 	CallerOnSlowQuery
 	// CallerAlways captures a caller for every statement. Best for development
 	// and tests, where caller attribution drives N+1 and loop detection.
@@ -36,89 +37,99 @@ const (
 	ArgsTypesOnly
 )
 
-// Config configures a wrapped driver and the Traces it records. The zero value
-// is usable but minimal; NewConfig is the recommended starting point.
+// Config configures a wrapped driver and the Traces it records. It is an opaque
+// value built by NewConfig and the With* options; the zero value is a disabled,
+// pass-through Config.
 type Config struct {
-	// Enabled turns tracing on. A disabled Config makes the wrapped driver a
-	// thin pass-through.
-	Enabled bool
+	// enabled turns tracing on. A disabled Config makes the wrapped driver a thin
+	// pass-through. The zero value is disabled; NewConfig enables it.
+	enabled bool
 
-	// Dialect is the SQL dialect used to recompile a parsed query into its
-	// fingerprint. It defaults to PostgreSQL when nil.
-	Dialect sql.Dialect
+	// dialect is the SQL dialect used to recompile a parsed query into its
+	// fingerprint; it defaults to PostgreSQL when nil. See WithDialect.
+	dialect sql.Dialect
 
-	// Parser analyzes SQL text into a sql.Query for structural analysis and
-	// fingerprinting. It is best-effort: a parse failure or a nil Parser falls
-	// back to lightweight string analysis and never aborts execution.
-	//
-	// Wire it explicitly with a frontend's parser, for example postgres.New()
-	// from github.com/aita/sqlkit/sqlparse/postgres. NewConfig sets it via
+	// parser analyzes SQL text into a sql.Query for structural analysis and
+	// fingerprinting. It is best-effort: a parse failure or a nil parser falls
+	// back to lightweight string analysis and never aborts execution. See
 	// WithParser.
-	Parser sqlparse.Parser
+	parser sqlparse.Parser
 
-	// CaptureRawSQL keeps the executed SQL text on each QueryInfo. Leave it off
-	// for production exporters; raw SQL can carry sensitive shapes.
-	CaptureRawSQL bool
-	// CaptureArgs controls how much of the bind arguments are kept.
-	CaptureArgs ArgCaptureMode
-	// CaptureCaller controls when the calling code is captured.
-	CaptureCaller CallerMode
+	// captureRawSQL keeps the executed SQL text on each QueryInfo. See WithRawSQL.
+	captureRawSQL bool
+	// captureArgs controls how much of the bind arguments are kept. See
+	// WithArgCapture.
+	captureArgs ArgCaptureMode
+	// captureCaller controls when the calling code is captured. See WithCaller.
+	captureCaller CallerMode
 
-	// Fingerprint enables SQL fingerprinting, the basis of repeated-query and
-	// N+1 detection.
-	Fingerprint bool
-	// AnalyzeSQL enables structural analysis (kind, tables, WHERE/JOIN/...),
-	// the basis of write/where warnings.
-	AnalyzeSQL bool
+	// fingerprint enables SQL fingerprinting, the basis of repeated-query and
+	// N+1 detection. On by default; see WithoutFingerprint.
+	fingerprint bool
+	// analyzeSQL enables structural analysis (kind, tables, WHERE/JOIN/...), the
+	// basis of the predicate and shape warnings. On by default; see
+	// WithoutAnalyze.
+	analyzeSQL bool
 
-	// SlowQueryThreshold is the duration above which a query counts as slow,
-	// for CallerOnSlowQuery.
-	SlowQueryThreshold time.Duration
+	// slowQueryThreshold is the duration above which a query counts as slow, for
+	// CallerOnSlowQuery. See WithSlowQueryThreshold.
+	slowQueryThreshold time.Duration
 
-	// NPlusOne configures repeated-query and loop detection.
-	NPlusOne NPlusOneConfig
-	// Warnings configures the threshold-based warnings.
-	Warnings WarningConfig
+	// nplusOne configures repeated-query and loop detection. See
+	// WithNPlusOneThreshold, WithNPlusOneIgnore, and WithoutNPlusOne.
+	nplusOne nPlusOneConfig
+	// warnings holds the threshold- and policy-based warning settings, each set
+	// through its own ConfigOption (WithMaxQueries, WithTenantCheck, ...).
+	warnings warningConfig
 }
 
-// NPlusOneConfig configures detection of repeated query shapes within one Trace.
-type NPlusOneConfig struct {
-	// Enabled turns repeated-query and loop detection on.
-	Enabled bool
-	// MinCount is how many times one fingerprint must repeat before it is
+// nPlusOneConfig holds the repeated-query and loop detection settings, set
+// through WithNPlusOneThreshold, WithNPlusOneIgnore, and WithoutNPlusOne.
+type nPlusOneConfig struct {
+	// enabled turns repeated-query and loop detection on. On by default.
+	enabled bool
+	// minCount is how many times one fingerprint must repeat before it is
 	// reported. It defaults to 10 when zero.
-	MinCount int
-	// IgnoreOperations skips fingerprints of these kinds; repeated INSERTs into
-	// a log table, for example, are usually expected.
-	IgnoreOperations []StmtKind
+	minCount int
+	// ignoreOperations skips fingerprints of these kinds; repeated INSERTs into a
+	// log table, for example, are usually expected.
+	ignoreOperations []StmtKind
 }
 
-// WarningConfig configures the threshold-based and policy-based warnings.
-type WarningConfig struct {
-	// MaxQueries is the per-Trace query count above which too_many_queries
-	// fires. Zero disables the check.
-	MaxQueries int
-	// MaxParams is the bind-parameter count at or above which a statement raises
-	// too_many_parameters. Zero disables the check.
-	MaxParams int
-	// MaxInListLen is the IN (...) value-list length at or above which a
-	// statement raises large_in_list. Zero disables the check. It needs the
-	// parsed AST, so it is silent on the keyword-fallback path.
-	MaxInListLen int
-	// SelectStar enables the select_star warning for SELECT * queries. It needs
-	// the parsed AST.
-	SelectStar bool
-	// RequireTenantColumns lists the tenant-scoping column names (such as
-	// "tenant_id" or "org_id"); a read or write touching a base table whose
-	// top-level WHERE references none of them raises missing_tenant_predicate.
-	// Matching is by bare, case-insensitive column name. Empty disables the
-	// check, which needs the parsed AST.
-	RequireTenantColumns []string
-	// SoftDeleteColumns lists soft-delete marker columns (such as "deleted_at");
-	// a SELECT touching a base table whose top-level WHERE references none of them
-	// raises missing_soft_delete_predicate. Matching is by bare, case-insensitive
-	// column name. Empty disables the check, which needs the parsed AST.
-	SoftDeleteColumns []string
+// warningConfig holds the threshold- and policy-based warning settings. Each
+// field is set through its own ConfigOption rather than constructed directly, so
+// the type is unexported; the zero value enables no warning.
+type warningConfig struct {
+	// maxQueries is the per-Trace query count above which too_many_queries fires.
+	// Zero disables the check. See WithMaxQueries.
+	maxQueries int
+	// maxParams is the bind-parameter count at or above which a statement raises
+	// too_many_parameters. Zero disables the check. See WithMaxParams.
+	maxParams int
+	// maxInListLen is the IN (...) value-list length at or above which a statement
+	// raises large_in_list. Zero disables the check. It needs the parsed AST, so
+	// it is silent on the keyword-fallback path. See WithMaxInList.
+	maxInListLen int
+	// selectStar enables the select_star warning for SELECT * queries. It needs
+	// the parsed AST. See WithSelectStarWarning.
+	selectStar bool
+	// tenant configures missing_tenant_predicate: a read or write touching a base
+	// table whose top-level WHERE references none of the marker columns. See
+	// WithTenantCheck.
+	tenant predicateConfig
+	// softDelete configures missing_soft_delete_predicate: a SELECT touching a
+	// base table whose top-level WHERE references none of the marker columns. See
+	// WithSoftDeleteCheck.
+	softDelete predicateConfig
+}
+
+// predicateConfig configures one of the predicate checks (tenant or soft-delete):
+// the marker column patterns it requires in a statement's top-level WHERE and,
+// when set, the schema that scopes it to the tables that actually have one. No
+// patterns leaves the check off. It is built from PredicateOptions.
+type predicateConfig struct {
+	patterns []columnPattern
+	schema   *schemaColumns
 }
 
 // ConfigOption configures a Config built by NewConfig. Options compose, so a
@@ -129,7 +140,7 @@ type ConfigOption func(*Config)
 // production-minded defaults: no raw SQL, argument *types* only (never values),
 // callers captured on error, fingerprinting, structural analysis, and N+1
 // detection on, and the PostgreSQL dialect. Layer options to capture more for
-// development (WithVerboseCapture) or to adjust any single field.
+// development (WithVerboseCapture) or to adjust any single setting.
 //
 //	// Development: capture everything, wire a parser for structural analysis.
 //	cfg := querytrace.NewConfig(
@@ -141,14 +152,14 @@ type ConfigOption func(*Config)
 //	cfg := querytrace.NewConfig(querytrace.WithParser(postgres.New()))
 func NewConfig(opts ...ConfigOption) Config {
 	cfg := Config{
-		Enabled:            true,
-		Dialect:            sql.PostgreSQLDialect{},
-		CaptureArgs:        ArgsTypesOnly,
-		CaptureCaller:      CallerOnError,
-		Fingerprint:        true,
-		AnalyzeSQL:         true,
-		SlowQueryThreshold: 100 * time.Millisecond,
-		NPlusOne:           NPlusOneConfig{Enabled: true, MinCount: 10},
+		enabled:            true,
+		dialect:            sql.PostgreSQLDialect{},
+		captureArgs:        ArgsTypesOnly,
+		captureCaller:      CallerOnError,
+		fingerprint:        true,
+		analyzeSQL:         true,
+		slowQueryThreshold: 100 * time.Millisecond,
+		nplusOne:           nPlusOneConfig{enabled: true, minCount: 10},
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -161,7 +172,7 @@ func NewConfig(opts ...ConfigOption) Config {
 func WithDialect(d sql.Dialect) ConfigOption {
 	return func(c *Config) {
 		if d != nil {
-			c.Dialect = d
+			c.dialect = d
 		}
 	}
 }
@@ -171,38 +182,159 @@ func WithDialect(d sql.Dialect) ConfigOption {
 // github.com/aita/sqlkit/sqlparse/postgres. Without a parser, analysis falls
 // back to lightweight string heuristics.
 func WithParser(p sqlparse.Parser) ConfigOption {
-	return func(c *Config) { c.Parser = p }
+	return func(c *Config) { c.parser = p }
 }
 
 // WithRawSQL keeps the executed SQL text on each statement. Leave it off for
 // production exporters; raw SQL can carry sensitive shapes.
 func WithRawSQL() ConfigOption {
-	return func(c *Config) { c.CaptureRawSQL = true }
+	return func(c *Config) { c.captureRawSQL = true }
 }
 
 // WithArgCapture controls how much of the bind arguments are kept.
 func WithArgCapture(mode ArgCaptureMode) ConfigOption {
-	return func(c *Config) { c.CaptureArgs = mode }
+	return func(c *Config) { c.captureArgs = mode }
 }
 
 // WithCaller controls when the calling code is captured.
 func WithCaller(mode CallerMode) ConfigOption {
-	return func(c *Config) { c.CaptureCaller = mode }
+	return func(c *Config) { c.captureCaller = mode }
 }
 
 // WithSlowQueryThreshold sets the duration above which a query counts as slow.
 func WithSlowQueryThreshold(d time.Duration) ConfigOption {
-	return func(c *Config) { c.SlowQueryThreshold = d }
+	return func(c *Config) { c.slowQueryThreshold = d }
 }
 
-// WithNPlusOne sets the repeated-query and loop detection configuration.
-func WithNPlusOne(n NPlusOneConfig) ConfigOption {
-	return func(c *Config) { c.NPlusOne = n }
+// WithoutFingerprint turns off SQL fingerprinting. Fingerprinting is on by
+// default and underpins repeated-query and N+1 detection, so disabling it also
+// disables those.
+func WithoutFingerprint() ConfigOption {
+	return func(c *Config) { c.fingerprint = false }
 }
 
-// WithWarnings sets the threshold-based warning configuration.
-func WithWarnings(w WarningConfig) ConfigOption {
-	return func(c *Config) { c.Warnings = w }
+// WithoutAnalyze turns off structural analysis. Analysis is on by default and
+// backs the predicate and shape warnings (large_in_list, select_star, the
+// tenant/soft-delete predicates), so disabling it also disables those.
+func WithoutAnalyze() ConfigOption {
+	return func(c *Config) { c.analyzeSQL = false }
+}
+
+// WithNPlusOneThreshold sets how many times one query shape must repeat within a
+// Trace before it is reported as a query-in-loop or possible N+1. Detection is on
+// by default at a threshold of 10; a value <= 0 restores that default.
+func WithNPlusOneThreshold(minCount int) ConfigOption {
+	return func(c *Config) { c.nplusOne.minCount = minCount }
+}
+
+// WithNPlusOneIgnore excludes the given statement kinds from repeated-query
+// detection; repeated INSERTs into a log table, for example, are usually
+// expected.
+func WithNPlusOneIgnore(ops ...StmtKind) ConfigOption {
+	return func(c *Config) { c.nplusOne.ignoreOperations = ops }
+}
+
+// WithoutNPlusOne turns off repeated-query and loop detection, which is on by
+// default.
+func WithoutNPlusOne() ConfigOption {
+	return func(c *Config) { c.nplusOne.enabled = false }
+}
+
+// WithMaxQueries sets the per-Trace query-count budget: a Trace with more read
+// and write statements than n raises too_many_queries. Zero (the default)
+// disables the check.
+func WithMaxQueries(n int) ConfigOption {
+	return func(c *Config) { c.warnings.maxQueries = n }
+}
+
+// WithMaxParams sets the bind-parameter budget: a statement carrying n or more
+// bind parameters raises too_many_parameters. Zero (the default) disables the
+// check.
+func WithMaxParams(n int) ConfigOption {
+	return func(c *Config) { c.warnings.maxParams = n }
+}
+
+// WithMaxInList sets the IN (...) value-list budget: a statement with an IN list
+// of n or more items raises large_in_list. It reads the parsed AST, so it stays
+// silent on the keyword-fallback path. Zero (the default) disables the check.
+func WithMaxInList(n int) ConfigOption {
+	return func(c *Config) { c.warnings.maxInListLen = n }
+}
+
+// WithSelectStarWarning enables select_star, which fires on a SELECT * query. It
+// reads the parsed AST, so it stays silent on the keyword-fallback path.
+func WithSelectStarWarning() ConfigOption {
+	return func(c *Config) { c.warnings.selectStar = true }
+}
+
+// PredicateOption configures a tenant or soft-delete predicate check: the marker
+// columns it requires (Columns) and, optionally, the schema scope that limits it
+// to the tables that actually have one (ScopedToSchema). It is the argument type
+// of WithTenantCheck and WithSoftDeleteCheck.
+type PredicateOption func(*predicateConfig)
+
+// Columns sets the marker column specs a predicate check looks for in a
+// statement's top-level WHERE, such as "tenant_id"/"org_id" for a tenant check or
+// "deleted_at" for a soft-delete check. Each spec is a bare column or a
+// table-qualified "table.column" (a leading schema is ignored), and both halves
+// accept glob wildcards (* ? [..]), matched case-insensitively:
+//
+//	Columns("deleted_at")              // any table, column deleted_at
+//	Columns("deleted_at", "deactivated_at") // either marker, any table
+//	Columns("*_at")                    // any table, any column ending in _at
+//	Columns("orders.deleted_at")       // only the orders table
+//	Columns("*.deleted_at")            // explicit any-table form
+//
+// A bare column governs every table; a table-qualified spec restricts the
+// requirement to the matching tables, so other tables are left unchecked. Columns
+// is required: a check with no columns does nothing.
+func Columns(specs ...string) PredicateOption {
+	return func(p *predicateConfig) {
+		for _, s := range specs {
+			if pat, ok := parsePattern(s); ok {
+				p.patterns = append(p.patterns, pat)
+			}
+		}
+	}
+}
+
+// ScopedToSchema scopes a predicate check to the base tables that, per the
+// resolved schema md, actually have a marker column — eliminating the false
+// positive the check otherwise raises on a table that has no such column (a lookup
+// or reference table). Without it the check applies to every analyzed base table.
+// Pass the meta.Metadata a decl catalog builds or the introspect produces. To
+// scope by hand instead, name the tables in the Columns specs ("orders.deleted_at").
+func ScopedToSchema(md meta.Metadata) PredicateOption {
+	return func(p *predicateConfig) { p.schema = schemaFromMeta(md) }
+}
+
+// WithTenantCheck enables missing_tenant_predicate: a read or write touching a
+// base table whose top-level WHERE references none of the configured marker
+// columns. Configure it with Columns (required) and, optionally, ScopedToSchema.
+// The check reads the parsed AST, so it stays silent on the keyword-fallback path.
+//
+//	querytrace.WithTenantCheck(querytrace.Columns("tenant_id"), querytrace.ScopedToSchema(md))
+func WithTenantCheck(opts ...PredicateOption) ConfigOption {
+	return func(c *Config) { c.warnings.tenant = buildPredicate(opts) }
+}
+
+// WithSoftDeleteCheck enables missing_soft_delete_predicate: a SELECT touching a
+// base table whose top-level WHERE references none of the configured marker
+// columns. Configure it with Columns (required) and, optionally, ScopedToSchema.
+// The check reads the parsed AST, so it stays silent on the keyword-fallback path.
+//
+//	querytrace.WithSoftDeleteCheck(querytrace.Columns("deleted_at"), querytrace.ScopedToSchema(md))
+func WithSoftDeleteCheck(opts ...PredicateOption) ConfigOption {
+	return func(c *Config) { c.warnings.softDelete = buildPredicate(opts) }
+}
+
+// buildPredicate applies the predicate options onto a fresh predicateConfig.
+func buildPredicate(opts []PredicateOption) predicateConfig {
+	var p predicateConfig
+	for _, opt := range opts {
+		opt(&p)
+	}
+	return p
 }
 
 // WithVerboseCapture turns on the development-grade capture the safe defaults
@@ -210,23 +342,35 @@ func WithWarnings(w WarningConfig) ConfigOption {
 // appropriate for production.
 func WithVerboseCapture() ConfigOption {
 	return func(c *Config) {
-		c.CaptureRawSQL = true
-		c.CaptureCaller = CallerAlways
+		c.captureRawSQL = true
+		c.captureCaller = CallerAlways
 	}
 }
 
-// dialect returns the configured dialect, defaulting to PostgreSQL.
-func (c Config) dialect() sql.Dialect {
-	if c.Dialect == nil {
+// Enabled reports whether the Config records traces. A disabled Config (the zero
+// value) makes the wrapped driver a thin pass-through.
+func (c Config) Enabled() bool { return c.enabled }
+
+// WantCaller reports whether a statement that finished with err after dur should
+// have its calling code captured, under the configured CallerMode and slow-query
+// threshold. A wrapped driver consults it before walking the stack.
+func (c Config) WantCaller(err error, dur time.Duration) bool {
+	return WantCaller(c.captureCaller, err, dur, c.slowQueryThreshold)
+}
+
+// Dialect returns the configured SQL dialect, defaulting to PostgreSQL when none
+// was set. It never returns nil.
+func (c Config) Dialect() sql.Dialect {
+	if c.dialect == nil {
 		return sql.PostgreSQLDialect{}
 	}
-	return c.Dialect
+	return c.dialect
 }
 
 // nPlusOneMinCount returns the effective repeat threshold.
 func (c Config) nPlusOneMinCount() int {
-	if c.NPlusOne.MinCount <= 0 {
+	if c.nplusOne.minCount <= 0 {
 		return 10
 	}
-	return c.NPlusOne.MinCount
+	return c.nplusOne.minCount
 }

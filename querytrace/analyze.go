@@ -15,26 +15,26 @@ import (
 // instrumentation contract used by wrapped drivers.
 func (c Config) Analyze(sqlText string, args []any) *QueryInfo {
 	qi := &QueryInfo{ParamCount: len(args)}
-	if c.CaptureRawSQL {
+	if c.captureRawSQL {
 		qi.RawSQL = sqlText
 	}
-	if c.CaptureArgs >= ArgsTypesOnly {
+	if c.captureArgs >= ArgsTypesOnly {
 		qi.ParamTypes = argTypeNames(args)
 	}
 
-	a := analyze.New(analyze.WithDialect(c.dialect()))
+	a := analyze.New(analyze.WithDialect(c.Dialect()))
 
 	var parsed sql.Query
 	var parseErr error
-	if (c.AnalyzeSQL || c.Fingerprint) && c.Parser != nil {
-		if q, err := sqlparse.ParseOne(c.Parser, sqlText); err != nil {
+	if (c.analyzeSQL || c.fingerprint) && c.parser != nil {
+		if q, err := sqlparse.ParseOne(c.parser, sqlText); err != nil {
 			parseErr = err
 		} else {
 			parsed = q
 		}
 	}
 
-	if c.AnalyzeSQL {
+	if c.analyzeSQL {
 		// The static analysis is produced and owned by the analyze framework; the
 		// advanced facts stay empty on the keyword-fallback path, so the warnings
 		// that read them do not fire there.
@@ -42,7 +42,7 @@ func (c Config) Analyze(sqlText string, args []any) *QueryInfo {
 		qi.Err = parseErr
 	}
 
-	if c.Fingerprint {
+	if c.fingerprint {
 		qi.Fingerprint = fingerprint(a, sqlText, parsed)
 	}
 	return qi
