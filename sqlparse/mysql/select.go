@@ -356,6 +356,11 @@ func convertSelectionExpr(node ast.ExprNode) (sql.Selection, error) {
 		c.Name = identAt(c.Name.Name, col)
 		return c, nil
 	}
+	// A placeholder (?) is also an ast.ValueExpr, but its value is unbound: pass
+	// the marker through verbatim rather than render its nil value as NULL.
+	if _, ok := node.(ast.ParamMarkerExpr); ok {
+		return sql.Raw("?"), nil
+	}
 	// A bare literal (SELECT 1, SELECT 'x') is not a sqlkit Selection as a bound
 	// value, so render it as a raw constant — faithful and common in
 	// EXISTS (SELECT 1 ...).

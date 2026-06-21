@@ -419,3 +419,12 @@ func TestSelectScalarSubqueryInWhere(t *testing.T) {
 func TestEmptyTableNameFallsBackToRaw(t *testing.T) {
 	assertRaw(t, "SELECT a FROM ``")
 }
+
+// A ? placeholder in the select list is an unbound ValueExpr; it must pass
+// through verbatim rather than render its nil value as NULL.
+func TestSelectPlaceholderPreserved(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT ? AS a FROM t",
+		sql.Select(sql.As(sql.Raw("?"), "a")).From(sql.Table{Name: sql.NewIdent("t")}),
+		"SELECT ? AS `a` FROM `t`")
+}
