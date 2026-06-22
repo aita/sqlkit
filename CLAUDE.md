@@ -74,7 +74,7 @@ golangci-lint run ./...
 
 ## Module layout & dependency policy
 
-- Root: `github.com/aita/sqlkit` (go 1.25). The core module consumers import.
+- Root: `github.com/aita/sqlkit`. The core module consumers import.
 - **Keep the root module lightweight and cgo-free.** Isolate heavy or
   cgo-bearing dependencies in their own leaf modules so they never leak into
   the root.
@@ -97,6 +97,7 @@ golangci-lint run ./...
   The scope is the changed package (e.g. `fix(codegen)`,
   `feat(sqlparse/postgres)`, `redact: ...`).
 - One concern per commit. Keep the summary imperative and concise.
+- Write commit messages and pull request titles/descriptions in English.
 
 ## Documentation
 
