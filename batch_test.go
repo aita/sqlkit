@@ -9,6 +9,7 @@ import (
 
 	"github.com/aita/sqlkit"
 	"github.com/aita/sqlkit/internal/testutil"
+	"github.com/aita/sqlkit/sql"
 )
 
 // TestPreloadInChunksByBindParamLimit drives a Preload whose follow-up IN list
@@ -488,6 +489,29 @@ func idFromArgsFake() *testutil.Fake {
 				Rows:    [][]driver.Value{{int64(len(args)), "x@example.com", nil}},
 			}, nil
 		},
+	}
+}
+
+// TestSelectWithWindowFunctionIsNotSplit guards against splitting a deferred IN
+// when the projection carries a window function: a window aggregates/ranks over
+// the whole result set, so per-chunk statements would compute it wrong (e.g.
+// ROW_NUMBER restarting in each chunk). The query must run as one statement.
+func TestSelectWithWindowFunctionIsNotSplit(t *testing.T) {
+	fake := idFromArgsFake()
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true))
+
+	var users []User
+	err := db.Select(Users.ID, sql.As(sql.RowNumber().Over().OrderBy(Users.ID.Asc()), "rn")).
+		From(Users).Where(Users.ID.In(1, 2, 3, 4, 5, 6, 7)).
+		AutoChunk(sqlkit.ChunkSize(3)).All(context.Background()).Scan(&users)
+	if err != nil {
+		t.Fatalf("Scan() error = %v", err)
+	}
+	if n := len(fake.Queries()); n != 1 {
+		t.Fatalf("queries = %d, want 1 (a window function must not be split)", n)
+	}
+	if got := len(fake.Queries()[0].Args); got != 7 {
+		t.Fatalf("single statement arg count = %d, want 7 (all ids in one IN)", got)
 	}
 }
 
