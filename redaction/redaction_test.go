@@ -886,3 +886,116 @@ func TestApplyMasksWrappedSensitiveLiterals(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { assertNoLeak(t, tc.name, tc.q, s) })
 	}
 }
+
+// TestRewriteInsertOnConflict covers the upsert path: an ON CONFLICT ... DO UPDATE
+// runs its assignments, target expressions, and WHERE through the redactor, so a
+// sensitive literal in the conflict action is masked. An upsert is a write path and
+// a redaction-bypass risk if the conflict branch is skipped.
+func TestRewriteInsertOnConflict(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	m := redaction.New(redaction.Columns("users.name"))
+
+	// INSERT INTO users (id, name) VALUES (1, 'taro')
+	// ON CONFLICT (id) DO UPDATE SET name = 'jiro' WHERE users.name = 'sub'
+	q := sql.InsertInto(users).Columns("id", "name").Values(1, "taro").
+		OnConflict("id").
+		DoUpdate(sql.Set("name", "jiro")).
+		Where(sql.Eq(sql.Col("users.name"), sql.Val("sub")))
+
+	// The inserted name ("taro"), the DO UPDATE SET name ("jiro"), and the conflict
+	// WHERE literal ("sub") are all masked; the numeric id is left intact.
+	want := []any{1, "*****", "*****", "*****"}
+	if got := args(t, m.Apply(q)); !reflect.DeepEqual(got, want) {
+		t.Errorf("upsert masked args = %v, want %v", got, want)
+	}
+}
+
+// TestIsSensitiveFailSafeUnknownQualifier exercises isSensitive's last-resort
+// fail-safe loop: a column whose qualifier matches no in-scope source resolves to
+// no candidate at any level, but with maskUnresolved set (the default) it is still
+// masked when a same-named column on an in-scope table is policy-sensitive — so a
+// stray/wrong qualifier cannot leak a PII value. With maskUnresolved cleared the
+// same reference is left intact (precise mode).
+func TestIsSensitiveFailSafeUnknownQualifier(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+
+	// "x.name" — qualifier "x" matches no FROM source, so it resolves to nothing,
+	// but "name" is sensitive on the in-scope users table.
+	q := func() sql.Query {
+		return sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("x.name"), sql.Val("taro")))
+	}
+
+	t.Run("default fail-safe masks an unknown-qualifier pii name", func(t *testing.T) {
+		m := redaction.New(redaction.Columns("users.name"))
+		if got := args(t, m.Apply(q())); !reflect.DeepEqual(got, []any{"*****"}) {
+			t.Errorf("args = %v, want [*****]", got)
+		}
+	})
+
+	t.Run("precise mode leaves an unknown-qualifier reference intact", func(t *testing.T) {
+		m := redaction.New(redaction.Columns("users.name"), redaction.WithMaskUnresolved(false))
+		if got := args(t, m.Apply(q())); !reflect.DeepEqual(got, []any{"taro"}) {
+			t.Errorf("args = %v, want [taro]", got)
+		}
+	})
+}
+
+// TestAnyCandidateNoneSensitive exercises the false branch of anyCandidateSensitive:
+// an ambiguous unqualified column across two joined tables where the policy marks a
+// *different* column sensitive, so no candidate matches and the literal is left
+// intact even with fail-safe masking on.
+func TestAnyCandidateNoneSensitive(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	accounts := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("accounts")}
+	// "email" is ambiguous across users+accounts, but only "name" is sensitive.
+	m := redaction.New(redaction.Columns("users.name"))
+	q := sql.Select(sql.Star()).From(users).
+		Join(accounts, sql.Eq(sql.Col("users.id"), sql.Col("accounts.id"))).
+		Where(sql.Eq(sql.Col("email"), sql.Val("x@y.z")))
+	if got := args(t, m.Apply(q)); !reflect.DeepEqual(got, []any{"x@y.z"}) {
+		t.Errorf("non-sensitive ambiguous column masked: args = %v, want [x@y.z]", got)
+	}
+}
+
+// TestMaskValueWrappers covers maskValue recursing through the remaining wrapper
+// nodes — COLLATE, ARRAY, and ROW — and its leaf passthrough for a non-string
+// value. A string nested under any wrapper compared to a sensitive column must not
+// survive; a non-string under one must be left intact.
+func TestMaskValueWrappers(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	m := redaction.New(redaction.Columns("users.name"))
+
+	tests := []struct {
+		name string
+		q    sql.Query
+		want []any
+	}{
+		{
+			name: "collate-wrapped string is masked",
+			q:    sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Collate(sql.Val("taro"), "C"))),
+			want: []any{"*****"},
+		},
+		{
+			name: "row-wrapped string is masked",
+			q:    sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Row(sql.Val("taro")))),
+			want: []any{"*****"},
+		},
+		{
+			name: "array-wrapped string is masked",
+			q:    sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Array("taro"))),
+			want: []any{"*****"},
+		},
+		{
+			name: "non-string value compared to pii column is left intact",
+			q:    sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Val(42))),
+			want: []any{42},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := args(t, m.Apply(tt.q)); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("masked args = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

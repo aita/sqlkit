@@ -2,6 +2,7 @@ package introspection
 
 import (
 	"context"
+	stdsql "database/sql"
 	"database/sql/driver"
 	"reflect"
 	"strings"
@@ -15,6 +16,198 @@ import (
 func TestInspectRejectsUnsupportedDialects(t *testing.T) {
 	if _, err := Schema(context.Background(), nil, "oracle", ""); err == nil {
 		t.Fatal("Schema(oracle) succeeded, want unsupported error")
+	}
+}
+
+// TestReferentialAction exercises every information_schema rule string mapping,
+// including case/whitespace normalization and the passthrough default that
+// preserves an unknown rule verbatim (uppercased).
+func TestReferentialAction(t *testing.T) {
+	tests := []struct {
+		rule string
+		want meta.ReferentialAction
+	}{
+		{"", ""},
+		{"NO ACTION", ""},
+		{"no action", ""},
+		{"  NO ACTION  ", ""},
+		{"RESTRICT", meta.Restrict},
+		{"restrict", meta.Restrict},
+		{"CASCADE", meta.Cascade},
+		{"cascade", meta.Cascade},
+		{"SET NULL", meta.SetNull},
+		{"set null", meta.SetNull},
+		{"SET DEFAULT", meta.SetDefault},
+		{"set default", meta.SetDefault},
+		// Unknown rule: preserved verbatim, uppercased and trimmed.
+		{"  weird rule ", meta.ReferentialAction("WEIRD RULE")},
+	}
+	for _, tt := range tests {
+		if got := referentialAction(tt.rule); got != tt.want {
+			t.Errorf("referentialAction(%q) = %q, want %q", tt.rule, got, tt.want)
+		}
+	}
+}
+
+// TestNormalizeCheckClause covers stripping the CHECK keyword and balanced
+// outer parentheses, while leaving unbalanced or non-enclosing parens intact.
+func TestNormalizeCheckClause(t *testing.T) {
+	tests := []struct {
+		clause string
+		want   string
+	}{
+		{"CHECK ((balance >= (0)::numeric))", "balance >= (0)::numeric"},
+		{"(`balance` >= 0)", "`balance` >= 0"},
+		{"CHECK (a > 0)", "a > 0"},
+		{"a > 0", "a > 0"},
+		{"   CHECK   (  x  )  ", "x"},
+		// Not enclosed by a single outer pair: "(a > 0) AND (b > 0)" starts and
+		// ends with parens, but stripping them leaves unbalanced content, so the
+		// clause must be preserved unchanged.
+		{"((a > 0) AND (b > 0))", "(a > 0) AND (b > 0)"},
+		{"(a > 0) AND (b > 0)", "(a > 0) AND (b > 0)"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		if got := normalizeCheckClause(tt.clause); got != tt.want {
+			t.Errorf("normalizeCheckClause(%q) = %q, want %q", tt.clause, got, tt.want)
+		}
+	}
+}
+
+// TestBalancedParens covers the depth-goes-negative early return as well as
+// the balanced and unbalanced terminal cases.
+func TestBalancedParens(t *testing.T) {
+	tests := []struct {
+		s    string
+		want bool
+	}{
+		{"", true},
+		{"a > 0", true},
+		{"(a) (b)", true},
+		{")a(", false}, // depth dips below zero
+		{"(a", false},  // ends positive
+		{"a)", false},  // dips below zero immediately
+	}
+	for _, tt := range tests {
+		if got := balancedParens(tt.s); got != tt.want {
+			t.Errorf("balancedParens(%q) = %v, want %v", tt.s, got, tt.want)
+		}
+	}
+}
+
+// TestColumnDefault covers the serial/identity, NULL, nextval sequence, and
+// raw-clause branches of default derivation.
+func TestColumnDefault(t *testing.T) {
+	tests := []struct {
+		name       string
+		def        stdsql.NullString
+		serial     bool
+		wantHas    bool
+		wantExpr   sql.Expression
+		wantNilExp bool
+	}{
+		{name: "serial drops expression", def: stdsql.NullString{String: "x", Valid: true}, serial: true, wantHas: true, wantNilExp: true},
+		{name: "no default", def: stdsql.NullString{}, wantHas: false, wantNilExp: true},
+		{name: "nextval sequence drops expression", def: stdsql.NullString{String: "nextval('s'::regclass)", Valid: true}, wantHas: true, wantNilExp: true},
+		{name: "raw clause preserved", def: stdsql.NullString{String: "0", Valid: true}, wantHas: true, wantExpr: sql.Raw("0")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			has, expr := columnDefault(tt.def, tt.serial)
+			if has != tt.wantHas {
+				t.Errorf("HasDefault = %v, want %v", has, tt.wantHas)
+			}
+			if tt.wantNilExp {
+				if expr != nil {
+					t.Errorf("expr = %#v, want nil", expr)
+				}
+				return
+			}
+			if !reflect.DeepEqual(expr, tt.wantExpr) {
+				t.Errorf("expr = %#v, want %#v", expr, tt.wantExpr)
+			}
+		})
+	}
+}
+
+// TestColumnTypeNonDecimalDropsPrecision verifies the precision/scale clearing
+// for non-decimal types and that decimal/numeric retain them, in both dialects.
+func TestColumnTypeNonDecimalDropsPrecision(t *testing.T) {
+	// information_schema reports a numeric_precision for integer types too;
+	// columnType must drop it for non-decimal types.
+	if got := columnType("postgres", "int8", 0, 64, 0); !reflect.DeepEqual(got, meta.Of("postgres", "int8", 0, 0, 0)) {
+		t.Errorf("int8 type = %#v, want precision dropped", got)
+	}
+	if got := columnType("mysql", "bigint", 0, 19, 0); !reflect.DeepEqual(got, meta.Of("mysql", "bigint", 0, 0, 0)) {
+		t.Errorf("bigint type = %#v, want precision dropped", got)
+	}
+	// decimal/numeric keep precision and scale.
+	if got := columnType("postgres", "numeric", 0, 10, 2); !reflect.DeepEqual(got, meta.Of("postgres", "numeric", 0, 10, 2)) {
+		t.Errorf("numeric type = %#v, want precision kept", got)
+	}
+	if got := columnType("mysql", "decimal", 0, 10, 2); !reflect.DeepEqual(got, meta.Of("mysql", "decimal", 0, 10, 2)) {
+		t.Errorf("decimal type = %#v, want precision kept", got)
+	}
+	// MySQL underscore prefix is NOT treated as an array (array detection is
+	// PostgreSQL-only).
+	if got := columnType("mysql", "_weird", 0, 0, 0); !reflect.DeepEqual(got, meta.Of("mysql", "_weird", 0, 0, 0)) {
+		t.Errorf("mysql _weird = %#v, want non-array literal type", got)
+	}
+}
+
+// TestAttachForeignKeysGroupsCompositeAndSkipsUnknown verifies multi-column FK
+// grouping under one constraint and that rows for unknown tables are skipped.
+func TestAttachForeignKeysGroupsCompositeAndSkipsUnknown(t *testing.T) {
+	tables := []meta.Table{{Name: "orders"}}
+	rows := []fkRow{
+		{constraint: "fk_a_b", table: "orders", column: "a", refSchema: "public", refTable: "ref", refColumn: "ra", onDelete: "CASCADE", onUpdate: "RESTRICT"},
+		{constraint: "fk_a_b", table: "orders", column: "b", refSchema: "public", refTable: "ref", refColumn: "rb"},
+		// Unknown table: silently skipped.
+		{constraint: "fk_x", table: "missing", column: "x", refTable: "ref", refColumn: "rx"},
+	}
+	attachForeignKeys(tables, rows)
+	if len(tables[0].ForeignKeys) != 1 {
+		t.Fatalf("foreign keys = %d, want 1 grouped constraint", len(tables[0].ForeignKeys))
+	}
+	fk := tables[0].ForeignKeys[0]
+	if !reflect.DeepEqual(fk.Columns, []string{"a", "b"}) || !reflect.DeepEqual(fk.RefColumns, []string{"ra", "rb"}) {
+		t.Fatalf("composite columns = %#v / %#v", fk.Columns, fk.RefColumns)
+	}
+	if fk.OnDelete != meta.Cascade || fk.OnUpdate != meta.Restrict {
+		t.Fatalf("actions = %q / %q", fk.OnDelete, fk.OnUpdate)
+	}
+}
+
+// TestAttachIndexesGroupsAndSkipsUnknown verifies multi-column index grouping
+// and that rows for unknown tables are skipped.
+func TestAttachIndexesGroupsAndSkipsUnknown(t *testing.T) {
+	tables := []meta.Table{{Name: "t"}}
+	rows := []indexRow{
+		{table: "t", index: "ix", unique: true, column: "a"},
+		{table: "t", index: "ix", unique: true, column: "b"},
+		{table: "gone", index: "ix2", column: "c"},
+	}
+	attachIndexes(tables, rows)
+	if len(tables[0].Indexes) != 1 {
+		t.Fatalf("indexes = %d, want 1", len(tables[0].Indexes))
+	}
+	if ix := tables[0].Indexes[0]; !ix.Unique || !reflect.DeepEqual(ix.Columns, []string{"a", "b"}) {
+		t.Fatalf("index = %#v", ix)
+	}
+}
+
+// TestAttachCheckUnknownTableIsNoOp verifies that a check for a table not in the
+// slice is dropped rather than panicking.
+func TestAttachCheckUnknownTableIsNoOp(t *testing.T) {
+	tables := []meta.Table{{Name: "t"}}
+	attachCheck(tables, "missing", "c", "CHECK (a > 0)")
+	if len(tables[0].Checks) != 0 {
+		t.Fatalf("checks = %d, want 0 (unknown table ignored)", len(tables[0].Checks))
+	}
+	attachCheck(tables, "t", "c", "CHECK ((a > 0))")
+	if len(tables[0].Checks) != 1 || tables[0].Checks[0].Expression != sql.Raw("a > 0") {
+		t.Fatalf("checks = %#v", tables[0].Checks)
 	}
 }
 

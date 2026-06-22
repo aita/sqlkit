@@ -142,6 +142,79 @@ func TestInsertBulk(t *testing.T) {
 	}
 }
 
+func TestInsertReturning(t *testing.T) {
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			return testutil.Result{
+				Columns: []string{"id", "email", "name"},
+				Rows: [][]driver.Value{
+					{int64(1), "alice@example.com", nil},
+					{int64(2), "bob@example.com", nil},
+				},
+			}, nil
+		},
+	}
+	db := wrap(fake, sqlkit.PostgreSQLDialect{})
+
+	got := sqltest.InsertReturning(t, db, newUsers(),
+		userRow{Email: "alice@example.com"},
+		userRow{Email: "bob@example.com"},
+	)
+	if len(got) != 2 {
+		t.Fatalf("returned rows = %d, want 2", len(got))
+	}
+	if got[0].ID != 1 || got[1].ID != 2 {
+		t.Fatalf("returned ids = %d,%d, want 1,2", got[0].ID, got[1].ID)
+	}
+	queries := fake.Queries()
+	if len(queries) != 1 || !strings.Contains(queries[0].SQL, "RETURNING") {
+		t.Fatalf("query = %v, want a single RETURNING query", queries)
+	}
+}
+
+// TestInsertReturningSkipsOnMySQL covers the RETURNING-unsupported skip branch.
+// It runs in an inner subtest so the Skip does not skip the parent.
+func TestInsertReturningSkipsOnMySQL(t *testing.T) {
+	fake := &testutil.Fake{}
+	db := wrap(fake, sqlkit.MySQLDialect{})
+
+	skipped := true
+	t.Run("inner", func(t *testing.T) {
+		sqltest.InsertReturning(t, db, newUsers(), userRow{Email: "a@example.com"})
+		skipped = false // unreachable when Skipf fires
+	})
+	if !skipped {
+		t.Fatalf("InsertReturning did not skip on a dialect without RETURNING")
+	}
+	if len(fake.Statements()) != 0 {
+		t.Fatalf("statements = %v, want none on the skip path", fake.Statements())
+	}
+}
+
+// TestInsertReturningEmpty returns nil without touching the database when given
+// no rows.
+func TestInsertReturningEmpty(t *testing.T) {
+	fake := &testutil.Fake{}
+	db := wrap(fake, sqlkit.PostgreSQLDialect{})
+
+	if got := sqltest.InsertReturning[userRow](t, db, newUsers()); got != nil {
+		t.Fatalf("InsertReturning with no rows = %v, want nil", got)
+	}
+	if len(fake.Statements()) != 0 {
+		t.Fatalf("statements = %v, want none for an empty insert", fake.Statements())
+	}
+}
+
+// TestInsertRowsEmpty is a no-op that issues no statement.
+func TestInsertRowsEmpty(t *testing.T) {
+	fake := &testutil.Fake{}
+	db := wrap(fake, sqlkit.PostgreSQLDialect{})
+	sqltest.InsertRows(t, db, newUsers())
+	if len(fake.Statements()) != 0 {
+		t.Fatalf("statements = %v, want none for an empty InsertRows", fake.Statements())
+	}
+}
+
 func TestFixtureLoadOrder(t *testing.T) {
 	fake := &testutil.Fake{}
 	db := wrap(fake, sqlkit.PostgreSQLDialect{})

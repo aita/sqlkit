@@ -127,6 +127,48 @@ func TestKeyStringFormat(t *testing.T) {
 	}
 }
 
+// TestKeyNilTypeAndExpr exercises the checksum's nil-type and nil-expression
+// encodings: a column declaring neither hashes without panic, and is distinct
+// from one that declares a type.
+func TestKeyNilTypeAndExpr(t *testing.T) {
+	bare := meta.Table{Name: "t", Columns: []meta.Column{{Name: "c"}}}
+	k1 := bare.Key()
+	k2 := bare.Key()
+	if k1 != k2 {
+		t.Fatalf("nil-type key not deterministic: %v vs %v", k1, k2)
+	}
+	typed := meta.Table{Name: "t", Columns: []meta.Column{{Name: "c", Type: meta.Of("postgres", "int8", 0, 0, 0)}}}
+	if typed.Key().Checksum == k1.Checksum {
+		t.Error("a typed column should hash differently from an untyped one")
+	}
+}
+
+// TestKeyNonCompilableExprStaysDistinct pins the documented fallback in
+// encodeExpr: a DEFAULT/CHECK expression that cannot be compiled statically (it
+// binds a value) must not collapse to empty — two distinct such expressions must
+// still yield distinct checksums so they are not silently merged.
+func TestKeyNonCompilableExprStaysDistinct(t *testing.T) {
+	base := meta.Table{Name: "t", Columns: []meta.Column{{Name: "c", Type: meta.Of("postgres", "int8", 0, 0, 0)}}}
+
+	withExpr := func(e sql.Expression) meta.Table {
+		tbl := base
+		tbl.Checks = []meta.Check{{Name: "ck", Expression: e}}
+		return tbl
+	}
+
+	// A bound-value expression fails CompileStatic, taking the !%T fallback.
+	bad1 := withExpr(sql.Eq(sql.Col("a"), 1)).Key()
+	bad2 := withExpr(sql.Eq(sql.Col("a"), 1)).Key()
+	if bad1 != bad2 {
+		t.Fatalf("non-compilable expr key not deterministic: %v vs %v", bad1, bad2)
+	}
+	// It must differ from no check at all (i.e. not collapse to empty).
+	noCheck := base.Key()
+	if bad1.Checksum == noCheck.Checksum {
+		t.Error("a non-compilable check expression collapsed to the empty encoding")
+	}
+}
+
 func TestIdentities(t *testing.T) {
 	md := meta.Metadata{Tables: []meta.Table{sampleTable()}}
 	im, err := md.Identities()

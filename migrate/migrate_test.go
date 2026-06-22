@@ -454,6 +454,207 @@ func TestDownRollsBackMostRecentlyApplied(t *testing.T) {
 	}
 }
 
+// TestUpToAppliesTargetAndAncestors checks UpTo (the named wrapper over
+// Upgrade) applies the target and its unapplied ancestors only, leaving later
+// migrations pending.
+func TestUpToAppliesTargetAndAncestors(t *testing.T) {
+	fake := &testutil.Fake{QueryFunc: appliedHistory()}
+	m := migrate.New(sqlkit.WrapDB(fake.DB()), linear()) // 0001 -> 0002 -> 0003
+	if err := m.UpTo(context.Background(), "0002"); err != nil {
+		t.Fatalf("UpTo 0002: %v", err)
+	}
+	want := []string{`CREATE TABLE "t1" (`, `CREATE TABLE "t2" (`}
+	if got := creates(fake.Execs()); !equalStrings(got, want) {
+		t.Errorf("UpTo 0002 created %v, want %v", got, want)
+	}
+}
+
+// TestPendingListsUnappliedInOrder checks Pending returns only unapplied
+// migrations, in topological order.
+func TestPendingListsUnappliedInOrder(t *testing.T) {
+	fake := &testutil.Fake{QueryFunc: appliedHistory("0001")}
+	m := migrate.New(sqlkit.WrapDB(fake.DB()), linear())
+	pending, err := m.Pending(context.Background())
+	if err != nil {
+		t.Fatalf("Pending: %v", err)
+	}
+	var revs []string
+	for _, mig := range pending {
+		revs = append(revs, mig.Revision)
+	}
+	if want := []string{"0002", "0003"}; !equalStrings(revs, want) {
+		t.Errorf("Pending = %v, want %v", revs, want)
+	}
+}
+
+// TestWithTableNameAndSchema checks the WithTableName and WithSchema options
+// retarget the tracking table and qualify migration DDL with the schema.
+func TestWithTableNameAndSchema(t *testing.T) {
+	fake := &testutil.Fake{QueryFunc: func(q string, _ []any) (testutil.Result, error) {
+		// History SELECT now reads the renamed, schema-qualified table.
+		if strings.Contains(q, "migration_log") && strings.HasPrefix(strings.TrimSpace(q), "SELECT") {
+			return testutil.Result{Columns: []string{"revision", "name", "direction", "applied_at"}}, nil
+		}
+		return testutil.Result{}, nil
+	}}
+	m := migrate.New(sqlkit.WrapDB(fake.DB()), []migrate.Migration{mk("0001", "", "a", "t1")},
+		migrate.WithTableName("migration_log"), migrate.WithSchema("app"))
+	if err := m.Up(context.Background()); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	var sawTracking, sawSchemaDDL bool
+	for _, e := range fake.Execs() {
+		if strings.Contains(e.SQL, `"app"."migration_log"`) {
+			sawTracking = true
+		}
+		if strings.Contains(e.SQL, `CREATE TABLE "app"."t1"`) {
+			sawSchemaDDL = true
+		}
+	}
+	if !sawTracking {
+		t.Error("tracking table was not the schema-qualified migration_log")
+	}
+	if !sawSchemaDDL {
+		t.Errorf("migration DDL was not schema-qualified to app:\n%v", fake.Statements())
+	}
+}
+
+// TestUpgradeSQLFromToRange renders the SQL for an offline range between two
+// revisions (resolved by unique prefix), covering rangeSet's ancestor paths.
+func TestUpgradeSQLFromToRange(t *testing.T) {
+	m := migrate.New(sqlkit.WrapDB((&testutil.Fake{}).DB()), linear())
+	// from=0001 (already applied), to=0003: only 0002 and 0003 should render.
+	script, err := m.UpgradeSQL("0001", "0003")
+	if err != nil {
+		t.Fatalf("UpgradeSQL: %v", err)
+	}
+	if strings.Contains(script, `CREATE TABLE "t1"`) {
+		t.Errorf("UpgradeSQL(0001,0003) should not re-create t1:\n%s", script)
+	}
+	mustOrder(t, script, `CREATE TABLE "t2" (`, `CREATE TABLE "t3" (`)
+}
+
+// TestDowngradeSQLToRevision renders a partial offline downgrade stopping at a
+// revision (its descendants only), covering DowngradeSQL's toSet path.
+func TestDowngradeSQLToRevision(t *testing.T) {
+	m := migrate.New(sqlkit.WrapDB((&testutil.Fake{}).DB()), linear())
+	script, err := m.DowngradeSQL("head", "0001")
+	if err != nil {
+		t.Fatalf("DowngradeSQL: %v", err)
+	}
+	// 0002 and 0003 (descendants of 0001) drop; 0001 itself stays.
+	mustOrder(t, script, `DROP TABLE IF EXISTS "t3";`, `DROP TABLE IF EXISTS "t2";`)
+	if strings.Contains(script, `DROP TABLE IF EXISTS "t1";`) {
+		t.Errorf("DowngradeSQL(head,0001) should not drop t1:\n%s", script)
+	}
+}
+
+// TestStampToMiddleRevision stamps to a middle revision from empty: only that
+// revision and its ancestors get "up" rows, none beyond.
+func TestStampToMiddleRevision(t *testing.T) {
+	fake := &testutil.Fake{QueryFunc: appliedHistory()}
+	m := migrate.New(sqlkit.WrapDB(fake.DB()), linear())
+	if err := m.Stamp(context.Background(), "0002"); err != nil {
+		t.Fatalf("Stamp 0002: %v", err)
+	}
+	if got := creates(fake.Execs()); len(got) != 0 {
+		t.Errorf("Stamp ran DDL: %v", got)
+	}
+	var stamped []string
+	for _, e := range fake.Execs() {
+		if strings.HasPrefix(e.SQL, "INSERT") {
+			rev, _ := e.Args[0].(string)
+			stamped = append(stamped, rev)
+		}
+	}
+	if want := []string{"0001", "0002"}; !equalStrings(stamped, want) {
+		t.Errorf("stamped %v, want %v (target and ancestors only)", stamped, want)
+	}
+}
+
+// TestStampUnknownRevisionErrors checks stamping to an unknown revision surfaces
+// resolve's error rather than silently stamping nothing.
+func TestStampUnknownRevisionErrors(t *testing.T) {
+	fake := &testutil.Fake{QueryFunc: appliedHistory()}
+	m := migrate.New(sqlkit.WrapDB(fake.DB()), linear())
+	if err := m.Stamp(context.Background(), "nope"); err == nil {
+		t.Error("Stamp to unknown revision should error")
+	}
+}
+
+// TestHistoryReturnsEventsOldestFirst checks History reads the full timeline
+// (apply and rollback events) in order.
+func TestHistoryReturnsEventsOldestFirst(t *testing.T) {
+	fake := &testutil.Fake{QueryFunc: historyFunc(
+		ev{"0001", "up"}, ev{"0002", "up"}, ev{"0002", "down"},
+	)}
+	m := migrate.New(sqlkit.WrapDB(fake.DB()), linear())
+	events, err := m.History(context.Background())
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("history len = %d, want 3", len(events))
+	}
+	if events[2].Revision != "0002" || events[2].Direction != migrate.DirectionDown {
+		t.Errorf("events[2] = %+v, want 0002 down", events[2])
+	}
+}
+
+// TestUpgradeNegativeRelativeRejected checks "+-1" (a malformed relative target)
+// is rejected, covering Upgrade's relative-parse error branch.
+func TestUpgradeNegativeRelativeRejected(t *testing.T) {
+	fake := &testutil.Fake{QueryFunc: appliedHistory()}
+	m := migrate.New(sqlkit.WrapDB(fake.DB()), linear())
+	if err := m.Upgrade(context.Background(), "+notanumber"); err == nil {
+		t.Error("Upgrade(+notanumber) should error")
+	}
+}
+
+// TestDowngradeMalformedRelativeRejected checks "-x" is rejected by Downgrade.
+func TestDowngradeMalformedRelativeRejected(t *testing.T) {
+	fake := &testutil.Fake{QueryFunc: appliedHistory("0001")}
+	m := migrate.New(sqlkit.WrapDB(fake.DB()), linear())
+	if err := m.Downgrade(context.Background(), "-x"); err == nil {
+		t.Error("Downgrade(-x) should error")
+	}
+}
+
+// TestDownToEmptyRollsBackAll checks DownTo("") downgrades to base (everything).
+func TestDownToEmptyRollsBackAll(t *testing.T) {
+	fake := &testutil.Fake{QueryFunc: appliedHistory("0001", "0002", "0003")}
+	m := migrate.New(sqlkit.WrapDB(fake.DB()), linear())
+	if err := m.DownTo(context.Background(), ""); err != nil {
+		t.Fatalf("DownTo \"\": %v", err)
+	}
+	want := []string{`DROP TABLE IF EXISTS "t3";`, `DROP TABLE IF EXISTS "t2";`, `DROP TABLE IF EXISTS "t1";`}
+	if got := drops(fake.Execs()); !equalStrings(got, want) {
+		t.Errorf("DownTo(\"\") drops:\ngot  %v\nwant %v", got, want)
+	}
+}
+
+// TestUpgradeSQLOperationErrorSurfaces checks an offline render whose migration
+// builds invalid DDL returns the operation error from record (rather than
+// emitting broken SQL). A primary-key-nullable column is invalid in decl.
+func TestUpgradeSQLOperationErrorSurfaces(t *testing.T) {
+	bad := []migrate.Migration{{
+		Revision: "0001", Name: "bad",
+		Up: func(op *migrate.Operator) {
+			op.CreateTable("t", decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Nullable()))
+		},
+		Down: func(op *migrate.Operator) {
+			op.CreateTable("t", decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Nullable()))
+		},
+	}}
+	m := migrate.New(sqlkit.WrapDB((&testutil.Fake{}).DB()), bad)
+	if _, err := m.UpgradeSQL("", "head"); err == nil {
+		t.Error("UpgradeSQL should surface the invalid-operation error")
+	}
+	if _, err := m.DowngradeSQL("head", "base"); err == nil {
+		t.Error("DowngradeSQL should surface the invalid-operation error")
+	}
+}
+
 // mustOrder asserts each substring appears in script in the given order.
 func mustOrder(t *testing.T, script string, subs ...string) {
 	t.Helper()

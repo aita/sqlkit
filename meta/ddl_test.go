@@ -340,6 +340,49 @@ func TestIndexCreateIndex(t *testing.T) {
 	}
 }
 
+// TestTableColumn exercises the by-name column lookup, hit and miss.
+func TestTableColumn(t *testing.T) {
+	tbl := meta.Table{
+		Name: "users",
+		Columns: []meta.Column{
+			{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0)},
+			{Name: "email", Type: meta.Of("postgres", "text", 0, 0, 0)},
+		},
+	}
+	c, ok := tbl.Column("email")
+	if !ok || c.Name != "email" {
+		t.Errorf("Column(email) = %+v, %v; want the email column", c, ok)
+	}
+	if _, ok := tbl.Column("missing"); ok {
+		t.Error("Column(missing) should report false")
+	}
+}
+
+// TestCreateSQLNoTypeError verifies a column with no type on the dialect surfaces
+// a descriptive compile-time error rather than a panic, both for the whole-table
+// CreateSQL and the per-table CreateSQL.
+func TestCreateSQLNoTypeError(t *testing.T) {
+	pg := mustDialect(t, "postgres")
+
+	// A column with a nil type.
+	nilType := meta.Metadata{Tables: []meta.Table{{
+		Name:    "t",
+		Columns: []meta.Column{{Name: "id", PrimaryKey: true}},
+	}}}
+	if _, err := nilType.CreateSQL(pg); err == nil {
+		t.Error("CreateSQL with a nil-type column should error")
+	}
+
+	// A column typed only for the other dialect (mysql) errors on postgres.
+	wrongDialect := meta.Table{
+		Name:    "t",
+		Columns: []meta.Column{{Name: "id", Type: meta.Of("mysql", "bigint", 0, 0, 0), PrimaryKey: true}},
+	}
+	if _, err := wrongDialect.CreateSQL(pg); err == nil {
+		t.Error("CreateSQL with a column typed only for mysql should error on postgres")
+	}
+}
+
 func TestDropDDLPostgres(t *testing.T) {
 	md := fixture("postgres", map[string]string{"bigint": "int8", "varchar": "varchar", "text": "text", "decimal": "numeric", "timestamp": "timestamptz"})
 	got := md.DropSQL(mustDialect(t, "postgres"))

@@ -67,3 +67,72 @@ func TestOperatorMaterializedViewAndGrant(t *testing.T) {
 	}
 	assertSQLs(t, cap.sqls, want)
 }
+
+// TestOperatorFunctions covers CreateFunction (with a configure callback) and
+// DropFunction (with argument types), the trigger-function escape hatches.
+func TestOperatorFunctions(t *testing.T) {
+	cap := newCapture()
+	op := newOperator(context.Background(), cap, "public")
+
+	op.CreateFunction("bump", func(s sql.CreateFunctionBuilder) sql.CreateFunctionBuilder {
+		return s.OrReplace().Returns("trigger").Language("plpgsql").Body("BEGIN RETURN NEW; END;")
+	})
+	op.DropFunction("bump")
+	op.DropFunction("overloaded", func(s sql.DropFunctionBuilder) sql.DropFunctionBuilder {
+		return s.ArgTypes("int", "text")
+	})
+
+	if err := op.Err(); err != nil {
+		t.Fatalf("Err = %v", err)
+	}
+	if len(cap.sqls) != 3 {
+		t.Fatalf("got %d statements, want 3:\n%v", len(cap.sqls), cap.sqls)
+	}
+	if !contains(cap.sqls[0], "CREATE OR REPLACE FUNCTION") || !contains(cap.sqls[0], `"public"."bump"`) {
+		t.Errorf("CreateFunction rendered %q", cap.sqls[0])
+	}
+	if !contains(cap.sqls[1], "DROP FUNCTION IF EXISTS") {
+		t.Errorf("DropFunction rendered %q", cap.sqls[1])
+	}
+	if !contains(cap.sqls[2], "int") || !contains(cap.sqls[2], "text") {
+		t.Errorf("DropFunction with arg types rendered %q", cap.sqls[2])
+	}
+}
+
+// TestOperatorExtensionWithSchema covers the CreateExtension configure callback
+// (WITH SCHEMA) and the unqualified-name path of qualified() via an empty schema.
+func TestOperatorExtensionWithSchema(t *testing.T) {
+	cap := newCapture()
+	op := newOperator(context.Background(), cap, "") // empty schema: names unqualified
+
+	op.CreateExtension("pg_trgm", func(s sql.CreateExtensionBuilder) sql.CreateExtensionBuilder {
+		return s.Schema("public")
+	})
+	op.CreateEnum("mood", "happy") // qualified() with empty schema -> bare name
+
+	if err := op.Err(); err != nil {
+		t.Fatalf("Err = %v", err)
+	}
+	if !contains(cap.sqls[0], "SCHEMA") {
+		t.Errorf("CreateExtension WITH SCHEMA rendered %q", cap.sqls[0])
+	}
+	if contains(cap.sqls[1], ".") {
+		t.Errorf("CreateEnum with empty schema should be unqualified, got %q", cap.sqls[1])
+	}
+}
+
+// TestOperatorRefreshConcurrently covers the RefreshMaterializedView configure
+// callback.
+func TestOperatorRefreshConcurrently(t *testing.T) {
+	cap := newCapture()
+	op := newOperator(context.Background(), cap, "public")
+	op.RefreshMaterializedView("nums", func(s sql.RefreshMaterializedViewBuilder) sql.RefreshMaterializedViewBuilder {
+		return s.Concurrently()
+	})
+	if err := op.Err(); err != nil {
+		t.Fatalf("Err = %v", err)
+	}
+	if len(cap.sqls) != 1 || !contains(cap.sqls[0], "CONCURRENTLY") {
+		t.Errorf("RefreshMaterializedView Concurrently rendered %v", cap.sqls)
+	}
+}
