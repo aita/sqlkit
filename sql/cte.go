@@ -71,3 +71,6 @@ func (b SelectBuilder) WithCTE(ctes ...CTE) SelectBuilder {
 	b.s.With = append(append([]CTE(nil), b.s.With...), ctes...)
 	return b
 }
+
+// WithBody returns a copy of c with its defining query replaced by q.
+func (c CTE) WithBody(q Query) CTE { c.query = q; return c }

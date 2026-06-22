@@ -499,6 +499,75 @@ func TestRewriteExprNested(t *testing.T) {
 	}
 }
 
+// TestApplyCTEBody checks that sensitive literals inside a CTE's defining query
+// are masked — the CTE body is its own scope and is rewritten recursively.
+func TestApplyCTEBody(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	m := redaction.New(redaction.Columns("users.name"))
+
+	// WITH filtered AS (SELECT * FROM users WHERE name = 'taro') SELECT * FROM filtered
+	cte := sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Val("taro"))).CTE("filtered")
+	q := sql.Select(sql.Star()).From(cte).WithCTE(cte)
+
+	if got := args(t, m.Apply(q)); !reflect.DeepEqual(got, []any{"*****"}) {
+		t.Errorf("CTE body masked args = %v, want [*****]", got)
+	}
+}
+
+// TestApplyCTEOuterRef checks that a sensitive literal in an outer query's WHERE
+// clause, qualified by a CTE alias, is masked by tracing the column through the
+// CTE's SELECT list to the underlying base table.
+func TestApplyCTEOuterRef(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	m := redaction.New(redaction.Columns("users.name"))
+
+	// WITH filtered AS (SELECT id, name FROM users)
+	// SELECT * FROM filtered WHERE filtered.name = 'taro'
+	cte := sql.Select(sql.Col("id"), sql.Col("name")).From(users).CTE("filtered")
+	q := sql.Select(sql.Star()).From(cte).
+		Where(sql.Eq(cte.Col("name"), sql.Val("taro"))).
+		WithCTE(cte)
+
+	if got := args(t, m.Apply(q)); !reflect.DeepEqual(got, []any{"*****"}) {
+		t.Errorf("CTE outer ref masked args = %v, want [*****]", got)
+	}
+}
+
+// TestApplySubqueryDerivedRef checks that a sensitive literal in an outer query's
+// WHERE clause, qualified by a derived-table alias, is masked by tracing the
+// column through the subquery's SELECT list.
+func TestApplySubqueryDerivedRef(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	m := redaction.New(redaction.Columns("users.name"))
+
+	// SELECT * FROM (SELECT id, name FROM users) AS t WHERE t.name = 'taro'
+	sub := sql.Select(sql.Col("id"), sql.Col("name")).From(users)
+	q := sql.Select(sql.Star()).
+		From(sql.Alias(sub, "t")).
+		Where(sql.Eq(sql.Col("t.name"), sql.Val("taro")))
+
+	if got := args(t, m.Apply(q)); !reflect.DeepEqual(got, []any{"*****"}) {
+		t.Errorf("derived-table ref masked args = %v, want [*****]", got)
+	}
+}
+
+// TestApplySubqueryWildcardRef checks that SELECT * in a subquery still allows
+// the outer query to resolve a sensitive column through it.
+func TestApplySubqueryWildcardRef(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	m := redaction.New(redaction.Columns("users.name"))
+
+	// SELECT * FROM (SELECT * FROM users) AS t WHERE t.name = 'taro'
+	sub := sql.Select(sql.Star()).From(users)
+	q := sql.Select(sql.Star()).
+		From(sql.Alias(sub, "t")).
+		Where(sql.Eq(sql.Col("t.name"), sql.Val("taro")))
+
+	if got := args(t, m.Apply(q)); !reflect.DeepEqual(got, []any{"*****"}) {
+		t.Errorf("wildcard subquery ref masked args = %v, want [*****]", got)
+	}
+}
+
 // TestApplyNilQuery pins the nil-query and nil-policy guards.
 func TestApplyNilQuery(t *testing.T) {
 	m := redaction.New(redaction.Columns("users.name"))

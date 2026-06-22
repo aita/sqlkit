@@ -51,9 +51,10 @@ type ColumnRef struct {
 // reachable through a returned SourceRef.Subquery — and a set operation (whose
 // arms are subqueries) yields no direct sources.
 //
-// A FROM/JOIN reference to a CTE presents as a base-table SourceRef here, because
-// the scope of CTE names is not known from q alone; a resolver that holds the
-// schema treats a name that matches no table as not a base table.
+// A FROM/JOIN reference to a CTE is resolved: when the query carries a WITH
+// clause, the SourceRef for each CTE-named source is annotated with the CTE's
+// body query in its Subquery field, so a resolver can trace column references
+// through the CTE definition just as it does for inline derived tables.
 func SourcesOf(q sql.Query) []SourceRef {
 	var out []SourceRef
 	add := func(src sql.Source) {
@@ -67,6 +68,7 @@ func SourcesOf(q sql.Query) []SourceRef {
 		for _, j := range v.Joins {
 			add(j.Source)
 		}
+		enrichWithCTEs(out, v.With)
 	case sql.UpdateStmt:
 		out = append(out, tableRef(v.Table, sql.Ident{}))
 		for _, s := range v.From {
@@ -75,6 +77,7 @@ func SourcesOf(q sql.Query) []SourceRef {
 		for _, j := range v.Joins {
 			add(j.Source)
 		}
+		enrichWithCTEs(out, v.With)
 	case sql.DeleteStmt:
 		out = append(out, tableRef(v.Table, sql.Ident{}))
 		for _, s := range v.Using {
@@ -83,16 +86,37 @@ func SourcesOf(q sql.Query) []SourceRef {
 		for _, j := range v.Joins {
 			add(j.Source)
 		}
+		enrichWithCTEs(out, v.With)
 	case sql.InsertStmt:
 		out = append(out, tableRef(v.Table, sql.Ident{}))
 	case sql.MergeStmt:
 		out = append(out, tableRef(v.Target, v.TargetAlias))
 		add(v.Using)
+		enrichWithCTEs(out, v.With)
 	default:
 		// CompoundStmt arms, ValuesQuery, and DDL have no immediate base-table
 		// sources of their own.
 	}
 	return out
+}
+
+// enrichWithCTEs annotates each source in out whose table name matches a CTE in
+// ctes with the CTE's body query, enabling column resolution to trace column
+// references through the CTE definition.
+func enrichWithCTEs(out []SourceRef, ctes []sql.CTE) {
+	if len(ctes) == 0 {
+		return
+	}
+	for i, r := range out {
+		if !r.Table.IsZero() && r.Subquery == nil {
+			for _, c := range ctes {
+				if sql.NewIdent(c.Name()).Equal(r.Table) {
+					out[i].Subquery = c.Body()
+					break
+				}
+			}
+		}
+	}
 }
 
 // Access is whether a column reference reads or writes the column.

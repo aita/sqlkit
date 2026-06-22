@@ -88,11 +88,19 @@ func Resolve(q sql.Query) []Resolution {
 // sole base-table source, or is Ambiguous when several distinct tables are in
 // scope. It is the per-reference core of Resolve, exposed for callers that drive
 // their own traversal.
+//
+// When the matched source is a derived table or CTE (SourceRef.Subquery is set),
+// resolution descends into the subquery's SELECT list to trace the column back to
+// its underlying base table, mirroring how a real RDBMS resolves such references.
 func ResolveColumn(scope []SourceRef, col ColumnRef) Resolution {
 	res := Resolution{Column: col, Status: Unknown}
 	if !col.Qualifier.IsZero() {
-		if s, ok := matchQualifier(scope, col.Qualifier); ok && !s.Table.IsZero() {
-			res.Schema, res.Table, res.Status = s.Schema, s.Table, Resolved
+		if s, ok := matchQualifier(scope, col.Qualifier); ok {
+			if !s.Table.IsZero() && s.Subquery == nil {
+				res.Schema, res.Table, res.Status = s.Schema, s.Table, Resolved
+			} else if s.Subquery != nil {
+				return resolveInSubquery(s.Subquery, col)
+			}
 		}
 		return res
 	}
@@ -102,7 +110,7 @@ func ResolveColumn(scope []SourceRef, col ColumnRef) Resolution {
 	for i := range scope {
 		s := &scope[i]
 		if s.Table.IsZero() {
-			continue // a derived (subquery/VALUES) source names no base table here
+			continue // a plain derived (subquery/VALUES) source names no base table here
 		}
 		if match != nil && !sameTable(*match, *s) {
 			res.Status = Ambiguous
@@ -111,9 +119,72 @@ func ResolveColumn(scope []SourceRef, col ColumnRef) Resolution {
 		match = s
 	}
 	if match != nil {
+		if match.Subquery != nil {
+			return resolveInSubquery(match.Subquery, col)
+		}
 		res.Schema, res.Table, res.Status = match.Schema, match.Table, Resolved
 	}
 	return res
+}
+
+// resolveInSubquery traces col.Name through the SELECT list of subq, returning
+// the resolution of the underlying base column. It handles aliased and unaliased
+// column projections and SELECT * wildcards. Non-SELECT queries (compound, VALUES)
+// and complex (non-column) projected expressions return Unknown.
+func resolveInSubquery(subq sql.Query, col ColumnRef) Resolution {
+	sel, ok := sql.Unwrap(subq).(sql.SelectStmt)
+	if !ok {
+		return Resolution{Column: col, Status: Unknown}
+	}
+	innerScope := SourcesOf(subq)
+
+	// Match col.Name against each named output column in the SELECT list.
+	for _, s := range sel.Columns {
+		outName, expr := selectionOutput(s)
+		if outName.IsZero() || !outName.Equal(col.Name) {
+			continue
+		}
+		c, ok := expr.(sql.ColumnExpression)
+		if !ok {
+			// Complex expression (function, cast, …) — cannot trace to a base column.
+			return Resolution{Column: col, Status: Unknown}
+		}
+		return ResolveColumn(innerScope, ColumnRefOf(c))
+	}
+
+	// No named match — check for a wildcard that passes all inner columns through.
+	for _, s := range sel.Columns {
+		star, ok := s.(sql.StarSelection)
+		if !ok {
+			continue
+		}
+		if star.Qualifier.IsZero() {
+			// SELECT * — resolve unqualified in the inner scope.
+			return ResolveColumn(innerScope, ColumnRef{Name: col.Name})
+		}
+		// SELECT t.* — resolve as t.name in the inner scope.
+		return ResolveColumn(innerScope, ColumnRef{Qualifier: star.Qualifier, Name: col.Name})
+	}
+
+	return Resolution{Column: col, Status: Unknown}
+}
+
+// selectionOutput returns the output alias and the underlying expression for a
+// SELECT-list item. For a plain ColumnExpression, the output name is the column's
+// bare name. For an AliasedSelection, the output name is the declared alias. For
+// a wildcard or a non-expression item, both return values are zero/nil.
+func selectionOutput(s sql.Selection) (name sql.Ident, expr sql.Expression) {
+	switch x := s.(type) {
+	case sql.AliasedSelection:
+		if e, ok := x.Selection.(sql.Expression); ok {
+			return x.Alias, e
+		}
+	case sql.Expression:
+		if c, ok := x.(sql.ColumnExpression); ok {
+			return ColumnRefOf(c).Name, x
+		}
+	}
+	return sql.Ident{}, nil
 }
 
 // matchQualifier returns the in-scope source a column qualifier denotes: the

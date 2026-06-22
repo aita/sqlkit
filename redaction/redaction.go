@@ -97,6 +97,7 @@ func (m *Redactor) rewriteQuery(q sql.Query) sql.Query {
 }
 
 func (m *Redactor) rewriteSelect(v sql.SelectStmt, scope []analysis.SourceRef) sql.Query {
+	v.With = m.rewriteCTEs(v.With)
 	v.From = m.rewriteSource(v.From)
 	v.Joins = m.rewriteJoins(v.Joins, scope)
 	if len(v.Columns) > 0 {
@@ -152,6 +153,7 @@ func (m *Redactor) rewriteInsert(v sql.InsertStmt, scope []analysis.SourceRef) s
 }
 
 func (m *Redactor) rewriteUpdate(v sql.UpdateStmt, scope []analysis.SourceRef) sql.Query {
+	v.With = m.rewriteCTEs(v.With)
 	// SET targets are the update target's own columns; resolve them against it
 	// alone so a same-named column on a joined table cannot make them ambiguous.
 	v.Sets = m.rewriteAssignments(v.Sets, analysis.TargetScope(v.Table))
@@ -163,6 +165,7 @@ func (m *Redactor) rewriteUpdate(v sql.UpdateStmt, scope []analysis.SourceRef) s
 }
 
 func (m *Redactor) rewriteDelete(v sql.DeleteStmt, scope []analysis.SourceRef) sql.Query {
+	v.With = m.rewriteCTEs(v.With)
 	v.Using = m.rewriteSources(v.Using)
 	v.Joins = m.rewriteJoins(v.Joins, scope)
 	v.Where = m.rewriteExpr(v.Where, scope)
@@ -171,6 +174,7 @@ func (m *Redactor) rewriteDelete(v sql.DeleteStmt, scope []analysis.SourceRef) s
 }
 
 func (m *Redactor) rewriteMerge(v sql.MergeStmt, scope []analysis.SourceRef) sql.Query {
+	v.With = m.rewriteCTEs(v.With)
 	target := analysis.TargetScope(v.Target)
 	v.Using = m.rewriteSource(v.Using)
 	v.On = m.rewriteExpr(v.On, scope)
@@ -240,6 +244,19 @@ func (m *Redactor) rewriteSources(sources []sql.Source) []sql.Source {
 	out := clone(sources)
 	for i := range out {
 		out[i] = m.rewriteSource(out[i])
+	}
+	return out
+}
+
+// rewriteCTEs rewrites each CTE's body query, returning a fresh slice so the
+// input query's backing array is never mutated. An empty slice is returned as-is.
+func (m *Redactor) rewriteCTEs(ctes []sql.CTE) []sql.CTE {
+	if len(ctes) == 0 {
+		return ctes
+	}
+	out := clone(ctes)
+	for i := range out {
+		out[i] = out[i].WithBody(m.rewriteQuery(out[i].Body()))
 	}
 	return out
 }

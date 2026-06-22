@@ -128,6 +128,69 @@ func TestResolveReportsClauseAndAccess(t *testing.T) {
 	}
 }
 
+// TestResolveColumnThroughSubquery checks that a column qualified by a
+// derived-table alias resolves through the subquery's SELECT list to the
+// underlying base column.
+func TestResolveColumnThroughSubquery(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+
+	// (SELECT id, name FROM users) AS t → t.name resolves to users.name
+	sub := sql.Select(sql.Col("id"), sql.Col("name")).From(users)
+	scope := analysis.SourcesOf(
+		sql.Select(sql.Star()).From(sql.Alias(sub, "t")),
+	)
+
+	col := analysis.ColumnRef{Qualifier: sql.NewIdent("t"), Name: sql.NewIdent("name")}
+	got := analysis.ResolveColumn(scope, col)
+	if got.Status != analysis.Resolved {
+		t.Fatalf("Status = %v, want Resolved", got.Status)
+	}
+	if got.Table.String() != "users" {
+		t.Errorf("Table = %q, want %q", got.Table, "users")
+	}
+}
+
+// TestResolveColumnThroughCTE checks that a column qualified by a CTE name
+// resolves through the CTE's SELECT list to the underlying base column.
+func TestResolveColumnThroughCTE(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+
+	// WITH filtered AS (SELECT id, name FROM users) SELECT * FROM filtered
+	// → filtered.name resolves to users.name
+	cte := sql.Select(sql.Col("id"), sql.Col("name")).From(users).CTE("filtered")
+	q := sql.Select(sql.Star()).From(cte).WithCTE(cte)
+	scope := analysis.SourcesOf(q)
+
+	col := analysis.ColumnRef{Qualifier: sql.NewIdent("filtered"), Name: sql.NewIdent("name")}
+	got := analysis.ResolveColumn(scope, col)
+	if got.Status != analysis.Resolved {
+		t.Fatalf("Status = %v, want Resolved", got.Status)
+	}
+	if got.Table.String() != "users" {
+		t.Errorf("Table = %q, want %q", got.Table, "users")
+	}
+}
+
+// TestResolveColumnThroughSubqueryWildcard checks SELECT * in a subquery lets
+// the outer scope resolve columns through it.
+func TestResolveColumnThroughSubqueryWildcard(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+
+	sub := sql.Select(sql.Star()).From(users)
+	scope := analysis.SourcesOf(
+		sql.Select(sql.Star()).From(sql.Alias(sub, "t")),
+	)
+
+	col := analysis.ColumnRef{Qualifier: sql.NewIdent("t"), Name: sql.NewIdent("email")}
+	got := analysis.ResolveColumn(scope, col)
+	if got.Status != analysis.Resolved {
+		t.Fatalf("Status = %v, want Resolved", got.Status)
+	}
+	if got.Table.String() != "users" {
+		t.Errorf("Table = %q, want %q", got.Table, "users")
+	}
+}
+
 // TestResolveSubqueryScope checks each query node resolves against its own
 // sources: an inner reference binds to the subquery's table, not the outer one.
 func TestResolveSubqueryScope(t *testing.T) {
