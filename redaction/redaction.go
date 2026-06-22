@@ -7,19 +7,34 @@
 //
 // It composes the lower layers: analysis.SourcesOf gives each query node its
 // table sources, resolve ties a column reference to its table, and Policy says
-// whether that column is sensitive. Resolution failing safe is the default —
-// an unqualified column that is ambiguous across in-scope tables is masked when
-// any candidate marks it PII — so the redactor errs toward over-masking rather than
-// leaking. Masking is confined to string literals (ValueExpression holding a
-// string): numbers, bind placeholders, and column references are never touched.
+// whether that column is sensitive. A reference that resolves to one table is
+// matched precisely — carrying its schema, so a schema-qualified policy
+// (Columns("public.users.name")) targets a single table and leaves a same-named
+// column on another schema intact. Resolution failing safe is the default for a
+// reference that does not resolve: an unqualified column that is ambiguous across
+// in-scope tables is masked when any candidate marks it PII, so the redactor errs
+// toward over-masking rather than leaking; WithMaskUnresolved(false) turns that
+// off for resolve-only masking. Masking is confined to string literals
+// (ValueExpression holding a string): numbers, bind placeholders, and column
+// references are never touched.
 // A string literal wrapped in an expression — a cast, concatenation, function
 // call, collation, row constructor, or CASE result — is reached too, so a value
 // composed through such a wrapper does not survive into the rendered SQL.
 //
-// Two scopes remain a known gap, both because the public AST cannot rebuild them
-// from outside the sql package: literals inside a WITH (CTE) body, and a
-// sensitive column re-exposed through a derived (subquery) FROM source, are left
-// unmasked.
+// Nested scopes are followed: the body of a WITH (CTE), a derived (subquery) FROM
+// source, and the arms of a set operation are each rewritten in their own scope,
+// and a column re-exposed through a CTE, derived table, or UNION is traced back to
+// its base table so the literal it is compared to is masked. A correlated
+// reference into an enclosing query (a subquery comparing an outer table's column)
+// resolves against the enclosing scope too. The remaining gap is depth: a column
+// reaching a base table through many chained CTE/subquery hops within a single
+// resolution is followed only to a bounded depth, beyond which it goes untraced.
+//
+// A raw SQL fragment — Raw(...) or RawSQL(...) — is opaque text. By default the
+// redactor scans it for the sensitive column names it mentions, so a literal
+// compared to such a fragment is masked, but a literal embedded inside the fragment
+// is out of reach. Configure WithRawParser to lift that limit: the fragment is
+// re-parsed into typed AST, masked like any expression, and substituted back.
 package redaction
 
 import (
@@ -33,12 +48,22 @@ const DefaultMask = "*****"
 // Redactor rewrites the sensitive string literals of a statement. Build one with
 // New and reuse it across statements; it is read-only and safe for concurrent use.
 type Redactor struct {
-	policy Policy
-	mask   string
+	policy         Policy
+	mask           string
+	maskUnresolved bool
+	rawParser      RawParser
 }
 
 // Option configures a Redactor.
 type Option func(*Redactor)
+
+// RawParser parses a SQL statement string into a query AST. Supplied via
+// WithRawParser, it lets the redactor look inside Raw(...) expression fragments and
+// RawSQL(...) statements — parsing them, masking the sensitive literals within, and
+// substituting the typed result — rather than falling back to the identifier-scan
+// heuristic. It is a plain function so the redaction package takes no dependency on
+// a parser: a caller passes the frontend it already has (e.g. postgres.ParseOne).
+type RawParser func(statement string) (sql.Query, error)
 
 // WithMask sets the string a masked literal is replaced with (the default is
 // DefaultMask).
@@ -46,13 +71,40 @@ func WithMask(mask string) Option {
 	return func(m *Redactor) { m.mask = mask }
 }
 
+// WithRawParser configures a parser used to re-parse raw SQL — Raw(...) expression
+// fragments and RawSQL(...) statements — so the literals inside them are masked too.
+// Without it a raw fragment is opaque: the redactor only scans it for sensitive
+// column names to decide whether a literal compared to it should be masked, and
+// cannot reach a sensitive literal embedded in the fragment itself. With it, a
+// fragment that the parser can model is rewritten like any typed expression. A
+// fragment that does not parse, or that the frontend cannot model, is left untouched.
+func WithRawParser(p RawParser) Option {
+	return func(m *Redactor) { m.rawParser = p }
+}
+
+// WithMaskUnresolved controls how a column reference that does not resolve to a
+// single in-scope table is treated — one that is unqualified across several
+// tables (ambiguous), or whose qualifier matches no source (unknown).
+//
+// When true (the default) such a reference is masked if any in-scope table marks
+// a same-named column sensitive: the policy fails safe, erring toward
+// over-masking so a sensitive value never leaks through an imprecise reference.
+// Pass false for precise masking — only a reference that resolves to exactly one
+// table is matched against the policy, and an unresolved one is left intact. Use
+// it when the statements are fully qualified and over-masking is not acceptable.
+func WithMaskUnresolved(mask bool) Option {
+	return func(m *Redactor) { m.maskUnresolved = mask }
+}
+
 // New builds a Redactor for policy, configured by opts. It needs no schema:
 // columns are resolved structurally (by alias and FROM scope) through analyze,
-// and the policy decides sensitivity — an unqualified column that does not
-// resolve to a single table is masked when any in-scope table marks it sensitive.
-// String literals tied to a sensitive column are replaced with the mask value.
+// and the policy decides sensitivity. By default an unqualified column that does
+// not resolve to a single table is masked when any in-scope table marks it
+// sensitive (fail safe); WithMaskUnresolved(false) turns that off for precise,
+// resolve-only masking. String literals tied to a sensitive column are replaced
+// with the mask value.
 func New(policy Policy, opts ...Option) *Redactor {
-	m := &Redactor{policy: policy, mask: DefaultMask}
+	m := &Redactor{policy: policy, mask: DefaultMask, maskUnresolved: true}
 	for _, o := range opts {
 		o(m)
 	}
@@ -67,61 +119,126 @@ func (m *Redactor) Apply(q sql.Query) sql.Query {
 	if q == nil || m.policy == nil {
 		return q
 	}
-	return m.rewriteQuery(q)
+	return m.rewriteQuery(q, nil, nil)
 }
 
-func (m *Redactor) rewriteQuery(q sql.Query) sql.Query {
+// scope is the lexical resolution context while rewriting one query node: the
+// node's own table sources (enriched with every CTE visible here, so a reference
+// through a CTE traces to its base table), the CTEs nested queries inherit, and a
+// link to the enclosing query's scope so a correlated reference can resolve
+// against an outer scope.
+type scope struct {
+	parent    *scope
+	sources   []analysis.SourceRef
+	childCTEs []sql.CTE // CTEs visible to nested queries: ambient CTEs plus this node's WITH
+}
+
+// targetScope wraps an explicit single-source scope (an UPDATE/MERGE target) with
+// no enclosing scope, so a SET target resolves against its table alone.
+func targetScope(sources []analysis.SourceRef) *scope { return &scope{sources: sources} }
+
+// rewriteQuery rewrites q in a fresh context: parent is the enclosing query's
+// context (nil at the top, or for a scope that cannot be correlated), and ambient
+// is the CTEs visible from above. The node's sources are enriched with the ambient
+// CTEs so a reference through one of them resolves.
+func (m *Redactor) rewriteQuery(q sql.Query, parent *scope, ambient []sql.CTE) sql.Query {
 	if q == nil {
 		return nil
 	}
-	scope := analysis.SourcesOf(q)
+	sources := analysis.SourcesOf(q)
+	if len(ambient) > 0 {
+		analysis.EnrichSources(sources, ambient)
+	}
+	sc := &scope{parent: parent, sources: sources, childCTEs: appendCTEs(ambient, withOf(q))}
 	switch v := sql.Unwrap(q).(type) {
 	case sql.SelectStmt:
-		return m.rewriteSelect(v, scope)
+		return m.rewriteSelect(v, sc)
 	case sql.CompoundStmt:
-		v.Left = m.rewriteQuery(v.Left)
-		v.Right = m.rewriteQuery(v.Right)
+		// A set operation's arms are independent subqueries: each shares the
+		// enclosing context and ambient CTEs of the operation itself.
+		v.Left = m.rewriteQuery(v.Left, parent, ambient)
+		v.Right = m.rewriteQuery(v.Right, parent, ambient)
 		return v
 	case sql.InsertStmt:
-		return m.rewriteInsert(v, scope)
+		return m.rewriteInsert(v, sc)
 	case sql.UpdateStmt:
-		return m.rewriteUpdate(v, scope)
+		return m.rewriteUpdate(v, sc)
 	case sql.DeleteStmt:
-		return m.rewriteDelete(v, scope)
+		return m.rewriteDelete(v, sc)
 	case sql.MergeStmt:
-		return m.rewriteMerge(v, scope)
+		return m.rewriteMerge(v, sc)
+	case sql.RawQuery:
+		// An opaque statement. With a parser configured, re-parse it so its literals
+		// are masked; if it does not parse or comes back raw, leave it untouched.
+		if m.rawParser != nil {
+			if parsed, err := m.rawParser(v.SQL()); err == nil && parsed != nil {
+				if _, raw := sql.Unwrap(parsed).(sql.RawQuery); !raw {
+					return m.rewriteQuery(parsed, parent, ambient)
+				}
+			}
+		}
+		return q
 	default:
 		// ValuesQuery and DDL carry no column-bound literals to mask.
 		return q
 	}
 }
 
-func (m *Redactor) rewriteSelect(v sql.SelectStmt, scope []analysis.SourceRef) sql.Query {
-	v.From = m.rewriteSource(v.From)
-	v.Joins = m.rewriteJoins(v.Joins, scope)
+// withOf returns a query node's own WITH clause, or nil for a node that carries none.
+func withOf(q sql.Query) []sql.CTE {
+	switch v := sql.Unwrap(q).(type) {
+	case sql.SelectStmt:
+		return v.With
+	case sql.UpdateStmt:
+		return v.With
+	case sql.DeleteStmt:
+		return v.With
+	case sql.MergeStmt:
+		return v.With
+	default:
+		return nil
+	}
+}
+
+// appendCTEs concatenates two CTE lists into a fresh slice, dropping nils so a
+// node with no WITH does not allocate.
+func appendCTEs(ambient, own []sql.CTE) []sql.CTE {
+	if len(own) == 0 {
+		return ambient
+	}
+	if len(ambient) == 0 {
+		return own
+	}
+	return append(append([]sql.CTE(nil), ambient...), own...)
+}
+
+func (m *Redactor) rewriteSelect(v sql.SelectStmt, sc *scope) sql.Query {
+	v.With = m.rewriteCTEs(v.With, sc)
+	v.From = m.rewriteSource(v.From, sc)
+	v.Joins = m.rewriteJoins(v.Joins, sc)
 	if len(v.Columns) > 0 {
 		cols := clone(v.Columns)
 		for i := range cols {
-			cols[i] = m.rewriteSelection(cols[i], scope)
+			cols[i] = m.rewriteSelection(cols[i], sc)
 		}
 		v.Columns = cols
 	}
-	v.Where = m.rewriteExpr(v.Where, scope)
-	v.Having = m.rewriteExpr(v.Having, scope)
-	v.GroupBy = m.rewriteExprs(v.GroupBy, scope)
-	v.DistinctOn = m.rewriteExprs(v.DistinctOn, scope)
-	v.OrderBy = m.rewriteOrderTerms(v.OrderBy, scope)
+	v.Where = m.rewriteExpr(v.Where, sc)
+	v.Having = m.rewriteExpr(v.Having, sc)
+	v.GroupBy = m.rewriteExprs(v.GroupBy, sc)
+	v.DistinctOn = m.rewriteExprs(v.DistinctOn, sc)
+	v.OrderBy = m.rewriteOrderTerms(v.OrderBy, sc)
 	return v
 }
 
-func (m *Redactor) rewriteInsert(v sql.InsertStmt, scope []analysis.SourceRef) sql.Query {
+func (m *Redactor) rewriteInsert(v sql.InsertStmt, sc *scope) sql.Query {
 	if len(v.Rows) > 0 {
 		// The target's columns are named positionally by v.Columns; mask the value
 		// in each row whose column is sensitive. Without a column list the positions
 		// are the table's own columns, which we cannot name here, so only recurse.
 		sensitive := make([]bool, len(v.Columns))
 		for i, c := range v.Columns {
-			sensitive[i] = m.isSensitive(scope, analysis.NamedColumn(c))
+			sensitive[i] = m.isSensitive(sc, analysis.NamedColumn(c))
 		}
 		rows := make([][]sql.Expression, len(v.Rows))
 		for r, row := range v.Rows {
@@ -130,7 +247,7 @@ func (m *Redactor) rewriteInsert(v sql.InsertStmt, scope []analysis.SourceRef) s
 				if i < len(sensitive) && sensitive[i] {
 					nr[i] = m.maskValue(nr[i])
 				} else {
-					nr[i] = m.rewriteExpr(nr[i], scope)
+					nr[i] = m.rewriteExpr(nr[i], sc)
 				}
 			}
 			rows[r] = nr
@@ -138,67 +255,71 @@ func (m *Redactor) rewriteInsert(v sql.InsertStmt, scope []analysis.SourceRef) s
 		v.Rows = rows
 	}
 	if v.Select != nil {
-		v.Select = m.rewriteQuery(v.Select)
+		v.Select = m.rewriteQuery(v.Select, sc.parent, sc.childCTEs)
 	}
 	if v.Conflict != nil {
 		c := *v.Conflict
-		c.Sets = m.rewriteAssignments(c.Sets, scope)
-		c.TargetExprs = m.rewriteExprs(c.TargetExprs, scope)
-		c.Where = m.rewriteExpr(c.Where, scope)
+		c.Sets = m.rewriteAssignments(c.Sets, sc)
+		c.TargetExprs = m.rewriteExprs(c.TargetExprs, sc)
+		c.Where = m.rewriteExpr(c.Where, sc)
 		v.Conflict = &c
 	}
-	v.Returning = m.rewriteSelections(v.Returning, scope)
+	v.Returning = m.rewriteSelections(v.Returning, sc)
 	return v
 }
 
-func (m *Redactor) rewriteUpdate(v sql.UpdateStmt, scope []analysis.SourceRef) sql.Query {
+func (m *Redactor) rewriteUpdate(v sql.UpdateStmt, sc *scope) sql.Query {
+	v.With = m.rewriteCTEs(v.With, sc)
 	// SET targets are the update target's own columns; resolve them against it
 	// alone so a same-named column on a joined table cannot make them ambiguous.
-	v.Sets = m.rewriteAssignments(v.Sets, analysis.TargetScope(v.Table))
-	v.From = m.rewriteSources(v.From)
-	v.Joins = m.rewriteJoins(v.Joins, scope)
-	v.Where = m.rewriteExpr(v.Where, scope)
-	v.Returning = m.rewriteSelections(v.Returning, scope)
+	target := targetScope(analysis.TargetScope(v.Table))
+	v.Sets = m.rewriteAssignments(v.Sets, target)
+	v.From = m.rewriteSources(v.From, sc)
+	v.Joins = m.rewriteJoins(v.Joins, sc)
+	v.Where = m.rewriteExpr(v.Where, sc)
+	v.Returning = m.rewriteSelections(v.Returning, sc)
 	return v
 }
 
-func (m *Redactor) rewriteDelete(v sql.DeleteStmt, scope []analysis.SourceRef) sql.Query {
-	v.Using = m.rewriteSources(v.Using)
-	v.Joins = m.rewriteJoins(v.Joins, scope)
-	v.Where = m.rewriteExpr(v.Where, scope)
-	v.Returning = m.rewriteSelections(v.Returning, scope)
+func (m *Redactor) rewriteDelete(v sql.DeleteStmt, sc *scope) sql.Query {
+	v.With = m.rewriteCTEs(v.With, sc)
+	v.Using = m.rewriteSources(v.Using, sc)
+	v.Joins = m.rewriteJoins(v.Joins, sc)
+	v.Where = m.rewriteExpr(v.Where, sc)
+	v.Returning = m.rewriteSelections(v.Returning, sc)
 	return v
 }
 
-func (m *Redactor) rewriteMerge(v sql.MergeStmt, scope []analysis.SourceRef) sql.Query {
-	target := analysis.TargetScope(v.Target)
-	v.Using = m.rewriteSource(v.Using)
-	v.On = m.rewriteExpr(v.On, scope)
+func (m *Redactor) rewriteMerge(v sql.MergeStmt, sc *scope) sql.Query {
+	v.With = m.rewriteCTEs(v.With, sc)
+	target := targetScope(analysis.TargetScope(v.Target))
+	v.Using = m.rewriteSource(v.Using, sc)
+	v.On = m.rewriteExpr(v.On, sc)
 	if len(v.When) > 0 {
 		whens := clone(v.When)
 		for i := range whens {
-			whens[i].Condition = m.rewriteExpr(whens[i].Condition, scope)
+			whens[i].Condition = m.rewriteExpr(whens[i].Condition, sc)
 			whens[i].Sets = m.rewriteAssignments(whens[i].Sets, target)
 			whens[i].InsertValues = m.rewriteInsertValues(whens[i].InsertColumns, whens[i].InsertValues, target)
 		}
 		v.When = whens
 	}
-	v.Returning = m.rewriteSelections(v.Returning, scope)
+	v.Returning = m.rewriteSelections(v.Returning, sc)
 	return v
 }
 
 // rewriteInsertValues masks the values whose paired InsertColumns are sensitive
 // (the MERGE ... WHEN NOT MATCHED THEN INSERT form), recursing through the rest.
-func (m *Redactor) rewriteInsertValues(columns []sql.Ident, values []sql.Expression, scope []analysis.SourceRef) []sql.Expression {
+func (m *Redactor) rewriteInsertValues(columns []sql.Ident, values []sql.Expression, sc *scope) []sql.Expression {
 	if len(values) == 0 {
 		return values
 	}
 	out := clone(values)
 	for i := range out {
-		if i < len(columns) && m.isSensitive(scope, analysis.NamedColumn(columns[i])) {
+		if i < len(columns) && m.isSensitive(sc, analysis.NamedColumn(columns[i])) {
 			out[i] = m.maskValue(out[i])
 		} else {
-			out[i] = m.rewriteExpr(out[i], scope)
+			out[i] = m.rewriteExpr(out[i], sc)
 		}
 	}
 	return out
@@ -206,65 +327,88 @@ func (m *Redactor) rewriteInsertValues(columns []sql.Ident, values []sql.Express
 
 // rewriteAssignments masks the value of each assignment whose target column is
 // sensitive, recursing through targets and values otherwise.
-func (m *Redactor) rewriteAssignments(as []sql.Assignment, scope []analysis.SourceRef) []sql.Assignment {
+func (m *Redactor) rewriteAssignments(as []sql.Assignment, sc *scope) []sql.Assignment {
 	if len(as) == 0 {
 		return as
 	}
 	out := clone(as)
 	for i := range out {
-		out[i].Target = m.rewriteExpr(out[i].Target, scope)
-		out[i].Value = m.rewriteExpr(out[i].Value, scope)
-		if !out[i].Column.IsZero() && m.isSensitive(scope, analysis.NamedColumn(out[i].Column)) {
+		out[i].Target = m.rewriteExpr(out[i].Target, sc)
+		out[i].Value = m.rewriteExpr(out[i].Value, sc)
+		if !out[i].Column.IsZero() && m.isSensitive(sc, analysis.NamedColumn(out[i].Column)) {
 			out[i].Value = m.maskValue(out[i].Value)
 		}
 	}
 	return out
 }
 
-func (m *Redactor) rewriteJoins(joins []sql.JoinClause, scope []analysis.SourceRef) []sql.JoinClause {
+func (m *Redactor) rewriteJoins(joins []sql.JoinClause, sc *scope) []sql.JoinClause {
 	if len(joins) == 0 {
 		return joins
 	}
 	out := clone(joins)
 	for i := range out {
-		out[i].Source = m.rewriteSource(out[i].Source)
-		out[i].On = m.rewriteExpr(out[i].On, scope)
+		out[i].Source = m.rewriteSource(out[i].Source, sc)
+		out[i].On = m.rewriteExpr(out[i].On, sc)
 	}
 	return out
 }
 
-func (m *Redactor) rewriteSources(sources []sql.Source) []sql.Source {
+func (m *Redactor) rewriteSources(sources []sql.Source, sc *scope) []sql.Source {
 	if len(sources) == 0 {
 		return sources
 	}
 	out := clone(sources)
 	for i := range out {
-		out[i] = m.rewriteSource(out[i])
+		out[i] = m.rewriteSource(out[i], sc)
+	}
+	return out
+}
+
+// rewriteCTEs rewrites each CTE's body query, returning a fresh slice so the input
+// query's backing array is never mutated. A CTE body is a scope of its own — it
+// cannot reference the WITH owner's FROM aliases — so it is rewritten under the
+// owner's enclosing context (sc.parent), with the sibling and ambient CTEs
+// (sc.childCTEs) visible so a CTE that builds on an earlier one resolves through it.
+func (m *Redactor) rewriteCTEs(ctes []sql.CTE, sc *scope) []sql.CTE {
+	if len(ctes) == 0 {
+		return ctes
+	}
+	out := clone(ctes)
+	for i := range out {
+		out[i] = out[i].WithBody(m.rewriteQuery(out[i].Body(), sc.parent, sc.childCTEs))
 	}
 	return out
 }
 
 // rewriteSource rewrites a subquery source's inner query; a base table or VALUES
-// source is returned unchanged.
-func (m *Redactor) rewriteSource(src sql.Source) sql.Source {
+// source is returned unchanged. A plain FROM/JOIN subquery is not correlated to
+// the other sources of its own query, so it is rewritten under the enclosing scope
+// (sc.parent); a LATERAL subquery may reference the sources to its left, so it is
+// rewritten under sc itself. Either way the ambient CTEs (sc.childCTEs) are visible.
+func (m *Redactor) rewriteSource(src sql.Source, sc *scope) sql.Source {
 	if src == nil {
 		return nil
 	}
 	e := src.SQLSource()
 	if e.Query != nil {
-		e.Query = m.rewriteQuery(e.Query)
+		parent := sc.parent
+		if e.Lateral {
+			parent = sc
+		}
+		e.Query = m.rewriteQuery(e.Query, parent, sc.childCTEs)
 		return e
 	}
 	return src
 }
 
-func (m *Redactor) rewriteSelections(ss []sql.Selection, scope []analysis.SourceRef) []sql.Selection {
+func (m *Redactor) rewriteSelections(ss []sql.Selection, sc *scope) []sql.Selection {
 	if len(ss) == 0 {
 		return ss
 	}
 	out := clone(ss)
 	for i := range out {
-		out[i] = m.rewriteSelection(out[i], scope)
+		out[i] = m.rewriteSelection(out[i], sc)
 	}
 	return out
 }
@@ -272,13 +416,13 @@ func (m *Redactor) rewriteSelections(ss []sql.Selection, scope []analysis.Source
 // rewriteSelection rewrites a SELECT-list item, looking through an AS alias and
 // recursing into any subquery the item embeds. A non-expression item (a "*") is
 // unchanged.
-func (m *Redactor) rewriteSelection(s sql.Selection, scope []analysis.SourceRef) sql.Selection {
+func (m *Redactor) rewriteSelection(s sql.Selection, sc *scope) sql.Selection {
 	switch x := s.(type) {
 	case sql.AliasedSelection:
-		x.Selection = m.rewriteSelection(x.Selection, scope)
+		x.Selection = m.rewriteSelection(x.Selection, sc)
 		return x
 	case sql.Expression:
-		if rewritten, ok := m.rewriteExpr(x, scope).(sql.Selection); ok {
+		if rewritten, ok := m.rewriteExpr(x, sc).(sql.Selection); ok {
 			return rewritten
 		}
 		return s
@@ -287,13 +431,13 @@ func (m *Redactor) rewriteSelection(s sql.Selection, scope []analysis.SourceRef)
 	}
 }
 
-func (m *Redactor) rewriteOrderTerms(terms []sql.OrderTerm, scope []analysis.SourceRef) []sql.OrderTerm {
+func (m *Redactor) rewriteOrderTerms(terms []sql.OrderTerm, sc *scope) []sql.OrderTerm {
 	if len(terms) == 0 {
 		return terms
 	}
 	out := clone(terms)
 	for i := range out {
-		out[i].Expr = m.rewriteExpr(out[i].Expr, scope)
+		out[i].Expr = m.rewriteExpr(out[i].Expr, sc)
 	}
 	return out
 }

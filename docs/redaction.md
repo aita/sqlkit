@@ -8,9 +8,12 @@ rewrites the statement's AST — across `SELECT`, `INSERT`, `UPDATE`, `DELETE`,
 and `MERGE` — replacing every string literal compared or assigned to a PII
 column with a fixed mask, while leaving the statement's shape and every
 non-sensitive value intact (numbers, bind placeholders, and column references
-are never touched). It does not mutate the input, and resolution fails safe: an
-unqualified column that is ambiguous across in-scope tables is masked when any
-candidate marks it PII.
+are never touched). It does not mutate the input. A column reference that
+resolves to exactly one table is matched precisely; one that does not resolve
+fails safe by default — an unqualified column that is ambiguous across in-scope
+tables is masked when any candidate marks it PII —
+[`WithMaskUnresolved(false)`](https://pkg.go.dev/github.com/aita/sqlkit/redaction#WithMaskUnresolved)
+turns that off for resolve-only masking.
 
 A [`Policy`](https://pkg.go.dev/github.com/aita/sqlkit/redaction#Policy) names the
 sensitive columns. Build one from an explicit list (no
@@ -19,13 +22,25 @@ schema declares its own PII — and
 [`Combine`](https://pkg.go.dev/github.com/aita/sqlkit/redaction#Combine) merges several:
 
 ```go
-// Explicit list: "table.column" (or "schema.table.column"), no schema needed.
+// Explicit list: every part accepts glob wildcards (* ? [..]).
+//   "users.name"          a name column on a users table in any schema
+//   "public.users.name"   exactly public.users.name — other schemas are left intact
+//   "users.*"             every column of users
+//   "public.*.email"      an email column on any table in the public schema
 m := redaction.New(redaction.Columns("users.name", "users.ssn"))
 
 q := sql.Select(sql.Star()).From(users).
     Where(sql.Eq(sql.Col("name"), sql.Val("taro")))
 text, args, _ := m.Apply(q).ToSQL(sql.PostgreSQLDialect{})
 // SELECT * FROM "users" WHERE ("name" = $1)   args: [*****]
+
+// Precise targeting: a fully qualified spec masks only its schema's table, and
+// WithMaskUnresolved(false) limits masking to references that resolve to exactly
+// one table (an ambiguous unqualified column is left intact).
+m = redaction.New(
+    redaction.Columns("public.users.name"),
+    redaction.WithMaskUnresolved(false),
+)
 
 // Convention-driven: a predicate receives each column's table, column, and
 // comment and reports whether it is PII. meta.Metadata can be hand-built or read

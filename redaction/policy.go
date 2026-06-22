@@ -37,35 +37,44 @@ func (s columnSet) add(table, column string) {
 }
 
 // Columns is a Policy of named columns. Each spec is "table.column" or
-// "schema.table.column" (the schema is accepted but ignored, since a column is
-// matched by table and column name), and both the table and column halves accept
-// glob wildcards (* ? [..]), matched case-insensitively:
+// "schema.table.column", and every part accepts glob wildcards (* ? [..]),
+// matched case-insensitively:
 //
-//	Columns("users.email")    // exactly users.email
-//	Columns("users.*")        // every column of users
-//	Columns("*.email")        // an email column on any table
-//	Columns("*.*_token")      // any column ending in _token, any table
+//	Columns("users.email")         // an email column on a users table in any schema
+//	Columns("public.users.email")  // exactly public.users.email — other schemas are left intact
+//	Columns("users.*")             // every column of users
+//	Columns("*.email")             // an email column on any table
+//	Columns("public.*.email")      // an email column on any table in the public schema
 //
+// A spec without a schema part stays schema-insensitive — it matches the named
+// table in any schema, so existing two-part specs behave as before. A spec that
+// names a schema constrains matching to it, so a fully qualified spec with no
+// wildcards is an exact match on all three parts: a precise, single-table target.
 // A spec without a table part is ignored. It needs no metadata.
 func Columns(specs ...string) Policy {
 	var ps patternPolicy
 	for _, spec := range specs {
-		if table, column, ok := splitTableColumn(spec); ok {
-			ps = append(ps, piiPattern{table: table, column: column})
+		if schema, table, column, ok := splitSpec(spec); ok {
+			ps = append(ps, piiPattern{schema: schema, table: table, column: column})
 		}
 	}
 	return ps
 }
 
-// piiPattern is one Columns spec: a table glob and a column glob.
-type piiPattern struct{ table, column string }
+// piiPattern is one Columns spec: an optional schema glob, a table glob, and a
+// column glob. An empty schema is unconstrained — it matches any schema — so a
+// two-part spec stays schema-insensitive.
+type piiPattern struct{ schema, table, column string }
 
 // patternPolicy is the Policy backing Columns: a column is sensitive when its
-// table and name match any pattern's globs.
+// schema (when the pattern names one), table, and name match a pattern's globs.
 type patternPolicy []piiPattern
 
-func (ps patternPolicy) IsSensitive(_, table, column string) bool {
+func (ps patternPolicy) IsSensitive(schema, table, column string) bool {
 	for _, p := range ps {
+		if p.schema != "" && !globMatch(p.schema, schema) {
+			continue
+		}
 		if globMatch(p.table, table) && globMatch(p.column, column) {
 			return true
 		}
@@ -121,20 +130,25 @@ func (c combined) IsSensitive(schema, table, column string) bool {
 	return false
 }
 
-// splitTableColumn splits a "table.column" or "schema.table.column" spec into its
-// table and column parts (the last two dotted segments), reporting ok=false when
-// it has no table part.
-func splitTableColumn(spec string) (table, column string, ok bool) {
+// splitSpec splits a "table.column" or "schema.table.column" spec into its
+// (optional) schema, table, and column parts — the last three dotted segments,
+// with the schema empty when only two are given. It reports ok=false when there
+// is no table part. A spec that names a schema constrains matching to it; a spec
+// without one stays schema-insensitive.
+func splitSpec(spec string) (schema, table, column string, ok bool) {
 	parts := strings.Split(strings.TrimSpace(spec), ".")
 	if len(parts) < 2 {
-		return "", "", false
+		return "", "", "", false
 	}
-	table = parts[len(parts)-2]
 	column = parts[len(parts)-1]
-	if table == "" || column == "" {
-		return "", "", false
+	table = parts[len(parts)-2]
+	if len(parts) >= 3 {
+		schema = parts[len(parts)-3]
 	}
-	return table, column, true
+	if table == "" || column == "" {
+		return "", "", "", false
+	}
+	return schema, table, column, true
 }
 
 // fold normalizes an identifier for case-insensitive matching.

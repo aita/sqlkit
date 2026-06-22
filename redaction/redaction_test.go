@@ -198,6 +198,111 @@ func TestColumnsGlob(t *testing.T) {
 	}
 }
 
+// TestSchemaPreciseColumns covers schema-qualified specs: a fully qualified spec
+// targets exactly one schema's table, leaving a same-named column on another
+// schema intact, while a two-part spec stays schema-insensitive.
+func TestSchemaPreciseColumns(t *testing.T) {
+	publicUsers := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	salesUsers := sql.Table{Schema: sql.NewIdent("sales"), Name: sql.NewIdent("users")}
+	bareUsers := sql.Table{Name: sql.NewIdent("users")}
+
+	tests := []struct {
+		name string
+		spec string
+		q    sql.Query
+		want []any
+	}{
+		{
+			name: "fully qualified spec masks its schema's table",
+			spec: "public.users.name",
+			q:    sql.Select(sql.Star()).From(publicUsers).Where(sql.Eq(sql.Col("name"), sql.Val("taro"))),
+			want: []any{"*****"},
+		},
+		{
+			name: "fully qualified spec leaves another schema intact",
+			spec: "public.users.name",
+			q:    sql.Select(sql.Star()).From(salesUsers).Where(sql.Eq(sql.Col("name"), sql.Val("taro"))),
+			want: []any{"taro"},
+		},
+		{
+			name: "two-part spec stays schema-insensitive",
+			spec: "users.name",
+			q:    sql.Select(sql.Star()).From(salesUsers).Where(sql.Eq(sql.Col("name"), sql.Val("taro"))),
+			want: []any{"*****"},
+		},
+		{
+			name: "schema-qualified spec does not match a bare table reference",
+			spec: "public.users.name",
+			q:    sql.Select(sql.Star()).From(bareUsers).Where(sql.Eq(sql.Col("name"), sql.Val("taro"))),
+			want: []any{"taro"},
+		},
+		{
+			name: "schema glob masks across tables in a schema",
+			spec: "public.*.email",
+			q:    sql.Select(sql.Star()).From(publicUsers).Where(sql.Eq(sql.Col("email"), sql.Val("x@y.z"))),
+			want: []any{"*****"},
+		},
+		{
+			name: "schema glob does not reach another schema",
+			spec: "public.*.email",
+			q:    sql.Select(sql.Star()).From(salesUsers).Where(sql.Eq(sql.Col("email"), sql.Val("x@y.z"))),
+			want: []any{"x@y.z"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := redaction.New(redaction.Columns(tt.spec))
+			if got := args(t, m.Apply(tt.q)); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("args = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestWithMaskUnresolved covers the precise-masking option: by default an
+// ambiguous unqualified reference fails safe and is masked, but
+// WithMaskUnresolved(false) leaves it — and a qualifier matching no source —
+// intact, masking only references that resolve to exactly one table.
+func TestWithMaskUnresolved(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	accounts := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("accounts")}
+
+	// SELECT * FROM users JOIN accounts ON ... WHERE name = 'taro'
+	// "name" is unqualified across two tables, so it is Ambiguous.
+	ambiguous := func() sql.Query {
+		return sql.Select(sql.Star()).From(users).
+			Join(accounts, sql.Eq(sql.Col("users.id"), sql.Col("accounts.id"))).
+			Where(sql.Eq(sql.Col("name"), sql.Val("taro")))
+	}
+
+	t.Run("default fails safe and masks", func(t *testing.T) {
+		m := redaction.New(redaction.Columns("users.name"))
+		if got := args(t, m.Apply(ambiguous())); !reflect.DeepEqual(got, []any{"*****"}) {
+			t.Errorf("args = %v, want [*****]", got)
+		}
+	})
+
+	t.Run("precise mode leaves ambiguous intact", func(t *testing.T) {
+		m := redaction.New(redaction.Columns("users.name"), redaction.WithMaskUnresolved(false))
+		if got := args(t, m.Apply(ambiguous())); !reflect.DeepEqual(got, []any{"taro"}) {
+			t.Errorf("args = %v, want [taro]", got)
+		}
+	})
+
+	t.Run("precise mode still masks a resolved reference", func(t *testing.T) {
+		m := redaction.New(redaction.Columns("users.name"), redaction.WithMaskUnresolved(false))
+		// "users.name" resolves to exactly one table, so it is masked even in
+		// precise mode.
+		q := sql.Select(sql.Star()).From(users).
+			Join(accounts, sql.Eq(sql.Col("users.id"), sql.Col("accounts.id"))).
+			Where(sql.Eq(sql.Col("users.name"), sql.Val("taro")))
+		if got := args(t, m.Apply(q)); !reflect.DeepEqual(got, []any{"*****"}) {
+			t.Errorf("args = %v, want [*****]", got)
+		}
+	})
+}
+
 func TestWithMaskCustomValue(t *testing.T) {
 	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
 	m := redaction.New(redaction.Columns("users.name"), redaction.WithMask("REDACTED"))
@@ -496,6 +601,236 @@ func TestRewriteExprNested(t *testing.T) {
 				t.Errorf("masked args = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestApplyCTEBody checks that sensitive literals inside a CTE's defining query
+// are masked — the CTE body is its own scope and is rewritten recursively.
+func TestApplyCTEBody(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	m := redaction.New(redaction.Columns("users.name"))
+
+	// WITH filtered AS (SELECT * FROM users WHERE name = 'taro') SELECT * FROM filtered
+	cte := sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Val("taro"))).CTE("filtered")
+	q := sql.Select(sql.Star()).From(cte).WithCTE(cte)
+
+	if got := args(t, m.Apply(q)); !reflect.DeepEqual(got, []any{"*****"}) {
+		t.Errorf("CTE body masked args = %v, want [*****]", got)
+	}
+}
+
+// TestApplyCTEOuterRef checks that a sensitive literal in an outer query's WHERE
+// clause, qualified by a CTE alias, is masked by tracing the column through the
+// CTE's SELECT list to the underlying base table.
+func TestApplyCTEOuterRef(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	m := redaction.New(redaction.Columns("users.name"))
+
+	// WITH filtered AS (SELECT id, name FROM users)
+	// SELECT * FROM filtered WHERE filtered.name = 'taro'
+	cte := sql.Select(sql.Col("id"), sql.Col("name")).From(users).CTE("filtered")
+	q := sql.Select(sql.Star()).From(cte).
+		Where(sql.Eq(cte.Col("name"), sql.Val("taro"))).
+		WithCTE(cte)
+
+	if got := args(t, m.Apply(q)); !reflect.DeepEqual(got, []any{"*****"}) {
+		t.Errorf("CTE outer ref masked args = %v, want [*****]", got)
+	}
+}
+
+// TestApplySubqueryDerivedRef checks that a sensitive literal in an outer query's
+// WHERE clause, qualified by a derived-table alias, is masked by tracing the
+// column through the subquery's SELECT list.
+func TestApplySubqueryDerivedRef(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	m := redaction.New(redaction.Columns("users.name"))
+
+	// SELECT * FROM (SELECT id, name FROM users) AS t WHERE t.name = 'taro'
+	sub := sql.Select(sql.Col("id"), sql.Col("name")).From(users)
+	q := sql.Select(sql.Star()).
+		From(sql.Alias(sub, "t")).
+		Where(sql.Eq(sql.Col("t.name"), sql.Val("taro")))
+
+	if got := args(t, m.Apply(q)); !reflect.DeepEqual(got, []any{"*****"}) {
+		t.Errorf("derived-table ref masked args = %v, want [*****]", got)
+	}
+}
+
+// TestApplySubqueryWildcardRef checks that SELECT * in a subquery still allows
+// the outer query to resolve a sensitive column through it.
+func TestApplySubqueryWildcardRef(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	m := redaction.New(redaction.Columns("users.name"))
+
+	// SELECT * FROM (SELECT * FROM users) AS t WHERE t.name = 'taro'
+	sub := sql.Select(sql.Star()).From(users)
+	q := sql.Select(sql.Star()).
+		From(sql.Alias(sub, "t")).
+		Where(sql.Eq(sql.Col("t.name"), sql.Val("taro")))
+
+	if got := args(t, m.Apply(q)); !reflect.DeepEqual(got, []any{"*****"}) {
+		t.Errorf("wildcard subquery ref masked args = %v, want [*****]", got)
+	}
+}
+
+// TestApplyNestedScopeNoLeak pins the nested-scope cases that once leaked a
+// sensitive literal: a CTE referencing an earlier CTE, a correlated subquery
+// comparing an outer table's column, and an outer reference to a column projected
+// through a UNION-bodied CTE. Each value must be masked, while a non-sensitive
+// value in the same shape is left intact.
+func TestApplyNestedScopeNoLeak(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	orders := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("orders")}
+	m := redaction.New(redaction.Columns("users.name"))
+
+	tests := []struct {
+		name string
+		q    sql.Query
+		want []any
+	}{
+		{
+			// WITH a AS (SELECT id, name FROM users),
+			//      b AS (SELECT id FROM a WHERE a.name = 'taro')
+			// SELECT * FROM b
+			name: "cte referencing an earlier cte",
+			q: func() sql.Query {
+				a := sql.Select(sql.Col("id"), sql.Col("name")).From(users).CTE("a")
+				b := sql.Select(sql.Col("id")).From(a).Where(sql.Eq(a.Col("name"), sql.Val("taro"))).CTE("b")
+				return sql.Select(sql.Star()).From(b).WithCTE(a, b)
+			}(),
+			want: []any{"*****"},
+		},
+		{
+			// SELECT * FROM users u WHERE EXISTS (
+			//   SELECT id FROM orders o WHERE u.name = 'taro')
+			name: "correlated subquery references outer column",
+			q: func() sql.Query {
+				inner := sql.Select(sql.Col("id")).From(sql.SourceAlias(orders, "o")).
+					Where(sql.Eq(sql.Col("u.name"), sql.Val("taro")))
+				return sql.Select(sql.Star()).From(sql.SourceAlias(users, "u")).Where(sql.Exists(inner))
+			}(),
+			want: []any{"*****"},
+		},
+		{
+			// WITH u2 AS (SELECT name FROM users UNION SELECT name FROM users)
+			// SELECT * FROM u2 WHERE u2.name = 'taro'
+			name: "outer ref to a union-bodied cte column",
+			q: func() sql.Query {
+				uni := sql.Select(sql.Col("name")).From(users).
+					Union(sql.Select(sql.Col("name")).From(users)).CTE("u2")
+				return sql.Select(sql.Star()).From(uni).Where(sql.Eq(uni.Col("name"), sql.Val("taro"))).WithCTE(uni)
+			}(),
+			want: []any{"*****"},
+		},
+		{
+			// Same correlated shape on a non-sensitive column must be left intact.
+			name: "correlated non-sensitive column untouched",
+			q: func() sql.Query {
+				inner := sql.Select(sql.Col("id")).From(sql.SourceAlias(orders, "o")).
+					Where(sql.Eq(sql.Col("u.email"), sql.Val("x@y.z")))
+				return sql.Select(sql.Star()).From(sql.SourceAlias(users, "u")).Where(sql.Exists(inner))
+			}(),
+			want: []any{"x@y.z"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := args(t, m.Apply(tt.q)); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("masked args = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestApplyWrappedAndRawColumnRefs pins masking when the sensitive column is not a
+// bare reference on the predicate side: wrapped in a function/cast/concat, named in
+// a raw SQL fragment, reached through a two-hop CTE chain, renamed by a projection,
+// or referenced from a LATERAL subquery. A recursive CTE must terminate.
+func TestApplyWrappedAndRawColumnRefs(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	orders := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("orders")}
+	m := redaction.New(redaction.Columns("users.name"))
+
+	tests := []struct {
+		name string
+		q    sql.Query
+		want []any
+	}{
+		{
+			name: "function-wrapped column in predicate",
+			q:    sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Func("lower", sql.Col("name")), sql.Val("taro"))),
+			want: []any{"*****"},
+		},
+		{
+			name: "concat-wrapped column in predicate",
+			q:    sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Concat(sql.Col("name"), sql.Val("!")), sql.Val("taro!"))),
+			// The "!" is a constant on the column side, not a value compared to the
+			// column, so it is left intact; only the compared literal is masked.
+			want: []any{"!", "*****"},
+		},
+		{
+			name: "raw fragment naming the column",
+			q:    sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Raw("lower(name)"), sql.Val("taro"))),
+			want: []any{"*****"},
+		},
+		{
+			name: "raw fragment with qualified column",
+			q:    sql.Select(sql.Star()).From(sql.SourceAlias(users, "u")).Where(sql.Eq(sql.Raw("u.name"), sql.Val("taro"))),
+			want: []any{"*****"},
+		},
+		{
+			name: "two-hop cte chain",
+			q: func() sql.Query {
+				a := sql.Select(sql.Col("id"), sql.Col("name")).From(users).CTE("a")
+				b := sql.Select(sql.Col("id"), sql.Col("name")).From(a).CTE("b")
+				return sql.Select(sql.Star()).From(b).Where(sql.Eq(b.Col("name"), sql.Val("taro"))).WithCTE(a, b)
+			}(),
+			want: []any{"*****"},
+		},
+		{
+			name: "projection renames the column",
+			q: func() sql.Query {
+				sub := sql.Select(sql.As(sql.Col("name"), "nm")).From(users)
+				return sql.Select(sql.Star()).From(sql.Alias(sub, "t")).Where(sql.Eq(sql.Col("t.nm"), sql.Val("taro")))
+			}(),
+			want: []any{"*****"},
+		},
+		{
+			name: "lateral subquery references outer column",
+			q: func() sql.Query {
+				lat := sql.Select(sql.Col("id")).From(sql.SourceAlias(orders, "o")).
+					Where(sql.Eq(sql.Col("u.name"), sql.Val("taro")))
+				return sql.Select(sql.Star()).From(sql.SourceAlias(users, "u")).
+					CrossJoin(sql.Lateral(sql.Alias(lat, "t")))
+			}(),
+			want: []any{"*****"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := args(t, m.Apply(tt.q)); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("masked args = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestApplyRecursiveCTETerminates pins that resolving through a recursive CTE
+// (whose body references itself) terminates rather than spinning.
+func TestApplyRecursiveCTETerminates(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	m := redaction.New(redaction.Columns("users.name"))
+
+	base := sql.Select(sql.Col("id"), sql.Col("name")).From(users)
+	rec := base.UnionAll(sql.Select(sql.Col("id"), sql.Col("name")).From(sql.Tbl("tree"))).
+		CTE("tree", sql.Recursive())
+	q := sql.Select(sql.Star()).From(rec).Where(sql.Eq(rec.Col("name"), sql.Val("taro"))).WithCTE(rec)
+
+	// Must complete; the literal compared to the recursive CTE's name is masked.
+	if got := args(t, m.Apply(q)); !reflect.DeepEqual(got, []any{"*****"}) {
+		t.Errorf("recursive cte masked args = %v, want [*****]", got)
 	}
 }
 
