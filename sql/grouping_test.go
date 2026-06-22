@@ -25,3 +25,23 @@ func TestGroupingCompile(t *testing.T) {
 		}
 	}
 }
+
+// TestGroupingSetsEmptyRejected pins that GROUPING SETS with zero sets is rejected
+// rather than compiled to the invalid "GROUPING SETS ()". A single empty (nil) set
+// is still valid — it is the grand total "()" — so only zero sets is an error.
+func TestGroupingSetsEmptyRejected(t *testing.T) {
+	q := Select(Col("a")).From(Table{Name: NewIdent("t")}).GroupBy(GroupingSets())
+	if _, _, err := q.ToSQL(PostgreSQLDialect{}); err == nil {
+		t.Fatal("ToSQL() error = nil, want an error for GROUPING SETS with no sets")
+	}
+
+	// A single empty set remains valid: it renders as the grand-total "()".
+	q = Select(Col("a")).From(Table{Name: NewIdent("t")}).GroupBy(GroupingSets(nil))
+	got, _, err := q.ToSQL(PostgreSQLDialect{})
+	if err != nil {
+		t.Fatalf("ToSQL() error = %v, want a valid grand-total grouping set", err)
+	}
+	if want := `SELECT "a" FROM "t" GROUP BY GROUPING SETS (())`; got != want {
+		t.Errorf("ToSQL() = %q, want %q", got, want)
+	}
+}
