@@ -1,41 +1,14 @@
 package autogen
 
 import (
-	"fmt"
-	"go/format"
 	"strings"
 	"testing"
 
 	"github.com/aita/sqlkit/decl"
+	"github.com/aita/sqlkit/internal/testutil"
 	"github.com/aita/sqlkit/meta"
 	"github.com/aita/sqlkit/sql"
 )
-
-// assertValidGo wraps a rendered body in a migration scaffold and gofmts it, so
-// a malformed op.* call is caught as a syntax error.
-func assertValidGo(t *testing.T, body string) {
-	t.Helper()
-	src := fmt.Sprintf(`package migrations
-
-import (
-	"github.com/aita/sqlkit/migrate"
-	"github.com/aita/sqlkit/sql"
-	"github.com/aita/sqlkit/decl"
-)
-
-var _ = func(op *migrate.Operator) {
-%s
-}
-
-var (
-	_ = sql.Raw
-	_ = decl.BigInt
-)
-`, body)
-	if _, err := format.Source([]byte(src)); err != nil {
-		t.Fatalf("rendered body is not valid Go: %v\n--- src ---\n%s", err, src)
-	}
-}
 
 func mustDialect(t *testing.T, name string) sql.Dialect {
 	t.Helper()
@@ -86,8 +59,8 @@ func TestRenderAddTable(t *testing.T) {
 	}
 
 	res := render(t, build(t, source()), build(t, target()), "postgres", Renames{})
-	assertValidGo(t, res.Up)
-	assertValidGo(t, res.Down)
+	testutil.AssertValidMigrationBody(t, res.Up)
+	testutil.AssertValidMigrationBody(t, res.Down)
 	wantUp := []string{
 		`op.CreateTable("posts",`,
 		`decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default())`,
@@ -279,8 +252,8 @@ func TestRenderIndexesAsVariadic(t *testing.T) {
 		decl.Index("author"),
 	)
 	res := render(t, build(t, source), build(t, target), "postgres", Renames{})
-	assertValidGo(t, res.Up)
-	assertValidGo(t, res.Down)
+	testutil.AssertValidMigrationBody(t, res.Up)
+	testutil.AssertValidMigrationBody(t, res.Down)
 	if !strings.Contains(res.Up, `op.CreateUniqueIndex("uq_users_email", "users", "email")`) {
 		t.Errorf("index columns must be variadic args, not a slice:\n%s", res.Up)
 	}
@@ -341,7 +314,7 @@ func TestRenderRenameTableBeforeDrops(t *testing.T) {
 	)
 	renames := Renames{Tables: []TableRename{{From: "clients", To: "customers"}}}
 	res := render(t, build(t, source), build(t, target), "postgres", renames)
-	assertValidGo(t, res.Up)
+	testutil.AssertValidMigrationBody(t, res.Up)
 	rename := strings.Index(res.Up, `op.RenameTable("clients", "customers")`)
 	drop := strings.Index(res.Up, `op.DropIndex(`)
 	if rename < 0 || drop < 0 {

@@ -33,13 +33,12 @@ package integration
 
 import (
 	"context"
-	"fmt"
-	"go/format"
 	"strings"
 	"testing"
 
 	"github.com/aita/sqlkit"
 	"github.com/aita/sqlkit/decl"
+	"github.com/aita/sqlkit/internal/testutil"
 	"github.com/aita/sqlkit/introspection"
 	"github.com/aita/sqlkit/migrate/autogen"
 	"github.com/aita/sqlkit/sql"
@@ -94,8 +93,8 @@ func TestAutogenerateForwardDiff(t *testing.T) {
 			t.Fatal("expected a non-empty diff, got none")
 		}
 
-		assertValidGo(t, res.Up)
-		assertValidGo(t, res.Down)
+		testutil.AssertValidMigrationBody(t, res.Up)
+		testutil.AssertValidMigrationBody(t, res.Down)
 
 		for _, want := range []string{
 			`op.CreateTable("gadgets"`,
@@ -242,32 +241,5 @@ func dropTables(t *testing.T, db *sqlkit.Database, eng engine, names ...string) 
 		if _, err := db.SQL().ExecContext(ctx, "DROP TABLE IF EXISTS "+ident); err != nil {
 			t.Fatalf("drop %s: %v", name, err)
 		}
-	}
-}
-
-// assertValidGo wraps a rendered migration body in a scaffold and gofmts it, so
-// a malformed op.* call surfaces as a syntax error. It mirrors the helper in
-// migrate/autogen/render_test.go, which cannot be imported across packages.
-func assertValidGo(t *testing.T, body string) {
-	t.Helper()
-	src := fmt.Sprintf(`package migrations
-
-import (
-	"github.com/aita/sqlkit/migrate"
-	"github.com/aita/sqlkit/sql"
-	"github.com/aita/sqlkit/decl"
-)
-
-var _ = func(op *migrate.Operator) {
-%s
-}
-
-var (
-	_ = sql.Raw
-	_ = decl.BigInt
-)
-`, body)
-	if _, err := format.Source([]byte(src)); err != nil {
-		t.Fatalf("rendered body is not valid Go: %v\n--- src ---\n%s", err, src)
 	}
 }
