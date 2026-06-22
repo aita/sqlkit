@@ -198,6 +198,111 @@ func TestColumnsGlob(t *testing.T) {
 	}
 }
 
+// TestSchemaPreciseColumns covers schema-qualified specs: a fully qualified spec
+// targets exactly one schema's table, leaving a same-named column on another
+// schema intact, while a two-part spec stays schema-insensitive.
+func TestSchemaPreciseColumns(t *testing.T) {
+	publicUsers := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	salesUsers := sql.Table{Schema: sql.NewIdent("sales"), Name: sql.NewIdent("users")}
+	bareUsers := sql.Table{Name: sql.NewIdent("users")}
+
+	tests := []struct {
+		name string
+		spec string
+		q    sql.Query
+		want []any
+	}{
+		{
+			name: "fully qualified spec masks its schema's table",
+			spec: "public.users.name",
+			q:    sql.Select(sql.Star()).From(publicUsers).Where(sql.Eq(sql.Col("name"), sql.Val("taro"))),
+			want: []any{"*****"},
+		},
+		{
+			name: "fully qualified spec leaves another schema intact",
+			spec: "public.users.name",
+			q:    sql.Select(sql.Star()).From(salesUsers).Where(sql.Eq(sql.Col("name"), sql.Val("taro"))),
+			want: []any{"taro"},
+		},
+		{
+			name: "two-part spec stays schema-insensitive",
+			spec: "users.name",
+			q:    sql.Select(sql.Star()).From(salesUsers).Where(sql.Eq(sql.Col("name"), sql.Val("taro"))),
+			want: []any{"*****"},
+		},
+		{
+			name: "schema-qualified spec does not match a bare table reference",
+			spec: "public.users.name",
+			q:    sql.Select(sql.Star()).From(bareUsers).Where(sql.Eq(sql.Col("name"), sql.Val("taro"))),
+			want: []any{"taro"},
+		},
+		{
+			name: "schema glob masks across tables in a schema",
+			spec: "public.*.email",
+			q:    sql.Select(sql.Star()).From(publicUsers).Where(sql.Eq(sql.Col("email"), sql.Val("x@y.z"))),
+			want: []any{"*****"},
+		},
+		{
+			name: "schema glob does not reach another schema",
+			spec: "public.*.email",
+			q:    sql.Select(sql.Star()).From(salesUsers).Where(sql.Eq(sql.Col("email"), sql.Val("x@y.z"))),
+			want: []any{"x@y.z"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := redaction.New(redaction.Columns(tt.spec))
+			if got := args(t, m.Apply(tt.q)); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("args = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestWithMaskUnresolved covers the precise-masking option: by default an
+// ambiguous unqualified reference fails safe and is masked, but
+// WithMaskUnresolved(false) leaves it — and a qualifier matching no source —
+// intact, masking only references that resolve to exactly one table.
+func TestWithMaskUnresolved(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	accounts := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("accounts")}
+
+	// SELECT * FROM users JOIN accounts ON ... WHERE name = 'taro'
+	// "name" is unqualified across two tables, so it is Ambiguous.
+	ambiguous := func() sql.Query {
+		return sql.Select(sql.Star()).From(users).
+			Join(accounts, sql.Eq(sql.Col("users.id"), sql.Col("accounts.id"))).
+			Where(sql.Eq(sql.Col("name"), sql.Val("taro")))
+	}
+
+	t.Run("default fails safe and masks", func(t *testing.T) {
+		m := redaction.New(redaction.Columns("users.name"))
+		if got := args(t, m.Apply(ambiguous())); !reflect.DeepEqual(got, []any{"*****"}) {
+			t.Errorf("args = %v, want [*****]", got)
+		}
+	})
+
+	t.Run("precise mode leaves ambiguous intact", func(t *testing.T) {
+		m := redaction.New(redaction.Columns("users.name"), redaction.WithMaskUnresolved(false))
+		if got := args(t, m.Apply(ambiguous())); !reflect.DeepEqual(got, []any{"taro"}) {
+			t.Errorf("args = %v, want [taro]", got)
+		}
+	})
+
+	t.Run("precise mode still masks a resolved reference", func(t *testing.T) {
+		m := redaction.New(redaction.Columns("users.name"), redaction.WithMaskUnresolved(false))
+		// "users.name" resolves to exactly one table, so it is masked even in
+		// precise mode.
+		q := sql.Select(sql.Star()).From(users).
+			Join(accounts, sql.Eq(sql.Col("users.id"), sql.Col("accounts.id"))).
+			Where(sql.Eq(sql.Col("users.name"), sql.Val("taro")))
+		if got := args(t, m.Apply(q)); !reflect.DeepEqual(got, []any{"*****"}) {
+			t.Errorf("args = %v, want [*****]", got)
+		}
+	})
+}
+
 func TestWithMaskCustomValue(t *testing.T) {
 	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
 	m := redaction.New(redaction.Columns("users.name"), redaction.WithMask("REDACTED"))

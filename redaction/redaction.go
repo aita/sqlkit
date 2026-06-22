@@ -7,11 +7,16 @@
 //
 // It composes the lower layers: analysis.SourcesOf gives each query node its
 // table sources, resolve ties a column reference to its table, and Policy says
-// whether that column is sensitive. Resolution failing safe is the default —
-// an unqualified column that is ambiguous across in-scope tables is masked when
-// any candidate marks it PII — so the redactor errs toward over-masking rather than
-// leaking. Masking is confined to string literals (ValueExpression holding a
-// string): numbers, bind placeholders, and column references are never touched.
+// whether that column is sensitive. A reference that resolves to one table is
+// matched precisely — carrying its schema, so a schema-qualified policy
+// (Columns("public.users.name")) targets a single table and leaves a same-named
+// column on another schema intact. Resolution failing safe is the default for a
+// reference that does not resolve: an unqualified column that is ambiguous across
+// in-scope tables is masked when any candidate marks it PII, so the redactor errs
+// toward over-masking rather than leaking; WithMaskUnresolved(false) turns that
+// off for resolve-only masking. Masking is confined to string literals
+// (ValueExpression holding a string): numbers, bind placeholders, and column
+// references are never touched.
 // A string literal wrapped in an expression — a cast, concatenation, function
 // call, collation, row constructor, or CASE result — is reached too, so a value
 // composed through such a wrapper does not survive into the rendered SQL.
@@ -33,8 +38,9 @@ const DefaultMask = "*****"
 // Redactor rewrites the sensitive string literals of a statement. Build one with
 // New and reuse it across statements; it is read-only and safe for concurrent use.
 type Redactor struct {
-	policy Policy
-	mask   string
+	policy         Policy
+	mask           string
+	maskUnresolved bool
 }
 
 // Option configures a Redactor.
@@ -46,13 +52,29 @@ func WithMask(mask string) Option {
 	return func(m *Redactor) { m.mask = mask }
 }
 
+// WithMaskUnresolved controls how a column reference that does not resolve to a
+// single in-scope table is treated — one that is unqualified across several
+// tables (ambiguous), or whose qualifier matches no source (unknown).
+//
+// When true (the default) such a reference is masked if any in-scope table marks
+// a same-named column sensitive: the policy fails safe, erring toward
+// over-masking so a sensitive value never leaks through an imprecise reference.
+// Pass false for precise masking — only a reference that resolves to exactly one
+// table is matched against the policy, and an unresolved one is left intact. Use
+// it when the statements are fully qualified and over-masking is not acceptable.
+func WithMaskUnresolved(mask bool) Option {
+	return func(m *Redactor) { m.maskUnresolved = mask }
+}
+
 // New builds a Redactor for policy, configured by opts. It needs no schema:
 // columns are resolved structurally (by alias and FROM scope) through analyze,
-// and the policy decides sensitivity — an unqualified column that does not
-// resolve to a single table is masked when any in-scope table marks it sensitive.
-// String literals tied to a sensitive column are replaced with the mask value.
+// and the policy decides sensitivity. By default an unqualified column that does
+// not resolve to a single table is masked when any in-scope table marks it
+// sensitive (fail safe); WithMaskUnresolved(false) turns that off for precise,
+// resolve-only masking. String literals tied to a sensitive column are replaced
+// with the mask value.
 func New(policy Policy, opts ...Option) *Redactor {
-	m := &Redactor{policy: policy, mask: DefaultMask}
+	m := &Redactor{policy: policy, mask: DefaultMask, maskUnresolved: true}
 	for _, o := range opts {
 		o(m)
 	}

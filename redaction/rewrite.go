@@ -181,12 +181,21 @@ func (m *Redactor) sensitiveColumn(e sql.Expression, scope []analysis.SourceRef)
 }
 
 // isSensitive resolves col against the scope and reports whether it is a policy
-// column. It fails safe: an unqualified column that is ambiguous across in-scope
-// tables is treated as sensitive when any candidate table marks it PII.
+// column. A reference that resolves to exactly one table is matched precisely,
+// carrying the resolved schema so a schema-qualified policy targets the right
+// table. A reference that does not resolve is masked only when maskUnresolved is
+// set: it then fails safe, treating the column as sensitive when any in-scope
+// table marks it PII.
 func (m *Redactor) isSensitive(scope []analysis.SourceRef, col analysis.ColumnRef) bool {
 	res := analysis.ResolveColumn(scope, col)
 	if res.Status == analysis.Resolved {
 		return m.policy.IsSensitive(res.Schema.String(), res.Table.String(), col.Name.String())
+	}
+	if !m.maskUnresolved {
+		// Precise mode: an unqualified column that is ambiguous across in-scope
+		// tables, or a qualifier that matches no source, is left intact rather than
+		// guessed at.
+		return false
 	}
 	// Unknown or Ambiguous: fail safe — mask if any in-scope table marks the
 	// column sensitive. Under executable SQL an unqualified column belongs to a
