@@ -169,8 +169,12 @@ func preloadRelation(ctx context.Context, ex executorBinding, dest any, spec pre
 			rel.Name(), childBase, targetKeys[0])
 	}
 
-	// Collect distinct parent keys and the parents each maps to.
+	// Collect distinct parent keys and the parents each maps to. keyOrder records
+	// the keys in first-seen (parent) order so the IN value list — and the
+	// statements AutoChunk splits it into — is deterministic rather than following
+	// Go's randomized map iteration, keeping the split plan-cache friendly.
 	groups := map[any][]int{}
+	var keyOrder []any
 	for i, p := range parents {
 		ps := elemStruct(p, parentPtr)
 		if !ps.IsValid() {
@@ -179,6 +183,9 @@ func preloadRelation(ctx context.Context, ex executorBinding, dest any, spec pre
 		key, ok := scalarValue(ps.FieldByIndex(basePath))
 		if !ok {
 			continue
+		}
+		if _, seen := groups[key]; !seen {
+			keyOrder = append(keyOrder, key)
 		}
 		groups[key] = append(groups[key], i)
 	}
@@ -192,8 +199,8 @@ func preloadRelation(ctx context.Context, ex executorBinding, dest any, spec pre
 		return fmt.Errorf("sqlkit: Preload of %q: target %s has no column %q",
 			rel.Name(), target.Info().QualifiedName(), targetKeys[0])
 	}
-	vals := make([]any, 0, len(groups))
-	for key := range groups {
+	vals := make([]any, 0, len(keyOrder))
+	for _, key := range keyOrder {
 		vals = append(vals, sql.Val(key))
 	}
 

@@ -3,6 +3,7 @@ package sqlkit_test
 import (
 	"context"
 	"database/sql/driver"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -44,6 +45,36 @@ func TestPreloadToManyPopulatesSliceField(t *testing.T) {
 	}
 	if len(users[2].Posts) != 0 {
 		t.Fatalf("user 3 should have no posts, got %+v", users[2].Posts)
+	}
+}
+
+// TestPreloadINOrderIsDeterministic guards against the preload follow-up's IN
+// value list following Go's randomized map iteration. The values must appear in
+// first-seen parent order so the statements AutoChunk splits the list into are
+// stable across runs (plan-cache friendly) and reproducible.
+func TestPreloadINOrderIsDeterministic(t *testing.T) {
+	var preloadArgs []any
+	fake := &testutil.Fake{
+		QueryFunc: func(s string, args []any) (testutil.Result, error) {
+			if contains(s, `"public"."posts"`) {
+				preloadArgs = args
+				return testutil.Result{Columns: []string{"id", "user_id", "title"}}, nil
+			}
+			// Parents come back in this order; the IN must follow it.
+			return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{
+				{int64(3)}, {int64(1)}, {int64(2)}, {int64(1)},
+			}}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var users []preUser
+	if err := db.Select(Users.ID).From(Users).Preload(Posts).All(context.Background()).Scan(&users); err != nil {
+		t.Fatalf("Preload chain error = %v", err)
+	}
+	want := []any{int64(3), int64(1), int64(2)} // distinct, first-seen order
+	if !reflect.DeepEqual(preloadArgs, want) {
+		t.Fatalf("preload IN args = %#v, want %#v", preloadArgs, want)
 	}
 }
 
