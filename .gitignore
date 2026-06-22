@@ -10,3 +10,6 @@
 
 # querytrace example binary
 /examples/querytrace/querytrace
+
+# Claude Code agent worktrees and local session scratch
+/.claude/
