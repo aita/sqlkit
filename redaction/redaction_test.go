@@ -743,6 +743,97 @@ func TestApplyNestedScopeNoLeak(t *testing.T) {
 	}
 }
 
+// TestApplyWrappedAndRawColumnRefs pins masking when the sensitive column is not a
+// bare reference on the predicate side: wrapped in a function/cast/concat, named in
+// a raw SQL fragment, reached through a two-hop CTE chain, renamed by a projection,
+// or referenced from a LATERAL subquery. A recursive CTE must terminate.
+func TestApplyWrappedAndRawColumnRefs(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	orders := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("orders")}
+	m := redaction.New(redaction.Columns("users.name"))
+
+	tests := []struct {
+		name string
+		q    sql.Query
+		want []any
+	}{
+		{
+			name: "function-wrapped column in predicate",
+			q:    sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Func("lower", sql.Col("name")), sql.Val("taro"))),
+			want: []any{"*****"},
+		},
+		{
+			name: "concat-wrapped column in predicate",
+			q:    sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Concat(sql.Col("name"), sql.Val("!")), sql.Val("taro!"))),
+			// The "!" is a constant on the column side, not a value compared to the
+			// column, so it is left intact; only the compared literal is masked.
+			want: []any{"!", "*****"},
+		},
+		{
+			name: "raw fragment naming the column",
+			q:    sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Raw("lower(name)"), sql.Val("taro"))),
+			want: []any{"*****"},
+		},
+		{
+			name: "raw fragment with qualified column",
+			q:    sql.Select(sql.Star()).From(sql.SourceAlias(users, "u")).Where(sql.Eq(sql.Raw("u.name"), sql.Val("taro"))),
+			want: []any{"*****"},
+		},
+		{
+			name: "two-hop cte chain",
+			q: func() sql.Query {
+				a := sql.Select(sql.Col("id"), sql.Col("name")).From(users).CTE("a")
+				b := sql.Select(sql.Col("id"), sql.Col("name")).From(a).CTE("b")
+				return sql.Select(sql.Star()).From(b).Where(sql.Eq(b.Col("name"), sql.Val("taro"))).WithCTE(a, b)
+			}(),
+			want: []any{"*****"},
+		},
+		{
+			name: "projection renames the column",
+			q: func() sql.Query {
+				sub := sql.Select(sql.As(sql.Col("name"), "nm")).From(users)
+				return sql.Select(sql.Star()).From(sql.Alias(sub, "t")).Where(sql.Eq(sql.Col("t.nm"), sql.Val("taro")))
+			}(),
+			want: []any{"*****"},
+		},
+		{
+			name: "lateral subquery references outer column",
+			q: func() sql.Query {
+				lat := sql.Select(sql.Col("id")).From(sql.SourceAlias(orders, "o")).
+					Where(sql.Eq(sql.Col("u.name"), sql.Val("taro")))
+				return sql.Select(sql.Star()).From(sql.SourceAlias(users, "u")).
+					CrossJoin(sql.Lateral(sql.Alias(lat, "t")))
+			}(),
+			want: []any{"*****"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := args(t, m.Apply(tt.q)); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("masked args = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestApplyRecursiveCTETerminates pins that resolving through a recursive CTE
+// (whose body references itself) terminates rather than spinning.
+func TestApplyRecursiveCTETerminates(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	m := redaction.New(redaction.Columns("users.name"))
+
+	base := sql.Select(sql.Col("id"), sql.Col("name")).From(users)
+	rec := base.UnionAll(sql.Select(sql.Col("id"), sql.Col("name")).From(sql.Tbl("tree"))).
+		CTE("tree", sql.Recursive())
+	q := sql.Select(sql.Star()).From(rec).Where(sql.Eq(rec.Col("name"), sql.Val("taro"))).WithCTE(rec)
+
+	// Must complete; the literal compared to the recursive CTE's name is masked.
+	if got := args(t, m.Apply(q)); !reflect.DeepEqual(got, []any{"*****"}) {
+		t.Errorf("recursive cte masked args = %v, want [*****]", got)
+	}
+}
+
 // TestApplyNilQuery pins the nil-query and nil-policy guards.
 func TestApplyNilQuery(t *testing.T) {
 	m := redaction.New(redaction.Columns("users.name"))

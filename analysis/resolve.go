@@ -127,29 +127,55 @@ func ResolveColumn(scope []SourceRef, col ColumnRef) Resolution {
 	return res
 }
 
+// maxResolveDepth bounds how many derived-table, CTE, and set-operation hops a
+// fan-out resolution follows. It both caps work on deeply nested queries and
+// breaks the cycle a recursive CTE (whose body references itself) would otherwise
+// spin in; past the limit a reference is reported as resolving to nothing.
+const maxResolveDepth = 32
+
 // ResolveColumnAll resolves col against scope like ResolveColumn, but returns
 // every base table the reference may map to rather than a single placement. A
 // qualified reference yields the source its qualifier names; an unqualified one
 // yields every base table in scope it could belong to (one for a single-table
 // scope, several when ambiguous). Tracing descends into derived sources and CTEs,
 // and through both arms of a set operation, so a column projected from a UNION
-// yields a candidate per arm.
+// yields a candidate per arm; a column projected through an expression
+// (an alias, a function, a concatenation) yields a candidate per base column the
+// expression reads. Each candidate's Column names the underlying base column,
+// which may differ from col when a projection renames it.
 //
-// The result holds only Resolved resolutions, deduplicated by owning table, and is
-// empty when the reference resolves to no base table in scope. It is the
-// fan-out form of ResolveColumn, for a caller — a masking policy — that treats a
-// column as sensitive when any candidate is, and so must see every provenance.
+// The result holds only Resolved resolutions, deduplicated by owning table and
+// base column, and is empty when the reference resolves to no base table in scope.
+// It is the fan-out form of ResolveColumn, for a caller — a masking policy — that
+// treats a column as sensitive when any candidate is, and so must see every
+// provenance.
 func ResolveColumnAll(scope []SourceRef, col ColumnRef) []Resolution {
+	return resolveAll(scope, col, nil, 0)
+}
+
+// ResolveColumnAllVia is ResolveColumnAll with ambient CTEs — those visible from
+// an enclosing WITH — applied to every scope it descends into, so a reference
+// chained through several CTEs (a CTE whose body selects from an earlier CTE) is
+// still traced to its base table. A query node alone cannot recover the CTEs in
+// scope above it, so a caller that holds them passes them here.
+func ResolveColumnAllVia(scope []SourceRef, col ColumnRef, ctes []sql.CTE) []Resolution {
+	return resolveAll(scope, col, ctes, 0)
+}
+
+func resolveAll(scope []SourceRef, col ColumnRef, ctes []sql.CTE, depth int) []Resolution {
+	if depth > maxResolveDepth {
+		return nil
+	}
 	if !col.Qualifier.IsZero() {
 		s, ok := matchQualifier(scope, col.Qualifier)
 		if !ok {
 			return nil
 		}
 		if s.Subquery != nil {
-			return resolveInSubqueryAll(s.Subquery, col)
+			return resolveInSubqueryAll(s.Subquery, col, ctes, depth+1)
 		}
 		if !s.Table.IsZero() {
-			return dedupeResolutions([]Resolution{{Column: col, Schema: s.Schema, Table: s.Table, Status: Resolved}})
+			return []Resolution{{Column: col, Schema: s.Schema, Table: s.Table, Status: Resolved}}
 		}
 		return nil
 	}
@@ -159,7 +185,7 @@ func ResolveColumnAll(scope []SourceRef, col ColumnRef) []Resolution {
 	for i := range scope {
 		s := &scope[i]
 		if s.Subquery != nil {
-			out = append(out, resolveInSubqueryAll(s.Subquery, col)...)
+			out = append(out, resolveInSubqueryAll(s.Subquery, col, ctes, depth+1)...)
 			continue
 		}
 		if !s.Table.IsZero() {
@@ -171,17 +197,21 @@ func ResolveColumnAll(scope []SourceRef, col ColumnRef) []Resolution {
 
 // resolveInSubqueryAll is the fan-out counterpart of resolveInSubquery: it traces
 // col.Name through subq, descending into both arms of a set operation so a column
-// drawn from a UNION yields a candidate per arm.
-func resolveInSubqueryAll(subq sql.Query, col ColumnRef) []Resolution {
+// drawn from a UNION yields a candidate per arm. The ambient CTEs are applied to
+// each inner scope so a reference chained through CTEs keeps resolving.
+func resolveInSubqueryAll(subq sql.Query, col ColumnRef, ctes []sql.CTE, depth int) []Resolution {
+	if depth > maxResolveDepth {
+		return nil
+	}
 	switch v := sql.Unwrap(subq).(type) {
 	case sql.SelectStmt:
-		return resolveInSelectAll(v, col)
+		return resolveInSelectAll(v, col, ctes, depth)
 	case sql.CompoundStmt:
 		// A set operation's output column draws from every arm; union their
 		// candidates so a sensitive column on any arm is reported.
 		var out []Resolution
-		out = append(out, resolveInSubqueryAll(v.Left, col)...)
-		out = append(out, resolveInSubqueryAll(v.Right, col)...)
+		out = append(out, resolveInSubqueryAll(v.Left, col, ctes, depth+1)...)
+		out = append(out, resolveInSubqueryAll(v.Right, col, ctes, depth+1)...)
 		return dedupeResolutions(out)
 	default:
 		return nil
@@ -189,20 +219,22 @@ func resolveInSubqueryAll(subq sql.Query, col ColumnRef) []Resolution {
 }
 
 // resolveInSelectAll traces col.Name through one SELECT's projection, returning the
-// candidates of the underlying base column. It mirrors resolveInSubquery's matching
-// (aliased and unaliased column projections, then a wildcard fallback) but fans out.
-func resolveInSelectAll(sel sql.SelectStmt, col ColumnRef) []Resolution {
+// candidates of the underlying base column(s). It matches a named output column
+// (a plain or aliased projection), then falls back to a wildcard; the matched
+// projection is followed through whatever expression produces it, so a renamed,
+// cast, or concatenated column still traces to its base. The inner scope is
+// enriched with the ambient CTEs so a chained CTE reference keeps resolving.
+func resolveInSelectAll(sel sql.SelectStmt, col ColumnRef, ctes []sql.CTE, depth int) []Resolution {
 	innerScope := SourcesOf(sel)
+	if len(ctes) > 0 {
+		enrichWithCTEs(innerScope, ctes)
+	}
 	for _, s := range sel.Columns {
 		outName, expr := selectionOutput(s)
 		if outName.IsZero() || !outName.Equal(col.Name) {
 			continue
 		}
-		c, ok := expr.(sql.ColumnExpression)
-		if !ok {
-			return nil
-		}
-		return ResolveColumnAll(innerScope, ColumnRefOf(c))
+		return resolveExprColumns(innerScope, expr, ctes, depth)
 	}
 	for _, s := range sel.Columns {
 		star, ok := s.(sql.StarSelection)
@@ -210,24 +242,43 @@ func resolveInSelectAll(sel sql.SelectStmt, col ColumnRef) []Resolution {
 			continue
 		}
 		if star.Qualifier.IsZero() {
-			return ResolveColumnAll(innerScope, ColumnRef{Name: col.Name})
+			return resolveAll(innerScope, ColumnRef{Name: col.Name}, ctes, depth+1)
 		}
-		return ResolveColumnAll(innerScope, ColumnRef{Qualifier: star.Qualifier, Name: col.Name})
+		return resolveAll(innerScope, ColumnRef{Qualifier: star.Qualifier, Name: col.Name}, ctes, depth+1)
 	}
 	return nil
 }
 
-// dedupeResolutions removes resolutions that name the same owning table, preserving
-// first-seen order, so a self-union or a self-join contributes one candidate.
+// resolveExprColumns resolves every base column an output expression reads: the
+// expression itself when it is a plain column reference, or each column reference
+// found within it (a function argument, a concatenation operand, a cast operand),
+// so a value derived from a sensitive column is still traced to it.
+func resolveExprColumns(scope []SourceRef, expr sql.Expression, ctes []sql.CTE, depth int) []Resolution {
+	if c, ok := expr.(sql.ColumnExpression); ok {
+		return resolveAll(scope, ColumnRefOf(c), ctes, depth+1)
+	}
+	var out []Resolution
+	sql.WalkExpr(expr, func(e sql.Expression) {
+		if c, ok := e.(sql.ColumnExpression); ok {
+			out = append(out, resolveAll(scope, ColumnRefOf(c), ctes, depth+1)...)
+		}
+	})
+	return dedupeResolutions(out)
+}
+
+// dedupeResolutions removes resolutions that name the same owning table and base
+// column, preserving first-seen order, so a self-union or a self-join contributes
+// one candidate while distinct base columns (a concatenation of two columns) are
+// each kept.
 func dedupeResolutions(in []Resolution) []Resolution {
 	if len(in) <= 1 {
 		return in
 	}
-	type key struct{ schema, table string }
+	type key struct{ schema, table, column string }
 	seen := make(map[key]struct{}, len(in))
 	out := in[:0]
 	for _, r := range in {
-		k := key{r.Schema.Name, r.Table.Name}
+		k := key{r.Schema.Name, r.Table.Name, r.Column.Name.Name}
 		if _, dup := seen[k]; dup {
 			continue
 		}

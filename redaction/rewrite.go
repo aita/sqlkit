@@ -1,6 +1,9 @@
 package redaction
 
 import (
+	"strings"
+	"unicode"
+
 	"github.com/aita/sqlkit/analysis"
 	"github.com/aita/sqlkit/sql"
 )
@@ -173,11 +176,102 @@ func (m *Redactor) rewriteExprs(es []sql.Expression, sc *scope) []sql.Expression
 	return out
 }
 
-// sensitiveColumn reports whether e is a column reference that resolves, in sc,
-// to a policy-sensitive column.
+// sensitiveColumn reports whether operand e, in sc, is or reads a policy-sensitive
+// column — so a literal compared to it should be masked. A bare column reference is
+// resolved directly; a column wrapped in a scalar expression (a function like
+// lower(name), a cast, a concatenation) or named inside a raw SQL fragment is
+// reached too, so the comparison "lower(name) = 'x'" still masks the literal. A row
+// constructor is left for maskRowPair to handle element-wise, so it is not treated
+// as a single sensitive operand here.
 func (m *Redactor) sensitiveColumn(e sql.Expression, sc *scope) bool {
-	col, ok := columnOf(e)
-	return ok && m.isSensitive(sc, col)
+	if _, isRow := e.(sql.RowExpression); isRow {
+		return false
+	}
+	if col, ok := columnOf(e); ok {
+		return m.isSensitive(sc, col)
+	}
+	return m.exprReadsSensitive(e, sc)
+}
+
+// exprReadsSensitive reports whether e reads a sensitive column other than as a
+// bare reference — wrapped in a function, cast, concatenation, or raw fragment. It
+// stays within the current scope: WalkExpr does not descend into embedded
+// subqueries, which carry their own scope and are rewritten on their own.
+func (m *Redactor) exprReadsSensitive(e sql.Expression, sc *scope) bool {
+	found := false
+	sql.WalkExpr(e, func(x sql.Expression) {
+		if found {
+			return
+		}
+		switch v := x.(type) {
+		case sql.ColumnExpression:
+			if m.isSensitive(sc, analysis.ColumnRefOf(v)) {
+				found = true
+			}
+		case sql.RawExpression:
+			if m.rawReadsSensitive(string(v), sc) {
+				found = true
+			}
+		}
+	})
+	return found
+}
+
+// rawReadsSensitive reports whether a raw SQL fragment names a sensitive column.
+// The fragment is opaque text, so it is scanned for identifier tokens (and
+// qualifier.column pairs), each tested against the policy in sc; string literals in
+// the fragment are skipped so a word inside a quoted value is not mistaken for a
+// column. It is a best-effort, fail-safe scan — it errs toward masking.
+func (m *Redactor) rawReadsSensitive(raw string, sc *scope) bool {
+	for _, ref := range rawColumnRefs(raw) {
+		if m.isSensitive(sc, ref) {
+			return true
+		}
+	}
+	return false
+}
+
+// rawColumnRefs extracts the column references a raw SQL fragment may name: each
+// maximal run of identifier characters, split on a trailing qualifier dot, with
+// single-quoted string literals skipped. It over-collects (a function name is
+// returned as a bare reference too), which only costs a policy lookup that fails.
+func rawColumnRefs(raw string) []analysis.ColumnRef {
+	var refs []analysis.ColumnRef
+	var tok strings.Builder
+	inStr := false
+	flush := func() {
+		if tok.Len() == 0 {
+			return
+		}
+		t := tok.String()
+		tok.Reset()
+		if i := strings.LastIndexByte(t, '.'); i >= 0 {
+			if n := t[i+1:]; n != "" {
+				refs = append(refs, analysis.ColumnRef{Qualifier: sql.NewIdent(t[:i]), Name: sql.NewIdent(n)})
+				return
+			}
+		}
+		refs = append(refs, analysis.ColumnRef{Name: sql.NewIdent(t)})
+	}
+	for _, r := range raw {
+		if inStr {
+			if r == '\'' {
+				inStr = false
+			}
+			continue
+		}
+		switch {
+		case r == '\'':
+			flush()
+			inStr = true
+		case r == '_' || r == '.' || unicode.IsLetter(r) || unicode.IsDigit(r):
+			tok.WriteRune(r)
+		default:
+			flush()
+		}
+	}
+	flush()
+	return refs
 }
 
 // isSensitive reports whether col is a policy column once resolved against sc and,
@@ -196,14 +290,14 @@ func (m *Redactor) sensitiveColumn(e sql.Expression, sc *scope) bool {
 // With maskUnresolved cleared, only a single-candidate precise resolution masks.
 func (m *Redactor) isSensitive(sc *scope, col analysis.ColumnRef) bool {
 	for s := sc; s != nil; s = s.parent {
-		cands := analysis.ResolveColumnAll(s.sources, col)
+		cands := analysis.ResolveColumnAllVia(s.sources, col, s.childCTEs)
 		switch len(cands) {
 		case 0:
 			continue // unknown here — try the enclosing (correlated) scope
 		case 1:
-			return m.policy.IsSensitive(cands[0].Schema.String(), cands[0].Table.String(), col.Name.String())
+			return m.candidateSensitive(cands[0])
 		default:
-			return m.maskUnresolved && m.anyCandidateSensitive(cands, col)
+			return m.maskUnresolved && m.anyCandidateSensitive(cands)
 		}
 	}
 	if !m.maskUnresolved {
@@ -221,11 +315,17 @@ func (m *Redactor) isSensitive(sc *scope, col analysis.ColumnRef) bool {
 	return false
 }
 
-// anyCandidateSensitive reports whether any resolved candidate table marks col a
-// policy column.
-func (m *Redactor) anyCandidateSensitive(cands []analysis.Resolution, col analysis.ColumnRef) bool {
+// candidateSensitive reports whether a resolved candidate is a policy column. It
+// uses the candidate's own Column — the underlying base column — which a projection
+// may have renamed from the reference that was resolved.
+func (m *Redactor) candidateSensitive(c analysis.Resolution) bool {
+	return m.policy.IsSensitive(c.Schema.String(), c.Table.String(), c.Column.Name.String())
+}
+
+// anyCandidateSensitive reports whether any resolved candidate is a policy column.
+func (m *Redactor) anyCandidateSensitive(cands []analysis.Resolution) bool {
 	for _, c := range cands {
-		if m.policy.IsSensitive(c.Schema.String(), c.Table.String(), col.Name.String()) {
+		if m.candidateSensitive(c) {
 			return true
 		}
 	}

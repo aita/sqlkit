@@ -345,16 +345,21 @@ func (m *Redactor) rewriteCTEs(ctes []sql.CTE, sc *scope) []sql.CTE {
 }
 
 // rewriteSource rewrites a subquery source's inner query; a base table or VALUES
-// source is returned unchanged. A FROM/JOIN subquery is not correlated to the
-// other sources of its own query, so it is rewritten under the enclosing context
-// (sc.parent) with the ambient CTEs (sc.childCTEs) visible.
+// source is returned unchanged. A plain FROM/JOIN subquery is not correlated to
+// the other sources of its own query, so it is rewritten under the enclosing scope
+// (sc.parent); a LATERAL subquery may reference the sources to its left, so it is
+// rewritten under sc itself. Either way the ambient CTEs (sc.childCTEs) are visible.
 func (m *Redactor) rewriteSource(src sql.Source, sc *scope) sql.Source {
 	if src == nil {
 		return nil
 	}
 	e := src.SQLSource()
 	if e.Query != nil {
-		e.Query = m.rewriteQuery(e.Query, sc.parent, sc.childCTEs)
+		parent := sc.parent
+		if e.Lateral {
+			parent = sc
+		}
+		e.Query = m.rewriteQuery(e.Query, parent, sc.childCTEs)
 		return e
 	}
 	return src
