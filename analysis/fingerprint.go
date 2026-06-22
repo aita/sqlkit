@@ -11,9 +11,10 @@ var (
 	// placeholderRe matches a bind placeholder in any common dialect form:
 	// $1, ?, @p1, :name.
 	placeholderRe = regexp.MustCompile(`\$\d+|@p\d+|:[a-zA-Z_]\w*|\?`)
-	// stringLiteralRe matches a single-quoted string literal (best-effort; it
-	// does not unescape doubled quotes).
-	stringLiteralRe = regexp.MustCompile(`'[^']*'`)
+	// stringLiteralRe matches a single-quoted string literal, treating a doubled
+	// quote ('') as an escaped quote within the literal rather than its end, so
+	// 'O''Brien' collapses to a single "?" like any other value instead of two.
+	stringLiteralRe = regexp.MustCompile(`'(?:[^']|'')*'`)
 	// numberLiteralRe matches a standalone numeric literal.
 	numberLiteralRe = regexp.MustCompile(`\b\d+(\.\d+)?\b`)
 	// whitespaceRe matches a run of whitespace.
