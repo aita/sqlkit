@@ -111,7 +111,9 @@ func (t Table) Key() TableKey {
 
 // encodeType renders a portable type as its resolved engine types across the
 // fixed checksum dialects, so two types that resolve identically everywhere
-// hash equal. A nil type (a column declaring none) encodes as empty.
+// hash equal. A nil type (a column declaring none) encodes as empty. The array
+// flag is part of the type's identity — text and text[] are distinct columns —
+// so it is appended (as "[]") when set; a scalar type encodes exactly as before.
 func encodeType(t Type) string {
 	if t == nil {
 		return ""
@@ -122,7 +124,11 @@ func encodeType(t Type) string {
 		if !ok {
 			continue
 		}
-		fmt.Fprintf(&sb, "%s=%s(%d,%d,%d);", dialect, eng.Name, eng.Length, eng.Precision, eng.Scale)
+		fmt.Fprintf(&sb, "%s=%s(%d,%d,%d)", dialect, eng.Name, eng.Length, eng.Precision, eng.Scale)
+		if eng.Array {
+			sb.WriteString("[]")
+		}
+		sb.WriteString(";")
 	}
 	return sb.String()
 }
