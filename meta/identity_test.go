@@ -71,6 +71,11 @@ func TestKeyDiffersOnStructuralChange(t *testing.T) {
 		"different type length": func(tbl *meta.Table) {
 			tbl.Columns[1].Type = meta.Of("postgres", "varchar", 128, 0, 0)
 		},
+		"scalar vs array of same element": func(tbl *meta.Table) {
+			// text and text[] are distinct columns; flipping only the array flag,
+			// with the same element name and modifiers, must change the checksum.
+			tbl.Columns[1].Type = meta.OfArray("postgres", "varchar", 255, 0, 0)
+		},
 		"nullability": func(tbl *meta.Table) {
 			tbl.Columns[1].Nullable = true
 		},
