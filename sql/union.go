@@ -1,7 +1,6 @@
 package sql
 
 import (
-	"strconv"
 	"strings"
 )
 
@@ -169,12 +168,20 @@ func (c *Compiler) CompileCompound(q CompoundStmt) (string, []any, error) {
 		}
 	}
 	if q.HasLimit {
+		v, err := limitCount("LIMIT", q.Limit)
+		if err != nil {
+			return "", nil, err
+		}
 		sb.WriteString(" LIMIT ")
-		sb.WriteString(strconv.Itoa(q.Limit))
+		sb.WriteString(v)
 	}
 	if q.HasOffset {
+		v, err := limitCount("OFFSET", q.Offset)
+		if err != nil {
+			return "", nil, err
+		}
 		sb.WriteString(" OFFSET ")
-		sb.WriteString(strconv.Itoa(q.Offset))
+		sb.WriteString(v)
 	}
 	return sb.String(), args, nil
 }

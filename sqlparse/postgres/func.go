@@ -468,7 +468,16 @@ func typeNameString(tn *pg.TypeName) (string, error) {
 			}
 			modStrs = append(modStrs, strconv.Itoa(int(c.GetIval().GetIval())))
 		}
-		base += "(" + strings.Join(modStrs, ", ") + ")"
+		typmod := "(" + strings.Join(modStrs, ", ") + ")"
+		// timestamptz / timetz canonicalize to "timestamp with time zone" /
+		// "time with time zone". The precision belongs on the leading type word
+		// (timestamp(3) with time zone), not after the whole phrase
+		// (timestamp with time zone(3)), which PostgreSQL's own grammar rejects.
+		if suffix := " with time zone"; strings.HasSuffix(base, suffix) {
+			base = strings.TrimSuffix(base, suffix) + typmod + suffix
+		} else {
+			base += typmod
+		}
 	}
 	for range tn.GetArrayBounds() {
 		base += "[]"

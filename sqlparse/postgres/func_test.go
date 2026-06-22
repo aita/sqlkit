@@ -12,6 +12,21 @@ func TestCountMultipleArgsFallsBackToRaw(t *testing.T) {
 	assertRaw(t, "SELECT count(a, b) FROM t")
 }
 
+// timestamptz / timetz canonicalize to "timestamp with time zone" /
+// "time with time zone"; a precision must land on the leading type word
+// (timestamp(3) with time zone), not after the whole phrase
+// (timestamp with time zone(3)), which PostgreSQL's own grammar rejects.
+func TestTypeNameTimestamptzWithPrecision(t *testing.T) {
+	assertRoundTrip(t,
+		`SELECT a::timestamptz(3) FROM t`,
+		sql.Select(sql.Cast(sql.Col("a"), "timestamp(3) with time zone")).From(sql.Table{Name: sql.NewIdent("t")}),
+		`SELECT CAST("a" AS timestamp(3) with time zone) FROM "t"`)
+	assertRoundTrip(t,
+		`SELECT a::timetz(3) FROM t`,
+		sql.Select(sql.Cast(sql.Col("a"), "time(3) with time zone")).From(sql.Table{Name: sql.NewIdent("t")}),
+		`SELECT CAST("a" AS time(3) with time zone) FROM "t"`)
+}
+
 // EXTRACT(field FROM x) is reported by libpg_query as pg_catalog.extract tagged
 // COERCE_SQL_SYNTAX; it must rebuild as the dedicated node so it renders with the
 // keyword syntax rather than the call form extract(field, x) the grammar rejects.

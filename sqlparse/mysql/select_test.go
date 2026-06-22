@@ -105,6 +105,16 @@ func TestSelectAggregateOrderByFallsBackToRaw(t *testing.T) {
 	assertRaw(t, "SELECT GROUP_CONCAT(name ORDER BY name) FROM t")
 }
 
+// GROUP_CONCAT's separator (the explicit SEPARATOR clause, or the implicit
+// default ",") has no typed home: the parser carries it as a trailing argument,
+// so converting it as a generic call would render it as an ordinary data
+// argument and silently change the separator. Every form round-trips raw.
+func TestSelectGroupConcatFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT GROUP_CONCAT(a SEPARATOR '|') FROM t")
+	assertRaw(t, "SELECT GROUP_CONCAT(a) FROM t")
+	assertRaw(t, "SELECT GROUP_CONCAT(DISTINCT a, b) FROM t")
+}
+
 func TestSelectOrderLimitOffset(t *testing.T) {
 	assertRoundTrip(t,
 		"SELECT id FROM users ORDER BY name DESC, id ASC LIMIT 10 OFFSET 5",

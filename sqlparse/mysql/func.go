@@ -167,6 +167,15 @@ func convertAggregate(e *ast.AggregateFuncExpr) (sql.Expression, error) {
 	if e.Order != nil {
 		return nil, sqlparse.Unsupportedf("%s(... ORDER BY ...)", name)
 	}
+	// GROUP_CONCAT carries its separator as a trailing pseudo-argument (the
+	// default "," when none is written) and its SEPARATOR clause has no typed
+	// home. Converting it as a generic call would render that separator as an
+	// ordinary data argument — GROUP_CONCAT(a SEPARATOR '|') becomes
+	// GROUP_CONCAT(a, '|'), a different aggregate with the wrong separator — so
+	// round-trip the whole construct raw instead.
+	if name == ast.AggFuncGroupConcat {
+		return nil, sqlparse.Unsupported("GROUP_CONCAT")
+	}
 	if name == "count" {
 		return convertCount(e)
 	}
