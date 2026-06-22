@@ -186,7 +186,7 @@ type PostsColumns struct {
 }
 
 func newPostsColumns() PostsColumns {
-	info := sqlkit.TableInfo{Schema: "public", Name: "posts", Checksum: "ae6c44bc694636209a416d68dd5fe54fd6129f8c000a4475153d31aab3daaa67", Generator: "fmt1+tpl3ed7a12fe1d5+sqlkit(devel)"}
+	info := sqlkit.TableInfo{Schema: "public", Name: "posts", Checksum: "71613f8127b3eedea59892885147ad1ca8cd73283f2554f52089cce71c9a0cb8", Generator: "fmt1+tpl3ed7a12fe1d5+sqlkit(devel)"}
 	return PostsColumns{
 		info:      info,
 		ID:        sqlkit.NewColumn[int64](info, "id"),
@@ -328,7 +328,7 @@ type ProfilesColumns struct {
 }
 
 func newProfilesColumns() ProfilesColumns {
-	info := sqlkit.TableInfo{Schema: "public", Name: "profiles", Checksum: "cb91d6b4d79dd2d1458268d691553800ed952abbbc666708c98237313a8b5791", Generator: "fmt1+tpl3ed7a12fe1d5+sqlkit(devel)"}
+	info := sqlkit.TableInfo{Schema: "public", Name: "profiles", Checksum: "7c86d0dad6831b61a65fa0b3f4666dc4e8a61006302fecaf6b0b4867bd3a4949", Generator: "fmt1+tpl3ed7a12fe1d5+sqlkit(devel)"}
 	return ProfilesColumns{
 		info:   info,
 		ID:     sqlkit.NewColumn[int64](info, "id"),
