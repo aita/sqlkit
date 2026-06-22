@@ -469,6 +469,13 @@ func TestFingerprintRaw(t *testing.T) {
 			in:   "SELECT   *\n  FROM users\t WHERE id = 1",
 			want: "SELECT * FROM users WHERE id = ?",
 		},
+		{
+			// A doubled quote escapes a quote within the literal; it must collapse
+			// to a single "?" so it groups with any other value for the column.
+			name: "escaped doubled quote in string literal",
+			in:   "SELECT * FROM users WHERE name = 'O''Brien'",
+			want: "SELECT * FROM users WHERE name = ?",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
