@@ -409,7 +409,35 @@ func (q SelectQuery) DistinctOn(exprs ...sql.Expression) SelectQuery {
 // sql.WindowDef(name).PartitionBy(...).OrderBy(...).
 func (q SelectQuery) Window(defs ...sql.NamedWindow) SelectQuery {
 	q.query = q.query.Window(defs...)
+	// A window spans the whole result set; concatenating per-chunk results would
+	// recompute it wrong, so a deferred IN must not be split (an inline OVER is
+	// caught separately by queryHasWindow at split time).
+	q.batchUnsafe = true
 	return q
+}
+
+// queryHasWindow reports whether q's AST carries a window function — an inline
+// OVER in a projection or a named WINDOW definition. A window aggregates/ranks
+// across the result set, so a query carrying one cannot be split into per-chunk
+// statements: each chunk would compute the window over only its own rows.
+func queryHasWindow(q sql.Query) bool {
+	node, ok := sql.Unwrap(q).(sql.Node)
+	if !ok {
+		return false
+	}
+	found := false
+	sql.Inspect(node, func(n sql.Node) bool {
+		if found {
+			return false
+		}
+		switch n.(type) {
+		case sql.WindowExpression, sql.NamedWindow:
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 // CTE wraps this SELECT as a common table expression named name, for use as a
@@ -485,7 +513,11 @@ func (q SelectQuery) rows(ctx context.Context, query sql.Query, opts []ExecOptio
 // fit). AutoChunk's ChunkSize additionally caps the values per statement. Reads are
 // never writes.
 func (q SelectQuery) splitStatements(ex executorBinding) ([]compiledStmt, bool, bool, error) {
-	if q.batchUnsafe || q.chunkOff {
+	// A window function spans the whole result set, so splitting the IN across
+	// statements would recompute it over each chunk's rows alone (ROW_NUMBER
+	// restarting per chunk, etc.). queryHasWindow catches an inline OVER in the
+	// projection, which the per-clause batchUnsafe flags cannot see.
+	if q.batchUnsafe || q.chunkOff || queryHasWindow(q.query) {
 		return nil, false, false, nil
 	}
 	dialect := ex.sqlDialect()
