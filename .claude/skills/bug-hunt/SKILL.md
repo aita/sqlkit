@@ -351,3 +351,23 @@ former (and only when the user has authorized auto-merge at all).
 
 When in doubt, default to **needs review**: the cost of a held PR is a comment;
 the cost of an auto-merged spec change is a regression in `main`.
+
+## Labels
+
+Label every PR so the queue is triageable at a glance — the same severity and
+Mergeability verdicts, as labels. Apply them on creation (via the GitHub MCP
+`issue_write` with `method: update` and the full `labels` array; a name that does
+not exist yet is created automatically, defaulting to a gray swatch — fine to
+leave). Each PR carries exactly one kind label, one severity (bug fixes only),
+and one mergeability label:
+
+- **Kind** — `bug` (a fix), `enhancement` (a feature/new API), or
+  `documentation` (docs/skill only).
+- **Severity** (bug fixes) — `severity: critical` / `severity: high` /
+  `severity: medium` / `severity: low`, matching the Severity rubric above.
+- **Mergeability** — `auto-merge-safe` or `needs-review`, matching the verdict
+  above. A feature or a docs/conventions change defaults to `needs-review`.
+
+So a typical silent-wrong-data fix that only corrects broken output is
+`bug` + `severity: critical` + `auto-merge-safe`; a checksum-encoding change is
+`bug` + `severity: critical` + `needs-review`.
