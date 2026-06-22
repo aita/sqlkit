@@ -41,6 +41,20 @@ func TestRevokeCompile(t *testing.T) {
 	}
 }
 
+// TestRevokeObjectNameContainingTO pins that REVOKE emits FROM by building the
+// clause with the right keyword, not by rewriting " TO " in the finished text:
+// an object name that itself contains " TO " must survive intact.
+func TestRevokeObjectNameContainingTO(t *testing.T) {
+	got, _, err := Revoke("SELECT").On("a TO b").From("alice").ToSQL(PostgreSQLDialect{})
+	if err != nil {
+		t.Fatalf("ToSQL() error = %v", err)
+	}
+	want := `REVOKE SELECT ON TABLE "a TO b" FROM "alice";`
+	if got != want {
+		t.Fatalf("ToSQL() = %q, want %q", got, want)
+	}
+}
+
 func TestGrantRequiresObjectAndGrantee(t *testing.T) {
 	if _, _, err := Grant("SELECT").To("r").ToSQL(PostgreSQLDialect{}); err == nil {
 		t.Fatal("GRANT without objects succeeded, want error")
