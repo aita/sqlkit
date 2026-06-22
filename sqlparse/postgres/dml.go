@@ -407,6 +407,11 @@ func convertMergeInsert(when sql.MergeWhen, wc *pg.MergeWhenClause) (sql.MergeWh
 		if rt == nil {
 			return when, sqlparse.Unsupportedf("MERGE INSERT column %T", target.GetNode())
 		}
+		// A quoted name with a dot ("x.y") would name the wrong column once the
+		// quotes are gone; fall back to raw, matching convertInsert.
+		if strings.Contains(rt.GetName(), ".") {
+			return when, sqlparse.Unsupportedf("MERGE INSERT column with a dot: %q", rt.GetName())
+		}
 		columns = append(columns, rt.GetName())
 	}
 	values := make([]any, 0, len(wc.GetValues()))
