@@ -219,3 +219,19 @@ func TestGenerateCatalogErrors(t *testing.T) {
 		t.Error("GenerateCatalog() without tables: expected error")
 	}
 }
+
+// A column with a nil Type must produce a descriptive compile-time error, not a
+// runtime panic out of DeclTypeExpr's column.Type.Engine dereference.
+func TestGenerateCatalogNilColumnType(t *testing.T) {
+	tables := []meta.Table{{
+		Name:    "widgets",
+		Columns: []meta.Column{{Name: "id", Type: nil}},
+	}}
+	_, err := GenerateCatalog(meta.Metadata{Tables: tables}, CatalogOptions{PackageName: "schema"})
+	if err == nil {
+		t.Fatalf("GenerateCatalog() with a nil-type column: got nil error, want a descriptive type error")
+	}
+	if !strings.Contains(err.Error(), "id") || !strings.Contains(err.Error(), "type") {
+		t.Fatalf("error %q should name the column and mention its missing type", err)
+	}
+}
