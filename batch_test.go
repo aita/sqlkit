@@ -143,6 +143,36 @@ func TestInsertReturningWithinLimitIsSingleQuery(t *testing.T) {
 	}
 }
 
+// TestRoutedInsertReturningSplitStaysAtomic guards a routed (per-statement
+// WithRoute) bulk RETURNING write against losing its atomic transaction when
+// split: the hint wraps the executor in a routedBinding, which batchExecutor must
+// look through so the chunks still run in one transaction on the primary.
+func TestRoutedInsertReturningSplitStaysAtomic(t *testing.T) {
+	primary := returningFake(func(args []any) int { return len(args) / 2 })
+	replica := rowFake()
+	router := sqlkit.NewRouter(map[string]sqlkit.Backend{
+		"default": sqlkit.DB(primary.DB()),
+		"replica": sqlkit.DB(replica.DB()),
+	}, rwSplit)
+	db := sqlkit.WrapExecutor(router)
+
+	rows := []User{{Email: "a"}, {Email: "b"}, {Email: "c"}, {Email: "d"}, {Email: "e"}}
+	var out []User
+	err := db.Insert(Users).Values(rows).AutoChunk(sqlkit.ChunkSize(2)).
+		Returning().All(context.Background(), sqlkit.WithRoute("default")).Scan(&out)
+	if err != nil {
+		t.Fatalf("routed insert returning error = %v", err)
+	}
+	if len(out) != 5 {
+		t.Fatalf("returned rows = %d, want 5 (concatenated)", len(out))
+	}
+	// The split chunks must share one write transaction on the primary, even
+	// though the per-statement WithRoute wrapped the executor in a routedBinding.
+	if opts := primary.BeginOptions(); len(opts) != 1 {
+		t.Fatalf("primary begins = %d, want 1 (chunks must share one tx)", len(opts))
+	}
+}
+
 func TestUpdateReturningSplitsByInList(t *testing.T) {
 	// SET name = $1 consumes one param; ChunkSize 2 leaves two ids per statement.
 	fake := returningFake(func(args []any) int { return len(args) - 1 })
