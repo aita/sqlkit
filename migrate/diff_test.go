@@ -1,6 +1,7 @@
 package migrate_test
 
 import (
+	"sort"
 	"strings"
 	"testing"
 
@@ -260,5 +261,62 @@ func TestDiffPrimaryKeyChange(t *testing.T) {
 	joined := strings.Join(diff(t, old, next), "\n")
 	if !strings.Contains(joined, `DROP CONSTRAINT "t_pkey"`) || !strings.Contains(joined, `ADD PRIMARY KEY ("b")`) {
 		t.Errorf("expected PK drop+add, got:\n%s", joined)
+	}
+}
+
+// TestDiffDeterministicDropOrder pins that dropping several indexes and foreign
+// keys in one diff emits them in a stable, name-sorted order. Before the fix
+// diffTable ranged the by-name index and FK maps directly, so Go's randomized
+// map iteration produced a different statement order on different runs.
+func TestDiffDeterministicDropOrder(t *testing.T) {
+	users := tbl("users", col("id", "int8"))
+	ref := meta.Schema{Name: "public"}
+
+	posts := func(withObjects bool) meta.Table {
+		p := tbl("posts", col("id", "int8"), col("user_id", "int8"), col("email", "text"))
+		if withObjects {
+			p.Indexes = []meta.Index{
+				{Name: "idx_e", Columns: []string{"id"}},
+				{Name: "idx_d", Columns: []string{"id"}},
+				{Name: "idx_c", Columns: []string{"id"}},
+				{Name: "idx_b", Columns: []string{"id"}},
+				{Name: "idx_a", Columns: []string{"email"}},
+			}
+			p.ForeignKeys = []meta.ForeignKey{
+				{Name: "fk_d", Columns: []string{"user_id"}, RefSchema: ref, RefTable: "users", RefColumns: []string{"id"}},
+				{Name: "fk_c", Columns: []string{"user_id"}, RefSchema: ref, RefTable: "users", RefColumns: []string{"id"}},
+				{Name: "fk_b", Columns: []string{"user_id"}, RefSchema: ref, RefTable: "users", RefColumns: []string{"id"}},
+				{Name: "fk_a", Columns: []string{"user_id"}, RefSchema: ref, RefTable: "users", RefColumns: []string{"id"}},
+			}
+		}
+		return p
+	}
+
+	old := md(users, posts(true))
+	next := md(users, posts(false))
+
+	// The diff must be byte-identical across many runs despite randomized map
+	// iteration; a single run can coincidentally come out ordered.
+	first := diff(t, old, next)
+	for i := 0; i < 200; i++ {
+		if got := diff(t, old, next); !equalStrings(got, first) {
+			t.Fatalf("non-deterministic diff on run %d:\n first=%v\n got  =%v", i, first, got)
+		}
+	}
+
+	// Dropped objects of each kind come out in ascending name order.
+	for _, kind := range []string{"DROP INDEX", "DROP CONSTRAINT"} {
+		var lines []string
+		for _, stmt := range first {
+			if strings.Contains(stmt, kind) {
+				lines = append(lines, stmt)
+			}
+		}
+		if len(lines) < 2 {
+			t.Fatalf("%s: expected several statements, got %v", kind, lines)
+		}
+		if !sort.StringsAreSorted(lines) {
+			t.Errorf("%s statements not in sorted order: %v", kind, lines)
+		}
 	}
 }
