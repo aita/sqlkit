@@ -91,6 +91,17 @@ func TestExprNegativeNumber(t *testing.T) {
 		-50)
 }
 
+// A literal larger than int64 max arrives from the parser as a uint64; it must
+// keep its value rather than wrap to a negative int.
+func TestExprUint64Literal(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT id FROM t WHERE x = 18446744073709551615",
+		sql.Select(sql.Col("id")).From(sql.Table{Name: sql.NewIdent("t")}).
+			Where(sql.Eq(sql.Col("x"), uint64(18446744073709551615))),
+		"SELECT `id` FROM `t` WHERE (`x` = ?)",
+		uint64(18446744073709551615))
+}
+
 func TestExprArithmetic(t *testing.T) {
 	assertRoundTrip(t,
 		"SELECT id FROM t WHERE a + b * 2 = c",
