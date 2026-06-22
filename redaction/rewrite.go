@@ -134,6 +134,57 @@ func (m *Redactor) rewriteExpr(e sql.Expression, sc *scope) sql.Expression {
 	case sql.FieldExpression:
 		x.Operand = m.rewriteExpr(x.Operand, sc)
 		return x
+	case sql.SubscriptExpression:
+		x.Operand = m.rewriteExpr(x.Operand, sc)
+		if len(x.Indices) > 0 {
+			indices := clone(x.Indices)
+			for i := range indices {
+				indices[i].Lower = m.rewriteExpr(indices[i].Lower, sc)
+				indices[i].Upper = m.rewriteExpr(indices[i].Upper, sc)
+			}
+			x.Indices = indices
+		}
+		return x
+	case sql.PositionExpression:
+		x.Substring = m.rewriteExpr(x.Substring, sc)
+		x.String = m.rewriteExpr(x.String, sc)
+		return x
+	case sql.ExtractExpression:
+		x.Operand = m.rewriteExpr(x.Operand, sc)
+		return x
+	case sql.StringAggExpression:
+		x.Arg = m.rewriteExpr(x.Arg, sc)
+		return x
+	case sql.CountExpression:
+		if target, ok := x.Target.(sql.Expression); ok {
+			if rewritten, ok := m.rewriteExpr(target, sc).(sql.Selection); ok {
+				x.Target = rewritten
+			}
+		}
+		return x
+	case sql.WindowExpression:
+		x.Fn = m.rewriteExpr(x.Fn, sc)
+		x.Partitions = m.rewriteExprs(x.Partitions, sc)
+		x.OrderByTerms = m.rewriteOrderTerms(x.OrderByTerms, sc)
+		return x
+	case sql.JSONObjectExpression:
+		x.Pairs = m.rewriteExprs(x.Pairs, sc)
+		return x
+	case sql.JSONAccessExpression:
+		x.Operand = m.rewriteExpr(x.Operand, sc)
+		return x
+	case sql.GroupingExpression:
+		x.Elements = m.rewriteExprs(x.Elements, sc)
+		return x
+	case sql.GroupingSetsExpression:
+		if len(x.Sets) > 0 {
+			sets := clone(x.Sets)
+			for i := range sets {
+				sets[i] = m.rewriteExprs(sets[i], sc)
+			}
+			x.Sets = sets
+		}
+		return x
 	case sql.CaseExpression:
 		x.Operand = m.rewriteExpr(x.Operand, sc)
 		if len(x.Whens) > 0 {
@@ -408,6 +459,47 @@ func (m *Redactor) maskValue(e sql.Expression) sql.Expression {
 		return x
 	case sql.ArrayExpression:
 		x.Elements = m.maskValues(x.Elements)
+		return x
+	case sql.FieldExpression:
+		x.Operand = m.maskValue(x.Operand)
+		return x
+	case sql.SubscriptExpression:
+		x.Operand = m.maskValue(x.Operand)
+		if len(x.Indices) > 0 {
+			indices := clone(x.Indices)
+			for i := range indices {
+				indices[i].Lower = m.maskValue(indices[i].Lower)
+				indices[i].Upper = m.maskValue(indices[i].Upper)
+			}
+			x.Indices = indices
+		}
+		return x
+	case sql.PositionExpression:
+		x.Substring = m.maskValue(x.Substring)
+		x.String = m.maskValue(x.String)
+		return x
+	case sql.ExtractExpression:
+		x.Operand = m.maskValue(x.Operand)
+		return x
+	case sql.StringAggExpression:
+		x.Arg = m.maskValue(x.Arg)
+		return x
+	case sql.CountExpression:
+		if target, ok := x.Target.(sql.Expression); ok {
+			if masked, ok := m.maskValue(target).(sql.Selection); ok {
+				x.Target = masked
+			}
+		}
+		return x
+	case sql.WindowExpression:
+		x.Fn = m.maskValue(x.Fn)
+		x.Partitions = m.maskValues(x.Partitions)
+		return x
+	case sql.JSONObjectExpression:
+		x.Pairs = m.maskValues(x.Pairs)
+		return x
+	case sql.JSONAccessExpression:
+		x.Operand = m.maskValue(x.Operand)
 		return x
 	case sql.CaseExpression:
 		// The whole CASE is the value being compared to a sensitive column, so
