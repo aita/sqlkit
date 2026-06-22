@@ -496,8 +496,11 @@ func (r *renderer) sequenceCreate(s meta.Sequence) string {
 func (r *renderer) diffTable(oldT, newT meta.Table, renameColumns, alters, createIndexes, dropIndexes, addFKs, dropFKs, comments *[]string) error {
 	name := newT.Name
 
-	// Column renames for this table (keyed by the destination table name).
-	colFromTo := map[string]string{}
+	// Column renames for this table, kept in rename-declaration order so the
+	// post-rename column-change statements below are emitted deterministically
+	// (ranging a map would order them by Go's randomized iteration).
+	type colRename struct{ from, to string }
+	var colRenames []colRename
 	renamedFromCol := map[string]bool{}
 	renamedToCol := map[string]bool{}
 	oldCols := columnsByName(oldT)
@@ -513,7 +516,7 @@ func (r *renderer) diffTable(oldT, newT meta.Table, renameColumns, alters, creat
 			continue
 		}
 		*renameColumns = append(*renameColumns, fmt.Sprintf("op.RenameColumn(%q, %q, %q)", name, cr.From, cr.To))
-		colFromTo[cr.From] = cr.To
+		colRenames = append(colRenames, colRename{from: cr.From, to: cr.To})
 		renamedFromCol[cr.From] = true
 		renamedToCol[cr.To] = true
 	}
@@ -557,8 +560,8 @@ func (r *renderer) diffTable(oldT, newT meta.Table, renameColumns, alters, creat
 		}
 	}
 	// Renamed columns may also have changed type/nullability/default/comment.
-	for from, to := range colFromTo {
-		if err := r.columnChange(name, oldCols[from], newCols[to], alters, comments); err != nil {
+	for _, cr := range colRenames {
+		if err := r.columnChange(name, oldCols[cr.from], newCols[cr.to], alters, comments); err != nil {
 			return err
 		}
 	}
