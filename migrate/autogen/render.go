@@ -730,6 +730,9 @@ func (r *renderer) createTable(t meta.Table) (string, error) {
 
 // columnElement renders a decl.Column element with its intrinsic options.
 func (r *renderer) columnElement(c meta.Column) (string, error) {
+	if c.Type == nil {
+		return "", fmt.Errorf("autogen: column %q has no type", c.Name)
+	}
 	r.usesDecl = true
 	var b strings.Builder
 	fmt.Fprintf(&b, "decl.Column(%q, %s", c.Name, codegen.DeclTypeExpr(c, r.dialect.Name()))

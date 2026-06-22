@@ -168,6 +168,9 @@ func renderCatalogTable(sb *strings.Builder, table meta.Table, owner string, tab
 		fmt.Fprintf(sb, "\tdecl.TableComment(%q),\n", table.Comment)
 	}
 	for _, column := range table.Columns {
+		if column.Type == nil {
+			return fmt.Errorf("codegen: table %q column %q has no type", table.Name, column.Name)
+		}
 		fmt.Fprintf(sb, "\tdecl.Column(%q, %s", column.Name, DeclTypeExpr(column, dialect))
 		if column.PrimaryKey {
 			sb.WriteString(", decl.PrimaryKey()")
