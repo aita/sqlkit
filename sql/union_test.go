@@ -28,6 +28,18 @@ func TestUnion(t *testing.T) {
 		[]any{true})
 }
 
+// TestUnionMySQLOffsetWithoutLimit covers a set operation with OFFSET but no
+// LIMIT on MySQL: MySQL rejects a bare OFFSET, so the compiler must emit the
+// "all rows" sentinel LIMIT first, matching the SELECT compiler.
+func TestUnionMySQLOffsetWithoutLimit(t *testing.T) {
+	a := Select(Col("id")).From(Table{Name: NewIdent("a")})
+	b := Select(Col("id")).From(Table{Name: NewIdent("b")})
+
+	assertMySQL(t, a.Union(b).Offset(10),
+		"(SELECT `id` FROM `a`) UNION (SELECT `id` FROM `b`) LIMIT 18446744073709551615 OFFSET 10",
+		nil)
+}
+
 func TestUnionAllChained(t *testing.T) {
 	a := Select(Col("id")).From(Table{Name: NewIdent("a")})
 	b := Select(Col("id")).From(Table{Name: NewIdent("b")})
