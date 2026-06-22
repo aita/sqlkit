@@ -1,0 +1,49 @@
+# Canonical label registry for aita/sqlkit.
+#
+# This is the source of truth for the repository's labels, codifying the
+# convention documented in CLAUDE.md ("## Pull requests" → Labels). A PR should
+# carry one kind label, one severity label (for bug fixes), and one mergeability
+# label.
+#
+# The file is consumable by a label-sync tool (e.g. github-label-sync or
+# crazy-max/ghaction-github-labeler) should the maintainer choose to apply it;
+# there is no workflow wired up, so labels are not synced automatically.
+
+# --- Kind: exactly one per PR/issue. ------------------------------------------
+- name: bug
+  color: d73a4a
+  description: A confirmed defect — panic, invalid SQL, wrong result, or PII leak
+
+- name: enhancement
+  color: a2eeef
+  description: New feature or request
+
+- name: documentation
+  color: 0075ca
+  description: Improvements or additions to documentation
+
+# --- Severity: one per bug fix, weighted by reachability (common vs. exotic). --
+- name: "severity: critical"
+  color: b60205
+  description: Silent wrong data or a security breach
+
+- name: "severity: high"
+  color: d93f0b
+  description: A crash or a lost integrity guarantee
+
+- name: "severity: medium"
+  color: fbca04
+  description: A loud, contained failure — invalid SQL the engine rejects, or non-determinism
+
+- name: "severity: low"
+  color: 0e8a16
+  description: No production-visible wrong behavior — hardening or cosmetic
+
+# --- Mergeability: exactly one per PR; default to needs-review when unsure. ----
+- name: auto-merge-safe
+  color: 1d76db
+  description: Only corrects already-broken output, no behavior change for valid input — safe to auto-merge
+
+- name: needs-review
+  color: ededed
+  description: Behavior/contract change or a security/integrity-critical pass — needs a human reviewer
