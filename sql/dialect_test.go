@@ -450,4 +450,14 @@ func TestJSONAccessErrorsAndKeyForms(t *testing.T) {
 	if !strings.Contains(got, `"a b"`) {
 		t.Errorf("expected quoted key in %q", got)
 	}
+
+	// A backslash in a key must be escaped, so it cannot escape the closing quote
+	// of the path member and inject further path syntax.
+	got, err = MySQLDialect{}.JSONAccess("`data`", []any{`a\".b`}, true)
+	if err != nil {
+		t.Fatalf("JSONAccess: %v", err)
+	}
+	if !strings.Contains(got, `"a\\\".b"`) {
+		t.Errorf("backslash/quote not escaped in path member: %q", got)
+	}
 }
