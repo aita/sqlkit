@@ -223,3 +223,9 @@ func TestInsertColumnWithDotFallsBackToRaw(t *testing.T) {
 func TestSetTargetWithDotFallsBackToRaw(t *testing.T) {
 	assertRaw(t, `UPDATE t SET "x.y" = 0`)
 }
+
+// A MERGE ... WHEN NOT MATCHED THEN INSERT column with a dot is re-split into the
+// wrong qualified column just like a plain INSERT, so it round-trips as raw.
+func TestMergeInsertColumnWithDotFallsBackToRaw(t *testing.T) {
+	assertRaw(t, `MERGE INTO t USING s ON t.id = s.id WHEN NOT MATCHED THEN INSERT ("x.y") VALUES (1)`)
+}
