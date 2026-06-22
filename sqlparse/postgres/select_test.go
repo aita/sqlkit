@@ -1,6 +1,7 @@
 package postgres_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/aita/sqlkit/sql"
@@ -25,6 +26,26 @@ func TestSelectStar(t *testing.T) {
 // raw statement rather than a select the compiler would reject.
 func TestSelectWithoutTargetListFallsBackToRaw(t *testing.T) {
 	assertRaw(t, "SELECT")
+}
+
+// ORDER BY ... USING <operator> selects a custom ordering operator that
+// sqlkit's OrderTerm (ASC/DESC only) cannot represent. It must fall back to a
+// raw passthrough so the operator survives, rather than render as a plain
+// ascending sort (a silent meaning change — USING > is descending).
+func TestOrderByUsingOperatorFallsBackToRaw(t *testing.T) {
+	for _, src := range []string{
+		"SELECT a FROM t ORDER BY a USING >",
+		"SELECT a FROM t ORDER BY a USING ~<~",
+	} {
+		raw := assertRaw(t, src)
+		text, _, err := raw.ToSQL(sql.PostgreSQLDialect{})
+		if err != nil {
+			t.Fatalf("ToSQL(%q) error = %v", src, err)
+		}
+		if !strings.Contains(text, "USING") {
+			t.Errorf("raw fallback for %q dropped the USING operator: %q", src, text)
+		}
+	}
 }
 
 func TestSelectWhereAndArgs(t *testing.T) {
