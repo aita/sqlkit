@@ -65,6 +65,11 @@ type Analysis struct {
 	// literal with = or <> (NullEqualityPredicate); false unless Parsed. It backs
 	// the eq_null check.
 	NullEquality bool
+	// LockingRead reports whether a SELECT carries a row-locking clause
+	// (FOR UPDATE / FOR SHARE / ...); false unless Parsed. Such a statement is a
+	// read by Kind but write-like in effect — it takes locks and a read-only
+	// transaction or replica rejects it — so IsWrite folds it in.
+	LockingRead bool
 	// Fingerprint is the normalized SQL used to group repeats; empty unless the
 	// caller asked for it. See Analyzer.Fingerprint and FingerprintRaw.
 	Fingerprint string
@@ -75,6 +80,13 @@ type Analysis struct {
 	// diagnostics; nil when Parsed. It is never an execution error.
 	Err error
 }
+
+// IsWrite reports whether the statement modifies data or takes row locks: a
+// definite write (INSERT/UPDATE/DELETE/DDL) by Kind, or a locking read
+// (SELECT ... FOR UPDATE/SHARE), which acquires locks and a read-only
+// transaction or replica rejects. It is the write predicate observers should
+// use rather than Kind.IsWrite alone, which misses the locking read.
+func (a Analysis) IsWrite() bool { return a.Kind.IsWrite() || a.LockingRead }
 
 // Analyze returns the static structural analysis of a statement, preferring the
 // parsed AST q and falling back to a keyword guess on sqlText when q is nil or of
@@ -101,8 +113,17 @@ func (a *Analyzer) Analyze(sqlText string, q sql.Query) Analysis {
 		FilterColumns:    cols,
 		MaxInList:        maxIn,
 		NullEquality:     NullEqualityPredicate(q),
+		LockingRead:      isLockingRead(q),
 		Parsed:           true,
 	}
+}
+
+// isLockingRead reports whether q is a SELECT carrying a row-locking clause
+// (FOR UPDATE / FOR SHARE / ...). Such a read takes locks and is rejected by a
+// read-only transaction, so observers treat it as write-like.
+func isLockingRead(q sql.Query) bool {
+	sel, ok := sql.Unwrap(q).(sql.SelectStmt)
+	return ok && sel.Lock != nil
 }
 
 // Kind reports the statement kind from the AST; see KindOf.

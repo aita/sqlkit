@@ -224,7 +224,7 @@ func (t *Trace) checkStatement(ev Event, exp expectations) {
 	if q == nil {
 		return
 	}
-	isWrite := q.Kind.IsWrite()
+	isWrite := q.IsWrite()
 
 	if exp.forbidQueries {
 		t.addWarning(Warning{
