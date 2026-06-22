@@ -865,3 +865,128 @@ func TestAttachDetectsInPlacePointerMutation(t *testing.T) {
 		t.Fatalf("update args = %v, want [bye, 1]", execs[0].Args)
 	}
 }
+
+// --- foreign-key-aware flush ordering ---
+
+// postsTable references users(id) via user_id, so a Unit of Work that stages both
+// must insert users before posts and delete posts before users.
+type postsTable struct {
+	info   sqlkit.TableInfo
+	ID     sqlkit.Column[int64]
+	UserID sqlkit.Column[int64]
+}
+
+func newPostsFull(checksum string) postsTable {
+	info := sqlkit.TableInfo{Schema: "public", Name: "posts", Checksum: checksum}
+	return postsTable{
+		info:   info,
+		ID:     sqlkit.NewColumn[int64](info, "id"),
+		UserID: sqlkit.NewColumn[int64](info, "user_id"),
+	}
+}
+
+func (t postsTable) Info() sqlkit.TableInfo             { return t.info }
+func (t postsTable) SQLSource() sqlkit.SourceExpression { return t.info.SQLSource() }
+func (t postsTable) Columns() []sqlkit.AnyColumn        { return []sqlkit.AnyColumn{t.ID, t.UserID} }
+func (t postsTable) PrimaryKey() []sqlkit.AnyColumn     { return []sqlkit.AnyColumn{t.ID} }
+func (t postsTable) Defaulted() []sqlkit.AnyColumn      { return []sqlkit.AnyColumn{t.ID} }
+
+type postRow struct {
+	ID     int64 `sqlkit:"id"`
+	UserID int64 `sqlkit:"user_id"`
+}
+
+func postsMeta() meta.Table {
+	return meta.Table{
+		Schema: meta.Schema{Name: "public"},
+		Name:   "posts",
+		Columns: []meta.Column{
+			{Name: "id", Type: meta.Of("postgres", "bigint", 0, 0, 0), PrimaryKey: true, HasDefault: true},
+			{Name: "user_id", Type: meta.Of("postgres", "bigint", 0, 0, 0)},
+		},
+		ForeignKeys: []meta.ForeignKey{
+			{Name: "fk_posts_user", Columns: []string{"user_id"}, RefSchema: meta.Schema{Name: "public"}, RefTable: "users", RefColumns: []string{"id"}},
+		},
+	}
+}
+
+// firstIndexContaining returns the index of the first call whose SQL contains sub,
+// or -1.
+func firstIndexContaining(calls []testutil.Call, sub string) int {
+	for i, c := range calls {
+		if strings.Contains(c.SQL, sub) {
+			return i
+		}
+	}
+	return -1
+}
+
+func fkScope(t *testing.T, fake *testutil.Fake) (*uow.Scope, usersTable, postsTable) {
+	t.Helper()
+	im, err := meta.Metadata{Tables: []meta.Table{usersMeta(), postsMeta()}}.Identities()
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()), uow.WithIdentities(im))
+	return scope, newUsersFull(usersMeta().Key().Checksum, ""), newPostsFull(postsMeta().Key().Checksum)
+}
+
+func TestFlushInsertsParentsBeforeChildren(t *testing.T) {
+	fake := &testutil.Fake{}
+	scope, users, posts := fkScope(t, fake)
+	// Stage the child (posts) first; the flush must still insert the parent first.
+	if err := scope.Add(posts, postRow{ID: 1, UserID: 7}); err != nil {
+		t.Fatal(err)
+	}
+	if err := scope.Add(users, userRow{ID: 7, Email: "a@x", Name: "A"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := scope.Flush(ctx()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	execs := fake.Execs()
+	ui, pi := firstIndexContaining(execs, "users"), firstIndexContaining(execs, "posts")
+	if ui < 0 || pi < 0 || ui > pi {
+		t.Fatalf("insert order: users at %d, posts at %d, want users before posts\n%v", ui, pi, verbs(execs))
+	}
+}
+
+func TestFlushDeletesChildrenBeforeParents(t *testing.T) {
+	fake := &testutil.Fake{}
+	scope, users, posts := fkScope(t, fake)
+	// Stage the parent (users) removal first; the flush must still delete the child
+	// (posts) first, the reverse of the foreign-key order.
+	if err := scope.Remove(users, userRow{ID: 7}); err != nil {
+		t.Fatal(err)
+	}
+	if err := scope.Remove(posts, postRow{ID: 1, UserID: 7}); err != nil {
+		t.Fatal(err)
+	}
+	if err := scope.Flush(ctx()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	execs := fake.Execs()
+	pi, ui := firstIndexContaining(execs, "posts"), firstIndexContaining(execs, "users")
+	if pi < 0 || ui < 0 || pi > ui {
+		t.Fatalf("delete order: posts at %d, users at %d, want posts before users\n%v", pi, ui, verbs(execs))
+	}
+}
+
+func TestRemovedManagedEntitySkipsUpdate(t *testing.T) {
+	fake := &testutil.Fake{}
+	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()))
+	u := &userRow{ID: 7, Email: "a@x", Name: "Alice"}
+	if err := scope.Attach(newUsers(), u); err != nil {
+		t.Fatal(err)
+	}
+	u.Name = "Bob"                                      // a dirty change that would UPDATE...
+	if err := scope.Remove(newUsers(), u); err != nil { // ...but the row is also removed
+		t.Fatal(err)
+	}
+	if err := scope.Flush(ctx()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if got := verbs(fake.Execs()); len(got) != 1 || got[0] != "DELETE" {
+		t.Fatalf("verbs = %v, want a single DELETE (no wasted UPDATE before the delete)", got)
+	}
+}
