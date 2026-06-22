@@ -31,24 +31,37 @@ type Metadata struct {
 	// them, a grant targets them) and dropped before them.
 	MaterializedViews []MaterializedView
 	Grants            []Grant
+	// ManagedSchemas are schemas put under migration management (CREATE/DROP
+	// SCHEMA) independently of any table — for example a schema that hosts only an
+	// enum, sequence, or materialized view. Schemas() folds them in alongside the
+	// schemas derived from the tables, so CreateSQL creates them before the objects
+	// that live in them. A schema that also hosts a table need not be repeated here.
+	ManagedSchemas []Schema
 }
 
-// Schemas returns the distinct schemas of the tables, in first-seen order. When
-// the same schema name appears with differing Create flags (e.g. one table
-// marks it for creation and another does not), the result reports Create=true:
-// the schema is managed if any of its tables ask for it.
+// Schemas returns the distinct schemas of the tables and the ManagedSchemas, in
+// first-seen order (table schemas first). When the same schema name appears more
+// than once with differing Create flags (e.g. one table marks it for creation
+// and another does not, or it is also a ManagedSchema), the result reports
+// Create=true: the schema is managed if any occurrence asks for it.
 func (m Metadata) Schemas() []Schema {
 	var out []Schema
 	index := map[string]int{}
-	for _, t := range m.Tables {
-		if i, ok := index[t.Schema.Name]; ok {
-			if t.Schema.Create {
+	add := func(s Schema) {
+		if i, ok := index[s.Name]; ok {
+			if s.Create {
 				out[i].Create = true
 			}
-			continue
+			return
 		}
-		index[t.Schema.Name] = len(out)
-		out = append(out, t.Schema)
+		index[s.Name] = len(out)
+		out = append(out, s)
+	}
+	for _, t := range m.Tables {
+		add(t.Schema)
+	}
+	for _, s := range m.ManagedSchemas {
+		add(s)
 	}
 	return out
 }

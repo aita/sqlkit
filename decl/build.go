@@ -3,6 +3,7 @@ package decl
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/aita/sqlkit/meta"
@@ -48,7 +49,29 @@ func (d *Catalog) Build() (meta.Metadata, error) {
 		Sequences:         append([]meta.Sequence(nil), d.sequences...),
 		MaterializedViews: append([]meta.MaterializedView(nil), d.matviews...),
 		Grants:            append([]meta.Grant(nil), d.grants...),
+		ManagedSchemas:    d.managedSchemas(),
 	}, nil
+}
+
+// managedSchemas returns the schemas marked for creation (Catalog.Schema with
+// Create), in name order so the result is deterministic. Metadata.Schemas folds
+// these in alongside the table schemas, so a schema that hosts only an enum,
+// sequence, or materialized view is still created — a table schema repeated here
+// is deduplicated.
+func (d *Catalog) managedSchemas() []meta.Schema {
+	if len(d.createSchemas) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(d.createSchemas))
+	for name := range d.createSchemas {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]meta.Schema, len(names))
+	for i, name := range names {
+		out[i] = meta.Schema{Name: name, Create: true}
+	}
+	return out
 }
 
 // BuildTable assembles a single meta.Table from decl table elements without a

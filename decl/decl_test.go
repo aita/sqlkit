@@ -117,6 +117,36 @@ func TestSchemaCreateOption(t *testing.T) {
 	}
 }
 
+// TestSchemaCreateObjectOnly pins that a Create schema hosting only an enum (no
+// table) is still created: the enum's CREATE TYPE is schema-qualified, so a
+// missing CREATE SCHEMA would make the generated SQL reference a schema that does
+// not exist.
+func TestSchemaCreateObjectOnly(t *testing.T) {
+	catalog := decl.NewCatalog()
+	catalog.Schema("audit", decl.Create()).Enum("mood", "happy", "sad")
+	md := buildCatalog(t, catalog)
+
+	pg, err := querysql.DialectByName("postgres")
+	if err != nil {
+		t.Fatalf("DialectByName() error = %v", err)
+	}
+	got, err := md.CreateSQL(pg)
+	if err != nil {
+		t.Fatalf("CreateSQL() error = %v", err)
+	}
+	schemaAt := strings.Index(got, `CREATE SCHEMA IF NOT EXISTS "audit";`)
+	if schemaAt < 0 {
+		t.Fatalf("expected CREATE SCHEMA for the enum-only audit schema:\n%s", got)
+	}
+	typeAt := strings.Index(got, `CREATE TYPE "audit"."mood"`)
+	if typeAt < 0 {
+		t.Fatalf("expected the enum type in the audit schema:\n%s", got)
+	}
+	if schemaAt > typeAt {
+		t.Errorf("CREATE SCHEMA must precede the CREATE TYPE that needs it:\n%s", got)
+	}
+}
+
 func TestBuildPortableTypes(t *testing.T) {
 	catalog := decl.NewCatalog()
 	catalog.Table("items",
