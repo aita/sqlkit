@@ -1019,8 +1019,12 @@ func (c *Compiler) CompileSelect(q SelectStmt) (string, []any, error) {
 		}
 	}
 	if q.HasLimit {
+		v, err := limitCount("LIMIT", q.Limit)
+		if err != nil {
+			return "", nil, err
+		}
 		sb.WriteString(" LIMIT ")
-		sb.WriteString(strconv.Itoa(q.Limit))
+		sb.WriteString(v)
 	} else if q.HasOffset && c.Dialect.Name() == "mysql" {
 		// MySQL has no bare OFFSET — OFFSET is only valid after a LIMIT. Emit
 		// MySQL's documented "all rows" sentinel count so the OFFSET is accepted;
@@ -1028,8 +1032,12 @@ func (c *Compiler) CompileSelect(q SelectStmt) (string, []any, error) {
 		sb.WriteString(" LIMIT 18446744073709551615")
 	}
 	if q.HasOffset {
+		v, err := limitCount("OFFSET", q.Offset)
+		if err != nil {
+			return "", nil, err
+		}
 		sb.WriteString(" OFFSET ")
-		sb.WriteString(strconv.Itoa(q.Offset))
+		sb.WriteString(v)
 	}
 	if q.Lock != nil {
 		locker, ok := c.Dialect.(RowLocker)
@@ -1694,8 +1702,24 @@ func (c *Compiler) writeRowLimit(sb *strings.Builder, args *[]any, orderBy []Ord
 		return err
 	}
 	if hasLimit {
+		v, err := limitCount("LIMIT", limit)
+		if err != nil {
+			return err
+		}
 		sb.WriteString(" LIMIT ")
-		sb.WriteString(strconv.Itoa(limit))
+		sb.WriteString(v)
 	}
 	return nil
+}
+
+// limitCount renders a LIMIT/OFFSET count, rejecting a negative value. Both
+// PostgreSQL ("LIMIT/OFFSET must not be negative") and MySQL (whose grammar
+// accepts only a non-negative integer there) reject one, so emit a descriptive
+// compile-time error rather than SQL the engine refuses. clause names the
+// offending keyword for the message.
+func limitCount(clause string, n int) (string, error) {
+	if n < 0 {
+		return "", fmt.Errorf("sqlkit/sql: %s must not be negative, got %d", clause, n)
+	}
+	return strconv.Itoa(n), nil
 }
