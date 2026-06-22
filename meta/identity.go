@@ -91,6 +91,8 @@ func (t Table) Key() TableKey {
 		f.str(fk.RefSchema.Name)
 		f.str(fk.RefTable)
 		f.strs(fk.RefColumns)
+		f.str(string(fk.OnDelete))
+		f.str(string(fk.OnUpdate))
 	}
 
 	f.count(len(t.Checks))
