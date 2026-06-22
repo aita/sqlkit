@@ -73,32 +73,32 @@ func foldSetOp(q UnionQuery, op func(UnionQuery, SelectQuery) UnionQuery, rest [
 
 // Union appends another UNION operand.
 func (q UnionQuery) Union(other SelectQuery) UnionQuery {
-	return UnionQuery{ex: q.ex, query: q.query.Union(other.query)}
+	return UnionQuery{ex: q.ex, query: q.query.Union(other.finalQuery())}
 }
 
 // UnionAll appends another UNION ALL operand.
 func (q UnionQuery) UnionAll(other SelectQuery) UnionQuery {
-	return UnionQuery{ex: q.ex, query: q.query.UnionAll(other.query)}
+	return UnionQuery{ex: q.ex, query: q.query.UnionAll(other.finalQuery())}
 }
 
 // Intersect appends another INTERSECT operand.
 func (q UnionQuery) Intersect(other SelectQuery) UnionQuery {
-	return UnionQuery{ex: q.ex, query: q.query.Intersect(other.query)}
+	return UnionQuery{ex: q.ex, query: q.query.Intersect(other.finalQuery())}
 }
 
 // IntersectAll appends another INTERSECT ALL operand.
 func (q UnionQuery) IntersectAll(other SelectQuery) UnionQuery {
-	return UnionQuery{ex: q.ex, query: q.query.IntersectAll(other.query)}
+	return UnionQuery{ex: q.ex, query: q.query.IntersectAll(other.finalQuery())}
 }
 
 // Except appends another EXCEPT operand.
 func (q UnionQuery) Except(other SelectQuery) UnionQuery {
-	return UnionQuery{ex: q.ex, query: q.query.Except(other.query)}
+	return UnionQuery{ex: q.ex, query: q.query.Except(other.finalQuery())}
 }
 
 // ExceptAll appends another EXCEPT ALL operand.
 func (q UnionQuery) ExceptAll(other SelectQuery) UnionQuery {
-	return UnionQuery{ex: q.ex, query: q.query.ExceptAll(other.query)}
+	return UnionQuery{ex: q.ex, query: q.query.ExceptAll(other.finalQuery())}
 }
 
 // OrderBy adds ORDER BY terms applied to the combined result. In a set

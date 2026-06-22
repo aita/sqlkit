@@ -232,6 +232,24 @@ func TestUnionAsSubquerySource(t *testing.T) {
 	}
 }
 
+// TestUnionAppendKeepsDeferredIN guards against a regression where appending an
+// operand to an existing set operation dropped that operand's deferred column IN.
+// A lone "col IN (values)" is held back from the SelectQuery's query (so All can
+// chunk it) and folded in only by finalQuery; the UnionQuery append methods must
+// finalize each operand, or the WHERE clause vanishes from the compiled SQL. The
+// third operand here is appended through UnionQuery.Union via foldSetOp.
+func TestUnionAppendKeepsDeferredIN(t *testing.T) {
+	deferred := sqlkit.Select(Users.ID).From(Users).Where(Users.ID.In(1, 2, 3))
+	union := sqlkit.Union(
+		sqlkit.Select(Users.ID).From(Users),
+		sqlkit.Select(Users.ID).From(Users),
+		deferred,
+	)
+	assertToSQL(t, union,
+		`(SELECT "public"."users"."id" FROM "public"."users") UNION (SELECT "public"."users"."id" FROM "public"."users") UNION (SELECT "public"."users"."id" FROM "public"."users" WHERE ("public"."users"."id" IN ($1, $2, $3)))`,
+		[]any{int64(1), int64(2), int64(3)})
+}
+
 func TestTypedUnionAsSubquery(t *testing.T) {
 	sub := sqlkit.Union(
 		sqlkit.Select(Users.ID).From(Users),
