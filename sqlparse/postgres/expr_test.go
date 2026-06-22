@@ -611,6 +611,18 @@ func TestExprInternalCharTypeKeepsQuotes(t *testing.T) {
 		`SELECT CAST("x" AS "char") FROM "t"`)
 }
 
+// A schema-qualified operator is not a bare infix token: written as
+// pg_catalog.+ it is invalid SQL. It must round-trip through the OPERATOR(...)
+// wrapper. An unqualified operator stays bare (the parser collapses OPERATOR(+)
+// to "+"), which TestExprBinaryOps and friends already cover.
+func TestExprSchemaQualifiedOperator(t *testing.T) {
+	assertRoundTrip(t,
+		`SELECT a OPERATOR(pg_catalog.+) b FROM t`,
+		sql.Select(sql.BinaryExpression{Left: sql.Col("a"), Operator: "OPERATOR(pg_catalog.+)", Right: sql.Col("b")}).
+			From(sql.Table{Name: sql.NewIdent("t")}),
+		`SELECT ("a" OPERATOR(pg_catalog.+) "b") FROM "t"`)
+}
+
 // Unary plus is identity and PostgreSQL folds it, so it is dropped rather than
 // emitted as (+x) — keeping it (e.g. for the inner + of ++2) would re-parse
 // without the plus and break the round-trip fixpoint.
