@@ -127,6 +127,125 @@ func ResolveColumn(scope []SourceRef, col ColumnRef) Resolution {
 	return res
 }
 
+// ResolveColumnAll resolves col against scope like ResolveColumn, but returns
+// every base table the reference may map to rather than a single placement. A
+// qualified reference yields the source its qualifier names; an unqualified one
+// yields every base table in scope it could belong to (one for a single-table
+// scope, several when ambiguous). Tracing descends into derived sources and CTEs,
+// and through both arms of a set operation, so a column projected from a UNION
+// yields a candidate per arm.
+//
+// The result holds only Resolved resolutions, deduplicated by owning table, and is
+// empty when the reference resolves to no base table in scope. It is the
+// fan-out form of ResolveColumn, for a caller — a masking policy — that treats a
+// column as sensitive when any candidate is, and so must see every provenance.
+func ResolveColumnAll(scope []SourceRef, col ColumnRef) []Resolution {
+	if !col.Qualifier.IsZero() {
+		s, ok := matchQualifier(scope, col.Qualifier)
+		if !ok {
+			return nil
+		}
+		if s.Subquery != nil {
+			return resolveInSubqueryAll(s.Subquery, col)
+		}
+		if !s.Table.IsZero() {
+			return dedupeResolutions([]Resolution{{Column: col, Schema: s.Schema, Table: s.Table, Status: Resolved}})
+		}
+		return nil
+	}
+	// Unqualified: the column may belong to any base table in scope, and may pass
+	// through any derived source's projection.
+	var out []Resolution
+	for i := range scope {
+		s := &scope[i]
+		if s.Subquery != nil {
+			out = append(out, resolveInSubqueryAll(s.Subquery, col)...)
+			continue
+		}
+		if !s.Table.IsZero() {
+			out = append(out, Resolution{Column: col, Schema: s.Schema, Table: s.Table, Status: Resolved})
+		}
+	}
+	return dedupeResolutions(out)
+}
+
+// resolveInSubqueryAll is the fan-out counterpart of resolveInSubquery: it traces
+// col.Name through subq, descending into both arms of a set operation so a column
+// drawn from a UNION yields a candidate per arm.
+func resolveInSubqueryAll(subq sql.Query, col ColumnRef) []Resolution {
+	switch v := sql.Unwrap(subq).(type) {
+	case sql.SelectStmt:
+		return resolveInSelectAll(v, col)
+	case sql.CompoundStmt:
+		// A set operation's output column draws from every arm; union their
+		// candidates so a sensitive column on any arm is reported.
+		var out []Resolution
+		out = append(out, resolveInSubqueryAll(v.Left, col)...)
+		out = append(out, resolveInSubqueryAll(v.Right, col)...)
+		return dedupeResolutions(out)
+	default:
+		return nil
+	}
+}
+
+// resolveInSelectAll traces col.Name through one SELECT's projection, returning the
+// candidates of the underlying base column. It mirrors resolveInSubquery's matching
+// (aliased and unaliased column projections, then a wildcard fallback) but fans out.
+func resolveInSelectAll(sel sql.SelectStmt, col ColumnRef) []Resolution {
+	innerScope := SourcesOf(sel)
+	for _, s := range sel.Columns {
+		outName, expr := selectionOutput(s)
+		if outName.IsZero() || !outName.Equal(col.Name) {
+			continue
+		}
+		c, ok := expr.(sql.ColumnExpression)
+		if !ok {
+			return nil
+		}
+		return ResolveColumnAll(innerScope, ColumnRefOf(c))
+	}
+	for _, s := range sel.Columns {
+		star, ok := s.(sql.StarSelection)
+		if !ok {
+			continue
+		}
+		if star.Qualifier.IsZero() {
+			return ResolveColumnAll(innerScope, ColumnRef{Name: col.Name})
+		}
+		return ResolveColumnAll(innerScope, ColumnRef{Qualifier: star.Qualifier, Name: col.Name})
+	}
+	return nil
+}
+
+// dedupeResolutions removes resolutions that name the same owning table, preserving
+// first-seen order, so a self-union or a self-join contributes one candidate.
+func dedupeResolutions(in []Resolution) []Resolution {
+	if len(in) <= 1 {
+		return in
+	}
+	type key struct{ schema, table string }
+	seen := make(map[key]struct{}, len(in))
+	out := in[:0]
+	for _, r := range in {
+		k := key{r.Schema.Name, r.Table.Name}
+		if _, dup := seen[k]; dup {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, r)
+	}
+	return out
+}
+
+// EnrichSources annotates each base-table source in sources that names one of the
+// CTEs with that CTE's body query, so resolution can trace columns through it.
+// SourcesOf already applies a query's own WITH; this lets a caller also apply the
+// CTEs visible from an enclosing WITH (ambient CTEs) to a nested query's sources,
+// the piece a query node cannot recover from itself.
+func EnrichSources(sources []SourceRef, ctes []sql.CTE) {
+	enrichWithCTEs(sources, ctes)
+}
+
 // resolveInSubquery traces col.Name through the SELECT list of subq, returning
 // the resolution of the underlying base column. It handles aliased and unaliased
 // column projections and SELECT * wildcards. Non-SELECT queries (compound, VALUES)

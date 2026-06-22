@@ -673,6 +673,76 @@ func TestApplySubqueryWildcardRef(t *testing.T) {
 	}
 }
 
+// TestApplyNestedScopeNoLeak pins the nested-scope cases that once leaked a
+// sensitive literal: a CTE referencing an earlier CTE, a correlated subquery
+// comparing an outer table's column, and an outer reference to a column projected
+// through a UNION-bodied CTE. Each value must be masked, while a non-sensitive
+// value in the same shape is left intact.
+func TestApplyNestedScopeNoLeak(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	orders := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("orders")}
+	m := redaction.New(redaction.Columns("users.name"))
+
+	tests := []struct {
+		name string
+		q    sql.Query
+		want []any
+	}{
+		{
+			// WITH a AS (SELECT id, name FROM users),
+			//      b AS (SELECT id FROM a WHERE a.name = 'taro')
+			// SELECT * FROM b
+			name: "cte referencing an earlier cte",
+			q: func() sql.Query {
+				a := sql.Select(sql.Col("id"), sql.Col("name")).From(users).CTE("a")
+				b := sql.Select(sql.Col("id")).From(a).Where(sql.Eq(a.Col("name"), sql.Val("taro"))).CTE("b")
+				return sql.Select(sql.Star()).From(b).WithCTE(a, b)
+			}(),
+			want: []any{"*****"},
+		},
+		{
+			// SELECT * FROM users u WHERE EXISTS (
+			//   SELECT id FROM orders o WHERE u.name = 'taro')
+			name: "correlated subquery references outer column",
+			q: func() sql.Query {
+				inner := sql.Select(sql.Col("id")).From(sql.SourceAlias(orders, "o")).
+					Where(sql.Eq(sql.Col("u.name"), sql.Val("taro")))
+				return sql.Select(sql.Star()).From(sql.SourceAlias(users, "u")).Where(sql.Exists(inner))
+			}(),
+			want: []any{"*****"},
+		},
+		{
+			// WITH u2 AS (SELECT name FROM users UNION SELECT name FROM users)
+			// SELECT * FROM u2 WHERE u2.name = 'taro'
+			name: "outer ref to a union-bodied cte column",
+			q: func() sql.Query {
+				uni := sql.Select(sql.Col("name")).From(users).
+					Union(sql.Select(sql.Col("name")).From(users)).CTE("u2")
+				return sql.Select(sql.Star()).From(uni).Where(sql.Eq(uni.Col("name"), sql.Val("taro"))).WithCTE(uni)
+			}(),
+			want: []any{"*****"},
+		},
+		{
+			// Same correlated shape on a non-sensitive column must be left intact.
+			name: "correlated non-sensitive column untouched",
+			q: func() sql.Query {
+				inner := sql.Select(sql.Col("id")).From(sql.SourceAlias(orders, "o")).
+					Where(sql.Eq(sql.Col("u.email"), sql.Val("x@y.z")))
+				return sql.Select(sql.Star()).From(sql.SourceAlias(users, "u")).Where(sql.Exists(inner))
+			}(),
+			want: []any{"x@y.z"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := args(t, m.Apply(tt.q)); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("masked args = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 // TestApplyNilQuery pins the nil-query and nil-policy guards.
 func TestApplyNilQuery(t *testing.T) {
 	m := redaction.New(redaction.Columns("users.name"))

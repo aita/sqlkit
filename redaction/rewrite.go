@@ -10,147 +10,147 @@ import (
 // predicate is reached, and into embedded subqueries (each with its own scope),
 // and applies masking at the comparison and membership nodes where a column meets
 // a literal. Unrecognized nodes are returned unchanged.
-func (m *Redactor) rewriteExpr(e sql.Expression, scope []analysis.SourceRef) sql.Expression {
+func (m *Redactor) rewriteExpr(e sql.Expression, sc *scope) sql.Expression {
 	if e == nil {
 		return nil
 	}
 	switch x := e.(type) {
 	case sql.BinaryExpression:
-		x.Left = m.rewriteExpr(x.Left, scope)
-		x.Right = m.rewriteExpr(x.Right, scope)
-		if m.sensitiveColumn(x.Left, scope) {
+		x.Left = m.rewriteExpr(x.Left, sc)
+		x.Right = m.rewriteExpr(x.Right, sc)
+		if m.sensitiveColumn(x.Left, sc) {
 			x.Right = m.maskValue(x.Right)
-		} else if m.sensitiveColumn(x.Right, scope) {
+		} else if m.sensitiveColumn(x.Right, sc) {
 			x.Left = m.maskValue(x.Left)
 		} else {
 			// Row constructor comparison: (a, b) = (v1, v2). Mask each value
 			// element whose paired column element is sensitive.
-			x.Left, x.Right = m.maskRowPair(x.Left, x.Right, scope)
+			x.Left, x.Right = m.maskRowPair(x.Left, x.Right, sc)
 		}
 		return x
 	case sql.DistinctPredicate:
-		x.Left = m.rewriteExpr(x.Left, scope)
-		x.Right = m.rewriteExpr(x.Right, scope)
-		if m.sensitiveColumn(x.Left, scope) {
+		x.Left = m.rewriteExpr(x.Left, sc)
+		x.Right = m.rewriteExpr(x.Right, sc)
+		if m.sensitiveColumn(x.Left, sc) {
 			x.Right = m.maskValue(x.Right)
-		} else if m.sensitiveColumn(x.Right, scope) {
+		} else if m.sensitiveColumn(x.Right, sc) {
 			x.Left = m.maskValue(x.Left)
 		}
 		return x
 	case sql.InExpression:
-		x.Left = m.rewriteExpr(x.Left, scope)
+		x.Left = m.rewriteExpr(x.Left, sc)
 		if len(x.Items) > 0 {
 			items := clone(x.Items)
-			sensitive := m.sensitiveColumn(x.Left, scope)
+			sensitive := m.sensitiveColumn(x.Left, sc)
 			for i := range items {
 				if sensitive {
 					items[i] = m.maskValue(items[i])
 				} else {
-					items[i] = m.rewriteExpr(items[i], scope)
+					items[i] = m.rewriteExpr(items[i], sc)
 				}
 			}
 			x.Items = items
 		}
 		if x.Subquery != nil {
-			x.Subquery = m.rewriteQuery(x.Subquery)
+			x.Subquery = m.rewriteQuery(x.Subquery, sc, sc.childCTEs)
 		}
 		return x
 	case sql.BetweenExpression:
-		x.Operand = m.rewriteExpr(x.Operand, scope)
-		x.Low = m.rewriteExpr(x.Low, scope)
-		x.High = m.rewriteExpr(x.High, scope)
-		if m.sensitiveColumn(x.Operand, scope) {
+		x.Operand = m.rewriteExpr(x.Operand, sc)
+		x.Low = m.rewriteExpr(x.Low, sc)
+		x.High = m.rewriteExpr(x.High, sc)
+		if m.sensitiveColumn(x.Operand, sc) {
 			x.Low = m.maskValue(x.Low)
 			x.High = m.maskValue(x.High)
 		}
 		return x
 	case sql.ILikeExpression:
-		x.Left = m.rewriteExpr(x.Left, scope)
-		x.Pattern = m.rewriteExpr(x.Pattern, scope)
-		if m.sensitiveColumn(x.Left, scope) {
+		x.Left = m.rewriteExpr(x.Left, sc)
+		x.Pattern = m.rewriteExpr(x.Pattern, sc)
+		if m.sensitiveColumn(x.Left, sc) {
 			x.Pattern = m.maskValue(x.Pattern)
 		}
 		return x
 	case sql.RegexpExpression:
-		x.Left = m.rewriteExpr(x.Left, scope)
-		x.Pattern = m.rewriteExpr(x.Pattern, scope)
-		if m.sensitiveColumn(x.Left, scope) {
+		x.Left = m.rewriteExpr(x.Left, sc)
+		x.Pattern = m.rewriteExpr(x.Pattern, sc)
+		if m.sensitiveColumn(x.Left, sc) {
 			x.Pattern = m.maskValue(x.Pattern)
 		}
 		return x
 	case sql.SimilarToExpression:
-		x.Left = m.rewriteExpr(x.Left, scope)
-		x.Pattern = m.rewriteExpr(x.Pattern, scope)
-		if m.sensitiveColumn(x.Left, scope) {
+		x.Left = m.rewriteExpr(x.Left, sc)
+		x.Pattern = m.rewriteExpr(x.Pattern, sc)
+		if m.sensitiveColumn(x.Left, sc) {
 			x.Pattern = m.maskValue(x.Pattern)
 		}
 		return x
 	case sql.QuantifiedArrayExpression:
-		x.Left = m.rewriteExpr(x.Left, scope)
-		x.Array = m.rewriteExpr(x.Array, scope)
-		if m.sensitiveColumn(x.Left, scope) {
+		x.Left = m.rewriteExpr(x.Left, sc)
+		x.Array = m.rewriteExpr(x.Array, sc)
+		if m.sensitiveColumn(x.Left, sc) {
 			x.Array = m.maskArray(x.Array)
 		}
 		return x
 	case sql.LogicalExpression:
-		x.Operands = m.rewriteExprs(x.Operands, scope)
+		x.Operands = m.rewriteExprs(x.Operands, sc)
 		return x
 	case sql.NotExpression:
-		x.Operand = m.rewriteExpr(x.Operand, scope)
+		x.Operand = m.rewriteExpr(x.Operand, sc)
 		return x
 	case sql.UnaryExpression:
-		x.Operand = m.rewriteExpr(x.Operand, scope)
+		x.Operand = m.rewriteExpr(x.Operand, sc)
 		return x
 	case sql.NullPredicate:
-		x.Operand = m.rewriteExpr(x.Operand, scope)
+		x.Operand = m.rewriteExpr(x.Operand, sc)
 		return x
 	case sql.QuantifiedExpression:
-		x.Left = m.rewriteExpr(x.Left, scope)
+		x.Left = m.rewriteExpr(x.Left, sc)
 		if x.Query != nil {
-			x.Query = m.rewriteQuery(x.Query)
+			x.Query = m.rewriteQuery(x.Query, sc, sc.childCTEs)
 		}
 		return x
 	case sql.ConcatExpression:
-		x.Operands = m.rewriteExprs(x.Operands, scope)
+		x.Operands = m.rewriteExprs(x.Operands, sc)
 		return x
 	case sql.RowExpression:
-		x.Elements = m.rewriteExprs(x.Elements, scope)
+		x.Elements = m.rewriteExprs(x.Elements, sc)
 		return x
 	case sql.ArrayExpression:
-		x.Elements = m.rewriteExprs(x.Elements, scope)
+		x.Elements = m.rewriteExprs(x.Elements, sc)
 		return x
 	case sql.FuncExpression:
-		x.Args = m.rewriteExprs(x.Args, scope)
+		x.Args = m.rewriteExprs(x.Args, sc)
 		return x
 	case sql.CastExpression:
-		x.Operand = m.rewriteExpr(x.Operand, scope)
+		x.Operand = m.rewriteExpr(x.Operand, sc)
 		return x
 	case sql.CollateExpression:
-		x.Operand = m.rewriteExpr(x.Operand, scope)
+		x.Operand = m.rewriteExpr(x.Operand, sc)
 		return x
 	case sql.FieldExpression:
-		x.Operand = m.rewriteExpr(x.Operand, scope)
+		x.Operand = m.rewriteExpr(x.Operand, sc)
 		return x
 	case sql.CaseExpression:
-		x.Operand = m.rewriteExpr(x.Operand, scope)
+		x.Operand = m.rewriteExpr(x.Operand, sc)
 		if len(x.Whens) > 0 {
 			whens := clone(x.Whens)
 			for i := range whens {
-				whens[i].Condition = m.rewriteExpr(whens[i].Condition, scope)
-				whens[i].Result = m.rewriteExpr(whens[i].Result, scope)
+				whens[i].Condition = m.rewriteExpr(whens[i].Condition, sc)
+				whens[i].Result = m.rewriteExpr(whens[i].Result, sc)
 			}
 			x.Whens = whens
 		}
-		x.ElseValue = m.rewriteExpr(x.ElseValue, scope)
+		x.ElseValue = m.rewriteExpr(x.ElseValue, sc)
 		return x
 	case sql.ExistsExpression:
 		if x.Query != nil {
-			x.Query = m.rewriteQuery(x.Query)
+			x.Query = m.rewriteQuery(x.Query, sc, sc.childCTEs)
 		}
 		return x
 	case sql.ScalarSubqueryExpression:
 		if x.Query != nil {
-			x.Query = m.rewriteQuery(x.Query)
+			x.Query = m.rewriteQuery(x.Query, sc, sc.childCTEs)
 		}
 		return x
 	default:
@@ -162,46 +162,70 @@ func (m *Redactor) rewriteExpr(e sql.Expression, scope []analysis.SourceRef) sql
 
 // rewriteExprs rewrites each expression in es, returning a fresh slice so the
 // input query's backing array is never mutated.
-func (m *Redactor) rewriteExprs(es []sql.Expression, scope []analysis.SourceRef) []sql.Expression {
+func (m *Redactor) rewriteExprs(es []sql.Expression, sc *scope) []sql.Expression {
 	if len(es) == 0 {
 		return es
 	}
 	out := clone(es)
 	for i := range out {
-		out[i] = m.rewriteExpr(out[i], scope)
+		out[i] = m.rewriteExpr(out[i], sc)
 	}
 	return out
 }
 
-// sensitiveColumn reports whether e is a column reference that resolves, in scope,
+// sensitiveColumn reports whether e is a column reference that resolves, in sc,
 // to a policy-sensitive column.
-func (m *Redactor) sensitiveColumn(e sql.Expression, scope []analysis.SourceRef) bool {
+func (m *Redactor) sensitiveColumn(e sql.Expression, sc *scope) bool {
 	col, ok := columnOf(e)
-	return ok && m.isSensitive(scope, col)
+	return ok && m.isSensitive(sc, col)
 }
 
-// isSensitive resolves col against the scope and reports whether it is a policy
-// column. A reference that resolves to exactly one table is matched precisely,
-// carrying the resolved schema so a schema-qualified policy targets the right
-// table. A reference that does not resolve is masked only when maskUnresolved is
-// set: it then fails safe, treating the column as sensitive when any in-scope
-// table marks it PII.
-func (m *Redactor) isSensitive(scope []analysis.SourceRef, col analysis.ColumnRef) bool {
-	res := analysis.ResolveColumn(scope, col)
-	if res.Status == analysis.Resolved {
-		return m.policy.IsSensitive(res.Schema.String(), res.Table.String(), col.Name.String())
+// isSensitive reports whether col is a policy column once resolved against sc and,
+// for a correlated reference, its enclosing scopes. At each scope it fans out
+// through derived tables, CTEs, and set operations (analysis.ResolveColumnAll):
+//
+//   - exactly one candidate table — a precise resolution — is matched directly;
+//   - several candidates (an ambiguous reference, or one fanned out across UNION
+//     arms or joined tables) are masked when maskUnresolved is set and any is a
+//     policy column;
+//   - no candidate here — the reference may be correlated to an enclosing query,
+//     so resolution continues outward.
+//
+// When nothing resolves at any level and maskUnresolved is set, it fails safe,
+// masking when any in-scope table across all levels marks the column sensitive.
+// With maskUnresolved cleared, only a single-candidate precise resolution masks.
+func (m *Redactor) isSensitive(sc *scope, col analysis.ColumnRef) bool {
+	for s := sc; s != nil; s = s.parent {
+		cands := analysis.ResolveColumnAll(s.sources, col)
+		switch len(cands) {
+		case 0:
+			continue // unknown here — try the enclosing (correlated) scope
+		case 1:
+			return m.policy.IsSensitive(cands[0].Schema.String(), cands[0].Table.String(), col.Name.String())
+		default:
+			return m.maskUnresolved && m.anyCandidateSensitive(cands, col)
+		}
 	}
 	if !m.maskUnresolved {
-		// Precise mode: an unqualified column that is ambiguous across in-scope
-		// tables, or a qualifier that matches no source, is left intact rather than
-		// guessed at.
 		return false
 	}
-	// Unknown or Ambiguous: fail safe — mask if any in-scope table marks the
-	// column sensitive. Under executable SQL an unqualified column belongs to a
-	// single in-scope table, so this masks the right one without over-masking.
-	for _, s := range scope {
-		if !s.Table.IsZero() && m.policy.IsSensitive(s.Schema.String(), s.Table.String(), col.Name.String()) {
+	// Unknown at every level: fail safe — mask if any in-scope table, in this scope
+	// or an enclosing one, marks the column sensitive.
+	for s := sc; s != nil; s = s.parent {
+		for _, src := range s.sources {
+			if !src.Table.IsZero() && m.policy.IsSensitive(src.Schema.String(), src.Table.String(), col.Name.String()) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// anyCandidateSensitive reports whether any resolved candidate table marks col a
+// policy column.
+func (m *Redactor) anyCandidateSensitive(cands []analysis.Resolution, col analysis.ColumnRef) bool {
+	for _, c := range cands {
+		if m.policy.IsSensitive(c.Schema.String(), c.Table.String(), col.Name.String()) {
 			return true
 		}
 	}
@@ -260,7 +284,7 @@ func (m *Redactor) maskValue(e sql.Expression) sql.Expression {
 // paired column element is sensitive — the "(a, b) = (v1, v2)" form, where neither
 // whole side is itself a single sensitive column. The value side may be on either
 // operand. Returns the operands unchanged when both are not row constructors.
-func (m *Redactor) maskRowPair(left, right sql.Expression, scope []analysis.SourceRef) (sql.Expression, sql.Expression) {
+func (m *Redactor) maskRowPair(left, right sql.Expression, sc *scope) (sql.Expression, sql.Expression) {
 	lrow, lok := left.(sql.RowExpression)
 	rrow, rok := right.(sql.RowExpression)
 	if !lok || !rok {
@@ -269,7 +293,7 @@ func (m *Redactor) maskRowPair(left, right sql.Expression, scope []analysis.Sour
 	mask := func(cols, vals sql.RowExpression) sql.RowExpression {
 		out := clone(vals.Elements)
 		for i := range out {
-			if i < len(cols.Elements) && m.sensitiveColumn(cols.Elements[i], scope) {
+			if i < len(cols.Elements) && m.sensitiveColumn(cols.Elements[i], sc) {
 				out[i] = m.maskValue(out[i])
 			}
 		}
