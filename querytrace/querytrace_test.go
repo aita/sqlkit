@@ -9,9 +9,14 @@ import (
 	"github.com/aita/sqlkit/sql"
 )
 
+// This file holds package-level, end-to-end querytrace tests that drive the
+// whole pipeline (Config.Analyze -> Trace.RecordStatement -> Trace.Report)
+// in-process. They are distinct from the database-backed integration tests under
+// internal/tests; here a fakeParser stands in for a real SQL frontend.
+
 // fakeParser is a stub sqlparse.Parser that returns a pre-built sql.Query,
 // independent of the SQL text. The real parsers live in separate modules
-// (sqlparse/postgres) the root module must not import, so the e2e test wires its
+// (sqlparse/postgres) the root module must not import, so these tests wire their
 // own trivial parser to drive the full querytrace pipeline.
 type fakeParser struct {
 	query sql.Query
