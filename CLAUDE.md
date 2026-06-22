@@ -20,7 +20,41 @@ instructions don't have to be repeated every session.
 - **Integration tests separate, in their own package**: integration and
   round-trip tests live under `internal/tests/` (e.g.
   `internal/tests/integration/`, `internal/tests/roundtrip/`). Don't mix them
-  into the same directory as unit tests.
+  into the same directory as unit tests. See the section below for which suite
+  a new test belongs in.
+
+## Cross-module test suites (`internal/tests/`)
+
+Most tests live next to the code they cover and run with `go test ./...` on the
+root module. `internal/tests/` holds the suites that **can't** live there
+because they need heavy dependencies the root module deliberately keeps out.
+Each suite is its **own Go module** (same isolation rule as `sqlparse/*`,
+`querytrace/otelquery`, etc.), so a change touching them must be built/tested in
+that module's directory. Both suites have a `README.md`; read it before adding
+cases.
+
+- **`internal/tests/roundtrip`** — the **static / syntactic** oracle (no
+  database). Asserts one invariant broadly across both dialects: the compiler
+  never emits SQL its own grammar rejects, and rendering is a fixpoint. It needs
+  the builder plus **both** parser frontends (`pg_query_go` cgo + TiDB), so it
+  must be its own module; it runs in the unit-test CI job.
+  - It is a **property + fuzz oracle, not a coverage corpus.** Do **not** grow
+    `testdata/` to chase `ToSQL` coverage — add a builder-driven unit test in the
+    root `sql`/`sqlkit` packages (or a fuzz seed) instead. Every fixed compiler
+    bug should still leave a regression statement in `testdata/`.
+
+- **`internal/tests/integration`** — the **dynamic / behavioral** oracle. Runs
+  the full stack (builder, scanner, DDL, introspection, migrations) against real
+  PostgreSQL + MySQL via testcontainers/drivers. It needs live engines, so it
+  runs in its own CI job and is **skipped** (not failed) when a backend is
+  unavailable — gate new tests through the existing `connect`/`setup` harness so
+  they skip cleanly rather than hard-failing locally.
+
+Rule of thumb for a new cross-module test: a *syntactic* check (is the generated
+SQL well-formed / stable, parser-only) → `roundtrip`; a *semantic* check (does a
+real engine execute it and return the right rows) → `integration`. Keep the two
+modules separate — their heavy deps are disjoint and they run in different CI
+jobs; don't merge them.
 
 ## Build, test & lint commands
 
