@@ -1,24 +1,43 @@
 ---
 name: bug-hunt
 description: >-
-  Systematically hunt for correctness bugs in the sqlkit codebase (compiler,
-  parser frontends, redaction, analysis, migrate, codegen, query builder,
-  routing, paginator). Use when asked to "find bugs", "hunt for bugs", do a
-  "bug hunt", "hardening pass", "robustness pass", or "another round" of bug
-  finding, or to harden a specific package against panics, invalid SQL,
-  silent meaning changes, non-determinism, or PII leaks. Encodes the
-  oracle + fuzz + differential + coverage-probe methodology this repo's
-  past bug-hunt PRs (#127, #130, #131, #140, …) have used.
+  Systematically hunt for correctness bugs in the sqlkit codebase — both the
+  text-in/AST/text-out surfaces (compiler, parser frontends, redaction,
+  analysis, fingerprint) and the stateful/runtime layers (query builder,
+  migrate, codegen, routing, paginator, meta/decl schema & checksums, uow,
+  querytrace/driver, sqltest). Use when asked to "find bugs", "hunt for bugs",
+  do a "bug hunt", "hardening pass", "robustness pass", or "another round" of
+  bug finding, or to harden a specific package against panics, invalid SQL,
+  silent meaning changes, non-determinism, structural-identity collisions,
+  write-path asymmetry, or PII leaks. Encodes the oracle + fuzz + differential
+  + coverage-probe + audit methodology this repo's past bug-hunt PRs
+  (#127, #130, #131, #140, #141–#166, …) have used.
 ---
 
 # Bug hunting in sqlkit
 
 This repo finds bugs with **oracles, fuzzing, differential testing, coverage
-probing, and fault injection** — not by reading code and guessing. A bug hunt
-is an empirical search: build a check that *must* hold, run it broadly over real
-and mutated inputs, and let it surface the violations. Every past round
-(`#127` ~30 bugs, `#130`, `#131` round 2, `#140` the per-bug split) worked this
-way. Reproduce that process; don't improvise a weaker one.
+probing, fault injection, and focused code-reading audits**. A bug hunt is an
+empirical search: build a check that *must* hold (or, where no oracle fits,
+reason precisely about one contract), then confirm the violation with a
+reproducer. Every past round (`#127` ~30 bugs, `#130`, `#131` round 2, `#140`
+the per-bug split, `#141`–`#166` the latest) worked this way. Reproduce that
+process; don't improvise a weaker one.
+
+## Match the method to the surface
+
+The strongest method depends on what layer you are probing. Pick the target
+surface first, then the matching method:
+
+- **Text-in → AST → text-out** (`sql` compiler, `sqlparse/*`, `redaction`,
+  `analysis`/fingerprint): **oracles + fuzzing + differential** (Techniques 1–5).
+  These are property-checkable over a corpus, so let the checks find the bugs —
+  don't hand-guess.
+- **Stateful / data / wrapper layers** (`meta`/`decl`, `uow`, `querytrace/driver`,
+  `sqltest`, `migrate` runtime, `routing`/`exec`): no text oracle covers these.
+  Hunt them with a **focused code-reading audit + a targeted DB-driven (or
+  fake-driver) regression test**, plus the structural oracles in Technique 9.
+  This is where the `#152`, `#154`–`#157` bugs lived.
 
 ## The governing principle
 
@@ -30,10 +49,13 @@ out". The single invariant the whole kit is held to:
 > invalid SQL, or silently change meaning.** For security-sensitive passes
 > (redaction), a sensitive literal must never survive masking (no fail-open).
 
-Almost every bug found here is a concrete violation of that sentence. When you
-inspect a candidate, classify it against the principle: *panic? invalid SQL?
-silent meaning change? non-determinism? PII leak?* If it is none of those, it is
-probably not a bug — see "What is NOT a bug".
+Almost every text-surface bug is a concrete violation of that sentence. When you
+inspect a candidate, classify it: *panic? invalid SQL? silent meaning change?
+non-determinism? PII leak?* The stateful layers add their own contracts —
+*structural-identity collision (a checksum/Equal that omits a field)? write-path
+asymmetry (INSERT vs UPDATE encoding)? FK-unsafe ordering? a dropped or
+over-advertised driver interface? a metric counted wrong?* If a candidate fits
+none of these, it is probably not a bug — see "What is NOT a bug".
 
 ## Workflow
 
@@ -135,6 +157,28 @@ digest changes — `meta`'s `TestKeyDiffersOnStructuralChange` is the template. 
 identity function alone yielded two bugs this way: omitted FK `ON DELETE`/`ON
 UPDATE` actions (#151) and the column array flag (#166).
 
+### 9. Stateful / data / wrapper-layer oracles
+The text oracles don't reach `meta`/`decl`, `uow`, `querytrace/driver`, or
+`sqltest`. These layers still have checkable round-trips and parities — use them
+as the oracle, backed by the integration suite or the fake driver:
+
+- **Binding ↔ catalog checksum reconciliation**: a generated binding's checksum
+  must equal the checksum of the catalog rebuilt from the schema. The FK-action
+  omission (#151) surfaced exactly here, via `internal/tests/integration`'s
+  uow binding-vs-catalog check.
+- **DDL generate → introspect round-trip**: run `CreateSQL` on a live engine,
+  introspect it back into `meta`, and assert the result is checksum-equal to the
+  source catalog. Catches DDL the generator omits (object-only schemas that never
+  got a `CREATE SCHEMA`, #157).
+- **INSERT/UPDATE parity**: the same column value must reach the driver
+  identically through the Insert builder and the `uow` UPDATE path. A value
+  JSON-encoded on INSERT but passed raw on UPDATE (#155) breaks this.
+- **Wrapper-fidelity differential**: drive a type through the wrapped vs unwrapped
+  `database/sql` driver and assert the wrapper advertises *exactly* the optional
+  driver interfaces (`SessionResetter`, `Validator`, `NamedValueChecker`,
+  `ColumnConverter`, …) the underlying one implements — no dropping, no
+  over-advertising (the `querytrace/driver` `conn_test.go`/`stmt_test.go` pattern).
+
 ## Triage: confirm before you fix
 
 Most candidates — especially from parallel agents — are false positives (these
@@ -178,6 +222,26 @@ its reasoning — a well-reasoned non-bug is a valid hunt outcome.
   or drift goes undetected (`#151` FK actions, `#166` array flag). Fix = fold the
   field into the encoding, ideally append-only so unchanged inputs keep their
   digest (see `validation.md`).
+- **DDL generation coverage gaps**: an object-only schema (enum / sequence /
+  matview, no tables) never emits its `CREATE SCHEMA` even though its DDL is
+  schema-qualified (#157).
+- **Write-path asymmetry**: a value encoded one way on INSERT but another on
+  UPDATE — e.g. a json-tagged column JSON-encoded by the Insert builder but passed
+  as a raw map/struct to the driver on the `uow` UPDATE path (#155).
+- **Wrapper optional-interface hiding / over-advertising**: a `database/sql`
+  wrapper that *drops* an optional interface the inner driver implements
+  (`SessionResetter`, `Validator`), or *unconditionally advertises* one
+  (`NamedValueChecker`) and thereby suppresses the inner `ColumnConverter`.
+- **Cross-table ordering vs constraints**: an FK-unsafe apply order — inserting a
+  child before its parent, or deleting a parent before its child — in `uow` flush
+  or migration apply (#156).
+- **Metric-by-subtraction**: a count derived as `A − B` instead of by direct
+  classification, so a third category is miscounted — `sqltest` deriving
+  `Reads = QueryCount − WriteCount` counted DDL as a read.
+- **Post-hoc text rewriting of rendered SQL**: a `strings.Replace` over built SQL
+  that can corrupt embedded user data — REVOKE rewriting the first `" TO "`, which
+  also hits a quoted identifier containing `" TO "` (#154). Fix = build the variant
+  from the AST, not by editing the string.
 - **Codegen**: invalid/duplicate Go identifiers, double pointers, unescaped
   struct-tag content.
 
