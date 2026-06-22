@@ -56,7 +56,8 @@ var checksumEngines = []string{"postgres", "mysql"}
 // Key computes the table's TableKey. The checksum is a SHA-256 over a
 // canonical, length-framed encoding of the table's structure: schema and name;
 // each column's name, nullability, default flag, primary-key flag, resolved
-// engine type, and default expression; then indexes, foreign keys, and checks.
+// engine type, and default expression; then indexes, foreign keys (including
+// their ON DELETE / ON UPDATE referential actions), and checks.
 // Every string is length-prefixed and every list is count-prefixed so that no
 // regrouping of fields can collide. The encoding reads only value fields, so it
 // is identical for any two Table values describing the same structure.
@@ -91,6 +92,8 @@ func (t Table) Key() TableKey {
 		f.str(fk.RefSchema.Name)
 		f.str(fk.RefTable)
 		f.strs(fk.RefColumns)
+		f.str(string(fk.OnDelete))
+		f.str(string(fk.OnUpdate))
 	}
 
 	f.count(len(t.Checks))

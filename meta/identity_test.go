@@ -89,6 +89,12 @@ func TestKeyDiffersOnStructuralChange(t *testing.T) {
 		"foreign key target": func(tbl *meta.Table) {
 			tbl.ForeignKeys[0].RefTable = "tenants"
 		},
+		"foreign key on delete": func(tbl *meta.Table) {
+			tbl.ForeignKeys[0].OnDelete = meta.Cascade
+		},
+		"foreign key on update": func(tbl *meta.Table) {
+			tbl.ForeignKeys[0].OnUpdate = meta.Restrict
+		},
 		"check expression": func(tbl *meta.Table) {
 			tbl.Checks[0].Expression = sql.Raw("email <> 'x'")
 		},

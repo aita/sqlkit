@@ -85,7 +85,7 @@ type PostsTable struct {
 
 // Posts provides typed access to table public.posts.
 var Posts = func() PostsTable {
-	info := sqlkit.TableInfo{Schema: "public", Name: "posts", Checksum: "ae6c44bc694636209a416d68dd5fe54fd6129f8c000a4475153d31aab3daaa67", Generator: "fmt1+tpl3ed7a12fe1d5+sqlkit(devel)"}
+	info := sqlkit.TableInfo{Schema: "public", Name: "posts", Checksum: "71613f8127b3eedea59892885147ad1ca8cd73283f2554f52089cce71c9a0cb8", Generator: "fmt1+tpl3ed7a12fe1d5+sqlkit(devel)"}
 	return PostsTable{
 		info:      info,
 		ID:        sqlkit.NewColumn[int64](info, "id"),
