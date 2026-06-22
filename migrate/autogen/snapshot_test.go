@@ -66,6 +66,42 @@ func TestSnapshotRoundTrip(t *testing.T) {
 	}
 }
 
+// TestSnapshotPreservesArrayColumn covers an array column (text[]) surviving the
+// snapshot round-trip: SnapshotType dropped the Array flag, so the rebuilt
+// metadata came back as a scalar and a diff spuriously reported (and would
+// migrate) a text[] -> text change.
+func TestSnapshotPreservesArrayColumn(t *testing.T) {
+	c := decl.NewCatalog(decl.DefaultSchema("public"))
+	c.Table("docs",
+		decl.Column("id", decl.BigInt, decl.PrimaryKey()),
+		decl.Column("tags", decl.Array(decl.Text)),
+	)
+	md, err := c.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := mustDialect(t, "postgres")
+	snap, err := Resolve(md, d)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	var buf bytes.Buffer
+	if err := snap.Encode(&buf); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	decoded, err := DecodeSnapshot(&buf)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	res, err := Render(md, decoded.Metadata(), Options{Dialect: d})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if !res.Empty() {
+		t.Errorf("array column not preserved through snapshot:\nUp=%s\nDown=%s", res.Up, res.Down)
+	}
+}
+
 func TestSnapshotPreservesFKActions(t *testing.T) {
 	md, err := blogMeta(t).Build()
 	if err != nil {
