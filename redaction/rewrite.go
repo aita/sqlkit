@@ -156,11 +156,57 @@ func (m *Redactor) rewriteExpr(e sql.Expression, sc *scope) sql.Expression {
 			x.Query = m.rewriteQuery(x.Query, sc, sc.childCTEs)
 		}
 		return x
+	case sql.RawExpression:
+		// An opaque SQL fragment. With a parser configured, re-parse it into a typed
+		// expression so its inner literals are masked like any other; otherwise it is
+		// left as-is (the heuristic scan still decides operand sensitivity).
+		if rewritten, ok := m.rewriteRawExpr(string(x), sc); ok {
+			return rewritten
+		}
+		return e
 	default:
-		// Leaf nodes (ColumnExpression, ValueExpression, RawExpression, ...) carry
-		// no operand to rewrite.
+		// Leaf nodes (ColumnExpression, ValueExpression, ...) carry no operand to
+		// rewrite.
 		return e
 	}
+}
+
+// rewriteRawExpr re-parses a raw SQL expression fragment, masks the sensitive
+// literals within it, and returns the typed result, reporting ok=false to leave the
+// raw fragment untouched: when no parser is configured, when the fragment does not
+// parse, or when the frontend cannot model it (it comes back as raw). The fragment
+// is parsed as the projection of a SELECT, the shape a statement parser accepts.
+func (m *Redactor) rewriteRawExpr(fragment string, sc *scope) (sql.Expression, bool) {
+	if m.rawParser == nil {
+		return nil, false
+	}
+	q, err := m.rawParser("SELECT " + fragment)
+	if err != nil || q == nil {
+		return nil, false
+	}
+	e, ok := firstSelectExpr(q)
+	if !ok {
+		return nil, false
+	}
+	if _, raw := e.(sql.RawExpression); raw {
+		return nil, false // the frontend could not model it; keep the original raw
+	}
+	return m.rewriteExpr(e, sc), true
+}
+
+// firstSelectExpr returns the expression of a parsed "SELECT <expr>" query's first
+// projection, looking through an AS alias. It reports ok=false for any other shape.
+func firstSelectExpr(q sql.Query) (sql.Expression, bool) {
+	sel, ok := sql.Unwrap(q).(sql.SelectStmt)
+	if !ok || len(sel.Columns) == 0 {
+		return nil, false
+	}
+	s := sel.Columns[0]
+	if al, ok := s.(sql.AliasedSelection); ok {
+		s = al.Selection
+	}
+	e, ok := s.(sql.Expression)
+	return e, ok
 }
 
 // rewriteExprs rewrites each expression in es, returning a fresh slice so the

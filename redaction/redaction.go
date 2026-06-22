@@ -27,8 +27,14 @@
 // its base table so the literal it is compared to is masked. A correlated
 // reference into an enclosing query (a subquery comparing an outer table's column)
 // resolves against the enclosing scope too. The remaining gap is depth: a column
-// reaching a base table through two or more chained CTE/subquery hops within a
-// single resolution may go untraced, and so unmasked.
+// reaching a base table through many chained CTE/subquery hops within a single
+// resolution is followed only to a bounded depth, beyond which it goes untraced.
+//
+// A raw SQL fragment — Raw(...) or RawSQL(...) — is opaque text. By default the
+// redactor scans it for the sensitive column names it mentions, so a literal
+// compared to such a fragment is masked, but a literal embedded inside the fragment
+// is out of reach. Configure WithRawParser to lift that limit: the fragment is
+// re-parsed into typed AST, masked like any expression, and substituted back.
 package redaction
 
 import (
@@ -45,15 +51,35 @@ type Redactor struct {
 	policy         Policy
 	mask           string
 	maskUnresolved bool
+	rawParser      RawParser
 }
 
 // Option configures a Redactor.
 type Option func(*Redactor)
 
+// RawParser parses a SQL statement string into a query AST. Supplied via
+// WithRawParser, it lets the redactor look inside Raw(...) expression fragments and
+// RawSQL(...) statements — parsing them, masking the sensitive literals within, and
+// substituting the typed result — rather than falling back to the identifier-scan
+// heuristic. It is a plain function so the redaction package takes no dependency on
+// a parser: a caller passes the frontend it already has (e.g. postgres.ParseOne).
+type RawParser func(statement string) (sql.Query, error)
+
 // WithMask sets the string a masked literal is replaced with (the default is
 // DefaultMask).
 func WithMask(mask string) Option {
 	return func(m *Redactor) { m.mask = mask }
+}
+
+// WithRawParser configures a parser used to re-parse raw SQL — Raw(...) expression
+// fragments and RawSQL(...) statements — so the literals inside them are masked too.
+// Without it a raw fragment is opaque: the redactor only scans it for sensitive
+// column names to decide whether a literal compared to it should be masked, and
+// cannot reach a sensitive literal embedded in the fragment itself. With it, a
+// fragment that the parser can model is rewritten like any typed expression. A
+// fragment that does not parse, or that the frontend cannot model, is left untouched.
+func WithRawParser(p RawParser) Option {
+	return func(m *Redactor) { m.rawParser = p }
 }
 
 // WithMaskUnresolved controls how a column reference that does not resolve to a
@@ -141,6 +167,17 @@ func (m *Redactor) rewriteQuery(q sql.Query, parent *scope, ambient []sql.CTE) s
 		return m.rewriteDelete(v, sc)
 	case sql.MergeStmt:
 		return m.rewriteMerge(v, sc)
+	case sql.RawQuery:
+		// An opaque statement. With a parser configured, re-parse it so its literals
+		// are masked; if it does not parse or comes back raw, leave it untouched.
+		if m.rawParser != nil {
+			if parsed, err := m.rawParser(v.SQL()); err == nil && parsed != nil {
+				if _, raw := sql.Unwrap(parsed).(sql.RawQuery); !raw {
+					return m.rewriteQuery(parsed, parent, ambient)
+				}
+			}
+		}
+		return q
 	default:
 		// ValuesQuery and DDL carry no column-bound literals to mask.
 		return q
