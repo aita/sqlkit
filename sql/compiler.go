@@ -62,6 +62,9 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		}
 		return e.Kind + " (" + inner + ")", args, nil
 	case GroupingSetsExpression:
+		if len(e.Sets) == 0 {
+			return "", nil, fmt.Errorf("sqlkit/sql: GROUPING SETS requires at least one set")
+		}
 		var sb strings.Builder
 		var args []any
 		sb.WriteString("GROUPING SETS (")
