@@ -161,7 +161,7 @@ func (b RevokeBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
 
 // CompileGrant compiles a GRANT statement.
 func (c *Compiler) CompileGrant(s GrantStmt) (string, error) {
-	body, err := c.grantBody(s.Privileges, s.ObjectType, s.Objects, s.Grantees)
+	body, err := c.grantBody(s.Privileges, s.ObjectType, s.Objects, s.Grantees, "TO")
 	if err != nil {
 		return "", err
 	}
@@ -182,12 +182,11 @@ func (c *Compiler) CompileRevoke(s RevokeStmt) (string, error) {
 	if s.GrantOptionFor {
 		sb.WriteString("GRANT OPTION FOR ")
 	}
-	body, err := c.grantBody(s.Privileges, s.ObjectType, s.Objects, s.Grantees)
+	body, err := c.grantBody(s.Privileges, s.ObjectType, s.Objects, s.Grantees, "FROM")
 	if err != nil {
 		return "", err
 	}
-	// grantBody renders the grantee clause with TO; REVOKE uses FROM.
-	sb.WriteString(strings.Replace(body, " TO ", " FROM ", 1))
+	sb.WriteString(body)
 	if s.Behavior != "" {
 		sb.WriteString(" ")
 		sb.WriteString(s.Behavior)
@@ -196,9 +195,11 @@ func (c *Compiler) CompileRevoke(s RevokeStmt) (string, error) {
 	return sb.String(), nil
 }
 
-// grantBody renders "<privileges> ON <type> <objects> TO <grantees>", shared by
-// GRANT and REVOKE (REVOKE rewrites TO to FROM).
-func (c *Compiler) grantBody(privileges []string, objectType string, objects, grantees []Ident) (string, error) {
+// grantBody renders "<privileges> ON <type> <objects> <granteeKeyword> <grantees>",
+// shared by GRANT (granteeKeyword "TO") and REVOKE (granteeKeyword "FROM"). The
+// keyword is passed in rather than rewritten afterward so an object or grantee
+// name that itself contains " TO " is never corrupted.
+func (c *Compiler) grantBody(privileges []string, objectType string, objects, grantees []Ident, granteeKeyword string) (string, error) {
 	if len(objects) == 0 {
 		return "", fmt.Errorf("sqlkit/sql: GRANT/REVOKE requires at least one object")
 	}
@@ -223,7 +224,9 @@ func (c *Compiler) grantBody(privileges []string, objectType string, objects, gr
 		}
 		sb.WriteString(c.Dialect.QuoteIdent(object.String()))
 	}
-	sb.WriteString(" TO ")
+	sb.WriteString(" ")
+	sb.WriteString(granteeKeyword)
+	sb.WriteString(" ")
 	for i, grantee := range grantees {
 		if i > 0 {
 			sb.WriteString(", ")
