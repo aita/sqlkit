@@ -7,7 +7,8 @@ import (
 )
 
 // Benchmarks for the PostgreSQL parse hot path: SQL text -> typed sqlkit/sql
-// query through the real PostgreSQL grammar (libpg_query, cgo). They make the
+// query through the real PostgreSQL grammar (libpg_query, run as WebAssembly on
+// the pure Go wazero runtime via go-pgquery). They make the
 // parser's latency and allocations measurable and regression-trackable
 // (e.g. with benchstat) — parsing is on the request path for anyone who accepts
 // SQL text, so "no feature is quietly slow" applies to it too.

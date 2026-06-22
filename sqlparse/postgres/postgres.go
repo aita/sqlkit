@@ -1,9 +1,11 @@
 // Package postgres parses PostgreSQL statements into github.com/aita/sqlkit/sql
 // queries. It is the PostgreSQL frontend for github.com/aita/sqlkit/sqlparse,
-// backed by pg_query_go (the real PostgreSQL grammar via libpg_query).
+// backed by the real PostgreSQL grammar (libpg_query): it parses and deparses
+// through go-pgquery, which runs libpg_query as a WebAssembly module on the pure
+// Go wazero runtime, and reuses the AST types from pg_query_go.
 //
-// It lives in its own module so the pg_query_go (cgo) dependency stays isolated
-// from callers that only need the sqlparse abstraction or the sql package.
+// It lives in its own module so the parser dependency tree stays isolated from
+// callers that only need the sqlparse abstraction or the sql package.
 //
 //	q, err := postgres.ParseOne("SELECT id FROM users WHERE active")
 //	text, args, err := q.ToSQL(sql.PostgreSQLDialect{})
@@ -15,8 +17,12 @@
 // loss of comments and formatting on that fallback, and so on). Backend-specific
 // notes:
 //
-//   - cgo. pg_query_go embeds libpg_query, so this module requires cgo and a C
-//     toolchain to build; it is not pure Go.
+//   - Pure Go. go-pgquery compiles libpg_query to WebAssembly and runs it on the
+//     wazero runtime, so this module builds without cgo or a C toolchain (it
+//     still depends on pg_query_go for the AST types, whose cgo entry points are
+//     unused). WebAssembly execution is several times slower than calling
+//     libpg_query through cgo, which is acceptable for parsing/import workloads
+//     but not for parsing very high query volumes online.
 //
 //   - Statement positions come from the parse result's statement locations, so
 //     each Query's position points at its start in the source text.
@@ -28,6 +34,7 @@ import (
 	"github.com/aita/sqlkit/sql"
 	"github.com/aita/sqlkit/sqlparse"
 	pg "github.com/pganalyze/pg_query_go/v6"
+	pgquery "github.com/wasilibs/go-pgquery"
 )
 
 // Parser parses PostgreSQL SQL text into sqlkit/sql queries. The zero value is
@@ -41,7 +48,7 @@ var _ sqlparse.Parser = Parser{}
 
 // Parse parses one or more PostgreSQL statements in source order.
 func (Parser) Parse(text string) ([]sql.Query, error) {
-	result, err := pg.Parse(text)
+	result, err := pgquery.Parse(text)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +81,7 @@ func (Parser) Parse(text string) ([]sql.Query, error) {
 // deparseStmt renders a single statement back to SQL text by deparsing a parse
 // result that holds only that statement, preserving the source version.
 func deparseStmt(result *pg.ParseResult, stmt *pg.RawStmt) (string, error) {
-	return pg.Deparse(&pg.ParseResult{
+	return pgquery.Deparse(&pg.ParseResult{
 		Version: result.GetVersion(),
 		Stmts:   []*pg.RawStmt{stmt},
 	})
