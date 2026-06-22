@@ -84,9 +84,9 @@ func singular(name string) string {
 // fields that would collide get a Col suffix.
 var reservedFieldNames = map[string]bool{
 	"Info": true, "Columns": true, "PrimaryKey": true, "Defaulted": true,
-	"SQLSource": true, "Get": true,
+	"SQLSource": true, "Get": true, "As": true,
 	// Relation-aware bindings add these methods/fields to the table struct.
-	"Query": true, "Q": true, "Rels": true,
+	"Query": true, "Q": true, "Rels": true, "Relations": true,
 	"Insert": true, "Update": true, "Delete": true,
 }
 
