@@ -97,6 +97,10 @@ type executorBinding interface {
 	// automatic split. Explicit chunking (AutoChunk, InBatches) does
 	// not consult it.
 	maxBindParams() int
+	// maxStatementBytes is the estimated-statement-size cap (bytes) that additionally
+	// splits a bulk INSERT with large string/BLOB rows (MySQL max_allowed_packet), or
+	// 0 when byte-aware splitting is off — unconfigured, or auto-chunk disabled.
+	maxStatementBytes() int
 	// executor returns the terminal that runs compiled statements: the
 	// connection-backed default, or a WrapExecutor database's custom one.
 	executor() Executor

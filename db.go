@@ -58,6 +58,13 @@ type Database struct {
 	// the dialect's bind-parameter limit. It defaults to 1000; 0 leaves only that
 	// hard limit.
 	preloadChunk int
+	// statementByteLimit caps the estimated serialized size of a single bulk
+	// INSERT, splitting it into more statements when rows carry large string/BLOB
+	// values that the bind-parameter count alone does not bound — MySQL's
+	// max_allowed_packet. It defaults to 0 (off, size never limits the split) and
+	// applies only when auto-chunk is on; WithMaxStatementBytes sets it. A session
+	// inherits it.
+	statementByteLimit int
 }
 
 // DatabaseOption configures a Database.
@@ -179,6 +186,19 @@ func WithPreloadBatchSize(n int) DatabaseOption {
 	return func(d *Database) { d.preloadChunk = n }
 }
 
+// WithMaxStatementBytes caps the estimated serialized size, in bytes, of a single
+// automatically split bulk INSERT. A statement whose rows would exceed it is split
+// into more chunks so each stays under the cap, the bound that matters for MySQL's
+// max_allowed_packet when rows carry large string or BLOB values — which the
+// bind-parameter count alone does not reflect. It applies in addition to the
+// dialect's bind-parameter limit and only when auto-split is enabled (WithAutoChunk);
+// the default is 0, leaving only that parameter-count limit. The size is an estimate,
+// so set it safely below the server's configured packet limit. Sessions inherit the
+// setting. Pass 0 to disable byte-aware splitting.
+func WithMaxStatementBytes(n int) DatabaseOption {
+	return func(d *Database) { d.statementByteLimit = n }
+}
+
 // Open opens a database/sql handle from a driver name and DSN string. The
 // dialect is inferred from the driver name (see DialectForDriver); pass
 // WithDialect to override.
@@ -217,7 +237,7 @@ func WrapExecutor(exec Executor, opts ...DatabaseOption) *Database {
 // newDatabase builds a Database with the shared defaults, then applies opts. A
 // WrapDB/Open database passes db (exec nil); WrapExecutor passes exec (db nil).
 func newDatabase(db *stdsql.DB, exec Executor, opts []DatabaseOption) *Database {
-	d := &Database{db: db, exec: exec, dialect: sql.PostgreSQLDialect{}, batchReadSnapshot: true, autoChunk: false, preloadChunk: defaultPreloadChunkSize}
+	d := &Database{db: db, exec: exec, dialect: sql.PostgreSQLDialect{}, batchReadSnapshot: true, autoChunk: false, preloadChunk: defaultPreloadChunkSize, statementByteLimit: 0}
 	for _, opt := range opts {
 		opt(d)
 	}
@@ -349,7 +369,7 @@ func (d *Database) newSession(options sessionOptions) *Session {
 	if options.autoChunk != nil {
 		autoChunk = *options.autoChunk
 	}
-	return &Session{base: d.executor(), txOpts: options.tx, dialect: d.dialect, identities: d.identities, hks: d.hks, autoChunk: autoChunk, preloadChunk: d.preloadChunk, route: options.route}
+	return &Session{base: d.executor(), txOpts: options.tx, dialect: d.dialect, identities: d.identities, hks: d.hks, autoChunk: autoChunk, preloadChunk: d.preloadChunk, statementByteLimit: d.statementByteLimit, route: options.route}
 }
 
 // WithSession runs fn inside a session and commits when fn returns nil; on
@@ -475,9 +495,24 @@ func (d *Database) maxBindParams() int {
 	return resolveBindParamLimit(d.dialect)
 }
 
+// maxStatementBytes is the estimated-statement-size cap that splits a bulk INSERT
+// whose rows carry large values (MySQL max_allowed_packet), or 0 when byte-aware
+// splitting is off — either unconfigured or because auto-chunk is disabled, which
+// suppresses every automatic split.
+func (d *Database) maxStatementBytes() int {
+	if !d.autoChunk {
+		return 0
+	}
+	return d.statementByteLimit
+}
+
 // AutoChunkEnabled reports whether automatic, limit-driven statement splitting is
 // enabled for this database (WithAutoChunk).
 func (d *Database) AutoChunkEnabled() bool { return d.autoChunk }
+
+// MaxStatementBytes reports the configured estimated-statement-size cap for
+// byte-aware INSERT splitting (WithMaxStatementBytes), or 0 when none is set.
+func (d *Database) MaxStatementBytes() int { return d.statementByteLimit }
 
 func (d *Database) preloadChunkSize() int { return d.preloadChunk }
 

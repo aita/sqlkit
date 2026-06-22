@@ -1,5 +1,7 @@
 package sql
 
+import "reflect"
+
 // InsertStmt is the immutable AST for an INSERT statement (INSERT ... VALUES or
 // INSERT ... SELECT). Exactly one of Rows or Select carries the inserted data;
 // Conflict holds an optional upsert action and Returning an optional RETURNING.
@@ -182,6 +184,102 @@ func (b InsertBuilder) SplitRows(n int) []InsertBuilder {
 		out = append(out, batch)
 	}
 	return out
+}
+
+// insertBaseBytes is the fixed per-statement byte estimate charged against a
+// byte budget in SplitRowsBySize — the INSERT scaffolding (keywords, table and
+// column names, RETURNING) that every chunk repeats. It is deliberately a small
+// constant: the row values, not the prefix, dominate a packet large enough to
+// matter (the case byte-aware splitting exists for).
+const insertBaseBytes = 64
+
+// SplitRowsBySize partitions a VALUES insert into statements bounded by both a
+// maximum row count and an estimated serialized byte size, packing rows greedily
+// into each. maxRows caps the rows per statement (0 = unbounded); maxBytes caps a
+// statement's estimated size — a fixed base plus each row's bind-value bytes — in
+// bytes (0 = unbounded), the bound that matters for MySQL's max_allowed_packet
+// when rows carry large string or BLOB values that the bind-parameter count alone
+// does not reflect. Every copy keeps the same column, conflict, and returning
+// clauses, like SplitRows. A single row larger than maxBytes still goes in a
+// statement of its own (it cannot be split further). With both limits zero, or a
+// query that already fits one statement, b is returned unchanged as a single
+// element. The byte figure is an estimate, so set maxBytes safely below the
+// server's true packet limit.
+func (b InsertBuilder) SplitRowsBySize(maxRows, maxBytes int) []InsertBuilder {
+	if len(b.s.Rows) == 0 || (maxRows <= 0 && maxBytes <= 0) {
+		return []InsertBuilder{b}
+	}
+	var out []InsertBuilder
+	start := 0
+	bytes := insertBaseBytes
+	for i := range b.s.Rows {
+		rowBytes := estimateRowBytes(b.s.Rows[i])
+		full := maxRows > 0 && i-start >= maxRows
+		over := maxBytes > 0 && i > start && bytes+rowBytes > maxBytes
+		if i > start && (full || over) {
+			out = append(out, b.rowSlice(start, i))
+			start = i
+			bytes = insertBaseBytes
+		}
+		bytes += rowBytes
+	}
+	return append(out, b.rowSlice(start, len(b.s.Rows)))
+}
+
+// rowSlice returns a copy of b narrowed to the VALUES rows [start, end), sharing
+// every other clause — the building block of the byte-aware split.
+func (b InsertBuilder) rowSlice(start, end int) InsertBuilder {
+	b.s.Rows = b.s.Rows[start:end]
+	return b
+}
+
+// estimateRowBytes approximates the serialized size of one VALUES row: each bind
+// value's byte size plus a little structural overhead (separators, length
+// prefixes, parentheses), which keeps the estimate on the high side so a chunk
+// stays under a real packet limit.
+func estimateRowBytes(row []Expression) int {
+	n := 2 // surrounding parentheses and the row separator
+	for _, e := range row {
+		n += 2 // placeholder / length-prefix and separator overhead
+		if v, ok := e.(ValueExpression); ok {
+			n += valueByteSize(v.Value)
+		} else {
+			n += 8 // a non-bind expression renders inline; rough fixed estimate
+		}
+	}
+	return n
+}
+
+// valueByteSize estimates the serialized byte size of a single bind value,
+// charging strings and byte slices their length (the values that make a row
+// large) and other scalars a small fixed cost.
+func valueByteSize(v any) int {
+	switch x := v.(type) {
+	case nil:
+		return 4 // NULL
+	case string:
+		return len(x)
+	case []byte:
+		return len(x)
+	case bool:
+		return 1
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.String:
+		return rv.Len()
+	case reflect.Slice, reflect.Array:
+		if rv.Type().Elem().Kind() == reflect.Uint8 {
+			return rv.Len()
+		}
+		return 16
+	case reflect.Pointer, reflect.Interface:
+		if rv.IsNil() {
+			return 4
+		}
+		return valueByteSize(rv.Elem().Interface())
+	}
+	return 16 // numbers, time.Time, driver.Valuer, and other scalars
 }
 
 // ToSQL compiles the building INSERT statement.

@@ -405,3 +405,84 @@ func TestInsertUpdateDeletePlumbing(t *testing.T) {
 		}
 	}
 }
+
+// rowsInserted sums the VALUES rows across the parts of a split insert, reading
+// each part's bind-arg count divided by its column width.
+func rowsInserted(parts []InsertBuilder) int {
+	total := 0
+	for _, part := range parts {
+		w := part.ColumnCount()
+		_, args, err := part.ToSQL(PostgreSQLDialect{})
+		if err != nil {
+			panic(err)
+		}
+		if w > 0 {
+			total += len(args) / w
+		}
+	}
+	return total
+}
+
+func bulkInsert(n int, value string) InsertBuilder {
+	q := InsertInto(Table{Name: NewIdent("t")}).Columns("email")
+	for i := 0; i < n; i++ {
+		q = q.Values(value)
+	}
+	return q
+}
+
+func TestSplitRowsBySizeNoLimitsIsSingle(t *testing.T) {
+	if parts := bulkInsert(5, "a@example.com").SplitRowsBySize(0, 0); len(parts) != 1 {
+		t.Fatalf("parts = %d, want 1 (no limits)", len(parts))
+	}
+}
+
+func TestSplitRowsBySizeRowCapMatchesSplitRows(t *testing.T) {
+	q := bulkInsert(5, "x")
+	bySize := q.SplitRowsBySize(2, 0)
+	bySplit := q.SplitRows(2)
+	if len(bySize) != len(bySplit) || len(bySize) != 3 {
+		t.Fatalf("byte-aware = %d parts, SplitRows = %d, want 3 each", len(bySize), len(bySplit))
+	}
+	if got := rowsInserted(bySize); got != 5 {
+		t.Fatalf("rows across parts = %d, want 5", got)
+	}
+}
+
+func TestSplitRowsBySizeByteCapSplitsLargeRows(t *testing.T) {
+	// Each row carries a ~100-byte string; a 256-byte budget keeps each part to a
+	// single row here (base 64 + 2*(2+2+100)=272 > 256) despite no row cap.
+	big := strings.Repeat("x", 100)
+	parts := bulkInsert(5, big).SplitRowsBySize(0, 256)
+	if len(parts) < 2 {
+		t.Fatalf("parts = %d, want a multi-statement split for oversized rows", len(parts))
+	}
+	if got := rowsInserted(parts); got != 5 {
+		t.Fatalf("rows across parts = %d, want 5 (disjoint chunks)", got)
+	}
+	for _, part := range parts {
+		_, args, _ := part.ToSQL(PostgreSQLDialect{})
+		if len(args) > 1 {
+			t.Fatalf("part holds %d rows, want the byte budget to keep it small", len(args))
+		}
+	}
+}
+
+func TestSplitRowsBySizeOversizedRowGoesAlone(t *testing.T) {
+	// A single row larger than the whole budget cannot be split further; it must
+	// still appear, in a statement of its own.
+	huge := strings.Repeat("x", 10_000)
+	parts := bulkInsert(3, huge).SplitRowsBySize(0, 100)
+	if len(parts) != 3 {
+		t.Fatalf("parts = %d, want 3 (one oversized row each)", len(parts))
+	}
+	if got := rowsInserted(parts); got != 3 {
+		t.Fatalf("rows across parts = %d, want 3", got)
+	}
+}
+
+func TestSplitRowsBySizeSmallRowsFitOneStatement(t *testing.T) {
+	if parts := bulkInsert(4, "a").SplitRowsBySize(0, 1<<20); len(parts) != 1 {
+		t.Fatalf("parts = %d, want 1 (rows fit the budget)", len(parts))
+	}
+}
