@@ -257,14 +257,47 @@ its reasoning — a well-reasoned non-bug is a valid hunt outcome.
   coverage — it has a structural ceiling (see `internal/tests/README.md`). Add a
   builder unit test or a fuzz seed instead.
 
+## Severity: how bad is the bug
+
+Rate each finding by **impact if it persists**, separately from how risky the
+*fix* is to land (that's Mergeability — the two are orthogonal). Severity drives
+priority and how loudly to flag it.
+
+- **Critical — silent wrong data, or a security breach.** Wrong rows returned or
+  written with no error, or sensitive data exposed — the caller cannot tell
+  anything went wrong. Examples: a silent meaning change that alters the result
+  set (GROUP_CONCAT separator dropped → wrong aggregate; quoted `"x.y"` naming a
+  different object), a fail-open PII leak in redaction, a structural-identity
+  collision (checksum / `Equal` omission) that serves a stale or wrong
+  cached/deduped result, write-path asymmetry sending the wrong value to the
+  driver, FK-unsafe ordering corrupting a write set.
+- **High — crash, or a lost integrity guarantee.** A panic on accepted input
+  (DoS on untrusted SQL), a dropped transaction/atomicity guarantee, or an
+  injection-relevant escaping gap. Detectable, but breaks availability or a
+  safety guarantee.
+- **Medium — loud, contained failure.** Emits SQL the engine rejects, or
+  hard-errors where a valid construct should work, or non-determinism that only
+  causes flaky diffs / output churn (migrate diff order, codegen). The operation
+  fails visibly; no silent corruption, no crash. Most "invalid dialect SQL" bugs
+  land here.
+- **Low — no production-visible wrong behavior.** Non-fixpoint rendering,
+  internal-only inconsistency, robustness hardening, cosmetic. Worth fixing to
+  keep an oracle honest; not urgent.
+
+Weight by **reachability**: the same impact is more urgent on a common path (any
+`SELECT`) than behind an exotic construct only a hand-written query reaches.
+State both — e.g. "Critical impact, low reachability (schema-qualified operators
+only)". Lead with severity for triage; lead with Mergeability for landing.
+
 ## Output
 
-Report findings as a short list, each with: the violated invariant, a minimal
-reproducer, the root cause, and the fix. Then implement them as **separate,
-small commits/PRs, one bug each, each with its regression test**, and only after
-the full validation suite (`validation.md`) is green. If a hunt finds no live
-bugs, say so plainly and leave behind any new oracle as a permanent guard (a
-clean hunt is a valid result — `#118` found none).
+Report findings as a short list, each with: its **severity (and reachability)**,
+the violated invariant, a minimal reproducer, the root cause, and the fix. Then
+implement them as **separate, small commits/PRs, one bug each, each with its
+regression test**, and only after the full validation suite (`validation.md`) is
+green. Each fix PR also declares its Mergeability verdict (above). If a hunt
+finds no live bugs, say so plainly and leave behind any new oracle as a permanent
+guard (a clean hunt is a valid result — `#118` found none).
 
 ## Mergeability: simple fix vs. needs review
 
