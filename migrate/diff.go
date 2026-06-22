@@ -130,32 +130,38 @@ type tableChanges struct {
 func diffTable(oldT, newT meta.Table, d sql.Dialect) (tableChanges, error) {
 	var tc tableChanges
 
-	// Foreign keys: by name. Changed = drop + add.
+	// Foreign keys: by name. Changed = drop + add. Names are sorted for
+	// deterministic output, matching the checks below.
 	oldFKs := fkMap(oldT)
 	newFKs := fkMap(newT)
-	for name, fk := range oldFKs {
+	for _, name := range sortedKeys(oldFKs) {
+		fk := oldFKs[name]
 		nf, ok := newFKs[name]
 		if !ok || !fkEqual(fk, nf) {
 			tc.dropFKs = append(tc.dropFKs, fk.DropStatement(oldT))
 		}
 	}
-	for name, fk := range newFKs {
+	for _, name := range sortedKeys(newFKs) {
+		fk := newFKs[name]
 		of, ok := oldFKs[name]
 		if !ok || !fkEqual(of, fk) {
 			tc.addFKs = append(tc.addFKs, fk.AddStatement(newT))
 		}
 	}
 
-	// Indexes: by name. Changed = drop + create.
+	// Indexes: by name. Changed = drop + create. Names are sorted for
+	// deterministic output.
 	oldIdx := indexMap(oldT)
 	newIdx := indexMap(newT)
-	for name, ix := range oldIdx {
+	for _, name := range sortedKeys(oldIdx) {
+		ix := oldIdx[name]
 		ni, ok := newIdx[name]
 		if !ok || !indexEqual(ix, ni) {
 			tc.dropIndexes = append(tc.dropIndexes, ix.DropStatement(oldT))
 		}
 	}
-	for name, ix := range newIdx {
+	for _, name := range sortedKeys(newIdx) {
+		ix := newIdx[name]
 		oi, ok := oldIdx[name]
 		if !ok || !indexEqual(oi, ix) {
 			tc.createIndexes = append(tc.createIndexes, ix.CreateStatement(newT))
@@ -365,6 +371,12 @@ func checkMap(t meta.Table) map[string]meta.Check {
 }
 
 func sortedCheckNames(m map[string]meta.Check) []string {
+	return sortedKeys(m)
+}
+
+// sortedKeys returns the keys of m in ascending order, so a diff built by
+// ranging over a by-name map emits its statements deterministically.
+func sortedKeys[V any](m map[string]V) []string {
 	names := make([]string, 0, len(m))
 	for name := range m {
 		names = append(names, name)
