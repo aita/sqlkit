@@ -183,6 +183,38 @@ func TestRenderColumnRename(t *testing.T) {
 	}
 }
 
+// TestRenderMultipleRenamesDeterministicOrder guards against the post-rename
+// column-change statements following Go's randomized map iteration: two columns
+// renamed AND retyped must emit their ModifyColumn statements in rename-
+// declaration order, the same on every run.
+func TestRenderMultipleRenamesDeterministicOrder(t *testing.T) {
+	source := decl.NewCatalog(decl.DefaultSchema("public"))
+	source.Table("users",
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("a", decl.Text),
+		decl.Column("b", decl.Text),
+	)
+	target := decl.NewCatalog(decl.DefaultSchema("public"))
+	target.Table("users",
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("a2", decl.VarChar(50)),
+		decl.Column("b2", decl.BigInt),
+	)
+	renames := Renames{Columns: []ColumnRename{
+		{Table: "users", From: "a", To: "a2"},
+		{Table: "users", From: "b", To: "b2"},
+	}}
+	res := render(t, build(t, source), build(t, target), "postgres", renames)
+	ia := strings.Index(res.Up, `op.ModifyColumn("users", decl.Column("a2"`)
+	ib := strings.Index(res.Up, `op.ModifyColumn("users", decl.Column("b2"`)
+	if ia < 0 || ib < 0 {
+		t.Fatalf("Up missing a ModifyColumn for a renamed+retyped column:\n%s", res.Up)
+	}
+	if ia > ib {
+		t.Errorf("renamed-column changes out of declaration order (a2 after b2):\n%s", res.Up)
+	}
+}
+
 func TestRenderRenameHeuristic(t *testing.T) {
 	source := decl.NewCatalog(decl.DefaultSchema("public"))
 	source.Table("users",
