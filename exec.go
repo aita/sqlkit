@@ -313,7 +313,17 @@ func (r Rows) batchExecutor() (executorBinding, func(error) error) {
 	noop := func(err error) error { return err }
 	db, ok := r.ex.(*Database)
 	if !ok {
-		return r.ex, noop
+		// A per-statement WithRoute wraps the executor in a routedBinding. For a
+		// write batch — which must be atomic and whose route hint the router
+		// ignores anyway — look through it to the underlying Database so the chunks
+		// still run in one transaction. A routedBinding over a Session already has
+		// the session's transaction, so it (like a bare Session) is reused as-is.
+		if routed, isRouted := r.ex.(routedBinding); isRouted && r.batchWrite {
+			db, ok = routed.base.(*Database)
+		}
+		if !ok {
+			return r.ex, noop
+		}
 	}
 	var session *Session
 	if r.batchWrite {
