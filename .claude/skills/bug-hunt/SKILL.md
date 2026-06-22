@@ -43,11 +43,20 @@ probably not a bug — see "What is NOT a bug".
 2. **Run several explorations in parallel** (see Techniques). `#131` ran four at
    once: semantic oracle, builder-first property testing, low-coverage branch
    probing, and a real-engine differential check. Use the `Agent` tool to fan
-   out independent explorations.
+   out independent explorations, each over a **scoped surface** (one package or
+   technique) so they don't overlap. **Re-verify every finding yourself before
+   acting** — agent output runs a high false-positive rate; treat each candidate
+   as unconfirmed until you reproduce it (see "Triage: confirm before you fix").
 3. **For each violation found**: write the smallest reproducer, confirm it
    breaks the invariant, then fix it.
-4. **Add a permanent regression test** — a unit test in the file matching the
-   code under test, and keep any fuzzer-found input as a corpus/seed entry.
+4. **Add a permanent regression test, and prove it catches the bug** — a unit
+   test in the file matching the code under test, and keep any fuzzer-found input
+   as a corpus/seed entry. Then **confirm the test fails without the production
+   change** (revert only the prod file in a throwaway worktree and re-run — see
+   `validation.md`). A test that passes both with and without the fix guards
+   nothing — this is what exposed a determinism fix shipped with *no* test (#147)
+   and a determinism test that false-passed ~74% of the time against the bug
+   (#142).
 5. **Validate the whole suite** (see `validation.md`) before claiming a fix.
 6. **One fix per commit/PR.** `#140` was explicitly split into ten per-bug PRs
    (`#141`–`#150`) for independent review. Do the same: small, self-contained,
@@ -111,8 +120,39 @@ roll back". Use the `internal/testutil` fake driver's counters.
 ### 7. Determinism
 Anything that iterates a Go `map` and emits the result in order is a suspect:
 preload IN-value order, migrate FK/index diff order, codegen output. The fix is
-to sort by a stable key; the test asserts a fixed expected order
-(`#142`, `#147`).
+to sort by a stable key. The test must **repeat the operation** (≈64–200×, or use
+enough distinct keys that an accidental match is negligible) and assert a fixed
+expected order — a single assertion can pass by chance under randomized map
+iteration (`#142`'s one-shot test false-passed ~74% of the time against the bug;
+`#147`).
+
+### 8. Canonical-encoding completeness
+A checksum, fingerprint, `Equal` method, or cache key must encode *every*
+structurally significant field; an omitted field is a silent collision (distinct
+things compare equal) or undetected drift. Enumerate the struct's fields and
+write a per-field-mutation property test that changes each one and asserts the
+digest changes — `meta`'s `TestKeyDiffersOnStructuralChange` is the template. One
+identity function alone yielded two bugs this way: omitted FK `ON DELETE`/`ON
+UPDATE` actions (#151) and the column array flag (#166).
+
+## Triage: confirm before you fix
+
+Most candidates — especially from parallel agents — are false positives (these
+hunts run a high dismissal rate). Before writing a fix, clear two bars:
+
+1. **Prove it is genuinely broken on the real contract.** Reproduce the
+   violation, and check the construct is actually invalid — a cast or surrounding
+   context can rescue what looks wrong. Empty `ARRAY[]` *looks* invalid but
+   `ARRAY[]::int[]` is valid PostgreSQL, so rejecting empty arrays would break a
+   real use; empty `GROUPING SETS ()` has no such rescue and *was* a bug (#165).
+2. **Prove the fix doesn't regress the valid common case.** A plausible fix can
+   be net-negative: adding `float`/`double` to the introspection decimal set
+   would turn a plain `FLOAT` into a bogus `FLOAT(12,0)`, so it was dismissed, not
+   shipped. If the fix changes behavior for inputs that were already correct, it
+   is the wrong fix.
+
+A candidate that fails either bar is not a fix to make. Record the dismissal with
+its reasoning — a well-reasoned non-bug is a valid hunt outcome.
 
 ## Common bug classes seen in this repo (use as a checklist)
 
@@ -133,6 +173,11 @@ to sort by a stable key; the test asserts a fixed expected order
   expression, behind a CTE/subquery/alias, that escapes masking.
 - **Fingerprint/analysis**: arity sensitivity (`IN (1,2)` vs `IN (1,2,3)`),
   un-collapsed placeholders/`LIMIT`/`OFFSET`, doubled-quote escapes.
+- **Incomplete canonical encodings**: a checksum / fingerprint / `Equal` / cache
+  key that omits a structurally significant field, so distinct structures collide
+  or drift goes undetected (`#151` FK actions, `#166` array flag). Fix = fold the
+  field into the encoding, ideally append-only so unchanged inputs keep their
+  digest (see `validation.md`).
 - **Codegen**: invalid/duplicate Go identifiers, double pointers, unescaped
   struct-tag content.
 
