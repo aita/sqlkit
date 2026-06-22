@@ -11,5 +11,7 @@
 # querytrace example binary
 /examples/querytrace/querytrace
 
-# Claude Code agent worktrees and local session scratch
-/.claude/
+# Claude Code agent worktrees and local session scratch, but keep shared
+# project skills under .claude/skills/ tracked.
+/.claude/*
+!/.claude/skills/
