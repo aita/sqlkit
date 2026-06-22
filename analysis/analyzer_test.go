@@ -9,6 +9,26 @@ import (
 	"github.com/aita/sqlkit/sql"
 )
 
+// TestAnalyzeLockingReadIsWrite covers SELECT ... FOR UPDATE: it is a read by
+// Kind but write-like (it takes locks and a read-only tx rejects it), so
+// LockingRead and IsWrite must be set — a plain SELECT must not be.
+func TestAnalyzeLockingReadIsWrite(t *testing.T) {
+	users := sql.Table{Name: sql.NewIdent("users")}
+
+	locking := analysis.New().Analyze("", sql.Select(sql.Col("id")).From(users).Where(sql.Eq(sql.Col("id"), sql.Val(1))).ForUpdate())
+	if locking.Kind != analysis.StmtSelect {
+		t.Fatalf("Kind = %v, want StmtSelect", locking.Kind)
+	}
+	if !locking.LockingRead || !locking.IsWrite() {
+		t.Fatalf("FOR UPDATE: LockingRead=%v IsWrite=%v, want both true", locking.LockingRead, locking.IsWrite())
+	}
+
+	plain := analysis.New().Analyze("", sql.Select(sql.Col("id")).From(users))
+	if plain.LockingRead || plain.IsWrite() {
+		t.Fatalf("plain SELECT: LockingRead=%v IsWrite=%v, want both false", plain.LockingRead, plain.IsWrite())
+	}
+}
+
 func TestAnalyzerDelegates(t *testing.T) {
 	users := sql.Table{Name: sql.NewIdent("users")}
 	q := sql.Select(sql.Star()).From(users).Where(sql.In(sql.Col("tenant_id"), 1, 2, 3))

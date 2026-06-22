@@ -51,7 +51,7 @@ func (t *Trace) deriveWriteOutsideTx() []Warning {
 			}
 		case EventExec, EventQuery:
 			q := ev.Query
-			if q == nil || !q.Kind.IsWrite() || depth > 0 {
+			if q == nil || !q.IsWrite() || depth > 0 {
 				continue
 			}
 			count++
