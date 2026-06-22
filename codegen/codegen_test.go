@@ -445,6 +445,21 @@ func TestColumnOverrideNullablePointer(t *testing.T) {
 	}
 }
 
+func TestColumnOverridePointerNameNoDoublePointer(t *testing.T) {
+	// An override that already spells a pointer ("*uuid.UUID") on a nullable column
+	// must not be wrapped again into "**uuid.UUID".
+	mapper := NewDefaultTypeMapper(TypeMapperConfig{ColumnOverrides: map[string]GoType{
+		"name": {ImportPath: "github.com/google/uuid", Name: "*uuid.UUID"},
+	}})
+	body := string(generateSingle(t, fixtureTables(), Options{PackageName: "blogdb", TypeMapper: mapper}))
+	if strings.Contains(body, "**uuid.UUID") {
+		t.Errorf("override already a pointer should not double-pointer:\n%s", body)
+	}
+	if !strings.Contains(body, `sqlkit.NewColumn[*uuid.UUID](info, "name")`) {
+		t.Errorf("override pointer type should be preserved:\n%s", body)
+	}
+}
+
 // pinnedType is a meta.Type that fixes an engine name and pins a Go type,
 // mirroring what decl's DataType.Go produces, to exercise the GoTyped path of
 // DefaultTypeMapper without importing decl.
