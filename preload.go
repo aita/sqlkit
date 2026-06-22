@@ -113,6 +113,9 @@ func applyPreloads(ctx context.Context, ex executorBinding, dest any, specs []pr
 // pointer to a slice of parents (every row) or to a single parent (First/One).
 func preloadRelation(ctx context.Context, ex executorBinding, dest any, spec preloadSpec) error {
 	rel := spec.rel
+	if rel == nil {
+		return fmt.Errorf("sqlkit: Preload requires a non-nil relation")
+	}
 	rv := reflect.ValueOf(dest)
 	if rv.Kind() != reflect.Pointer || rv.IsNil() {
 		return fmt.Errorf("sqlkit: Preload requires a pointer destination, got %T", dest)
