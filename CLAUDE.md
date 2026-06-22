@@ -134,6 +134,36 @@ golangci-lint run ./...
 - One concern per commit. Keep the summary imperative and concise.
 - Write commit messages and pull request titles/descriptions in English.
 
+## Pull requests
+
+Bug fixes (especially from a bug-hunt round) follow a fixed shape. The full
+methodology — how to find bugs, and the Severity / Mergeability rubrics — lives
+in the `bug-hunt` skill (`.claude/skills/bug-hunt/`); the essentials for opening
+a PR:
+
+- **One fix per PR.** Small and self-contained, each with its own regression
+  test, opened only after the full suite (`go test -race`, `vet`, `gofmt`,
+  `golangci-lint`, and any affected leaf modules) is green. Prove the regression
+  test fails without the production change.
+- **Severity** — the PR body states the bug's impact if it persists:
+  `critical` (silent wrong data or a security breach), `high` (crash or lost
+  integrity guarantee), `medium` (a loud, contained failure — invalid SQL the
+  engine rejects, non-determinism), or `low` (no production-visible wrong
+  behavior). Weight it by reachability (common path vs. exotic construct).
+- **Mergeability** — the first line of the PR body declares
+  `Mergeability: auto-merge-safe` or `Mergeability: needs review — <reason>`.
+  Auto-merge-safe means the change only corrects already-broken output (no
+  behavior change for valid input, no new error/rejection), changes no public
+  API / documented limitation / encoded form (checksum, fingerprint), is
+  self-contained with no embedded-output regeneration, follows an established
+  pattern, and is not in a security/integrity-critical pass (redaction, routing,
+  transactions). Anything else is needs-review; default to needs-review when
+  unsure. Only enable auto-merge for an auto-merge-safe PR.
+- **Labels** — apply one kind (`bug` / `enhancement` / `documentation`), one
+  severity label for bug fixes (`severity: critical|high|medium|low`), and one
+  mergeability label (`auto-merge-safe` / `needs-review`); features and docs
+  default to `needs-review`.
+
 ## Documentation
 
 - When behavior changes, update the relevant topic under `docs/`
