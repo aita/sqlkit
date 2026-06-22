@@ -27,7 +27,7 @@ func (w *connector) Connect(ctx context.Context) (stddriver.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &conn{cfg: w.cfg, c: c}, nil
+	return newConn(w.cfg, c), nil
 }
 
 // Driver returns the underlying driver.

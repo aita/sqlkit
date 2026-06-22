@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
 	"text/template"
 
@@ -657,10 +658,21 @@ var _ sqlkit.Table = {{.VarName}}
 // (so callers reach target columns through the relation) without forming a
 // recursive struct type; building every value from the new*Columns constructors
 // keeps the package-level vars free of initialization cycles.
+// structTag renders a Go struct tag literal binding a generated field to its
+// database column name. The name is quoted for the tag value (%q escapes any
+// quote or backslash), and the literal falls back to a double-quoted form when
+// the name contains a backtick — which a raw-string tag cannot hold — so any
+// column name the database allows still produces source that compiles.
+func structTag(name string) string {
+	content := fmt.Sprintf("sqlkit:%q", name)
+	if !strings.ContainsRune(content, '`') {
+		return "`" + content + "`"
+	}
+	return strconv.Quote(content)
+}
+
 var relationalBindingTemplate = template.Must(template.New("relbinding").Funcs(template.FuncMap{
-	// bq emits a backtick, so the template (itself a backtick-delimited raw
-	// string) can render the backtick-quoted struct tags of the filter bundle.
-	"bq": func() string { return "`" },
+	"structTag": structTag,
 	// filterType maps a relation's target columns type (e.g. "PostsColumns") to
 	// the target's filter bundle type (e.g. "PostsFilter"), so a relation field
 	// in a filter bundle is typed as a pointer to the related table's filter.
@@ -808,7 +820,7 @@ func (t {{.TypeName}}) Relations() []sqlkit.Relation {
 // (zero) fields are skipped.
 type {{.VarName}}Filter struct {
 {{- range .Columns}}
-	{{.Field}} sqlkit.FilterTerm {{bq}}sqlkit:"{{.Name}}"{{bq}}
+	{{.Field}} sqlkit.FilterTerm {{structTag .Name}}
 {{- end}}
 {{- range .Relations}}
 	{{.Field}} *{{filterType .TargetColumns}}
@@ -834,7 +846,9 @@ var {{.VarName}} = {{.TypeName}}{
 var _ sqlkit.Table = {{.VarName}}
 `
 
-var dtoTemplate = template.Must(template.New("dto").Parse(dtoTemplateSrc))
+var dtoTemplate = template.Must(template.New("dto").Funcs(template.FuncMap{
+	"structTag": structTag,
+}).Parse(dtoTemplateSrc))
 
 const dtoTemplateSrc = "// {{.DTOName}} is a generated row struct for table {{.Qualified}}; any struct\n" +
 	"// following Scan's mapping rules works as a destination or Insert value.\n" +
@@ -846,6 +860,6 @@ const dtoTemplateSrc = "// {{.DTOName}} is a generated row struct for table {{.Q
 	"{{- range .Doc}}\n" +
 	"\t// {{.}}\n" +
 	"{{- end}}\n" +
-	"\t{{.Field}} {{.GoType}} `sqlkit:\"{{.Name}}\"`\n" +
+	"\t{{.Field}} {{.GoType}} {{structTag .Name}}\n" +
 	"{{- end}}\n" +
 	"}\n"

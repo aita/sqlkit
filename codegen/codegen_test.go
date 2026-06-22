@@ -751,6 +751,37 @@ func TestGenerateSpecialCharColumn(t *testing.T) {
 	})
 }
 
+// TestGenerateBacktickColumnStructTag covers a column name containing a backtick
+// or a double quote: it is embedded in the generated struct tags (the DTO struct
+// and the relation-aware filter bundle), which are raw-string literals, so an
+// unescaped name would break the generated source. The tag must be escaped so the
+// source still compiles while preserving the exact column name.
+func TestGenerateBacktickColumnStructTag(t *testing.T) {
+	columns := []meta.Column{
+		{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true},
+		{Name: "a`b", Type: meta.Of("postgres", "text", 0, 0, 0)},
+		{Name: `c"d`, Type: meta.Of("postgres", "text", 0, 0, 0)},
+	}
+	tables := []meta.Table{{Schema: meta.Schema{Name: "public"}, Name: "widgets", Columns: columns}}
+	// EmitRelations exercises the filter-bundle tag, EmitDTO the DTO struct tag.
+	files, err := Generate(meta.Metadata{Tables: tables},
+		Options{PackageName: "widgetdb", EmitRelations: true, EmitDTO: true})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	for _, f := range files {
+		src := string(f.Content)
+		if _, err := parser.ParseFile(token.NewFileSet(), f.Name, src, parser.AllErrors); err != nil {
+			t.Fatalf("generated %s does not parse: %v\n--- source ---\n%s", f.Name, err, src)
+		}
+		// The exact column name must survive into the binding (via %q) so the
+		// generated code still targets the right database column.
+		if strings.Contains(src, "NewColumn") && !strings.Contains(src, "\"a`b\"") {
+			t.Errorf("generated %s lost the backtick column name:\n%s", f.Name, src)
+		}
+	}
+}
+
 // TestGenerateCollidingColumns covers bug B: distinct columns that map to the
 // same Go name (user_id and user__id both -> UserID) must be deduped into
 // distinct struct fields rather than redeclaring one.

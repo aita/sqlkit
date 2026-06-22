@@ -275,6 +275,28 @@ func TestMatchers(t *testing.T) {
 	sqltest.Expect(t, trace).Reads(1).Writes(1)
 }
 
+// TestDDLNotCountedAsRead pins that a schema statement (CREATE/ALTER/DROP) counts
+// as neither a read nor a write: Reads must count read statements directly, not
+// subtract writes from the total, or DDL leaks into the read count.
+func TestDDLNotCountedAsRead(t *testing.T) {
+	db, mock := newDB(t)
+	mock.ExpectExec(sqltest.Contains("create table")).
+		ReturnResult(0, 0).
+		Required()
+
+	trace := querytrace.New("op")
+	ctx := querytrace.WithTrace(context.Background(), trace)
+
+	if _, err := db.ExecContext(ctx, "CREATE TABLE users (id int)"); err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+
+	sqltest.Expect(t, trace).
+		Queries(1).
+		Reads(0).
+		NoWrites()
+}
+
 func rowCount(t *testing.T, ctx context.Context, db *sql.DB, query string, args ...any) int {
 	t.Helper()
 	rows, err := db.QueryContext(ctx, query, args...)

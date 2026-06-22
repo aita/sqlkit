@@ -11,6 +11,16 @@ import (
 // interfaces and forwards to the underlying connection's, returning
 // driver.ErrSkip when the underlying connection lacks one so database/sql falls
 // back to the prepare path (which the wrapped statement still instruments).
+//
+// NamedValueChecker is handled by conditional composition (see newConn): like a
+// statement's, database/sql discovers a connection's NamedValueChecker by a
+// static type assertion, so the wrapper must advertise it exactly when the
+// underlying does. SessionResetter and Validator, by contrast, are forwarded
+// unconditionally: their absent-default behavior (ResetSession → nil, IsValid →
+// true) is precisely what database/sql assumes when a connection does not
+// implement them, so advertising them on a non-supporting underlying is a no-op
+// and keeps the wrapper simple while never hiding an underlying that does
+// implement them.
 type conn struct {
 	cfg qt.Config
 	c   stddriver.Conn
@@ -31,8 +41,21 @@ var (
 	_ stddriver.ConnPrepareContext = (*conn)(nil)
 	_ stddriver.ConnBeginTx        = (*conn)(nil)
 	_ stddriver.Pinger             = (*conn)(nil)
-	_ stddriver.NamedValueChecker  = (*conn)(nil)
+	_ stddriver.SessionResetter    = (*conn)(nil)
+	_ stddriver.Validator          = (*conn)(nil)
 )
+
+// newConn wraps an underlying connection, selecting a variant that advertises
+// driver.NamedValueChecker exactly when the underlying connection implements it
+// — so the wrapper neither hides the underlying's per-connection argument
+// checking nor advertises a capability it lacks.
+func newConn(cfg qt.Config, c stddriver.Conn) stddriver.Conn {
+	base := conn{cfg: cfg, c: c}
+	if _, ok := c.(stddriver.NamedValueChecker); ok {
+		return &connNamedValueChecker{base}
+	}
+	return &base
+}
 
 // Prepare prepares a statement, returning an instrumented wrapper that carries
 // the SQL text for later recording.
@@ -41,7 +64,7 @@ func (cn *conn) Prepare(query string) (stddriver.Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &stmt{cfg: cn.cfg, txID: cn.txID, sql: query, s: s}, nil
+	return newStmt(cn.cfg, cn.txID, query, s), nil
 }
 
 // PrepareContext prepares a statement with a context when the underlying
@@ -52,7 +75,7 @@ func (cn *conn) PrepareContext(ctx context.Context, query string) (stddriver.Stm
 		if err != nil {
 			return nil, err
 		}
-		return &stmt{cfg: cn.cfg, txID: cn.txID, sql: query, s: s}, nil
+		return newStmt(cn.cfg, cn.txID, query, s), nil
 	}
 	return cn.Prepare(query)
 }
@@ -123,11 +146,43 @@ func (cn *conn) Ping(ctx context.Context) error {
 	return nil
 }
 
-// CheckNamedValue forwards to the underlying NamedValueChecker, or returns
-// driver.ErrSkip so database/sql applies its default argument conversion.
-func (cn *conn) CheckNamedValue(nv *stddriver.NamedValue) error {
-	if c, ok := cn.c.(stddriver.NamedValueChecker); ok {
-		return c.CheckNamedValue(nv)
+// ResetSession forwards to the underlying SessionResetter so database/sql can
+// reset per-connection session state (temp tables, SET settings, search_path)
+// when a connection is returned to the pool. When the underlying connection does
+// not implement it, returning nil matches database/sql's no-op default for a
+// connection that lacks the interface, so unconditional advertisement is safe.
+func (cn *conn) ResetSession(ctx context.Context) error {
+	if r, ok := cn.c.(stddriver.SessionResetter); ok {
+		return r.ResetSession(ctx)
 	}
-	return stddriver.ErrSkip
+	return nil
+}
+
+// IsValid forwards to the underlying Validator so database/sql can drop broken
+// connections from the pool (and keep healthy connections across a
+// context-canceled rollback). When the underlying connection does not implement
+// it, reporting valid matches database/sql's default for a connection that lacks
+// the interface, so unconditional advertisement is safe.
+func (cn *conn) IsValid() bool {
+	if v, ok := cn.c.(stddriver.Validator); ok {
+		return v.IsValid()
+	}
+	return true
+}
+
+// checkNamedValue forwards to the underlying connection's NamedValueChecker. It
+// is only reachable from the connNamedValueChecker variant, selected because the
+// underlying implements it.
+func (cn *conn) checkNamedValue(nv *stddriver.NamedValue) error {
+	return cn.c.(stddriver.NamedValueChecker).CheckNamedValue(nv) //nolint:forcetypeassert // variant invariant
+}
+
+// connNamedValueChecker advertises driver.NamedValueChecker, forwarding to an
+// underlying connection that implements it.
+type connNamedValueChecker struct{ conn }
+
+var _ stddriver.NamedValueChecker = (*connNamedValueChecker)(nil)
+
+func (cn *connNamedValueChecker) CheckNamedValue(nv *stddriver.NamedValue) error {
+	return cn.checkNamedValue(nv)
 }
