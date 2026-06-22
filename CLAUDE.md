@@ -1,66 +1,73 @@
 # CLAUDE.md
 
-このリポジトリで作業する際の規約。毎回の指示を不要にするために集約している。
+Conventions for working in this repository. Collected here so the same
+instructions don't have to be repeated every session.
 
-## テストファイルの分け方
+## Test file layout
 
-- **1ソース1テストファイル**: `foo.go` に対しては `foo_test.go` を対応させる。
-  まずはこの対応を基本とし、テストを安易に1ファイルへ寄せ集めない。
-- **機能・関心ごとに分割**: テストファイルが大きくなってきたら、機能（関心事）
-  単位で `foo_<topic>_test.go` のように分割する。1ファイルに詰め込まない。
-  - 例: `querytrace/warning_positive_test.go` /
-    `querytrace/warning_derive_test.go` /
-    `querytrace/warning_transaction_test.go` のように
-    `warning` 機能を観点ごとに分けている。
-- **Fuzz は別ファイル**: Fuzz テストは通常のテストと混ぜず、
-  `foo_fuzz_test.go` に分離する（例: `paginator_fuzz_test.go`,
-  `internal/reflectmap/snakecase_fuzz_test.go`）。
-- **結合テストは別ファイル・別パッケージ**: 結合（integration）テストや
-  ラウンドトリップ系は `internal/tests/` 配下に置く
-  （例: `internal/tests/integration/`, `internal/tests/roundtrip/`）。
-  ユニットテストと同じディレクトリに混在させない。
+- **One source, one test file**: pair `foo.go` with `foo_test.go`. Keep this
+  mapping as the default; don't pile unrelated tests into one file.
+- **Split by feature/concern**: once a test file grows large, split it by
+  feature (concern) into `foo_<topic>_test.go`. Don't cram everything into a
+  single file.
+  - Example: `querytrace/warning_positive_test.go`,
+    `querytrace/warning_derive_test.go`,
+    `querytrace/warning_transaction_test.go` split the `warning` feature by
+    concern.
+- **Fuzz tests in their own file**: keep fuzz tests separate from regular
+  tests, in `foo_fuzz_test.go` (e.g. `paginator_fuzz_test.go`,
+  `internal/reflectmap/snakecase_fuzz_test.go`).
+- **Integration tests separate, in their own package**: integration and
+  round-trip tests live under `internal/tests/` (e.g.
+  `internal/tests/integration/`, `internal/tests/roundtrip/`). Don't mix them
+  into the same directory as unit tests.
 
-## ビルド・テスト・Lint コマンド
+## Build, test & lint commands
 
-このリポジトリは複数の Go モジュールで構成される。ルートモジュールでは以下を使う。
+This repo is several Go modules. In the root module, use:
 
 ```sh
 go build ./...
 go test -race ./...
 go vet ./...
-gofmt -l .            # 出力が空であること（未フォーマット検出）
+gofmt -l .            # must print nothing (detects unformatted files)
 golangci-lint run ./...
 ```
 
-- 提出前には少なくとも `gofmt`・`go vet`・`go test -race ./...` を通す。
-- `examples/` 配下はより厳しい `examples/.golangci.yml` が適用される。
+- Before submitting, at minimum pass `gofmt`, `go vet`, and
+  `go test -race ./...`.
+- `examples/` is held to the stricter `examples/.golangci.yml`.
 
-## モジュール構成と依存方針
+## Module layout & dependency policy
 
-- ルート: `github.com/aita/sqlkit`（go 1.25）。利用者が import する中核モジュール。
-- **ルートモジュールを軽量・cgo フリーに保つ**。重い依存や cgo を持つものは
-  独立した leaf モジュールに隔離し、ルートへ依存が漏れないようにする。
-  - `sqlparse/postgres`: pg_query_go（cgo）を使うため別モジュール。
-  - `sqlparse/mysql`: TiDB パーサを使うため別モジュール。
-  - `querytrace/otelquery`: OpenTelemetry 依存を切り離すため別モジュール。
-  - `internal/tests/roundtrip`: ビルダ＋両パーサを必要とするラウンドトリップ
-    オラクル。cgo/パーサ依存を抱えるため別モジュール。
-- 新しい重量級依存を入れるときは、ルートに足さず別モジュール化を検討する。
-- パッケージをまたぐ変更時は、該当 leaf モジュールでも個別に `go build/vet/test`
-  すること（CI も各モジュールを別ジョブで回している）。
+- Root: `github.com/aita/sqlkit` (go 1.25). The core module consumers import.
+- **Keep the root module lightweight and cgo-free.** Isolate heavy or
+  cgo-bearing dependencies in their own leaf modules so they never leak into
+  the root.
+  - `sqlparse/postgres`: separate module because it uses pg_query_go (cgo).
+  - `sqlparse/mysql`: separate module because it uses the TiDB parser.
+  - `querytrace/otelquery`: separate module to keep the OpenTelemetry
+    dependency out of the root.
+  - `internal/tests/roundtrip`: round-trip oracle that needs the builder plus
+    both parser frontends; a separate module because it carries their
+    cgo/parser deps.
+- When adding a new heavyweight dependency, prefer a separate module over
+  adding it to the root.
+- For cross-package changes, also `go build/vet/test` the affected leaf
+  module(s) individually (CI runs each module as its own job).
 
-## コミットメッセージ
+## Commit messages
 
-- Conventional Commits 形式・スコープ付きを使う:
-  `feat(scope): ...` / `fix(scope): ...` / `build: ...` / `chore: ...`。
-  スコープは変更したパッケージ名（例: `fix(codegen)`,
-  `feat(sqlparse/postgres)`, `redact: ...`）。
-- 1コミット1関心。要約は命令形・現在形で簡潔に。
+- Use Conventional Commits with a scope:
+  `feat(scope): ...`, `fix(scope): ...`, `build: ...`, `chore: ...`.
+  The scope is the changed package (e.g. `fix(codegen)`,
+  `feat(sqlparse/postgres)`, `redact: ...`).
+- One concern per commit. Keep the summary imperative and concise.
 
-## ドキュメント
+## Documentation
 
-- 振る舞いを変えたら `docs/` 配下の該当トピック（`query-builder.md`,
-  `migrations.md`, `redaction.md`, `routing.md`, `observability.md`,
-  `schema-codegen.md`, `testing.md` など）も更新する。
-- コード生成を伴う変更（`go:generate` / `cmd/sqlkit`）では、生成物の
-  再生成とコミットを忘れない。
+- When behavior changes, update the relevant topic under `docs/`
+  (`query-builder.md`, `migrations.md`, `redaction.md`, `routing.md`,
+  `observability.md`, `schema-codegen.md`, `testing.md`, etc.).
+- For changes involving code generation (`go:generate` / `cmd/sqlkit`),
+  regenerate and commit the generated output.
