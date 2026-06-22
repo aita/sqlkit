@@ -263,6 +263,13 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 		reserved[varName] = true
 		reserved[varName+"Table"] = true
 	}
+	// Reserve enum type names too: an enum and a table's DTO can derive the same
+	// Go identifier (enum "mood" and table "moods" both -> "Mood"), which would
+	// emit two `type Mood` declarations. Seeding them here pushes the colliding
+	// DTO to its "Row"-suffixed fallback.
+	for _, enum := range md.Enums {
+		reserved[goName(enum.Name)] = true
+	}
 
 	generator := GeneratorID()
 	enumGo := enumGoTypes(md.Enums)

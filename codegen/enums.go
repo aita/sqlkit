@@ -47,8 +47,14 @@ func renderEnum(e meta.Enum) string {
 	fmt.Fprintf(&b, "type %s string\n\n", typeName)
 	fmt.Fprintf(&b, "// Values of the %s enum type.\n", typeName)
 	b.WriteString("const (\n")
+	// Distinct labels can map to the same Go name (e.g. "foo", "foo_" and "foo__"
+	// all yield "Foo"), and a catalog could even carry a duplicate label; dedupe
+	// the const names so the block never redeclares an identifier. The type name
+	// is reserved too, so a label can't collide with the enum type itself.
+	used := map[string]bool{typeName: true}
 	for _, v := range e.Values {
-		fmt.Fprintf(&b, "\t%s%s %s = %q\n", typeName, goName(v), typeName, v)
+		name := uniqueName(used, typeName+goName(v))
+		fmt.Fprintf(&b, "\t%s %s = %q\n", name, typeName, v)
 	}
 	b.WriteString(")\n")
 	return b.String()
