@@ -238,6 +238,30 @@ func TestDDLSchemaCreateGating(t *testing.T) {
 	}
 }
 
+// TestDDLManagedSchemaCreatedAndDropped pins that a ManagedSchema with no table
+// of its own (one hosting only an enum or sequence) is still folded into
+// Schemas() and so created by CreateSQL and dropped by DropSQL.
+func TestDDLManagedSchemaCreatedAndDropped(t *testing.T) {
+	pg := mustDialect(t, "postgres")
+	md := meta.Metadata{
+		Enums:          []meta.Enum{{Schema: "audit", Name: "mood", Values: []string{"happy", "sad"}}},
+		ManagedSchemas: []meta.Schema{{Name: "audit", Create: true}},
+	}
+	if schemas := md.Schemas(); len(schemas) != 1 || schemas[0].Name != "audit" || !schemas[0].Create {
+		t.Fatalf("Schemas() = %+v, want one managed audit schema", md.Schemas())
+	}
+	got, err := md.CreateSQL(pg)
+	if err != nil {
+		t.Fatalf("CreateSQL() error = %v", err)
+	}
+	if !strings.Contains(got, `CREATE SCHEMA IF NOT EXISTS "audit";`) {
+		t.Errorf("expected CREATE SCHEMA for the enum-only managed schema:\n%s", got)
+	}
+	if !strings.Contains(md.DropSQL(pg), `DROP SCHEMA IF EXISTS "audit"`) {
+		t.Errorf("expected DROP SCHEMA for the managed schema:\n%s", md.DropSQL(pg))
+	}
+}
+
 func TestDDLUnsupportedDialect(t *testing.T) {
 	if _, err := sql.DialectByName("oracle"); err == nil {
 		t.Error("DialectByName(oracle): expected error")
