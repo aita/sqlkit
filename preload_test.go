@@ -161,6 +161,19 @@ func TestPreloadRelExplicit(t *testing.T) {
 	}
 }
 
+// TestPreloadRelNilErrors covers PreloadRel(nil): it must surface a clear error
+// rather than panicking with a nil-interface dereference when parents exist.
+func TestPreloadRelNilErrors(t *testing.T) {
+	fake := &testutil.Fake{QueryFunc: func(string, []any) (testutil.Result, error) {
+		return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}}}, nil
+	}}
+	db := sqlkit.WrapDB(fake.DB())
+	err := db.Select(Users.ID).From(Users).PreloadRel(nil).All(context.Background()).Scan(&[]preUser{})
+	if err == nil {
+		t.Fatal("PreloadRel(nil) should error, not panic")
+	}
+}
+
 // TestPreloadNested loads Users -> Posts -> (each post's) User in three batched
 // queries and threads the grandchildren onto the value-type child slice.
 func TestPreloadNested(t *testing.T) {
