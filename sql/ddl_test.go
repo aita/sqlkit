@@ -51,6 +51,29 @@ func TestCreateTableTableLevelUniqueAndForeignKey(t *testing.T) {
 	}
 }
 
+func TestCreateTableEmptyErrors(t *testing.T) {
+	// A table with no columns or constraints would emit "CREATE TABLE t ();", which
+	// is invalid SQL; the compiler must error instead.
+	stmt := CreateTable(Table{Name: NewIdent("t")})
+	if _, _, err := stmt.ToSQL(mustDialect(t, "postgres")); err == nil || !strings.Contains(err.Error(), "at least one column") {
+		t.Fatalf("ToSQL() error = %v, want empty-table rejection", err)
+	}
+}
+
+func TestForeignKeyEmptyColumnsErrors(t *testing.T) {
+	// An empty referencing or referenced column list would emit "FOREIGN KEY ()
+	// REFERENCES t ()", which is invalid; the compiler must error, like UNIQUE/KEY.
+	stmt := CreateTable(Table{Name: NewIdent("t")}).
+		Column(ColumnDef{Name: NewIdent("a"), Type: EngineType{Name: "int8"}}).
+		ForeignKey(ForeignKeyConstraint{
+			Name: NewIdent("fk"), Columns: nil,
+			RefTable: NewIdent("users"), RefColumns: Idents("id"),
+		})
+	if _, _, err := stmt.ToSQL(mustDialect(t, "postgres")); err == nil || !strings.Contains(err.Error(), "FOREIGN KEY requires") {
+		t.Fatalf("ToSQL() error = %v, want empty-FK rejection", err)
+	}
+}
+
 func TestCreateTableUnnamedUnique(t *testing.T) {
 	stmt := CreateTable(Table{Name: NewIdent("t")}).
 		Column(ColumnDef{Name: NewIdent("a"), Type: EngineType{Name: "int8"}}).

@@ -76,7 +76,11 @@ func (c *Compiler) CompileCreateTable(s CreateTableStmt) (string, error) {
 		defs = append(defs, clause)
 	}
 	for _, fk := range s.ForeignKeys {
-		defs = append(defs, c.foreignKeyDef(fk))
+		def, err := c.foreignKeyDef(fk)
+		if err != nil {
+			return "", err
+		}
+		defs = append(defs, def)
 	}
 	if len(s.Indexes) > 0 {
 		if c.Dialect.Name() != "mysql" {
@@ -92,6 +96,10 @@ func (c *Compiler) CompileCreateTable(s CreateTableStmt) (string, error) {
 			}
 			defs = append(defs, clause+"("+c.quoteAll(idx.Columns)+")")
 		}
+	}
+
+	if len(defs) == 0 {
+		return "", fmt.Errorf("sqlkit/sql: CREATE TABLE requires at least one column or constraint")
 	}
 
 	var sb strings.Builder
@@ -449,7 +457,7 @@ func (c *Compiler) compileAlteration(table Table, a Alteration) (string, error) 
 		if a.ForeignKey == nil {
 			return "", fmt.Errorf("sqlkit/sql: ADD FOREIGN KEY has no constraint")
 		}
-		return c.foreignKeyClause(*a.ForeignKey), nil
+		return c.foreignKeyClause(*a.ForeignKey)
 	case AlterAddCheck:
 		expr, err := CompileStatic(c.Dialect, a.Expression)
 		if err != nil {
@@ -519,13 +527,22 @@ func (c *Compiler) requireColumnModify(op string) error {
 
 // foreignKeyClause renders an ALTER TABLE "ADD CONSTRAINT ... FOREIGN KEY ..."
 // action; foreignKeyDef renders the same constraint as a CREATE TABLE definition.
-func (c *Compiler) foreignKeyClause(fk ForeignKeyConstraint) string {
-	return "ADD " + c.foreignKeyDef(fk)
+func (c *Compiler) foreignKeyClause(fk ForeignKeyConstraint) (string, error) {
+	def, err := c.foreignKeyDef(fk)
+	if err != nil {
+		return "", err
+	}
+	return "ADD " + def, nil
 }
 
 // foreignKeyDef renders a "CONSTRAINT name FOREIGN KEY (cols) REFERENCES ..."
-// table constraint, shared by CREATE TABLE and ALTER TABLE ADD.
-func (c *Compiler) foreignKeyDef(fk ForeignKeyConstraint) string {
+// table constraint, shared by CREATE TABLE and ALTER TABLE ADD. Both column
+// lists must be non-empty, mirroring the UNIQUE and KEY constraint guards, so a
+// degenerate constraint errors rather than emitting "FOREIGN KEY () REFERENCES".
+func (c *Compiler) foreignKeyDef(fk ForeignKeyConstraint) (string, error) {
+	if len(fk.Columns) == 0 || len(fk.RefColumns) == 0 {
+		return "", fmt.Errorf("sqlkit/sql: FOREIGN KEY requires at least one referencing and one referenced column")
+	}
 	clause := "CONSTRAINT " + c.Dialect.QuoteName(fk.Name.String()) +
 		" FOREIGN KEY (" + c.quoteAll(fk.Columns) + ")" +
 		" REFERENCES " + c.qualifyName(fk.RefSchema, fk.RefTable) +
@@ -536,7 +553,7 @@ func (c *Compiler) foreignKeyDef(fk ForeignKeyConstraint) string {
 	if fk.OnUpdate != "" {
 		clause += " ON UPDATE " + fk.OnUpdate
 	}
-	return clause
+	return clause, nil
 }
 
 // qualify renders a schema-qualified table identifier for DDL, quoting each
