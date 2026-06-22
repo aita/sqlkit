@@ -85,6 +85,36 @@ func ColumnValues(table Table, row any) (names []string, values []any, err error
 	return names, values, nil
 }
 
+// ColumnWriteValues is like ColumnValues but returns each value ready to be
+// written to its column: a field tagged `sqlkit:",json"` (or `,jsonb`) is wrapped
+// so it is stored as its JSON encoding, exactly as the Insert and Update builders
+// do — the raw Go struct/map/slice would otherwise reach the driver unencoded.
+// Column order and skipping (unmapped and read-only columns) match ColumnValues
+// exactly, so the two results align index for index. The uow package builds
+// UPDATE assignments from this, while ColumnValues stays the raw reader used for
+// change detection.
+func ColumnWriteValues(table Table, row any) (names []string, values []any, err error) {
+	rv, err := rowStruct(row)
+	if err != nil {
+		return nil, nil, err
+	}
+	fields := reflectmap.Fields(rv.Type())
+	for _, col := range table.Columns() {
+		name := col.ColumnName()
+		f, ok := fields[strings.ToLower(name)]
+		if !ok || f.ReadOnly {
+			continue
+		}
+		v := rv.FieldByIndex(f.Path).Interface()
+		if f.JSON {
+			v = jsonValue{v: v}
+		}
+		names = append(names, name)
+		values = append(values, v)
+	}
+	return names, values, nil
+}
+
 // SetColumns assigns values to the fields of *rowPtr that map to the named
 // columns, using the same column-to-field mapping as Scan and Insert. rowPtr
 // must be a non-nil pointer to a struct so the fields are settable; columns the
