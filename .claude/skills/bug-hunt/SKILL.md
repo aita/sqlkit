@@ -265,3 +265,56 @@ small commits/PRs, one bug each, each with its regression test**, and only after
 the full validation suite (`validation.md`) is green. If a hunt finds no live
 bugs, say so plainly and leave behind any new oracle as a permanent guard (a
 clean hunt is a valid result — `#118` found none).
+
+## Mergeability: simple fix vs. needs review
+
+For each fix PR, classify how safe it is to land, so a trivial correctness fix
+isn't held up and a behavior/spec change isn't waved through. State the verdict
+on the **first line of the PR body** as `Mergeability: auto-merge-safe` or
+`Mergeability: needs review — <reason>`, and only enable auto-merge for the
+former (and only when the user has authorized auto-merge at all).
+
+**Auto-merge-safe** — *all* of these hold:
+
+- **No change for already-valid input.** The diff only changes output for input
+  that was already broken (panic / invalid SQL / wrong result / leak); every
+  previously-correct input renders byte-identically. The cleanest signal: the
+  round-trip / semantic / golden oracles and the full suite are green with **no
+  expected-output edits** beyond the new regression test.
+- **No public-API or contract change** — no changed/added exported signature a
+  caller must adopt, no change to a documented limitation (`docs/limitations.md`).
+- **Self-contained** — one package, small diff, no embedded-output regeneration
+  (no golden/binding churn — see `validation.md`), no new dependency.
+- **Follows an established repo pattern** — e.g. raw-fallback for an unmodelable
+  construct, or a compile-time rejection of dialect-invalid SQL of a kind the
+  compiler already rejects elsewhere.
+- **Not in a security/integrity-critical pass** — redaction masking, routing
+  read/write split, transaction atomicity. Those get human eyes even when small.
+- Regression test proven to fail without the fix; full validation green.
+
+  *Examples from this skill's own round:* the GROUP_CONCAT raw-fallback and the
+  timestamptz / schema-qualified-operator rendering fixes — each only turns
+  broken output into correct output, follows the raw-fallback / canonical-render
+  pattern, and touches one parser package.
+
+**Needs review** (hold auto-merge, and call the reason out at the top of the PR)
+— *any* of these:
+
+- **It changes behavior for input that was previously accepted** — even if the
+  old behavior was wrong. Introducing a **new error or rejection** where output
+  used to be produced is a soft spec change: a caller may depend on the old
+  path, so a human decides. *Example:* the negative-`LIMIT`/`OFFSET` fix now
+  errors at compile time where it used to emit `LIMIT -1` — correct, but a
+  behavior change worth a maintainer's nod.
+- **It alters a contract or default** — a public API, a documented limitation, an
+  error message other code matches on, or a serialized/encoded form (a checksum
+  or fingerprint encoding change ripples to every consumer; see `validation.md`).
+- **It touches security/integrity semantics** — redaction, routing, transactions.
+- **Broad blast radius** — embedded-output regeneration across modules, or a
+  cross-cutting change.
+- **Ambiguous root cause or more than one plausible fix** — when the right
+  behavior is a judgment call (which dialect is correct? reject vs. raw-fallback?),
+  surface the options with `AskUserQuestion` rather than picking silently.
+
+When in doubt, default to **needs review**: the cost of a held PR is a comment;
+the cost of an auto-merged spec change is a regression in `main`.
