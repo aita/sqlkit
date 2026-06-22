@@ -655,7 +655,12 @@ func buildJSONPath(path []any) (string, error) {
 		if isSimpleJSONKey(key) {
 			p.WriteString(key)
 		} else {
-			p.WriteString(`"` + strings.ReplaceAll(key, `"`, `\"`) + `"`)
+			// Escape backslashes before quotes so a key ending in (or containing)
+			// a backslash can't escape the closing quote and break out of the
+			// quoted path member — e.g. `a\` must render as "a\\", not "a\".
+			esc := strings.ReplaceAll(key, `\`, `\\`)
+			esc = strings.ReplaceAll(esc, `"`, `\"`)
+			p.WriteString(`"` + esc + `"`)
 		}
 	}
 	return p.String(), nil
