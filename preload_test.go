@@ -67,14 +67,20 @@ func TestPreloadINOrderIsDeterministic(t *testing.T) {
 		},
 	}
 	db := sqlkit.WrapDB(fake.DB())
-
-	var users []preUser
-	if err := db.Select(Users.ID).From(Users).Preload(Posts).All(context.Background()).Scan(&users); err != nil {
-		t.Fatalf("Preload chain error = %v", err)
-	}
 	want := []any{int64(3), int64(1), int64(2)} // distinct, first-seen order
-	if !reflect.DeepEqual(preloadArgs, want) {
-		t.Fatalf("preload IN args = %#v, want %#v", preloadArgs, want)
+
+	// Map iteration is randomized per range, so a single run can match the wanted
+	// order by chance; repeat enough that an order-following bug is caught with
+	// overwhelming odds in one `go test` invocation.
+	for i := 0; i < 64; i++ {
+		preloadArgs = nil
+		var users []preUser
+		if err := db.Select(Users.ID).From(Users).Preload(Posts).All(context.Background()).Scan(&users); err != nil {
+			t.Fatalf("run %d: Preload chain error = %v", i, err)
+		}
+		if !reflect.DeepEqual(preloadArgs, want) {
+			t.Fatalf("run %d: preload IN args = %#v, want %#v", i, preloadArgs, want)
+		}
 	}
 }
 
