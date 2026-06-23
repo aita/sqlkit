@@ -161,6 +161,12 @@ func (c *Compiler) compileColumnDef(col ColumnDef) (string, error) {
 			}
 			storage := "STORED"
 			if !col.Generated.Stored {
+				// PostgreSQL (and the standard target) has no VIRTUAL generated
+				// columns — only STORED — so emitting VIRTUAL produces DDL the engine
+				// rejects. Reject it at compile time rather than render invalid SQL.
+				if c.Dialect.Name() != "mysql" {
+					return "", fmt.Errorf("sqlkit/sql: the %s dialect has no VIRTUAL generated columns; use a STORED generated column", c.Dialect.Name())
+				}
 				storage = "VIRTUAL"
 			}
 			core += " GENERATED ALWAYS AS (" + expr + ") " + storage
