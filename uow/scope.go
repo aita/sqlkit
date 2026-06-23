@@ -100,6 +100,14 @@ type Scope struct {
 	// WithAutoChunk setting. See WithAutoChunk.
 	autoChunk *bool
 
+	// autoflush, when set, flushes pending work before a Get/Find read so the
+	// read observes the scope's own not-yet-flushed changes. See WithAutoflush.
+	autoflush bool
+
+	// hooks observe the flush lifecycle; each may implement BeforeFlushHook
+	// and/or AfterFlushHook. See WithFlushHook.
+	hooks []any
+
 	// nesting
 	parent    *Scope
 	savepoint string
@@ -168,6 +176,8 @@ func (s *Scope) NewScope() *Scope {
 		identities: s.identities,
 		batchSize:  s.batchSize,
 		autoChunk:  s.autoChunk,
+		autoflush:  s.autoflush,
+		hooks:      s.hooks,
 		tables:     map[string]*tableState{},
 		parent:     s,
 	}
@@ -206,6 +216,9 @@ type tracked struct {
 // row was found. Mutating dest afterward and calling Flush emits an UPDATE of
 // only the changed columns.
 func (s *Scope) Get(ctx context.Context, table sqlkit.Table, dest any, pk ...any) (bool, error) {
+	if err := s.maybeAutoflush(ctx); err != nil {
+		return false, err
+	}
 	ts, err := s.stateFor(table)
 	if err != nil {
 		return false, err
@@ -235,6 +248,9 @@ func (s *Scope) Get(ctx context.Context, table sqlkit.Table, dest any, pk ...any
 // slice) and tracks each as a managed entity. With no predicates it loads the
 // whole table.
 func (s *Scope) Find(ctx context.Context, table sqlkit.Table, dest any, predicates ...sqlkit.Predicate) error {
+	if err := s.maybeAutoflush(ctx); err != nil {
+		return err
+	}
 	ts, err := s.stateFor(table)
 	if err != nil {
 		return err
@@ -411,6 +427,9 @@ func (s *Scope) Rollback(ctx context.Context) error {
 // foreign-key-aware table order; within a phase each table's own work runs as a
 // unit.
 func (s *Scope) flush(ctx context.Context) error {
+	if err := s.runBeforeFlush(ctx); err != nil {
+		return err
+	}
 	order := s.flushOrder()
 	for _, name := range order {
 		if err := s.flushInserts(ctx, s.tables[name]); err != nil {
@@ -445,7 +464,7 @@ func (s *Scope) flush(ctx context.Context) error {
 			}
 		}
 	}
-	return nil
+	return s.runAfterFlush(ctx)
 }
 
 // flushOrder returns the staged tables ordered so each table follows the tables

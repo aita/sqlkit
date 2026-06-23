@@ -518,7 +518,28 @@ an untouched session's `Commit`/`Close` are free no-ops.
 
 For a higher-level batch-and-flush pattern over a transaction-scoped session, see
 the [`uow`](https://pkg.go.dev/github.com/aita/sqlkit/uow) (Unit of Work)
-package.
+package. [`uow.WithScope`](https://pkg.go.dev/github.com/aita/sqlkit/uow#WithScope)
+opens a session, runs a callback against a Unit of Work bound to it, then flushes
+and commits — the Unit-of-Work counterpart of `WithSession`:
+
+```go
+err := uow.WithScope(ctx, db, func(s *uow.Scope) error {
+    var u appdb.User
+    if _, err := s.Get(ctx, appdb.Users, &u, 1); err != nil {
+        return err
+    }
+    u.Name = "renamed"               // mutate in place
+    s.Add(appdb.Users, &newUser)     // stage an insert
+    return nil                       // WithScope flushes, then commits
+})
+```
+
+Pass [`uow.WithAutoflush`](https://pkg.go.dev/github.com/aita/sqlkit/uow#WithAutoflush)`(true)`
+to flush pending work before each `Get`/`Find` so a read sees the scope's own
+buffered changes, and
+[`uow.WithFlushHook`](https://pkg.go.dev/github.com/aita/sqlkit/uow#WithFlushHook)
+to observe or amend the work at flush time (stamping audit columns, enforcing
+invariants).
 
 ## Auto splitting
 
