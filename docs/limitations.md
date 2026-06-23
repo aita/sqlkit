@@ -47,7 +47,7 @@ PostgreSQL); override with `WithDialect`.
 | Regex match — `~` / `~*` | ✅ | ❌ | MySQL can't express a case-insensitive regex inline (collation-dependent). |
 | `SIMILAR TO` / `NOT SIMILAR TO` | ✅ | ❌ | SQL-standard pattern matching. |
 | `DISTINCT ON (col)` | ✅ | ❌ | No MySQL equivalent. |
-| Multi-table `UPDATE … FROM` / `DELETE … USING` | ✅ | ⚠️ | Some shapes error ("multi-table UPDATE/DELETE is unsupported for this dialect"). |
+| Multi-table `UPDATE … FROM` / `DELETE … USING` | ✅ | ⚠️ | Some shapes error ("multi-table UPDATE/DELETE is unsupported for this dialect"). MySQL also rejects `ORDER BY` / `LIMIT` on a multi-table UPDATE/DELETE, so sqlkit errors at compile time rather than emit SQL the engine refuses. |
 | Aliased `VALUES` derived-table source | ✅ | ⚠️ | MySQL can't alias `VALUES` columns, so sqlkit renders it as a `UNION ALL` of `SELECT`s (equivalent result, different SQL text). |
 | Schema introspection — [`introspection.Schema`](https://pkg.go.dev/github.com/aita/sqlkit/introspection#Schema) | ✅ | ✅ | Constructs the [`meta`](https://pkg.go.dev/github.com/aita/sqlkit/meta) model can't represent are skipped on import. |
 | Transactional (atomic) migrations | ✅ | ❌ | MySQL commits DDL implicitly and can't roll a partly-applied migration back — see [Migrations](#migrations). |

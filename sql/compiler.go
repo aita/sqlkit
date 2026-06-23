@@ -1352,7 +1352,7 @@ func (c *Compiler) CompileUpdate(q UpdateStmt) (string, []any, error) {
 		sb.WriteString(whereSQL)
 		args = append(args, whereArgs...)
 	}
-	if err := c.writeRowLimit(&sb, &args, q.OrderBy, q.HasLimit, q.Limit); err != nil {
+	if err := c.writeRowLimit(&sb, &args, q.OrderBy, q.HasLimit, q.Limit, len(q.From) > 0 || len(q.Joins) > 0); err != nil {
 		return "", nil, err
 	}
 	if err := c.writeReturning(&sb, &args, q.Returning); err != nil {
@@ -1430,7 +1430,7 @@ func (c *Compiler) CompileDelete(q DeleteStmt) (string, []any, error) {
 		sb.WriteString(whereSQL)
 		args = append(args, whereArgs...)
 	}
-	if err := c.writeRowLimit(&sb, &args, q.OrderBy, q.HasLimit, q.Limit); err != nil {
+	if err := c.writeRowLimit(&sb, &args, q.OrderBy, q.HasLimit, q.Limit, hasSources); err != nil {
 		return "", nil, err
 	}
 	if err := c.writeReturning(&sb, &args, q.Returning); err != nil {
@@ -1693,13 +1693,18 @@ func (c *Compiler) writeOrderBy(sb *strings.Builder, args *[]any, terms []OrderT
 
 // writeRowLimit renders the "ORDER BY ... LIMIT n" tail of an UPDATE or DELETE,
 // which bounds the affected rows. Only MySQL accepts it on data-modifying
-// statements; other dialects reject it rather than emit invalid SQL.
-func (c *Compiler) writeRowLimit(sb *strings.Builder, args *[]any, orderBy []OrderTerm, hasLimit bool, limit int) error {
+// statements, and only on the single-table form: MySQL rejects ORDER BY / LIMIT
+// on a multi-table (joined) UPDATE or DELETE. Other dialects reject it outright.
+// multiTable reports whether the statement carries join/extra sources.
+func (c *Compiler) writeRowLimit(sb *strings.Builder, args *[]any, orderBy []OrderTerm, hasLimit bool, limit int, multiTable bool) error {
 	if len(orderBy) == 0 && !hasLimit {
 		return nil
 	}
 	if c.Dialect.Name() != "mysql" {
 		return fmt.Errorf("sqlkit/sql: ORDER BY / LIMIT on UPDATE/DELETE is supported only on the mysql dialect")
+	}
+	if multiTable {
+		return fmt.Errorf("sqlkit/sql: MySQL does not allow ORDER BY / LIMIT on a multi-table UPDATE/DELETE")
 	}
 	if err := c.writeOrderBy(sb, args, orderBy); err != nil {
 		return err
