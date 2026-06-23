@@ -302,6 +302,13 @@ func (m *Redactor) exprReadsSensitive(e sql.Expression, sc *scope) bool {
 			if m.isSensitive(sc, analysis.ColumnRefOf(v)) {
 				found = true
 			}
+		case sql.ExcludedExpression:
+			// excluded.<col> (PostgreSQL) / VALUES(<col>) (MySQL) is the proposed
+			// INSERT value for a column of the target table, so it reads that column;
+			// resolve its bare name against the scope, which holds the target.
+			if m.isSensitive(sc, analysis.NamedColumn(v.Column)) {
+				found = true
+			}
 		case sql.RawExpression:
 			if m.rawReadsSensitive(string(v), sc) {
 				found = true

@@ -909,6 +909,19 @@ func TestApplyMasksRawFragmentLiterals(t *testing.T) {
 	})
 }
 
+// TestApplyMasksExcludedComparison checks that a literal compared to the proposed
+// upsert value of a sensitive column — excluded.<col> (PostgreSQL) / VALUES(<col>)
+// (MySQL) — is masked: excluded.<col> reads the target table's column, so the
+// redactor must recognize it as a sensitive reference, not an opaque expression.
+func TestApplyMasksExcludedComparison(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	const s = "SECRETTARO"
+	q := sql.InsertInto(users).Columns("id", "name").Values(1, "ok").
+		OnConflict("id").DoUpdate(sql.Set("id", sql.Col("id"))).
+		Where(sql.Eq(sql.Excluded("name"), sql.Val(s)))
+	assertNoLeak(t, "conflict_where_excluded", q, s)
+}
+
 // assertNoLeak applies the redactor and fails if the secret survives anywhere in
 // the rendered SQL or its bind arguments.
 func assertNoLeak(t *testing.T, name string, q sql.Query, secret string) {
