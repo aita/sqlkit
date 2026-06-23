@@ -38,18 +38,33 @@ func (m *Redactor) rewriteExpr(e sql.Expression, sc *scope) sql.Expression {
 			x.Right = m.maskValue(x.Right)
 		} else if m.sensitiveColumn(x.Right, sc) {
 			x.Left = m.maskValue(x.Left)
+		} else {
+			// Row-wise IS [NOT] DISTINCT FROM: (a, b) IS DISTINCT FROM (v1, v2).
+			x.Left, x.Right = m.maskRowPair(x.Left, x.Right, sc)
 		}
 		return x
 	case sql.InExpression:
 		x.Left = m.rewriteExpr(x.Left, sc)
 		if len(x.Items) > 0 {
 			items := clone(x.Items)
-			sensitive := m.sensitiveColumn(x.Left, sc)
-			for i := range items {
-				if sensitive {
-					items[i] = m.maskValue(items[i])
-				} else {
-					items[i] = m.rewriteExpr(items[i], sc)
+			if lrow, isRow := x.Left.(sql.RowExpression); isRow {
+				// Row-wise membership: (a, b) IN ((v1, v2), (v3, v4)). Mask each
+				// item's element paired with a sensitive column of the left row.
+				for i := range items {
+					if irow, ok := items[i].(sql.RowExpression); ok {
+						items[i] = m.maskRowValues(lrow, irow, sc)
+					} else {
+						items[i] = m.rewriteExpr(items[i], sc)
+					}
+				}
+			} else {
+				sensitive := m.sensitiveColumn(x.Left, sc)
+				for i := range items {
+					if sensitive {
+						items[i] = m.maskValue(items[i])
+					} else {
+						items[i] = m.rewriteExpr(items[i], sc)
+					}
 				}
 			}
 			x.Items = items
@@ -436,21 +451,27 @@ func (m *Redactor) maskRowPair(left, right sql.Expression, sc *scope) (sql.Expre
 	if !lok || !rok {
 		return left, right
 	}
-	mask := func(cols, vals sql.RowExpression) sql.RowExpression {
-		out := clone(vals.Elements)
-		for i := range out {
-			if i < len(cols.Elements) && m.sensitiveColumn(cols.Elements[i], sc) {
-				out[i] = m.maskValue(out[i])
-			}
-		}
-		vals.Elements = out
-		return vals
-	}
 	// Mask in both directions so a sensitive column on either side masks the
 	// paired element on the other.
-	left = mask(rrow, lrow)
-	right = mask(lrow, rrow)
+	left = m.maskRowValues(rrow, lrow, sc)
+	right = m.maskRowValues(lrow, rrow, sc)
 	return left, right
+}
+
+// maskRowValues returns vals with each element masked whose positionally paired
+// element in cols is a sensitive column — the value side of a row-wise comparison
+// such as "(name, id) <op> ('secret', 1)". It is shared by every row-wise form
+// (=, IS DISTINCT FROM, and row-constructor IN) so the value paired with a
+// sensitive column is masked the same way regardless of the operator.
+func (m *Redactor) maskRowValues(cols, vals sql.RowExpression, sc *scope) sql.RowExpression {
+	out := clone(vals.Elements)
+	for i := range out {
+		if i < len(cols.Elements) && m.sensitiveColumn(cols.Elements[i], sc) {
+			out[i] = m.maskValue(out[i])
+		}
+	}
+	vals.Elements = out
+	return vals
 }
 
 // maskValues masks each string literal in es (recursively), returning a fresh

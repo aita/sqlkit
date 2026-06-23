@@ -879,6 +879,8 @@ func TestApplyMasksWrappedSensitiveLiterals(t *testing.T) {
 		{"in_wrapped", sql.Select(sql.Star()).From(users).Where(sql.In(sql.Col("name"), sql.Func("lower", sql.Val(s)), sql.Val("b")))},
 		{"between_wrapped", sql.Select(sql.Star()).From(users).Where(sql.Between(sql.Col("name"), sql.Func("lower", sql.Val(s)), sql.Val("z")))},
 		{"row_pair", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Row(sql.Col("name"), sql.Col("id")), sql.Row(sql.Val(s), sql.Val(1))))},
+		{"row_in", sql.Select(sql.Star()).From(users).Where(sql.In(sql.Row(sql.Col("name"), sql.Col("id")), sql.Row(sql.Val(s), sql.Val(1)), sql.Row(sql.Val("other"), sql.Val(2))))},
+		{"row_distinct", sql.Select(sql.Star()).From(users).Where(sql.IsDistinctFrom(sql.Row(sql.Col("name"), sql.Col("id")), sql.Row(sql.Val(s), sql.Val(1))))},
 		{"case_result", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Case().When(sql.Eq(sql.Col("id"), 1), sql.Val(s)).Else(sql.Val("other"))))},
 		{"update_set", sql.Update(users).Set(sql.Set("name", sql.Func("lower", sql.Val(s)))).Where(sql.Eq(sql.Col("id"), 1))},
 	}
