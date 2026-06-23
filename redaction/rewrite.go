@@ -485,6 +485,38 @@ func (m *Redactor) maskValue(e sql.Expression) sql.Expression {
 		}
 		x.ElseValue = m.maskValue(x.ElseValue)
 		return x
+	case sql.UnaryExpression:
+		x.Operand = m.maskValue(x.Operand)
+		return x
+	case sql.FieldExpression:
+		x.Operand = m.maskValue(x.Operand)
+		return x
+	case sql.SubscriptExpression:
+		// The indices are positions, not the value being compared; mask the operand.
+		x.Operand = m.maskValue(x.Operand)
+		return x
+	case sql.JSONObjectExpression:
+		// Both keys and values are operands of the constructed value; mask all.
+		x.Pairs = m.maskValues(x.Pairs)
+		return x
+	case sql.JSONAccessExpression:
+		// The path steps are static accessors, not bound values; mask the operand.
+		x.Operand = m.maskValue(x.Operand)
+		return x
+	case sql.StringAggExpression:
+		x.Arg = m.maskValue(x.Arg)
+		return x
+	case sql.ExtractExpression:
+		x.Operand = m.maskValue(x.Operand)
+		return x
+	case sql.PositionExpression:
+		x.Substring = m.maskValue(x.Substring)
+		x.String = m.maskValue(x.String)
+		return x
+	case sql.WindowExpression:
+		// The windowed function carries the value; the frame/partition clauses do not.
+		x.Fn = m.maskValue(x.Fn)
+		return x
 	}
 	return e
 }

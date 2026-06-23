@@ -955,6 +955,16 @@ func TestApplyMasksWrappedSensitiveLiterals(t *testing.T) {
 		{"any_array_ctor", sql.Select(sql.Star()).From(users).Where(sql.AnyArray(sql.Col("name"), "=", sql.Array(sql.Val(s), sql.Val("b"))))},
 		{"any_array_cast", sql.Select(sql.Star()).From(users).Where(sql.AnyArray(sql.Col("name"), "=", sql.Cast(sql.Val("{"+s+"}"), "text[]")))},
 		{"update_set", sql.Update(users).Set(sql.Set("name", sql.Func("lower", sql.Val(s)))).Where(sql.Eq(sql.Col("id"), 1))},
+		// Value-side wrappers maskValue must recurse through, or the embedded literal leaks.
+		{"unary", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Neg(sql.Val(s))))},
+		{"field", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Field(sql.Val(s), "x")))},
+		{"subscript", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Subscript(sql.Cast(sql.Val(s), "text[]"), 1)))},
+		{"json_object", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.JSONObject("k", sql.Val(s))))},
+		{"json_access", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.JSONGetText(sql.Cast(sql.Val(s), "jsonb"), "k")))},
+		{"string_agg", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.StringAgg(sql.Val(s), ",")))},
+		{"extract", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Extract("year", sql.Cast(sql.Val(s), "date"))))},
+		{"position", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Position(sql.Val(s), sql.Col("name"))))},
+		{"window", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Over(sql.Func("max", sql.Val(s)))))},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) { assertNoLeak(t, tc.name, tc.q, s) })
