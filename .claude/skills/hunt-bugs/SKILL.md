@@ -1,5 +1,5 @@
 ---
-name: bug-hunt
+name: hunt-bugs
 description: >-
   Systematically hunt for correctness bugs in the sqlkit codebase — both the
   text-in/AST/text-out surfaces (compiler, parser frontends, redaction,
