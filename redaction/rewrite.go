@@ -103,6 +103,18 @@ func (m *Redactor) rewriteExpr(e sql.Expression, sc *scope) sql.Expression {
 			x.Pattern = m.maskValue(x.Pattern)
 		}
 		return x
+	case sql.MatchExpression:
+		// Full-text search: MATCH(cols) AGAINST(query). The query string is matched
+		// against the searched columns, so when any of them is sensitive the query
+		// literal carries a value compared to a sensitive column and must be masked.
+		x.Query = m.rewriteExpr(x.Query, sc)
+		for _, c := range x.Columns {
+			if m.sensitiveColumn(c, sc) {
+				x.Query = m.maskValue(x.Query)
+				break
+			}
+		}
+		return x
 	case sql.QuantifiedArrayExpression:
 		x.Left = m.rewriteExpr(x.Left, sc)
 		x.Array = m.rewriteExpr(x.Array, sc)

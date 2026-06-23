@@ -896,6 +896,7 @@ func TestApplyMasksWrappedSensitiveLiterals(t *testing.T) {
 		{"cast", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Cast(sql.Val(s), "text")))},
 		{"concat", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Concat(sql.Val(s), sql.Val("X"))))},
 		{"binary_concat", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.BinaryExpression{Left: sql.Val(s), Operator: "||", Right: sql.Val("X")}))},
+		{"match_against", sql.Select(sql.Star()).From(users).Where(sql.Match(sql.Col("name")).Against(sql.Val(s)))},
 		{"func", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Func("lower", sql.Val(s))))},
 		{"in_wrapped", sql.Select(sql.Star()).From(users).Where(sql.In(sql.Col("name"), sql.Func("lower", sql.Val(s)), sql.Val("b")))},
 		{"between_wrapped", sql.Select(sql.Star()).From(users).Where(sql.Between(sql.Col("name"), sql.Func("lower", sql.Val(s)), sql.Val("z")))},

@@ -65,13 +65,16 @@ func wrapNameRef(g *fuzzBytes, base string) sql.Expression {
 // optionally negated, so the secret is always compared to the sensitive column.
 func predicate(g *fuzzBytes, ref sql.Expression) sql.Expression {
 	var p sql.Expression
-	switch g.choice(13) {
+	switch g.choice(14) {
 	case 0:
 		p = sql.Eq(ref, sql.Val(piiSecret))
 	case 12:
 		// Value built with a binary "||" operator, the shape the parser produces
 		// for string concatenation: ref = (secret || x).
 		p = sql.Eq(ref, sql.BinaryExpression{Left: sql.Val(piiSecret), Operator: "||", Right: sql.Val("x")})
+	case 13:
+		// Full-text search: MATCH(ref) AGAINST(secret).
+		p = sql.Match(ref).Against(sql.Val(piiSecret))
 	case 1:
 		p = sql.Eq(sql.Val(piiSecret), ref)
 	case 2:
