@@ -199,10 +199,17 @@ func (m *Redactor) rewriteExpr(e sql.Expression, sc *scope) sql.Expression {
 		return x
 	case sql.RawExpression:
 		// An opaque SQL fragment. With a parser configured, re-parse it into a typed
-		// expression so its inner literals are masked like any other; otherwise it is
-		// left as-is (the heuristic scan still decides operand sensitivity).
+		// expression so its inner literals are masked precisely.
 		if rewritten, ok := m.rewriteRawExpr(string(x), sc); ok {
 			return rewritten
+		}
+		// No parser (or the fragment did not parse): fall back to a best-effort,
+		// fail-safe scan. When the fragment names a sensitive column, a string
+		// literal inside it may be a value compared to that column, so mask every
+		// literal in the fragment rather than leak the one that is. WithRawParser
+		// replaces this with precise, per-literal masking.
+		if m.rawReadsSensitive(string(x), sc) {
+			return sql.RawExpression(maskRawStringLiterals(string(x), m.mask))
 		}
 		return e
 	default:
@@ -442,6 +449,11 @@ func (m *Redactor) maskValue(e sql.Expression) sql.Expression {
 	case sql.ConcatExpression:
 		x.Operands = m.maskValues(x.Operands)
 		return x
+	case sql.RawExpression:
+		// The whole raw fragment is the value compared to a sensitive column, so
+		// every string literal in it carries sensitive data; mask them all. (Without
+		// this a raw value like name = Raw("'secret'") would survive untouched.)
+		return sql.RawExpression(maskRawStringLiterals(string(x), m.mask))
 	case sql.BinaryExpression:
 		// A value built with a binary operator carries its literals in both
 		// operands — the parser models string concatenation as "a || b", a
@@ -521,6 +533,45 @@ func (m *Redactor) maskValues(es []sql.Expression) []sql.Expression {
 		out[i] = m.maskValue(out[i])
 	}
 	return out
+}
+
+// maskRawStringLiterals replaces the content of every single-quoted string
+// literal in a raw SQL fragment with the mask, leaving identifiers, operators,
+// and numbers intact; a doubled ” inside a literal is an escaped quote, not a
+// terminator. It is the best-effort masking applied to a raw fragment when no
+// RawParser is configured. Being unable to tell which literal pairs with a
+// sensitive column, it is only invoked once the fragment is known to read one (or
+// to be the value compared to one) and then masks every literal — fail-safe, the
+// same over-masking-rather-than-leaking stance the resolver takes.
+func maskRawStringLiterals(raw, mask string) string {
+	mask = strings.ReplaceAll(mask, "'", "''") // keep the emitted literal well-formed
+	runes := []rune(raw)
+	var b strings.Builder
+	for i := 0; i < len(runes); i++ {
+		if runes[i] != '\'' {
+			b.WriteRune(runes[i])
+			continue
+		}
+		// Start of a string literal: find its terminator, honoring '' escapes.
+		j := i + 1
+		for j < len(runes) {
+			if runes[j] == '\'' {
+				if j+1 < len(runes) && runes[j+1] == '\'' {
+					j += 2 // an escaped quote inside the literal
+					continue
+				}
+				break // the terminating quote
+			}
+			j++
+		}
+		b.WriteByte('\'')
+		b.WriteString(mask)
+		if j < len(runes) {
+			b.WriteByte('\'') // closing quote (absent only for a malformed, unterminated literal)
+		}
+		i = j
+	}
+	return b.String()
 }
 
 // columnOf returns the column reference a ColumnExpression names, reporting

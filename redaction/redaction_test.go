@@ -862,6 +862,53 @@ func TestApplyMasksCTEColumnListRename(t *testing.T) {
 	}
 }
 
+// TestApplyMasksRawFragmentLiterals pins the best-effort, parser-free masking of
+// string literals inside a Raw(...) fragment: when the fragment names a sensitive
+// column (or is the value compared to one) its literals are masked; a fragment
+// that names no sensitive column is left intact (no over-masking of unrelated
+// raw SQL).
+func TestApplyMasksRawFragmentLiterals(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	m := redaction.New(redaction.Columns("users.name"))
+	render := func(q sql.Query) string {
+		text, a, err := m.Apply(q).ToSQL(sql.PostgreSQLDialect{})
+		if err != nil {
+			t.Fatalf("ToSQL: %v", err)
+		}
+		for _, v := range a {
+			if s, ok := v.(string); ok {
+				text += "\x00" + s
+			}
+		}
+		return text
+	}
+
+	t.Run("raw value masked", func(t *testing.T) {
+		q := sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Raw("'SECRETTARO'")))
+		if got := render(q); strings.Contains(got, "SECRETTARO") {
+			t.Errorf("raw value leaked: %s", got)
+		}
+	})
+	t.Run("raw predicate naming the column masked", func(t *testing.T) {
+		q := sql.Select(sql.Star()).From(users).Where(sql.Raw("name = 'SECRETTARO'"))
+		if got := render(q); strings.Contains(got, "SECRETTARO") {
+			t.Errorf("raw predicate leaked: %s", got)
+		}
+	})
+	t.Run("escaped quote does not leak", func(t *testing.T) {
+		q := sql.Select(sql.Star()).From(users).Where(sql.Raw("name = 'O''SECRETTARO'"))
+		if got := render(q); strings.Contains(got, "SECRETTARO") {
+			t.Errorf("raw escaped-quote literal leaked: %s", got)
+		}
+	})
+	t.Run("unrelated raw fragment is not over-masked", func(t *testing.T) {
+		q := sql.Select(sql.Star()).From(users).Where(sql.Raw("status = 'active'"))
+		if got := render(q); !strings.Contains(got, "active") {
+			t.Errorf("non-sensitive raw fragment was masked: %s", got)
+		}
+	})
+}
+
 // assertNoLeak applies the redactor and fails if the secret survives anywhere in
 // the rendered SQL or its bind arguments.
 func assertNoLeak(t *testing.T, name string, q sql.Query, secret string) {

@@ -65,7 +65,7 @@ func wrapNameRef(g *fuzzBytes, base string) sql.Expression {
 // optionally negated, so the secret is always compared to the sensitive column.
 func predicate(g *fuzzBytes, ref sql.Expression) sql.Expression {
 	var p sql.Expression
-	switch g.choice(14) {
+	switch g.choice(15) {
 	case 0:
 		p = sql.Eq(ref, sql.Val(piiSecret))
 	case 12:
@@ -75,6 +75,9 @@ func predicate(g *fuzzBytes, ref sql.Expression) sql.Expression {
 	case 13:
 		// Full-text search: MATCH(ref) AGAINST(secret).
 		p = sql.Match(ref).Against(sql.Val(piiSecret))
+	case 11:
+		// Raw fragment as the compared value, masked by the parser-free heuristic.
+		p = sql.Eq(ref, sql.Raw("'"+piiSecret+"'"))
 	case 1:
 		p = sql.Eq(sql.Val(piiSecret), ref)
 	case 2:

@@ -31,10 +31,12 @@
 // resolution is followed only to a bounded depth, beyond which it goes untraced.
 //
 // A raw SQL fragment — Raw(...) or RawSQL(...) — is opaque text. By default the
-// redactor scans it for the sensitive column names it mentions, so a literal
-// compared to such a fragment is masked, but a literal embedded inside the fragment
-// is out of reach. Configure WithRawParser to lift that limit: the fragment is
-// re-parsed into typed AST, masked like any expression, and substituted back.
+// redactor scans it for the sensitive column names it mentions; when it finds one
+// (or the fragment is itself the value compared to a sensitive column) it masks
+// every string literal in the fragment — a fail-safe heuristic that cannot tell
+// which literal pairs with the column, so it over-masks rather than leak. Configure
+// WithRawParser for precise, per-literal masking: the fragment is re-parsed into
+// typed AST, masked like any expression, and substituted back.
 package redaction
 
 import (
@@ -72,12 +74,14 @@ func WithMask(mask string) Option {
 }
 
 // WithRawParser configures a parser used to re-parse raw SQL — Raw(...) expression
-// fragments and RawSQL(...) statements — so the literals inside them are masked too.
-// Without it a raw fragment is opaque: the redactor only scans it for sensitive
-// column names to decide whether a literal compared to it should be masked, and
-// cannot reach a sensitive literal embedded in the fragment itself. With it, a
-// fragment that the parser can model is rewritten like any typed expression. A
-// fragment that does not parse, or that the frontend cannot model, is left untouched.
+// fragments and RawSQL(...) statements — so the literals inside them are masked
+// precisely. Without it a raw fragment is opaque: the redactor scans it for
+// sensitive column names and, when it finds one, masks every string literal in the
+// fragment as a fail-safe heuristic (over-masking, since it cannot tell which
+// literal pairs with the column). With it, a fragment that the parser can model is
+// rewritten like any typed expression, masking only the literals actually tied to a
+// sensitive column. A fragment that does not parse, or that the frontend cannot
+// model, falls back to the heuristic.
 func WithRawParser(p RawParser) Option {
 	return func(m *Redactor) { m.rawParser = p }
 }
