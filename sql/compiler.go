@@ -56,12 +56,18 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		}
 		return c.nextPlaceholder(), []any{e.Value}, nil
 	case GroupingExpression:
+		if !supportsGroupingSets(c.Dialect) {
+			return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support %s grouping", c.Dialect.Name(), e.Kind)
+		}
 		inner, args, err := c.compileExprList(e.Elements)
 		if err != nil {
 			return "", nil, err
 		}
 		return e.Kind + " (" + inner + ")", args, nil
 	case GroupingSetsExpression:
+		if !supportsGroupingSets(c.Dialect) {
+			return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support GROUPING SETS", c.Dialect.Name())
+		}
 		if len(e.Sets) == 0 {
 			return "", nil, fmt.Errorf("sqlkit/sql: GROUPING SETS requires at least one set")
 		}
@@ -1513,6 +1519,14 @@ func (c *Compiler) assignmentLHS(a Assignment) (string, []any, error) {
 }
 
 // compileExprList compiles a comma-separated list of expressions.
+// supportsGroupingSets reports whether the dialect can render the ROLLUP / CUBE /
+// GROUPING SETS grouping elements. MySQL cannot, so the compiler rejects them
+// rather than emit SQL it would reject (its ROLLUP is the trailing WITH ROLLUP).
+func supportsGroupingSets(d Dialect) bool {
+	g, ok := d.(GroupingSetsDialect)
+	return ok && g.SupportsGroupingSets()
+}
+
 func (c *Compiler) compileExprList(exprs []Expression) (string, []any, error) {
 	var sb strings.Builder
 	var args []any
