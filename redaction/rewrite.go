@@ -107,7 +107,11 @@ func (m *Redactor) rewriteExpr(e sql.Expression, sc *scope) sql.Expression {
 		x.Left = m.rewriteExpr(x.Left, sc)
 		x.Array = m.rewriteExpr(x.Array, sc)
 		if m.sensitiveColumn(x.Left, sc) {
-			x.Array = m.maskArray(x.Array)
+			// The array side carries values compared to the sensitive column, in
+			// any form: an ARRAY[...] constructor, a cast of an array literal
+			// ('{a,b}'::text[]), or a bare string array literal. maskValue masks
+			// the string leaves and recurses through the cast/constructor wrapper.
+			x.Array = m.maskValue(x.Array)
 		}
 		return x
 	case sql.LogicalExpression:
@@ -482,21 +486,6 @@ func (m *Redactor) maskRowValues(cols, vals sql.RowExpression, sc *scope) sql.Ro
 	}
 	vals.Elements = out
 	return vals
-}
-
-// maskArray masks the string elements of an ARRAY[...] constructor, for the
-// "col = ANY(ARRAY['a','b'])" form; a non-array operand is unchanged.
-func (m *Redactor) maskArray(e sql.Expression) sql.Expression {
-	arr, ok := e.(sql.ArrayExpression)
-	if !ok {
-		return e
-	}
-	elems := clone(arr.Elements)
-	for i := range elems {
-		elems[i] = m.maskValue(elems[i])
-	}
-	arr.Elements = elems
-	return arr
 }
 
 // maskValues masks each string literal in es (recursively), returning a fresh

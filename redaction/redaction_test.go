@@ -883,6 +883,8 @@ func TestApplyMasksWrappedSensitiveLiterals(t *testing.T) {
 		{"row_distinct", sql.Select(sql.Star()).From(users).Where(sql.IsDistinctFrom(sql.Row(sql.Col("name"), sql.Col("id")), sql.Row(sql.Val(s), sql.Val(1))))},
 		{"case_result", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Case().When(sql.Eq(sql.Col("id"), 1), sql.Val(s)).Else(sql.Val("other"))))},
 		{"simple_case_when", sql.Select(sql.As(sql.CaseOf(sql.Col("name")).When(sql.Val(s), 1).Else(0), "c")).From(users)},
+		{"any_array_ctor", sql.Select(sql.Star()).From(users).Where(sql.AnyArray(sql.Col("name"), "=", sql.Array(sql.Val(s), sql.Val("b"))))},
+		{"any_array_cast", sql.Select(sql.Star()).From(users).Where(sql.AnyArray(sql.Col("name"), "=", sql.Cast(sql.Val("{"+s+"}"), "text[]")))},
 		{"update_set", sql.Update(users).Set(sql.Set("name", sql.Func("lower", sql.Val(s)))).Where(sql.Eq(sql.Col("id"), 1))},
 	}
 	for _, tc := range cases {
