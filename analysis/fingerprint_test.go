@@ -476,6 +476,14 @@ func TestFingerprintRaw(t *testing.T) {
 			in:   "SELECT * FROM users WHERE name = 'O''Brien'",
 			want: "SELECT * FROM users WHERE name = ?",
 		},
+		{
+			// Padding inside the parentheses must not defeat the IN arity collapse:
+			// the list still reduces to a single "?" so it groups with the unpadded
+			// form and with lists of other lengths.
+			name: "in list with parenthesis padding",
+			in:   "SELECT * FROM users WHERE id IN ( 1, 2, 3 )",
+			want: "SELECT * FROM users WHERE id IN (?)",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
