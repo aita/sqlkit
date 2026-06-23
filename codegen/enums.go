@@ -22,39 +22,27 @@ func columnGoType(table meta.Table, column meta.Column, dialect string, mapper T
 	return mapper.GoTypeFor(table, column, dialect)
 }
 
-// enumGoTypes maps the SQL type names an enum column can carry (the enum's bare
-// name and its schema-qualified name) to the generated Go enum type, so a column
-// declared with decl.EnumType resolves to that type without a manual override.
-func enumGoTypes(enums []meta.Enum) map[string]meta.GoType {
-	if len(enums) == 0 {
-		return nil
-	}
-	m := make(map[string]meta.GoType, len(enums)*2)
-	for _, e := range enums {
-		gt := meta.GoType{Name: goName(e.Name)}
-		m[e.Name] = gt
-		m[e.QualifiedName()] = gt
-	}
-	return m
+// enumModel is one enum with its final, collision-free Go identifiers: the type
+// name and the per-label const names, all deduped in Generate against the shared
+// package-wide reserved set (binding vars, DTOs, other enums and their labels).
+type enumModel struct {
+	Enum     meta.Enum
+	TypeName string
+	Labels   []string // one Go const name per Enum.Values entry
 }
 
 // renderEnum generates a Go string type and a const block of its labels for one
-// enum: type Mood string; const ( MoodHappy Mood = "happy"; ... ).
-func renderEnum(e meta.Enum) string {
-	typeName := goName(e.Name)
+// enum: type Mood string; const ( MoodHappy Mood = "happy"; ... ). The
+// identifiers are precomputed (and deduped) in em.
+func renderEnum(em enumModel) string {
+	typeName := em.TypeName
 	var b strings.Builder
-	fmt.Fprintf(&b, "// %s is the %q enum type.\n", typeName, e.QualifiedName())
+	fmt.Fprintf(&b, "// %s is the %q enum type.\n", typeName, em.Enum.QualifiedName())
 	fmt.Fprintf(&b, "type %s string\n\n", typeName)
 	fmt.Fprintf(&b, "// Values of the %s enum type.\n", typeName)
 	b.WriteString("const (\n")
-	// Distinct labels can map to the same Go name (e.g. "foo", "foo_" and "foo__"
-	// all yield "Foo"), and a catalog could even carry a duplicate label; dedupe
-	// the const names so the block never redeclares an identifier. The type name
-	// is reserved too, so a label can't collide with the enum type itself.
-	used := map[string]bool{typeName: true}
-	for _, v := range e.Values {
-		name := uniqueName(used, typeName+goName(v))
-		fmt.Fprintf(&b, "\t%s %s = %q\n", name, typeName, v)
+	for i, v := range em.Enum.Values {
+		fmt.Fprintf(&b, "\t%s %s = %q\n", em.Labels[i], typeName, v)
 	}
 	b.WriteString(")\n")
 	return b.String()
@@ -62,13 +50,13 @@ func renderEnum(e meta.Enum) string {
 
 // enumFile assembles the generated enums into a single "enums.go" file, or
 // reports ok=false when there are no enums.
-func enumFile(enums []meta.Enum, opts Options) (File, bool, error) {
-	if len(enums) == 0 {
+func enumFile(models []enumModel, opts Options) (File, bool, error) {
+	if len(models) == 0 {
 		return File{}, false, nil
 	}
 	fb := newFileBuf()
-	for _, e := range enums {
-		fb.write(renderEnum(e))
+	for _, em := range models {
+		fb.write(renderEnum(em))
 	}
 	file, err := fb.file(opts.PackageName, "enums.go")
 	if err != nil {
