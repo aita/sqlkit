@@ -21,19 +21,19 @@ type Policy interface {
 	IsSensitive(schema, table, column string) bool
 }
 
-type piiKey struct{ table, column string }
+type columnKey struct{ table, column string }
 
 // columnSet is the common Policy implementation: a set of (table, column) keys,
 // folded for case-insensitive matching. Both Columns and CommentMarker build one.
-type columnSet map[piiKey]struct{}
+type columnSet map[columnKey]struct{}
 
 func (s columnSet) IsSensitive(_, table, column string) bool {
-	_, ok := s[piiKey{fold(table), fold(column)}]
+	_, ok := s[columnKey{fold(table), fold(column)}]
 	return ok
 }
 
 func (s columnSet) add(table, column string) {
-	s[piiKey{fold(table), fold(column)}] = struct{}{}
+	s[columnKey{fold(table), fold(column)}] = struct{}{}
 }
 
 // Columns is a Policy of named columns. Each spec is "table.column" or
@@ -55,20 +55,20 @@ func Columns(specs ...string) Policy {
 	var ps patternPolicy
 	for _, spec := range specs {
 		if schema, table, column, ok := splitSpec(spec); ok {
-			ps = append(ps, piiPattern{schema: schema, table: table, column: column})
+			ps = append(ps, columnPattern{schema: schema, table: table, column: column})
 		}
 	}
 	return ps
 }
 
-// piiPattern is one Columns spec: an optional schema glob, a table glob, and a
+// columnPattern is one Columns spec: an optional schema glob, a table glob, and a
 // column glob. An empty schema is unconstrained — it matches any schema — so a
 // two-part spec stays schema-insensitive.
-type piiPattern struct{ schema, table, column string }
+type columnPattern struct{ schema, table, column string }
 
 // patternPolicy is the Policy backing Columns: a column is sensitive when its
 // schema (when the pattern names one), table, and name match a pattern's globs.
-type patternPolicy []piiPattern
+type patternPolicy []columnPattern
 
 func (ps patternPolicy) IsSensitive(schema, table, column string) bool {
 	for _, p := range ps {
