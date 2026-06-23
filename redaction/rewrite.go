@@ -151,10 +151,20 @@ func (m *Redactor) rewriteExpr(e sql.Expression, sc *scope) sql.Expression {
 		return x
 	case sql.CaseExpression:
 		x.Operand = m.rewriteExpr(x.Operand, sc)
+		// In a simple CASE (CASE operand WHEN value ...) each WHEN value is
+		// equality-compared against the operand, so when the operand reads a
+		// sensitive column the values must be masked like any compared literal. In
+		// a searched CASE (no operand) the WHEN arms are predicates, rewritten
+		// recursively so a comparison inside them masks on its own.
+		operandSensitive := x.Operand != nil && m.sensitiveColumn(x.Operand, sc)
 		if len(x.Whens) > 0 {
 			whens := clone(x.Whens)
 			for i := range whens {
-				whens[i].Condition = m.rewriteExpr(whens[i].Condition, sc)
+				if operandSensitive {
+					whens[i].Condition = m.maskValue(whens[i].Condition)
+				} else {
+					whens[i].Condition = m.rewriteExpr(whens[i].Condition, sc)
+				}
 				whens[i].Result = m.rewriteExpr(whens[i].Result, sc)
 			}
 			x.Whens = whens
@@ -474,19 +484,6 @@ func (m *Redactor) maskRowValues(cols, vals sql.RowExpression, sc *scope) sql.Ro
 	return vals
 }
 
-// maskValues masks each string literal in es (recursively), returning a fresh
-// slice so the input query's backing array is never mutated.
-func (m *Redactor) maskValues(es []sql.Expression) []sql.Expression {
-	if len(es) == 0 {
-		return es
-	}
-	out := clone(es)
-	for i := range out {
-		out[i] = m.maskValue(out[i])
-	}
-	return out
-}
-
 // maskArray masks the string elements of an ARRAY[...] constructor, for the
 // "col = ANY(ARRAY['a','b'])" form; a non-array operand is unchanged.
 func (m *Redactor) maskArray(e sql.Expression) sql.Expression {
@@ -500,6 +497,19 @@ func (m *Redactor) maskArray(e sql.Expression) sql.Expression {
 	}
 	arr.Elements = elems
 	return arr
+}
+
+// maskValues masks each string literal in es (recursively), returning a fresh
+// slice so the input query's backing array is never mutated.
+func (m *Redactor) maskValues(es []sql.Expression) []sql.Expression {
+	if len(es) == 0 {
+		return es
+	}
+	out := clone(es)
+	for i := range out {
+		out[i] = m.maskValue(out[i])
+	}
+	return out
 }
 
 // columnOf returns the column reference a ColumnExpression names, reporting
