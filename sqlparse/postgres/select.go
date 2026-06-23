@@ -330,6 +330,13 @@ func convertSortClause(nodes []*pg.Node) ([]sql.OrderTerm, error) {
 		if err != nil {
 			return nil, err
 		}
+		// ORDER BY ... USING <operator> selects a custom ordering operator (and
+		// reverses direction for >). sqlkit's OrderTerm models only ASC/DESC, so
+		// fall back to a raw passthrough rather than silently drop the operator and
+		// change the sort meaning.
+		if sb.GetSortbyDir() == pg.SortByDir_SORTBY_USING {
+			return nil, sqlparse.Unsupported("ORDER BY ... USING operator")
+		}
 		term := sql.Asc(expr)
 		if sb.GetSortbyDir() == pg.SortByDir_SORTBY_DESC {
 			term = sql.Desc(expr)
