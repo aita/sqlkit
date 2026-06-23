@@ -410,8 +410,9 @@ func (m *Redactor) anyCandidateSensitive(cands []analysis.Resolution) bool {
 // maskValue replaces a string literal with the mask value, leaving every other
 // leaf — a number, a bind placeholder, a column — untouched. When the value is a
 // string literal wrapped in an expression (a cast, concatenation, function call,
-// collation, or row constructor), it recurses so the embedded literal does not
-// survive into the rendered SQL.
+// collation, row constructor, or a binary operator such as the parser-modeled
+// "||"), it recurses so the embedded literal does not survive into the rendered
+// SQL.
 func (m *Redactor) maskValue(e sql.Expression) sql.Expression {
 	if v, ok := e.(sql.ValueExpression); ok {
 		if _, isString := v.Value.(string); isString {
@@ -428,6 +429,15 @@ func (m *Redactor) maskValue(e sql.Expression) sql.Expression {
 		return x
 	case sql.ConcatExpression:
 		x.Operands = m.maskValues(x.Operands)
+		return x
+	case sql.BinaryExpression:
+		// A value built with a binary operator carries its literals in both
+		// operands — the parser models string concatenation as "a || b", a
+		// BinaryExpression rather than a ConcatExpression. Mask both sides so an
+		// embedded literal (name = 'a' || 'b') does not survive; a non-string
+		// operand (a column, a number) is left untouched by the recursion.
+		x.Left = m.maskValue(x.Left)
+		x.Right = m.maskValue(x.Right)
 		return x
 	case sql.FuncExpression:
 		x.Args = m.maskValues(x.Args)
