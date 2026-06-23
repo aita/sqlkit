@@ -842,6 +842,26 @@ func TestApplyNilQuery(t *testing.T) {
 	}
 }
 
+// TestApplyMasksCTEColumnListRename checks that a CTE's explicit output column
+// list — which renames the body's projections (WITH c(alias) AS (SELECT name ...))
+// — does not let a sensitive value escape: a literal compared to the renamed
+// column must still be traced to the underlying base column and masked.
+func TestApplyMasksCTEColumnListRename(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	const s = "SECRETTARO"
+	cte := sql.Select(sql.Col("id"), sql.Col("name")).From(users).CTE("c", sql.Columns("uid", "alias"))
+	cases := []struct {
+		name string
+		q    sql.Query
+	}{
+		{"qualified", sql.Select(sql.Col("c.alias")).From(cte).Where(sql.Eq(sql.Col("c.alias"), sql.Val(s))).WithCTE(cte)},
+		{"unqualified", sql.Select(sql.Col("alias")).From(cte).Where(sql.Eq(sql.Col("alias"), sql.Val(s))).WithCTE(cte)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { assertNoLeak(t, tc.name, tc.q, s) })
+	}
+}
+
 // assertNoLeak applies the redactor and fails if the secret survives anywhere in
 // the rendered SQL or its bind arguments.
 func assertNoLeak(t *testing.T, name string, q sql.Query, secret string) {
