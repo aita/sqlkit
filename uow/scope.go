@@ -598,7 +598,11 @@ func (s *Scope) flushManaged(ctx context.Context, ts *tableState) error {
 		if err != nil {
 			return err
 		}
-		assignments := diffAssignments(ts.table, tr, names, vals)
+		_, wvals, err := sqlkit.ColumnWriteValues(ts.table, tr.ptr)
+		if err != nil {
+			return err
+		}
+		assignments := diffAssignments(ts.table, tr, names, vals, wvals)
 		if len(assignments) == 0 {
 			continue
 		}
@@ -817,8 +821,11 @@ func (s *Scope) stateFor(table sqlkit.Table) (*tableState, error) {
 }
 
 // diffAssignments builds SET assignments for the managed entity's changed,
-// non-primary-key columns by comparing current values to the snapshot.
-func diffAssignments(table sqlkit.Table, tr *tracked, names []string, vals []any) []sql.Assignment {
+// non-primary-key columns by comparing current values to the snapshot. Change
+// detection runs on the raw values (vals), but the emitted assignment uses the
+// write-ready value (wvals) so a json-tagged column is stored as its JSON
+// encoding; the two slices align index for index (see ColumnWriteValues).
+func diffAssignments(table sqlkit.Table, tr *tracked, names []string, vals, wvals []any) []sql.Assignment {
 	pk := pkNameSet(table)
 	snap := make(map[string]any, len(tr.snapNames))
 	for i, n := range tr.snapNames {
@@ -832,15 +839,16 @@ func diffAssignments(table sqlkit.Table, tr *tracked, names []string, vals []any
 		if old, ok := snap[name]; ok && valueEqual(old, normalize(vals[i])) {
 			continue
 		}
-		out = append(out, sql.Set(name, sql.Val(vals[i])))
+		out = append(out, sql.Set(name, sql.Val(wvals[i])))
 	}
 	return out
 }
 
 // updateAssignments builds SET assignments for every mapped non-primary-key
-// column of a detached row.
+// column of a detached row. It reads write-ready values so a json-tagged column
+// is stored as its JSON encoding, matching the Insert path.
 func updateAssignments(table sqlkit.Table, row any) ([]sql.Assignment, error) {
-	names, values, err := sqlkit.ColumnValues(table, row)
+	names, values, err := sqlkit.ColumnWriteValues(table, row)
 	if err != nil {
 		return nil, err
 	}

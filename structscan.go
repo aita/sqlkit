@@ -68,6 +68,25 @@ func PrimaryKeyValues(table Table, row any) ([]any, error) {
 // uses the same column-to-field mapping as Scan and Insert. row may be a struct
 // or a pointer to one. It backs the uow package's UPDATE assignment building.
 func ColumnValues(table Table, row any) (names []string, values []any, err error) {
+	return columnValues(table, row, false)
+}
+
+// ColumnWriteValues is like ColumnValues but returns each value ready to be
+// written to its column: a field tagged `sqlkit:",json"` (or `,jsonb`) is wrapped
+// so it is stored as its JSON encoding, exactly as the Insert and Update builders
+// do — the raw Go struct/map/slice would otherwise reach the driver unencoded.
+// ColumnValues and ColumnWriteValues share one iteration, so their column order
+// and skipping are identical and the two results align index for index: the uow
+// package detects changes from the raw ColumnValues and emits the write-ready
+// value from this.
+func ColumnWriteValues(table Table, row any) (names []string, values []any, err error) {
+	return columnValues(table, row, true)
+}
+
+// columnValues backs ColumnValues and ColumnWriteValues with a single iteration
+// over the table's columns, so the two stay aligned index for index. With
+// encodeJSON set, a json-tagged field is wrapped for JSON encoding on write.
+func columnValues(table Table, row any, encodeJSON bool) (names []string, values []any, err error) {
 	rv, err := rowStruct(row)
 	if err != nil {
 		return nil, nil, err
@@ -79,8 +98,12 @@ func ColumnValues(table Table, row any) (names []string, values []any, err error
 		if !ok || f.ReadOnly {
 			continue
 		}
+		v := rv.FieldByIndex(f.Path).Interface()
+		if encodeJSON && f.JSON {
+			v = jsonValue{v: v}
+		}
 		names = append(names, name)
-		values = append(values, rv.FieldByIndex(f.Path).Interface())
+		values = append(values, v)
 	}
 	return names, values, nil
 }

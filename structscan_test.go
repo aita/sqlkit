@@ -390,6 +390,50 @@ func TestColumnValuesSkipsUnmappedColumns(t *testing.T) {
 	}
 }
 
+// TestColumnWriteValuesEncodesJSON covers the write-oriented sibling of
+// ColumnValues: a json-tagged column is wrapped so it is stored as its JSON
+// encoding, while column order and skipping (here the readonly "created") match
+// ColumnValues index for index.
+func TestColumnWriteValuesEncodesJSON(t *testing.T) {
+	row := Item{ID: 1, SKU: "x", Meta: map[string]any{"k": "v"}, Rev: 2, Created: 9}
+
+	rawNames, rawValues, err := sqlkit.ColumnValues(Items, row)
+	if err != nil {
+		t.Fatalf("ColumnValues() error = %v", err)
+	}
+	names, values, err := sqlkit.ColumnWriteValues(Items, row)
+	if err != nil {
+		t.Fatalf("ColumnWriteValues() error = %v", err)
+	}
+	// Same columns in the same order as ColumnValues (created is readonly => skipped).
+	if !reflect.DeepEqual(names, rawNames) {
+		t.Fatalf("ColumnWriteValues() names = %#v, want %#v (must match ColumnValues)", names, rawNames)
+	}
+	if want := []string{"id", "sku", "meta", "rev"}; !reflect.DeepEqual(names, want) {
+		t.Fatalf("names = %#v, want %#v", names, want)
+	}
+	// The raw reader leaves meta as the Go map; the write reader wraps it so it
+	// binds as its JSON encoding.
+	if _, ok := rawValues[2].(map[string]any); !ok {
+		t.Fatalf("ColumnValues() meta = %T, want raw map[string]any", rawValues[2])
+	}
+	valuer, ok := values[2].(driver.Valuer)
+	if !ok {
+		t.Fatalf("ColumnWriteValues() meta = %T, want a driver.Valuer", values[2])
+	}
+	enc, err := valuer.Value()
+	if err != nil {
+		t.Fatalf("meta Value() error = %v", err)
+	}
+	if b, ok := enc.([]byte); !ok || string(b) != `{"k":"v"}` {
+		t.Fatalf("meta encoded = %T %v, want JSON {\"k\":\"v\"}", enc, enc)
+	}
+	// Non-json columns are untouched and stay aligned with the raw values.
+	if values[0] != int64(1) || values[1] != "x" || values[3] != int64(2) {
+		t.Fatalf("ColumnWriteValues() values = %#v", values)
+	}
+}
+
 // TestSetColumns covers writing values back into the row's mapped fields,
 // skipping columns the struct has no field for.
 func TestSetColumns(t *testing.T) {
