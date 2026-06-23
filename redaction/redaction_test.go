@@ -922,6 +922,27 @@ func TestApplyMasksExcludedComparison(t *testing.T) {
 	assertNoLeak(t, "conflict_where_excluded", q, s)
 }
 
+// TestApplyMasksInsertSelectProjection checks that a literal projected by an
+// INSERT ... SELECT into a sensitive target column is masked: the SELECT
+// projections feed v.Columns positionally, so a sensitive target column's feeding
+// projection must be masked like a VALUES element. Both a plain SELECT and a set
+// operation (each arm) are covered.
+func TestApplyMasksInsertSelectProjection(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	const s = "SECRETTARO"
+	cases := []struct {
+		name string
+		q    sql.Query
+	}{
+		{"literal", sql.InsertInto(users).Columns("name").FromSelect(sql.Select(sql.As(sql.Concat(sql.Val(s)), "name")))},
+		{"union", sql.InsertInto(users).Columns("name").FromSelect(
+			sql.Select(sql.As(sql.Concat(sql.Val(s)), "name")).Union(sql.Select(sql.As(sql.Concat(sql.Val("z")), "name"))))},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { assertNoLeak(t, tc.name, tc.q, s) })
+	}
+}
+
 // assertNoLeak applies the redactor and fails if the secret survives anywhere in
 // the rendered SQL or its bind arguments.
 func assertNoLeak(t *testing.T, name string, q sql.Query, secret string) {

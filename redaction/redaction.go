@@ -259,7 +259,19 @@ func (m *Redactor) rewriteInsert(v sql.InsertStmt, sc *scope) sql.Query {
 		v.Rows = rows
 	}
 	if v.Select != nil {
-		v.Select = m.rewriteQuery(v.Select, sc.parent, sc.childCTEs)
+		rewritten := m.rewriteQuery(v.Select, sc.parent, sc.childCTEs)
+		// INSERT ... SELECT feeds the SELECT's projections into v.Columns
+		// positionally, so a literal projected into a sensitive target column must
+		// be masked just like a VALUES element. (Without a column list the positions
+		// are the table's own columns, which we cannot name here.)
+		if len(v.Columns) > 0 {
+			sensitive := make([]bool, len(v.Columns))
+			for i, c := range v.Columns {
+				sensitive[i] = m.isSensitive(sc, analysis.NamedColumn(c))
+			}
+			rewritten = m.maskSelectProjections(rewritten, sensitive)
+		}
+		v.Select = rewritten
 	}
 	if v.Conflict != nil {
 		c := *v.Conflict
@@ -310,6 +322,53 @@ func (m *Redactor) rewriteMerge(v sql.MergeStmt, sc *scope) sql.Query {
 	}
 	v.Returning = m.rewriteSelections(v.Returning, sc)
 	return v
+}
+
+// maskSelectProjections masks the i-th projection of an INSERT ... SELECT's
+// result when sensitive[i] is set — the projection feeds the i-th (sensitive)
+// target column, so a literal there is a value assigned to that column. It
+// descends into both arms of a set operation so every UNION arm is masked, and
+// leaves a projection whose position cannot be mapped (a wildcard, or an index
+// past the column list) untouched. Only the value of a matched projection is
+// masked (maskValue), so a projected base column is unchanged.
+func (m *Redactor) maskSelectProjections(q sql.Query, sensitive []bool) sql.Query {
+	switch v := sql.Unwrap(q).(type) {
+	case sql.SelectStmt:
+		if len(v.Columns) == 0 {
+			return q
+		}
+		cols := clone(v.Columns)
+		for i := range cols {
+			if i < len(sensitive) && sensitive[i] {
+				cols[i] = m.maskSelection(cols[i])
+			}
+		}
+		v.Columns = cols
+		return v
+	case sql.CompoundStmt:
+		v.Left = m.maskSelectProjections(v.Left, sensitive)
+		v.Right = m.maskSelectProjections(v.Right, sensitive)
+		return v
+	default:
+		return q
+	}
+}
+
+// maskSelection masks the value expression a SELECT-list item projects, looking
+// through an AS alias; a wildcard or non-expression item is left unchanged.
+func (m *Redactor) maskSelection(s sql.Selection) sql.Selection {
+	switch x := s.(type) {
+	case sql.AliasedSelection:
+		x.Selection = m.maskSelection(x.Selection)
+		return x
+	case sql.Expression:
+		if masked, ok := m.maskValue(x).(sql.Selection); ok {
+			return masked
+		}
+		return s
+	default:
+		return s
+	}
 }
 
 // rewriteInsertValues masks the values whose paired InsertColumns are sensitive
