@@ -27,6 +27,7 @@ type SelectQuery struct {
 	hasCols    bool
 	base       Table         // the From table, when the source is one; powers Filter/Get
 	preloads   []preloadSpec // relations eager-loaded at Scan after the base rows
+	folds      []foldSpec    // relations joined and folded into nested fields at Scan
 	query      sql.SelectBuilder
 	err        error // deferred build error (e.g. from Filter), surfaced at the terminal
 	// batch holds a lone column IN back from q.query so All can split its
@@ -503,7 +504,7 @@ func (q SelectQuery) rows(ctx context.Context, query sql.Query, opts []ExecOptio
 	ex, preloadEx := applyExecOptions(q.ex, opts)
 	rows := newRows(ctx, ex, query)
 	rows.preloadEx = preloadEx
-	return q.withPreloads(rows)
+	return q.withFolds(q.withPreloads(rows))
 }
 
 // splitStatements implements splitter: it splits a deferred lone column IN across

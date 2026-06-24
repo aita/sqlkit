@@ -96,6 +96,20 @@ trade convenience for correctness:
   or pointer. The field is matched by relation name or a `preload:"…"` tag and
   must map to the target key column.
 
+## Fold (single-query eager load)
+
+`FoldRel`/`Fold` join the relation and fold the rows in one query (see
+[Query builder](query-builder.md#fold-eager-loading-in-one-query)).
+
+- 🚧 **One level, distinct tables.** Nested fold paths and folding the same table
+  twice (a self-reference, which would need an alias) are not supported yet — use
+  `Preload` for those.
+- 🔒 **Controls the projection.** A folded chain must start from `From` with no
+  explicit `Select` columns; the base table needs a primary key to group rows for
+  a to-many fold, and the folded target needs one to de-duplicate children.
+- 🔒 **`LIMIT` counts joined rows, not parents.** A parent column repeats per
+  child, so paginate with `Preload` (or a key sub-query) rather than `FoldRel`.
+
 ## Migrations
 
 - 🔒 **MySQL migrations are not atomic.** MySQL commits DDL implicitly and cannot
