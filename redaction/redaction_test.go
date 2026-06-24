@@ -113,6 +113,28 @@ func TestApplyMasksSubquery(t *testing.T) {
 	}
 }
 
+// TestApplyMasksValueSideSubquery checks that when a sensitive column is compared
+// to a subquery, the literal the subquery projects (the compared value) is masked:
+// name = (SELECT 'x'), name IN (SELECT 'x'), name = ANY(SELECT 'x'). A subquery on
+// the value side of a sensitive comparison projects what the column is matched
+// against, so its projected literals must not survive.
+func TestApplyMasksValueSideSubquery(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	const s = "SECRETTARO"
+	proj := sql.As(sql.Concat(sql.Val(s)), "v")
+	cases := []struct {
+		name string
+		q    sql.Query
+	}{
+		{"scalar", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.ScalarSubquery(sql.Select(proj))))},
+		{"in", sql.Select(sql.Star()).From(users).Where(sql.InQuery(sql.Col("name"), sql.Select(proj)))},
+		{"any", sql.Select(sql.Star()).From(users).Where(sql.Any(sql.Col("name"), "=", sql.Select(proj)))},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { assertNoLeak(t, tc.name, tc.q, s) })
+	}
+}
+
 // TestNumbersAndPlaceholdersNotMasked pins that only string literals are masked.
 func TestNumbersAndPlaceholdersNotMasked(t *testing.T) {
 	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}

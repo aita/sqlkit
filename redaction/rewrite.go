@@ -45,6 +45,7 @@ func (m *Redactor) rewriteExpr(e sql.Expression, sc *scope) sql.Expression {
 		return x
 	case sql.InExpression:
 		x.Left = m.rewriteExpr(x.Left, sc)
+		leftSensitive := m.sensitiveColumn(x.Left, sc)
 		if len(x.Items) > 0 {
 			items := clone(x.Items)
 			if lrow, isRow := x.Left.(sql.RowExpression); isRow {
@@ -58,9 +59,8 @@ func (m *Redactor) rewriteExpr(e sql.Expression, sc *scope) sql.Expression {
 					}
 				}
 			} else {
-				sensitive := m.sensitiveColumn(x.Left, sc)
 				for i := range items {
-					if sensitive {
+					if leftSensitive {
 						items[i] = m.maskValue(items[i])
 					} else {
 						items[i] = m.rewriteExpr(items[i], sc)
@@ -71,6 +71,11 @@ func (m *Redactor) rewriteExpr(e sql.Expression, sc *scope) sql.Expression {
 		}
 		if x.Subquery != nil {
 			x.Subquery = m.rewriteQuery(x.Subquery, sc, sc.childCTEs)
+			if leftSensitive {
+				// name IN (SELECT 'x'): the subquery projects the values the
+				// sensitive column is matched against; mask its projected literals.
+				x.Subquery = m.maskAllProjections(x.Subquery)
+			}
 		}
 		return x
 	case sql.BetweenExpression:
@@ -142,6 +147,10 @@ func (m *Redactor) rewriteExpr(e sql.Expression, sc *scope) sql.Expression {
 		x.Left = m.rewriteExpr(x.Left, sc)
 		if x.Query != nil {
 			x.Query = m.rewriteQuery(x.Query, sc, sc.childCTEs)
+			if m.sensitiveColumn(x.Left, sc) {
+				// name = ANY(SELECT 'x'): the subquery projects the compared values.
+				x.Query = m.maskAllProjections(x.Query)
+			}
 		}
 		return x
 	case sql.ConcatExpression:
@@ -461,6 +470,11 @@ func (m *Redactor) maskValue(e sql.Expression) sql.Expression {
 		// every string literal in it carries sensitive data; mask them all. (Without
 		// this a raw value like name = Raw("'secret'") would survive untouched.)
 		return sql.RawExpression(maskRawStringLiterals(string(x), m.mask))
+	case sql.ScalarSubqueryExpression:
+		// name = (SELECT 'x'): the subquery's projection is the value compared to
+		// the sensitive column, so mask its projected literal(s).
+		x.Query = m.maskAllProjections(x.Query)
+		return x
 	case sql.BinaryExpression:
 		// A value built with a binary operator carries its literals in both
 		// operands — the parser models string concatenation as "a || b", a

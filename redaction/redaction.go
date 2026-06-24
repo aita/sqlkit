@@ -354,6 +354,36 @@ func (m *Redactor) maskSelectProjections(q sql.Query, sensitive []bool) sql.Quer
 	}
 }
 
+// maskAllProjections masks every projection of a query — used for a subquery that
+// stands on the value side of a comparison against a sensitive column
+// (name = (SELECT 'x'), name IN (SELECT 'x'), name = ANY(SELECT 'x')), where the
+// projected value is what the sensitive column is compared to. It descends into
+// both arms of a set operation. maskSelection masks only literal-bearing
+// projections, so a projected base column is left unchanged.
+func (m *Redactor) maskAllProjections(q sql.Query) sql.Query {
+	if q == nil {
+		return q
+	}
+	switch v := sql.Unwrap(q).(type) {
+	case sql.SelectStmt:
+		if len(v.Columns) == 0 {
+			return q
+		}
+		cols := clone(v.Columns)
+		for i := range cols {
+			cols[i] = m.maskSelection(cols[i])
+		}
+		v.Columns = cols
+		return v
+	case sql.CompoundStmt:
+		v.Left = m.maskAllProjections(v.Left)
+		v.Right = m.maskAllProjections(v.Right)
+		return v
+	default:
+		return q
+	}
+}
+
 // maskSelection masks the value expression a SELECT-list item projects, looking
 // through an AS alias; a wildcard or non-expression item is left unchanged.
 func (m *Redactor) maskSelection(s sql.Selection) sql.Selection {
