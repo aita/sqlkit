@@ -186,6 +186,20 @@ func TestColumnsGlob(t *testing.T) {
 			q:    sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Val("taro"))),
 			want: []any{"*****"},
 		},
+		{
+			// An identifier containing a glob metacharacter must match its own spec
+			// (path.Match would read [..] as a class); the exact fallback masks it.
+			name: "identifier with bracket metacharacter matches its spec",
+			spec: "users.c[1]",
+			q:    sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("c[1]"), sql.Val("taro"))),
+			want: []any{"*****"},
+		},
+		{
+			name: "identifier with backslash matches its spec",
+			spec: `users.na\me`,
+			q:    sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col(`na\me`), sql.Val("taro"))),
+			want: []any{"*****"},
+		},
 	}
 
 	for _, tt := range tests {
