@@ -32,6 +32,7 @@ package uow
 
 import (
 	"context"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"reflect"
@@ -625,7 +626,7 @@ func (s *Scope) flushManaged(ctx context.Context, ts *tableState) error {
 		if len(assignments) == 0 {
 			continue
 		}
-		if !bulk || hasNullAssignment(assignments) {
+		if !bulk || hasNullAssignment(assignments) || hasValuerAssignment(assignments) {
 			if err := s.execRowUpdate(ctx, ts, tr.pk, assignments); err != nil {
 				return err
 			}
@@ -656,7 +657,7 @@ func (s *Scope) flushUpdates(ctx context.Context, ts *tableState) error {
 		if len(assignments) == 0 {
 			continue
 		}
-		if !bulk || hasNullAssignment(assignments) {
+		if !bulk || hasNullAssignment(assignments) || hasValuerAssignment(assignments) {
 			if err := s.execRowUpdate(ctx, ts, pk, assignments); err != nil {
 				return err
 			}
@@ -965,6 +966,25 @@ func hasNullAssignment(assignments []sql.Assignment) bool {
 	for _, a := range assignments {
 		if v, ok := a.Value.(sql.ValueExpression); ok && v.Value == nil {
 			return true
+		}
+	}
+	return false
+}
+
+// hasValuerAssignment reports whether any assignment binds a value through a
+// driver.Valuer — most notably a json-tagged column, wrapped for JSON encoding
+// by ColumnWriteValues. Such a value reaches the driver as the opaque output of
+// Value() (e.g. JSON bytes), which a VALUES source cannot carry as a typed
+// column: the parameter is untyped there and the target column's type cannot be
+// inferred (PostgreSQL rejects it), whereas a single-row UPDATE assigns straight
+// to the column and infers the type. So these rows are flushed individually, the
+// same per-row fallback hasNullAssignment uses.
+func hasValuerAssignment(assignments []sql.Assignment) bool {
+	for _, a := range assignments {
+		if v, ok := a.Value.(sql.ValueExpression); ok {
+			if _, ok := v.Value.(driver.Valuer); ok {
+				return true
+			}
 		}
 	}
 	return false

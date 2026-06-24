@@ -1,6 +1,7 @@
 package uow_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/aita/sqlkit"
@@ -74,5 +75,37 @@ func TestManagedUpdateEncodesJSONColumn(t *testing.T) {
 	b, ok := upd.Args[0].([]byte)
 	if !ok || string(b) != `{"k":"w"}` {
 		t.Fatalf("meta arg = %T %v, want JSON {\"k\":\"w\"}", upd.Args[0], upd.Args[0])
+	}
+}
+
+// TestBulkUpdateRoutesJSONColumnPerRow covers that, even with batching on, a
+// json column is updated one row at a time rather than through a VALUES join: a
+// json value binds via a driver.Valuer, which a VALUES source cannot carry as a
+// typed column. Without this the batched path would emit one UPDATE ... FROM
+// (VALUES ...) the engine rejects.
+func TestBulkUpdateRoutesJSONColumnPerRow(t *testing.T) {
+	fake := &testutil.Fake{}
+	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()), uow.WithBatchSize(10))
+	a := &docRow{ID: 1, Meta: map[string]any{"k": "a"}}
+	b := &docRow{ID: 2, Meta: map[string]any{"k": "b"}}
+	if err := scope.Attach(newDocs(), a, b); err != nil {
+		t.Fatal(err)
+	}
+	a.Meta = map[string]any{"k": "a2"} // both rows change the same (json) column...
+	b.Meta = map[string]any{"k": "b2"} // ...so batching would otherwise group them
+	if err := scope.Flush(ctx()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	execs := fake.Execs()
+	if len(execs) != 2 {
+		t.Fatalf("got %d execs, want 2 per-row UPDATEs: %v", len(execs), fake.Statements())
+	}
+	for _, e := range execs {
+		if strings.Contains(e.SQL, "VALUES") {
+			t.Fatalf("json update used a VALUES join: %s", e.SQL)
+		}
+		if _, ok := e.Args[0].([]byte); !ok {
+			t.Fatalf("update arg = %T, want JSON []byte per row", e.Args[0])
+		}
 	}
 }
