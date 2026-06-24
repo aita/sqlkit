@@ -508,3 +508,27 @@ func TestDetectKind(t *testing.T) {
 		}
 	}
 }
+
+// TestFingerprintPreservesDialectCapabilities checks that a query using an
+// optional dialect capability (here a PostgreSQL array) still fingerprints. The
+// compiler discovers capabilities by type-asserting the dialect, so Fingerprint
+// must compile with the concrete dialect — a wrapper embedding sql.Dialect would
+// hide ArrayDialect and the query would fail to compile (ok=false), silently
+// degrading to the raw-text fallback.
+func TestFingerprintPreservesDialectCapabilities(t *testing.T) {
+	users := sql.Table{Name: sql.NewIdent("users")}
+	q1 := sql.Select(sql.Col("id")).From(users).Where(sql.Eq(sql.Col("tags"), sql.Array(sql.Val("a"), sql.Val("b"))))
+	q2 := sql.Select(sql.Col("id")).From(users).Where(sql.Eq(sql.Col("tags"), sql.Array(sql.Val("x"), sql.Val("y"))))
+
+	f1, ok1 := analysis.Fingerprint(q1, sql.PostgreSQLDialect{})
+	f2, ok2 := analysis.Fingerprint(q2, sql.PostgreSQLDialect{})
+	if !ok1 || !ok2 {
+		t.Fatalf("Fingerprint ok = %v, %v, want both true (capability query must compile)", ok1, ok2)
+	}
+	if f1 != f2 {
+		t.Errorf("array fingerprints differ for value-only difference:\n %q\n %q", f1, f2)
+	}
+	if strings.ContainsAny(f1, "$") {
+		t.Errorf("fingerprint kept a numbered placeholder: %q", f1)
+	}
+}
