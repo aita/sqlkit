@@ -485,12 +485,28 @@ to-one field (the `LEFT JOIN` yields NULLs). `Fold(target)` resolves the relatio
 from the target table the way `Preload(target)` does, and conditions passed to
 either are ANDed into the JOIN's `ON` clause.
 
+**Nested fold** — pass a [`RelPath`](https://pkg.go.dev/github.com/aita/sqlkit#RelPath) of related tables and each hop becomes its
+own `LEFT JOIN`, folded into the nested field at every level (conditions apply to
+the final hop):
+
+```go
+err := db.Select().From(appdb.Users).
+    Fold(sqlkit.RelPath(appdb.Posts, appdb.Comments), appdb.Comments.Approved.Eq(true)).
+    All(ctx).Scan(&users)
+// FROM users LEFT JOIN posts ON … LEFT JOIN comments ON …
+// users[i].Posts[j].Comments folded in one query
+```
+
+Sibling fold paths that share a prefix (`Fold(RelPath(Posts, Comments))` and
+`Fold(RelPath(Posts, Tags))`) reuse the single `Posts` join.
+
 Fold trades the second round trip for **wider, partly redundant rows** (each
 parent column repeats per child). Two consequences follow: prefer `Preload` when
 children are numerous, and note that **`LIMIT` counts joined rows, not parents**,
 so paginate with `Preload` (or a key sub-query) rather than `FoldRel`. Folding the
-same table twice (a self-reference) needs an alias and is not supported yet — use
-`Preload` for those. See [Limitations](limitations.md).
+same table twice (a self-reference, or two paths reaching one table) needs an
+alias and is not supported yet — use `Preload` for those. See
+[Limitations](limitations.md).
 
 Relations also drive multi-table writes (`Update(t).JoinRel(rel)`,
 `Delete(t).UsingRel(rel)`) and primary-key lookups (`Get(ctx, pk...)`).

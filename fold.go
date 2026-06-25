@@ -25,14 +25,16 @@ import (
 // repeats per child), and LIMIT counts joined rows rather than parents — prefer
 // Preload when children are numerous or the result is paginated.
 
-// foldSpec is one registered fold: the relation joined and folded, the table it
-// loads, and where that table's columns sit in the projected row (colOff is the
-// index of its first column, ncols how many).
+// foldSpec is one registered fold hop: the relation joined and folded, the table
+// it loads, where that table's columns sit in the projected row (colOff is the
+// index of its first column, ncols how many), and parent — the index of the hop
+// it nests under in the same slice, or -1 when it folds directly off the base.
 type foldSpec struct {
 	rel    Relation
 	target Table
 	colOff int
 	ncols  int
+	parent int
 }
 
 // FoldRel joins rel's target with a LEFT JOIN, projects its columns next to the
@@ -55,18 +57,97 @@ func (q SelectQuery) FoldRel(rel Relation, conditions ...Predicate) SelectQuery 
 	if rel == nil {
 		return q.fail(fmt.Errorf("sqlkit: FoldRel requires a non-nil relation"))
 	}
-	target := rel.Target()
-	// The single-level join references each table by its real name, so the target
-	// must be distinct from the base and from any already-folded table; a repeated
-	// table (e.g. a self-reference) would need an alias, which is not yet supported.
-	if sameTable(target, q.base) {
-		return q.fail(fmt.Errorf("sqlkit: FoldRel of %q: folding a table onto itself needs an alias, which is not supported yet", rel.Name()))
+	q, _ = q.registerFoldHop(-1, rel, conditions)
+	return q
+}
+
+// Fold resolves the From table's relation reaching target and folds it like
+// FoldRel, so callers pass the target binding rather than the relation:
+// Fold(Posts), not FoldRel(Users.Rels.Posts). When several relations reach the
+// same table, the lookup is ambiguous — pick one with FoldRel.
+//
+// Pass a RelPath as the target to fold a whole chain of related tables, each hop
+// its own LEFT JOIN (base → path[0] → path[1] → …); the conditions then apply to
+// the final hop:
+//
+//	db.Select().From(Users).
+//	    Fold(sqlkit.RelPath(Posts, Comments), Comments.Approved.Eq(true)).
+//	    All(ctx).Scan(&users)
+func (q SelectQuery) Fold(target Table, conditions ...Predicate) SelectQuery {
+	if q.base == nil {
+		return q.fail(fmt.Errorf("sqlkit: Fold requires From to be a table"))
 	}
-	for _, f := range q.folds {
-		if sameTable(f.target, target) {
-			return q.fail(fmt.Errorf("sqlkit: FoldRel of %q: %s is already folded; folding the same table twice needs an alias, which is not supported yet",
-				rel.Name(), target.Info().QualifiedName()))
+	if q.hasCols {
+		return q.fail(fmt.Errorf("sqlkit: Fold requires Select with no explicit columns"))
+	}
+	path := []Table{target}
+	if rp, ok := target.(relPath); ok {
+		if len(rp.path) == 0 {
+			return q.fail(fmt.Errorf("sqlkit: Fold: RelPath requires at least one table"))
 		}
+		path = rp.path
+	}
+	return q.foldPath(path, conditions)
+}
+
+// foldPath registers a fold hop for each table on path, resolving each against
+// the previous one's relations (path[0] against the base). Conditions apply to
+// the final hop.
+func (q SelectQuery) foldPath(path []Table, conditions []Predicate) SelectQuery {
+	src := q.base
+	parent := -1
+	for i, tbl := range path {
+		rs, ok := src.(RelationSource)
+		if !ok {
+			return q.fail(fmt.Errorf("sqlkit: Fold: %s exposes no relations", src.Info().QualifiedName()))
+		}
+		rel, n := relationReaching(rs, tbl)
+		switch {
+		case n == 0:
+			return q.fail(fmt.Errorf("sqlkit: Fold: %s has no relation to %s",
+				src.Info().QualifiedName(), tbl.Info().QualifiedName()))
+		case n > 1:
+			return q.fail(fmt.Errorf("sqlkit: Fold: %s has multiple relations to %s; pick one with FoldRel",
+				src.Info().QualifiedName(), tbl.Info().QualifiedName()))
+		}
+		var conds []Predicate
+		if i == len(path)-1 {
+			conds = conditions
+		}
+		var idx int
+		if q, idx = q.registerFoldHop(parent, rel, conds); q.err != nil {
+			return q
+		}
+		src = tbl
+		parent = idx
+	}
+	return q
+}
+
+// registerFoldHop adds a LEFT JOIN to rel.Target() nested under the hop at parent
+// (-1 = the base), projects the target's columns, and records the hop, returning
+// the resulting query and the hop's index. A path that revisits a table already
+// folded under the same parent reuses that join (so sibling paths can share a
+// prefix); revisiting it under a different parent, or folding the base's own
+// table, needs an alias and errors — single-level joins reference each table by
+// its real name.
+func (q SelectQuery) registerFoldHop(parent int, rel Relation, conditions []Predicate) (SelectQuery, int) {
+	if q.err != nil {
+		return q, -1
+	}
+	target := rel.Target()
+	for i, f := range q.folds {
+		if !sameTable(f.target, target) {
+			continue
+		}
+		if f.parent == parent {
+			return q, i // shared-prefix hop already joined
+		}
+		return q.fail(fmt.Errorf("sqlkit: Fold of %q: %s is already folded via a different path; that needs an alias, which is not supported yet",
+			rel.Name(), target.Info().QualifiedName())), -1
+	}
+	if sameTable(target, q.base) {
+		return q.fail(fmt.Errorf("sqlkit: Fold of %q: folding a table onto itself needs an alias, which is not supported yet", rel.Name())), -1
 	}
 
 	off := len(q.base.Columns())
@@ -83,35 +164,9 @@ func (q SelectQuery) FoldRel(rel Relation, conditions ...Predicate) SelectQuery 
 		target: target,
 		colOff: off,
 		ncols:  len(target.Columns()),
+		parent: parent,
 	})
-	return q
-}
-
-// Fold resolves the From table's relation reaching target and folds it like
-// FoldRel, so callers pass the target binding rather than the relation:
-// Fold(Posts), not FoldRel(Users.Rels.Posts). When several relations reach the
-// same table, the lookup is ambiguous — pick one with FoldRel.
-func (q SelectQuery) Fold(target Table, conditions ...Predicate) SelectQuery {
-	if q.base == nil {
-		return q.fail(fmt.Errorf("sqlkit: Fold requires From to be a table"))
-	}
-	if _, ok := target.(relPath); ok {
-		return q.fail(fmt.Errorf("sqlkit: Fold: nested fold paths are not supported yet"))
-	}
-	rs, ok := q.base.(RelationSource)
-	if !ok {
-		return q.fail(fmt.Errorf("sqlkit: Fold: %s exposes no relations", q.base.Info().QualifiedName()))
-	}
-	rel, n := relationReaching(rs, target)
-	switch {
-	case n == 0:
-		return q.fail(fmt.Errorf("sqlkit: Fold: %s has no relation to %s",
-			q.base.Info().QualifiedName(), target.Info().QualifiedName()))
-	case n > 1:
-		return q.fail(fmt.Errorf("sqlkit: Fold: %s has multiple relations to %s; pick one with FoldRel",
-			q.base.Info().QualifiedName(), target.Info().QualifiedName()))
-	}
-	return q.FoldRel(rel, conditions...)
+	return q, len(q.folds) - 1
 }
 
 // withFolds attaches the registered folds to a Rows so Scan materializes the
@@ -261,12 +316,29 @@ func buildFoldPlan(rootBase reflect.Type, base Table, specs []foldSpec) (*foldPl
 	if err != nil {
 		return nil, err
 	}
-	for _, spec := range specs {
-		edge, err := buildFoldEdge(rootBase, spec, flat)
+	// Build each hop's node and edge, then attach it to its parent. A hop's parent
+	// is always registered earlier (parent < i, or -1 for the base), so its node is
+	// ready by the time this hop is processed.
+	nodes := make([]*foldNode, len(specs))
+	edges := make([]foldEdge, len(specs))
+	for i, spec := range specs {
+		parentType := rootBase
+		if spec.parent >= 0 {
+			parentType = nodes[spec.parent].elemType
+		}
+		edge, err := buildFoldEdge(parentType, spec, flat)
 		if err != nil {
 			return nil, err
 		}
-		root.children = append(root.children, edge)
+		nodes[i] = edge.node
+		edges[i] = edge
+	}
+	for i, spec := range specs {
+		if spec.parent < 0 {
+			root.children = append(root.children, edges[i])
+		} else {
+			nodes[spec.parent].children = append(nodes[spec.parent].children, edges[i])
+		}
 	}
 	return &foldPlan{root: root, flat: flat}, nil
 }
