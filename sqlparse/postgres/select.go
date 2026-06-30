@@ -41,6 +41,18 @@ func convertSelect(s *pg.SelectStmt) (sql.Query, error) {
 	if len(s.GetTargetList()) == 0 {
 		return nil, sqlparse.Unsupported("SELECT without a target list")
 	}
+	// FETCH FIRST n ROWS WITH TIES returns the rows tying the last ordered row,
+	// not a strict count; sqlkit renders only a plain LIMIT, so modeling it would
+	// silently drop WITH TIES and change the row count. Fall back to raw.
+	if s.GetLimitOption() == pg.LimitOption_LIMIT_OPTION_WITH_TIES {
+		return nil, sqlparse.Unsupported("FETCH ... WITH TIES")
+	}
+	// GROUP BY DISTINCT de-duplicates the generated grouping sets (meaningful with
+	// ROLLUP/CUBE/GROUPING SETS); sqlkit cannot model the DISTINCT, so dropping it
+	// would change which group rows are produced. Fall back to raw.
+	if s.GetGroupDistinct() {
+		return nil, sqlparse.Unsupported("GROUP BY DISTINCT")
+	}
 
 	columns, err := convertTargetList(s.GetTargetList())
 	if err != nil {
@@ -391,6 +403,12 @@ func convertWith(wc *pg.WithClause) ([]sql.CTE, error) {
 		cte := node.GetCommonTableExpr()
 		if cte == nil {
 			return nil, sqlparse.Unsupportedf("WITH item %T", node.GetNode())
+		}
+		// [NOT] MATERIALIZED is an optimizer fence sqlkit cannot model; dropping it
+		// would erase a forced/forbidden-inlining directive that can change the
+		// execution semantics of a side-effecting CTE. Fall back to raw.
+		if cte.GetCtematerialized() != pg.CTEMaterialize_CTEMaterializeDefault {
+			return nil, sqlparse.Unsupported("CTE with [NOT] MATERIALIZED")
 		}
 		body, err := convertSelect(cte.GetCtequery().GetSelectStmt())
 		if err != nil {
