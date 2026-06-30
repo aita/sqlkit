@@ -262,6 +262,18 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 		varName := bindingName(table)
 		reserved[varName] = true
 		reserved[varName+"Table"] = true
+		// With relations enabled the relational template also declares
+		// package-level <Var>Columns / <Var>Rels / <Var>Filter types and a
+		// new<Var>Columns constructor (see buildTable and the relational
+		// template). Reserve them too, or an enum/DTO whose name maps to one of
+		// these identifiers would emit a second declaration of it — code that
+		// does not compile.
+		if opts.EmitRelations {
+			reserved[varName+"Columns"] = true
+			reserved[varName+"Rels"] = true
+			reserved[varName+"Filter"] = true
+			reserved["new"+varName+"Columns"] = true
+		}
 	}
 	// Assign each enum a unique Go type name and unique label const names,
 	// deduped against binding vars and one another and reserved so DTOs and other
