@@ -96,10 +96,14 @@ func Diff(old, next meta.Metadata, dialect sql.Dialect) ([]sql.Statement, error)
 	// the reverse of the create order below, mirroring meta.DropSQL.
 	out = append(out, objs.dropSequences...)
 	out = append(out, objs.dropEnums...)
+	// Managed schemas drop after their contained objects and before extensions,
+	// mirroring meta.DropSQL.
+	out = append(out, objs.dropSchemas...)
 	out = append(out, objs.dropExtensions...)
-	// Extensions, enums, and sequences create before the tables that use them,
-	// mirroring meta.CreateSQL.
+	// Extensions, then managed schemas, then enums and sequences create before the
+	// tables that use them, mirroring meta.CreateSQL.
 	out = append(out, objs.createExtensions...)
+	out = append(out, objs.createSchemas...)
 	out = append(out, objs.createEnums...)
 	out = append(out, objs.createSequences...)
 	out = append(out, createTables...)
