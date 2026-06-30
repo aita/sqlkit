@@ -116,6 +116,29 @@ mock.ExpectQuery(sqltest.Contains("from users")).
 // ... run the code under test against db ...
 ```
 
+Rows can also be spelled out as CSV with
+[`RowSet.FromCSVString`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#RowSet.FromCSVString)
+(`NewRows("id", "name").FromCSVString("1,alice\n2,bob")`).
+
+Beyond statements, the mock programs the transaction and ping lifecycle:
+[`ExpectBegin`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#Mock.ExpectBegin),
+`ExpectCommit`, `ExpectRollback`, and `ExpectPing` each return a
+[`CallStub`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#CallStub) whose
+`ReturnError` injects a failure (a commit that fails, a database that is down)
+and whose `Required` / `Times` assert the call happened — so a test can check
+that a failing unit of work rolled back, or that a commit error surfaces:
+
+```go
+db, mock := sqltest.NewDB(t)
+mock.ExpectBegin().Required()
+mock.ExpectCommit().ReturnError(errors.New("conflict")) // commit fails
+```
+
+A transaction the code opens without a programmed expectation still works, so
+these stubs are needed only to inject an error or assert a call. (Statement order
+is asserted on the spy side with `Expect(t, trace).InOrder(...)`, not by the
+mock.)
+
 See [Observability](observability.md) for the tracing side that backs the spy.
 
 ---
