@@ -31,10 +31,17 @@ type Plan struct {
 // captured Plan. q is any Queryer — the same *sql.DB or *sql.Tx the code under
 // test uses — so the plan reflects the real schema and statistics. The query is
 // not executed, only planned.
-func ExplainQuery(t *testing.T, q Queryer, dialect sqlkit.Dialect, query string, args ...any) *Plan {
+func ExplainQuery(t testing.TB, q Queryer, dialect sqlkit.Dialect, query string, args ...any) *Plan {
 	t.Helper()
 	header, rows := runExplain(t, q, query, args)
 	return &Plan{dialect: dialect, header: header, rows: rows}
+}
+
+// ExplainQuery runs EXPLAIN through the DB's connection, supplying its dialect —
+// the DB-method convenience over the package-level ExplainQuery.
+func (d *DB) ExplainQuery(t testing.TB, query string, args ...any) *Plan {
+	t.Helper()
+	return ExplainQuery(t, d.db.SQL(), d.db.Dialect(), query, args...)
 }
 
 // NewPlan builds a Plan from EXPLAIN output captured outside this package: header
@@ -108,7 +115,7 @@ func (p *Plan) UsesIndex(name string) bool {
 }
 
 // AssertNoSeqScan fails the test if the plan includes a full table scan.
-func (p *Plan) AssertNoSeqScan(t *testing.T) {
+func (p *Plan) AssertNoSeqScan(t testing.TB) {
 	t.Helper()
 	if p.HasSeqScan() {
 		t.Errorf("sqltest: query plan has a sequential (full table) scan:\n%s", p.Text())
@@ -116,7 +123,7 @@ func (p *Plan) AssertNoSeqScan(t *testing.T) {
 }
 
 // AssertUsesIndex fails the test unless the plan reads through the named index.
-func (p *Plan) AssertUsesIndex(t *testing.T, name string) {
+func (p *Plan) AssertUsesIndex(t testing.TB, name string) {
 	t.Helper()
 	if !p.UsesIndex(name) {
 		t.Errorf("sqltest: query plan does not use index %q:\n%s", name, p.Text())
@@ -124,7 +131,7 @@ func (p *Plan) AssertUsesIndex(t *testing.T, name string) {
 }
 
 // AssertContains fails the test unless some plan cell contains sub.
-func (p *Plan) AssertContains(t *testing.T, sub string) {
+func (p *Plan) AssertContains(t testing.TB, sub string) {
 	t.Helper()
 	if !p.Contains(sub) {
 		t.Errorf("sqltest: query plan does not contain %q:\n%s", sub, p.Text())
@@ -132,7 +139,7 @@ func (p *Plan) AssertContains(t *testing.T, sub string) {
 }
 
 // AssertNotContains fails the test if some plan cell contains sub.
-func (p *Plan) AssertNotContains(t *testing.T, sub string) {
+func (p *Plan) AssertNotContains(t testing.TB, sub string) {
 	t.Helper()
 	if p.Contains(sub) {
 		t.Errorf("sqltest: query plan unexpectedly contains %q:\n%s", sub, p.Text())
@@ -159,7 +166,7 @@ func (p *Plan) cell(row []string, name string) (string, bool) {
 
 // runExplain executes EXPLAIN for the query and returns the result's column
 // names and rows, each cell stringified.
-func runExplain(t *testing.T, q Queryer, query string, args []any) ([]string, [][]string) {
+func runExplain(t testing.TB, q Queryer, query string, args []any) ([]string, [][]string) {
 	t.Helper()
 	rows, err := q.QueryContext(context.Background(), "EXPLAIN "+query, args...)
 	if err != nil {
