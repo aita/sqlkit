@@ -1,0 +1,129 @@
+package sqltest
+
+import (
+	"context"
+	stdsql "database/sql"
+	"regexp"
+	"strings"
+	"testing"
+
+	"github.com/aita/sqlkit"
+)
+
+// NewRaw wraps a standard *sql.DB as a throwaway test database for code that
+// does not use a sqlkit catalog (meta.Metadata) — a project on database/sql,
+// sqlx, or pgx that only wants sqltest's schema lifecycle, isolation, and
+// seeding helpers. The schema is applied from raw DDL with SetupSchemaSQL or
+// ApplySchemaSQL rather than from a rendered catalog; everything else (Tx,
+// Snapshot, the table-name seeding helpers) works the same.
+//
+//	tdb := sqltest.NewRaw(openTestDB(t), sqlkit.PostgreSQLDialect{})
+//	tdb.SetupSchemaSQL(t, `
+//		CREATE TABLE users (id BIGSERIAL PRIMARY KEY, email TEXT NOT NULL);
+//		CREATE TABLE posts (id BIGSERIAL PRIMARY KEY, user_id BIGINT REFERENCES users(id));
+//	`)
+//	// ... seed and exercise the code under test ...
+//
+// dialect is sqlkit.PostgreSQLDialect{} or sqlkit.MySQLDialect{}; it selects the
+// foreign-key-safe teardown strategy (PostgreSQL CASCADE, MySQL foreign-key
+// checks toggled) and the identifier quoting used to drop the tables. db must be
+// opened against a disposable test database — a container, a CI service
+// database, or a scratch schema — never production: constructing a DB is the
+// safety bar exactly as with New.
+//
+// The metadata-driven methods (SetupSchema, ApplySchema, Truncate with no
+// arguments) have no schema to act on a raw DB; use SetupSchemaSQL/ApplySchemaSQL
+// and TruncateTables instead.
+func NewRaw(db *stdsql.DB, dialect sqlkit.Dialect) *DB {
+	return &DB{db: sqlkit.WrapDB(db, sqlkit.WithDialect(dialect))}
+}
+
+// SetupSchemaSQL applies the given DDL now and drops the tables it creates on
+// t.Cleanup, leaving the database empty — the raw-DDL counterpart of
+// SetupSchema. Each argument may hold several semicolon-separated statements,
+// and several arguments may be passed (e.g. one embedded .sql file per
+// argument); they run in order. Before creating, it drops any table the DDL
+// declares (foreign-key-safely), so a leftover table from a crashed run does
+// not fail the CREATE.
+//
+// Only the names of tables created by CREATE TABLE statements are tracked for
+// teardown; other objects (types, sequences, functions, tables created through
+// constructs this does not recognise) are not dropped automatically. Add their
+// teardown with a t.Cleanup of your own when needed.
+func (d *DB) SetupSchemaSQL(t *testing.T, ddl ...string) {
+	t.Helper()
+	d.applySchemaSQL(t, ddl)
+	t.Cleanup(func() { dropTableNames(t, d.db, d.tables) })
+}
+
+// ApplySchemaSQL applies the given DDL with no teardown registered — the raw-DDL
+// counterpart of ApplySchema. It is SetupSchemaSQL without the automatic drop on
+// cleanup: reach for it to reset the schema again within a test, or when
+// something else owns the teardown. The names of the created tables are recorded
+// so a later SetupSchemaSQL, TruncateTables, or manual drop can find them.
+func (d *DB) ApplySchemaSQL(t *testing.T, ddl ...string) {
+	t.Helper()
+	d.applySchemaSQL(t, ddl)
+}
+
+// applySchemaSQL splits the DDL into statements, drops the tables they declare
+// (so re-applying is idempotent and a leftover table never blocks the CREATE),
+// executes them in order, and records the created table names for teardown.
+func (d *DB) applySchemaSQL(t *testing.T, ddl []string) {
+	t.Helper()
+	var stmts []string
+	for _, text := range ddl {
+		stmts = append(stmts, splitStatements(text)...)
+	}
+	names := createdTableNames(stmts)
+	dropTableNames(t, d.db, names)
+	ctx := context.Background()
+	for _, stmt := range stmts {
+		if _, err := d.db.SQL().ExecContext(ctx, stmt); err != nil {
+			t.Fatalf("sqltest: apply schema statement %q: %v", stmt, err)
+		}
+	}
+	d.tables = names
+}
+
+// TruncateTables deletes every row from the named tables foreign-key-safely,
+// whatever order they are given in — the raw-DDL counterpart of Truncate, which
+// needs a meta.Metadata to resolve sqlkit.Table bindings. Called with no names
+// it clears every table the raw schema created (the tables ApplySchemaSQL or
+// SetupSchemaSQL last recorded).
+func (d *DB) TruncateTables(t *testing.T, names ...string) {
+	t.Helper()
+	if len(names) == 0 {
+		names = d.tables
+	}
+	truncateTableNames(t, d.db, names)
+}
+
+// createTableRE matches the table name of a CREATE TABLE statement, tolerating
+// the IF NOT EXISTS clause and the TEMP/TEMPORARY and UNLOGGED qualifiers. The
+// name is captured up to the first whitespace or opening parenthesis, so a
+// quoted, back-quoted, bracketed, or schema-qualified name comes through whole
+// and is unquoted by createdTableNames.
+var createTableRE = regexp.MustCompile(`(?is)\bCREATE\s+(?:(?:GLOBAL|LOCAL)\s+)?(?:TEMP(?:ORARY)?\s+|UNLOGGED\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([^\s(]+)`)
+
+// createdTableNames extracts, in order, the qualified names of the tables the
+// statements create. Quoting characters ("`[]) are stripped from each name so
+// the dialect can re-quote it; statements that are not CREATE TABLE are ignored.
+func createdTableNames(stmts []string) []string {
+	var names []string
+	for _, stmt := range stmts {
+		m := createTableRE.FindStringSubmatch(stmt)
+		if m == nil {
+			continue
+		}
+		names = append(names, unquoteIdent(m[1]))
+	}
+	return names
+}
+
+// unquoteIdent removes the identifier quoting a dialect uses ("..." on standard
+// SQL/PostgreSQL, `...` on MySQL, [...] on SQL Server) from a possibly
+// dot-qualified name, leaving the bare schema.table form QuoteIdent expects.
+func unquoteIdent(s string) string {
+	return strings.NewReplacer(`"`, "", "`", "", "[", "", "]", "").Replace(s)
+}
