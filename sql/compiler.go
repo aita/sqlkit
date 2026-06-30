@@ -1345,7 +1345,7 @@ func (c *Compiler) CompileUpdate(q UpdateStmt) (string, []any, error) {
 
 	where := q.Where
 	if !inline {
-		if err := rejectOuterJoins(q.Joins); err != nil {
+		if err := rejectUnfoldableJoins(q.Joins); err != nil {
 			return "", nil, err
 		}
 		if sources := joinSources(q.From, q.Joins); len(sources) > 0 {
@@ -1417,7 +1417,7 @@ func (c *Compiler) CompileDelete(q DeleteStmt) (string, []any, error) {
 			args = append(args, joinArgs...)
 		}
 	} else {
-		if err := rejectOuterJoins(q.Joins); err != nil {
+		if err := rejectUnfoldableJoins(q.Joins); err != nil {
 			return "", nil, err
 		}
 		sb.WriteString("DELETE FROM ")
@@ -1462,16 +1462,27 @@ func joinSources(sources []Source, joins []JoinClause) []Source {
 	return out
 }
 
-// rejectOuterJoins errors on any non-inner join, for the standard FROM/USING
-// form (PostgreSQL) that folds join ON predicates into WHERE. That folding is
-// correct only for inner joins: a LEFT JOIN flattened this way would silently
-// become an inner join (e.g. an "outer row with no match" predicate turns
-// unsatisfiable), so reject it rather than emit wrong-set-of-rows SQL.
-func rejectOuterJoins(joins []JoinClause) error {
+// rejectUnfoldableJoins errors on any join whose condition the standard
+// FROM/USING form (PostgreSQL) cannot fold into WHERE. That fold takes only an
+// inner join's ON predicate, so two cases must be rejected rather than silently
+// mis-rendered:
+//
+//   - a non-inner join (LEFT/RIGHT/FULL): flattening its ON into WHERE would
+//     collapse the outer join to an inner one (an "outer row with no match"
+//     predicate turns unsatisfiable), changing the set of rows;
+//   - a NATURAL or USING join: its condition lives in the Natural/Using fields,
+//     not On, and foldJoinOns folds only On — so the condition would be dropped
+//     entirely, leaving an unconstrained cross product that updates/deletes every
+//     target row.
+func rejectUnfoldableJoins(joins []JoinClause) error {
 	for _, join := range joins {
 		if join.Kind != "JOIN" {
 			return fmt.Errorf("sqlkit/sql: %s in a multi-table UPDATE/DELETE is unsupported for this dialect "+
 				"(its ON would fold into WHERE, collapsing the outer join to an inner one); use an inner Join", join.Kind)
+		}
+		if join.Natural || len(join.Using) > 0 {
+			return fmt.Errorf("sqlkit/sql: a NATURAL or USING join in a multi-table UPDATE/DELETE is unsupported " +
+				"for this dialect (its condition cannot fold into WHERE); use an inner Join with an explicit ON")
 		}
 	}
 	return nil
