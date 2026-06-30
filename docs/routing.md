@@ -48,7 +48,14 @@ func (ShardByTenant) Route(ctx context.Context, stmt sqlkit.Statement) string {
 Route on **`Kind`/`IsWrite`, not `Op`**: an `INSERT/UPDATE/DELETE ... RETURNING`
 runs through the row-returning path with `Op == `[`OpQuery`](https://pkg.go.dev/github.com/aita/sqlkit#OpQuery) yet is a write, and a
 locking read (`SELECT ... FOR UPDATE`) takes row locks — `stmt.IsWrite()` reports
-both correctly so they never land on a read replica. For the three-way
+both correctly so they never land on a read replica. A data-modifying CTE
+(`WITH x AS (INSERT/UPDATE/DELETE ... RETURNING ...) SELECT ...`) is likewise a
+write even though its top-level statement is a `SELECT`; `IsWrite()` detects it
+**from the parsed AST**, so a router that runs builder-produced or parsed
+statements keeps it off replicas. The keyword-guess fallback (a raw SQL string
+analyzed without a parser) cannot see into the CTE body, so attach a
+[`WithRoute`](https://pkg.go.dev/github.com/aita/sqlkit#WithRoute) hint to such
+raw statements if you route them. For the three-way
 read/write/**undetermined** distinction (an opaque raw string whose nature
 cannot be inferred, which `IsWrite` folds to the safe write side), branch on
 `stmt.Access()` and handle [`AccessUnknown`](https://pkg.go.dev/github.com/aita/sqlkit#AccessUnknown) yourself.
