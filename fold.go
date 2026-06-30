@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/aita/sqlkit/internal/reflectmap"
+	"github.com/aita/sqlkit/sql"
 )
 
 // Folding loads related rows in a single round trip: FoldRel adds a LEFT JOIN to
@@ -27,14 +28,17 @@ import (
 
 // foldSpec is one registered fold hop: the relation joined and folded, the table
 // it loads, where that table's columns sit in the projected row (colOff is the
-// index of its first column, ncols how many), and parent — the index of the hop
-// it nests under in the same slice, or -1 when it folds directly off the base.
+// index of its first column, ncols how many), parent — the index of the hop it
+// nests under in the same slice, or -1 when it folds directly off the base — and
+// effInfo, the table identity used to qualify its join and columns (aliased when
+// the real table name already appears elsewhere in the join tree).
 type foldSpec struct {
-	rel    Relation
-	target Table
-	colOff int
-	ncols  int
-	parent int
+	rel     Relation
+	target  Table
+	colOff  int
+	ncols   int
+	parent  int
+	effInfo TableInfo
 }
 
 // FoldRel joins rel's target with a LEFT JOIN, projects its columns next to the
@@ -126,47 +130,106 @@ func (q SelectQuery) foldPath(path []Table, conditions []Predicate) SelectQuery 
 
 // registerFoldHop adds a LEFT JOIN to rel.Target() nested under the hop at parent
 // (-1 = the base), projects the target's columns, and records the hop, returning
-// the resulting query and the hop's index. A path that revisits a table already
-// folded under the same parent reuses that join (so sibling paths can share a
-// prefix); revisiting it under a different parent, or folding the base's own
-// table, needs an alias and errors — single-level joins reference each table by
-// its real name.
+// the resulting query and the hop's index. A sibling path that revisits the same
+// relation under the same parent reuses that join, so shared prefixes are joined
+// once. When the target's real table name already appears in the join tree (a
+// self-reference, or two paths reaching one table), the join is aliased so each
+// occurrence is referenced unambiguously.
 func (q SelectQuery) registerFoldHop(parent int, rel Relation, conditions []Predicate) (SelectQuery, int) {
 	if q.err != nil {
 		return q, -1
 	}
 	target := rel.Target()
 	for i, f := range q.folds {
-		if !sameTable(f.target, target) {
-			continue
-		}
-		if f.parent == parent {
+		if f.parent == parent && f.rel.Name() == rel.Name() && sameTable(f.target, target) {
 			return q, i // shared-prefix hop already joined
 		}
-		return q.fail(fmt.Errorf("sqlkit: Fold of %q: %s is already folded via a different path; that needs an alias, which is not supported yet",
-			rel.Name(), target.Info().QualifiedName())), -1
 	}
-	if sameTable(target, q.base) {
-		return q.fail(fmt.Errorf("sqlkit: Fold of %q: folding a table onto itself needs an alias, which is not supported yet", rel.Name())), -1
+
+	effInfo := target.Info()
+	if alias := q.foldAlias(rel, target); alias != "" {
+		effInfo = effInfo.WithAlias(alias)
+	}
+	parentInfo := q.base.Info()
+	if parent >= 0 {
+		parentInfo = q.folds[parent].effInfo
+	}
+	on := foldJoinOn(rel, effInfo, parentInfo)
+	if len(conditions) > 0 {
+		on = on.And(conditions...)
 	}
 
 	off := len(q.base.Columns())
 	for _, f := range q.folds {
 		off += f.ncols
 	}
-	on := rel.JoinOn()
-	if len(conditions) > 0 {
-		on = on.And(conditions...)
-	}
-	q.query = q.query.LeftJoin(target, on.Expression()).AddColumns(selectionsOf(target.Columns())...)
+	q.query = q.query.LeftJoin(effInfo, on.Expression()).AddColumns(foldProjection(target, effInfo)...)
 	q.folds = append(append([]foldSpec(nil), q.folds...), foldSpec{
-		rel:    rel,
-		target: target,
-		colOff: off,
-		ncols:  len(target.Columns()),
-		parent: parent,
+		rel:     rel,
+		target:  target,
+		colOff:  off,
+		ncols:   len(target.Columns()),
+		parent:  parent,
+		effInfo: effInfo,
 	})
 	return q, len(q.folds) - 1
+}
+
+// foldAlias returns an alias for folding target, or "" when the target's real
+// table name is free in the join tree (the common case, which stays unaliased and
+// renders identical SQL). On a collision it derives a unique alias from the
+// relation name.
+func (q SelectQuery) foldAlias(rel Relation, target Table) string {
+	used := map[string]bool{strings.ToLower(q.base.Info().refName()): true}
+	for _, f := range q.folds {
+		used[strings.ToLower(f.effInfo.refName())] = true
+	}
+	real := target.Info().QualifiedName()
+	if !used[strings.ToLower(real)] {
+		return ""
+	}
+	stem := rel.Name()
+	if stem == "" {
+		stem = target.Info().Name
+	}
+	cand := stem
+	for n := 2; used[strings.ToLower(cand)]; n++ {
+		cand = fmt.Sprintf("%s_%d", stem, n)
+	}
+	return cand
+}
+
+// foldJoinOn builds a fold hop's ON predicate from the relation's join keys,
+// qualifying the target by targetInfo and the parent by parentInfo, so the
+// condition is correct whether either side is aliased.
+func foldJoinOn(rel Relation, targetInfo, parentInfo TableInfo) Predicate {
+	tcols, bcols := rel.Keys()
+	preds := make([]Predicate, len(tcols))
+	for i := range tcols {
+		preds[i] = Cond(sql.Eq(foldColRef(targetInfo, tcols[i]), foldColRef(parentInfo, bcols[i])))
+	}
+	if len(preds) == 1 {
+		return preds[0]
+	}
+	return And(preds...)
+}
+
+// foldProjection lists target's columns qualified by info, so an aliased fold
+// projects "<alias>"."<col>" while an unaliased one renders exactly as
+// target.Columns() would.
+func foldProjection(target Table, info TableInfo) []sql.Selection {
+	cols := target.Columns()
+	out := make([]sql.Selection, len(cols))
+	for i, c := range cols {
+		out[i] = foldColRef(info, c.ColumnName())
+	}
+	return out
+}
+
+// foldColRef is a column reference qualified by info's effective name (its alias
+// when set, else its real qualified name).
+func foldColRef(info TableInfo, name string) sql.ColumnExpression {
+	return sql.Col(info.refName() + "." + name)
 }
 
 // withFolds attaches the registered folds to a Rows so Scan materializes the

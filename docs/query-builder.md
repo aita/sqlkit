@@ -498,14 +498,27 @@ err := db.Select().From(appdb.Users).
 ```
 
 Sibling fold paths that share a prefix (`Fold(RelPath(Posts, Comments))` and
-`Fold(RelPath(Posts, Tags))`) reuse the single `Posts` join.
+`Fold(RelPath(Posts, Tags))`) reuse the single `Posts` join. A path that folds the
+same table more than once — a self-reference like `Users → Posts → author(Users)`,
+or two paths reaching one table — is **joined under an automatic alias** derived
+from the relation name, so each occurrence is referenced unambiguously:
+
+```go
+// Users → their Posts → each post's author (back to users, aliased "User").
+err := db.Select().From(appdb.Users).
+    Fold(sqlkit.RelPath(appdb.Posts, appdb.Users)).
+    All(ctx).Scan(&users)
+// FROM users LEFT JOIN posts ON … LEFT JOIN users AS "User" ON "User".id = posts.user_id
+```
+
+Conditions passed to a fold reference the relation's own (unaliased) binding, so
+narrow an **aliased** hop through its own columns is not expressed — apply the
+condition on a non-aliased hop, or use `Preload`.
 
 Fold trades the second round trip for **wider, partly redundant rows** (each
 parent column repeats per child). Two consequences follow: prefer `Preload` when
 children are numerous, and note that **`LIMIT` counts joined rows, not parents**,
-so paginate with `Preload` (or a key sub-query) rather than `FoldRel`. Folding the
-same table twice (a self-reference, or two paths reaching one table) needs an
-alias and is not supported yet — use `Preload` for those. See
+so paginate with `Preload` (or a key sub-query) rather than `FoldRel`. See
 [Limitations](limitations.md).
 
 Relations also drive multi-table writes (`Update(t).JoinRel(rel)`,

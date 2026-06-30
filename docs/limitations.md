@@ -101,10 +101,11 @@ trade convenience for correctness:
 `FoldRel`/`Fold` join the relation and fold the rows in one query (see
 [Query builder](query-builder.md#fold-eager-loading-in-one-query)).
 
-- 🚧 **Distinct tables only.** A `RelPath` folds a nested chain, but every table
-  in the join tree must be distinct: folding the same table twice (a
-  self-reference, or two paths reaching one table) would need an alias and is not
-  supported yet — use `Preload` for those.
+- 🔒 **Aliased hops can't be narrowed by their own columns.** A table folded more
+  than once in a tree (a self-reference, or two paths reaching it) is joined under
+  an automatic alias; a condition passed to such a hop references the relation's
+  unaliased binding, so it won't match the aliased join. Condition a non-aliased
+  hop instead, or use `Preload`.
 - 🔒 **Controls the projection.** A folded chain must start from `From` with no
   explicit `Select` columns; the base table needs a primary key to group rows for
   a to-many fold, and the folded target needs one to de-duplicate children.

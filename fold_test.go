@@ -257,6 +257,71 @@ func TestFoldNestedSQLJoinsEachHop(t *testing.T) {
 	}
 }
 
+// saUser/saPost/saAuthor fold users → posts → author, where the author hop
+// returns to the base users table and must be aliased.
+type saUser struct {
+	ID    int64 `sqlkit:"id"`
+	Posts []saPost
+}
+
+type saPost struct {
+	ID     int64 `sqlkit:"id"`
+	UserID int64 `sqlkit:"user_id"`
+	User   *saAuthor
+}
+
+type saAuthor struct {
+	ID   int64 `sqlkit:"id"`
+	Name *string
+}
+
+func TestFoldSelfReferenceAliasesJoin(t *testing.T) {
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			return testutil.Result{
+				Columns: []string{"id", "email", "name", "id", "user_id", "title", "id", "email", "name"},
+				Rows: [][]driver.Value{
+					{int64(1), "a", "Alice", int64(10), int64(1), "t10", int64(1), "a", "Alice"},
+					{int64(2), "b", "Bob", int64(11), int64(2), "t11", int64(2), "b", "Bob"},
+				},
+			}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var users []saUser
+	if err := db.Select().From(Users).
+		Fold(sqlkit.RelPath(Posts, Users)).
+		All(context.Background()).Scan(&users); err != nil {
+		t.Fatalf("Scan() error = %v", err)
+	}
+	if len(users) != 2 || len(users[0].Posts) != 1 {
+		t.Fatalf("users = %#v", users)
+	}
+	a := users[0].Posts[0].User
+	if a == nil || a.ID != 1 || a.Name == nil || *a.Name != "Alice" {
+		t.Fatalf("post author = %#v", a)
+	}
+	if users[1].Posts[0].User == nil || users[1].Posts[0].User.ID != 2 {
+		t.Fatalf("user2 post author = %#v", users[1].Posts[0].User)
+	}
+}
+
+func TestFoldSelfReferenceSQLAliasesTarget(t *testing.T) {
+	s, _, err := newDB().Select().From(Users).
+		Fold(sqlkit.RelPath(Posts, Users)).
+		ToSQL(pg)
+	if err != nil {
+		t.Fatalf("ToSQL() error = %v", err)
+	}
+	if !contains(s, `LEFT JOIN "public"."users" AS "User"`) {
+		t.Fatalf("self-reference hop not aliased: %s", s)
+	}
+	if !contains(s, `"User"."id" = "public"."posts"."user_id"`) {
+		t.Fatalf("aliased ON not rendered: %s", s)
+	}
+}
+
 func bodies(comments []fcComment) string {
 	out := ""
 	for i, c := range comments {
