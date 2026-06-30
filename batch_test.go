@@ -174,6 +174,31 @@ func TestRoutedInsertReturningSplitStaysAtomic(t *testing.T) {
 	}
 }
 
+// TestRoutedInsertExecSplitStaysAtomic is the non-RETURNING analog of
+// TestRoutedInsertReturningSplitStaysAtomic: a routed (per-statement WithRoute)
+// bulk Exec write that splits must still run its chunks in one transaction.
+// The hint wraps the executor in a routedBinding, which execStatements must look
+// through to the underlying Database — otherwise the chunks auto-commit
+// independently and a mid-batch failure cannot roll the whole set back.
+func TestRoutedInsertExecSplitStaysAtomic(t *testing.T) {
+	primary := &testutil.Fake{}
+	replica := rowFake()
+	router := sqlkit.NewRouter(map[string]sqlkit.Backend{
+		"default": sqlkit.DB(primary.DB()),
+		"replica": sqlkit.DB(replica.DB()),
+	}, rwSplit)
+	db := sqlkit.WrapExecutor(router)
+
+	rows := []User{{Email: "a"}, {Email: "b"}, {Email: "c"}, {Email: "d"}, {Email: "e"}}
+	if _, err := db.Insert(Users).Values(rows).AutoChunk(sqlkit.ChunkSize(2)).
+		Exec(context.Background(), sqlkit.WithRoute("default")); err != nil {
+		t.Fatalf("routed insert exec error = %v", err)
+	}
+	if got := primary.Begins(); got != 1 {
+		t.Fatalf("primary begins = %d, want 1 (routed split write chunks must share one tx)", got)
+	}
+}
+
 func TestUpdateReturningSplitsByInList(t *testing.T) {
 	// SET name = $1 consumes one param; ChunkSize 2 leaves two ids per statement.
 	fake := returningFake(func(args []any) int { return len(args) - 1 })
