@@ -111,6 +111,27 @@ func TestGeneratedColumnMySQL(t *testing.T) {
 	}
 }
 
+// TestGeneratedColumnVirtualRejectedOnPostgreSQL covers PostgreSQL's lack of
+// VIRTUAL generated columns: a Stored:false generated column must be rejected at
+// compile time rather than emit "GENERATED ALWAYS AS (...) VIRTUAL", which the
+// PostgreSQL grammar rejects. STORED still compiles.
+func TestGeneratedColumnVirtualRejectedOnPostgreSQL(t *testing.T) {
+	virtual := CreateTable(Table{Name: NewIdent("t")}).
+		Column(ColumnDef{Name: NewIdent("a"), Type: EngineType{Name: "int"}}).
+		Column(ColumnDef{Name: NewIdent("b"), Type: EngineType{Name: "int"},
+			Generated: &GeneratedColumn{Expression: Raw("a + 1")}})
+	if _, _, err := virtual.ToSQL(mustDialect(t, "postgres")); err == nil || !strings.Contains(err.Error(), "VIRTUAL") {
+		t.Fatalf("ToSQL(postgres) err = %v, want a VIRTUAL rejection", err)
+	}
+
+	stored := CreateTable(Table{Name: NewIdent("t")}).
+		Column(ColumnDef{Name: NewIdent("b"), Type: EngineType{Name: "int"},
+			Generated: &GeneratedColumn{Expression: Raw("a + 1"), Stored: true}})
+	if got := mustDDL(t, stored, "postgres"); !strings.Contains(got, "STORED") {
+		t.Errorf("STORED generated column should compile on postgres, got:\n%s", got)
+	}
+}
+
 func mustDDL(t *testing.T, s Statement, dialect string) string {
 	t.Helper()
 	out, args, err := s.ToSQL(mustDialect(t, dialect))
