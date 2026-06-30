@@ -459,3 +459,10 @@ func TestLimitOutOfRangeFallsBackToRaw(t *testing.T) {
 func TestTableIdentifierWithDotFallsBackToRaw(t *testing.T) {
 	assertRaw(t, "SELECT a FROM `x.y`")
 }
+
+// t PARTITION (p0) restricts the scan to named partitions; the builder cannot
+// model it, so it must round-trip as raw rather than drop the PARTITION (which
+// would silently widen the query to the whole table).
+func TestSelectPartitionSelectionFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT a FROM t PARTITION (p0)")
+}
