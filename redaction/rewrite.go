@@ -165,6 +165,17 @@ func (m *Redactor) rewriteExpr(e sql.Expression, sc *scope) sql.Expression {
 	case sql.FuncExpression:
 		x.Args = m.rewriteExprs(x.Args, sc)
 		return x
+	case sql.WindowExpression:
+		// A windowed function: fn OVER (PARTITION BY ... ORDER BY ...). The walk
+		// must descend into the function and the partition/order expressions so a
+		// sensitive comparison anywhere inside the OVER construct is reached and
+		// masked — mirroring how rewriteSelect descends into a SELECT's own
+		// GROUP BY / ORDER BY. The frame clause is opaque text and the window name
+		// carries no literal, so neither needs rewriting.
+		x.Fn = m.rewriteExpr(x.Fn, sc)
+		x.Partitions = m.rewriteExprs(x.Partitions, sc)
+		x.OrderByTerms = m.rewriteOrderTerms(x.OrderByTerms, sc)
+		return x
 	case sql.CastExpression:
 		x.Operand = m.rewriteExpr(x.Operand, sc)
 		return x
