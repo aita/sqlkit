@@ -820,3 +820,37 @@ func TestRegisterTypeAndDialects(t *testing.T) {
 		t.Errorf("geometry should be unavailable on an unregistered dialect")
 	}
 }
+
+// TestSQLiteAndLibSQLBuiltinTypes covers the SQLite (and its libSQL fork)
+// engine-type resolution of the built-in kinds: SQLite's affinity-based types
+// collapse many kinds onto integer/real/text/blob, and libSQL resolves to the
+// same names.
+func TestSQLiteAndLibSQLBuiltinTypes(t *testing.T) {
+	cases := []struct {
+		typ  decl.DataType
+		want string
+	}{
+		{decl.Bool, "boolean"},
+		{decl.SmallInt, "integer"},
+		{decl.Int, "integer"},
+		{decl.BigInt, "integer"},
+		{decl.Float, "real"},
+		{decl.Double, "real"},
+		{decl.Text, "text"},
+		{decl.Bytes, "blob"},
+		{decl.JSON, "text"},
+		{decl.UUID, "text"},
+		{decl.Date, "text"},
+		{decl.Time, "text"},
+		{decl.Timestamp, "datetime"},
+		{decl.Decimal(10, 2), "numeric"},
+	}
+	for _, dialect := range []string{"sqlite", "libsql"} {
+		for _, c := range cases {
+			eng, ok := c.typ.Engine(dialect)
+			if !ok || eng.Name != c.want {
+				t.Errorf("Engine(%s) = %q (ok=%v), want %q", dialect, eng.Name, ok, c.want)
+			}
+		}
+	}
+}

@@ -11,7 +11,8 @@ import (
 // canonical type kind (e.g. "bigint", "varchar") plus any length/precision
 // modifiers; the per-dialect engine type name is resolved through the type
 // registry when a generator picks a dialect, so meta stays dialect-free and new
-// dialects are added by registering, not by changing this type.
+// dialects (sqlite, libsql, ...) are added by registering, not by changing this
+// type.
 //
 // A DataType fixes the DB type — Type names a registered kind (or, for an
 // unregistered name, one used verbatim on every dialect) and TypeFor pins a
@@ -53,13 +54,13 @@ var (
 // RegisterType registers (or extends) the engine type names a type kind resolves
 // to per dialect, so a custom type or a new dialect is added in one place rather
 // than by changing the DSL. names is keyed by dialect ("postgres", "mysql",
-// ...); entries merge into any existing registration for the kind, so a later
-// call can add a dialect to a built-in kind. After registering, declare columns
-// of the kind with Type(kind):
+// "sqlite", "libsql", ...); entries merge into any existing registration for the
+// kind, so a later call can add a dialect to a built-in kind. After registering,
+// declare columns of the kind with Type(kind):
 //
-//	decl.RegisterType("uuid", map[string]string{"mysql": "char"})
+//	decl.RegisterType("uuid", map[string]string{"sqlite": "text"})
 //	decl.RegisterType("geometry", map[string]string{
-//		"postgres": "geometry", "mysql": "geometry",
+//		"postgres": "geometry", "mysql": "geometry", "sqlite": "blob",
 //	})
 //	decl.Column("shape", decl.Type("geometry"))
 func RegisterType(kind string, names map[string]string) {
@@ -85,22 +86,22 @@ func lookupDBType(kind string) (map[string]string, bool) {
 
 func init() {
 	for kind, names := range map[string]map[string]string{
-		"bool":      {"postgres": "bool", "mysql": "boolean"},
-		"smallint":  {"postgres": "int2", "mysql": "smallint"},
-		"int":       {"postgres": "int4", "mysql": "int"},
-		"bigint":    {"postgres": "int8", "mysql": "bigint"},
-		"float":     {"postgres": "float4", "mysql": "float"},
-		"double":    {"postgres": "float8", "mysql": "double"},
-		"text":      {"postgres": "text", "mysql": "text"},
-		"bytes":     {"postgres": "bytea", "mysql": "blob"},
-		"json":      {"postgres": "jsonb", "mysql": "json"},
-		"uuid":      {"postgres": "uuid", "mysql": "char"},
-		"date":      {"postgres": "date", "mysql": "date"},
-		"time":      {"postgres": "time", "mysql": "time"},
-		"timestamp": {"postgres": "timestamptz", "mysql": "datetime"},
-		"varchar":   {"postgres": "varchar", "mysql": "varchar"},
-		"char":      {"postgres": "bpchar", "mysql": "char"},
-		"decimal":   {"postgres": "numeric", "mysql": "decimal"},
+		"bool":      {"postgres": "bool", "mysql": "boolean", "sqlite": "boolean", "libsql": "boolean"},
+		"smallint":  {"postgres": "int2", "mysql": "smallint", "sqlite": "integer", "libsql": "integer"},
+		"int":       {"postgres": "int4", "mysql": "int", "sqlite": "integer", "libsql": "integer"},
+		"bigint":    {"postgres": "int8", "mysql": "bigint", "sqlite": "integer", "libsql": "integer"},
+		"float":     {"postgres": "float4", "mysql": "float", "sqlite": "real", "libsql": "real"},
+		"double":    {"postgres": "float8", "mysql": "double", "sqlite": "real", "libsql": "real"},
+		"text":      {"postgres": "text", "mysql": "text", "sqlite": "text", "libsql": "text"},
+		"bytes":     {"postgres": "bytea", "mysql": "blob", "sqlite": "blob", "libsql": "blob"},
+		"json":      {"postgres": "jsonb", "mysql": "json", "sqlite": "text", "libsql": "text"},
+		"uuid":      {"postgres": "uuid", "mysql": "char", "sqlite": "text", "libsql": "text"},
+		"date":      {"postgres": "date", "mysql": "date", "sqlite": "text", "libsql": "text"},
+		"time":      {"postgres": "time", "mysql": "time", "sqlite": "text", "libsql": "text"},
+		"timestamp": {"postgres": "timestamptz", "mysql": "datetime", "sqlite": "datetime", "libsql": "datetime"},
+		"varchar":   {"postgres": "varchar", "mysql": "varchar", "sqlite": "text", "libsql": "text"},
+		"char":      {"postgres": "bpchar", "mysql": "char", "sqlite": "text", "libsql": "text"},
+		"decimal":   {"postgres": "numeric", "mysql": "decimal", "sqlite": "numeric", "libsql": "numeric"},
 	} {
 		RegisterType(kind, names)
 	}
@@ -266,7 +267,7 @@ func Type(name string) DataType {
 }
 
 // TypeFor declares a column type with a distinct, fixed engine type name per
-// dialect inline, keyed by dialect name ("postgres", "mysql", ...). A
+// dialect inline, keyed by dialect name ("postgres", "mysql", "sqlite", ...). A
 // dialect absent from names makes the type unavailable there, which the
 // generators report as an error when targeting it. For a reusable type, prefer
 // RegisterType plus Type. Chain Go/GoFor to also pin the Go type.
