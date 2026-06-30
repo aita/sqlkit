@@ -805,6 +805,13 @@ func (c *Compiler) CompileJoin(join JoinClause) (string, []any, error) {
 	if join.On != nil && len(join.Using) > 0 {
 		return "", nil, fmt.Errorf("sqlkit/sql: a join cannot carry both ON and USING")
 	}
+	// MySQL has no FULL [OUTER] JOIN; emitting it verbatim produces SQL the engine
+	// rejects. Surface it as a descriptive compile-time error naming the dialect,
+	// the same stance the compiler takes for other dialect-unsupported constructs
+	// (a single-element row, GROUPING SETS, …).
+	if c.Dialect.Name() == "mysql" && strings.Contains(strings.ToUpper(join.Kind), "FULL") {
+		return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support a FULL JOIN", c.Dialect.Name())
+	}
 	sourceSQL, args, err := c.CompileSource(join.Source)
 	if err != nil {
 		return "", nil, err
