@@ -19,11 +19,11 @@ import (
 //	blog.Load(t, session)            // seed once
 //	restore := sqltest.Snapshot(t, session)
 //
-//	t.Run("case1", func(t *testing.T) {
+//	t.Run("case1", func(t testing.TB) {
 //		defer restore(t)         // undo case1's writes
 //		// ... mutate and assert against session ...
 //	})
-//	t.Run("case2", func(t *testing.T) {
+//	t.Run("case2", func(t testing.TB) {
 //		defer restore(t)         // case2 sees the seeded state again
 //		// ...
 //	})
@@ -34,13 +34,13 @@ import (
 // and the session must stay open and uncommitted: committing or closing it ends
 // the transaction and invalidates the restore point. Cases therefore cannot run
 // in parallel against the snapshot.
-func Snapshot(t *testing.T, s *sqlkit.Session) (restore func(t *testing.T)) {
+func Snapshot(t testing.TB, s *sqlkit.Session) (restore func(t testing.TB)) {
 	t.Helper()
 	name, err := s.Savepoint(context.Background())
 	if err != nil {
 		t.Fatalf("sqltest: snapshot: %v", err)
 	}
-	return func(t *testing.T) {
+	return func(t testing.TB) {
 		t.Helper()
 		if err := s.RollbackTo(context.Background(), name); err != nil {
 			t.Fatalf("sqltest: restore snapshot: %v", err)
@@ -51,7 +51,7 @@ func Snapshot(t *testing.T, s *sqlkit.Session) (restore func(t *testing.T)) {
 // LoadSnapshot loads the fixture into the session and snapshots immediately,
 // returning the restore function. It is Fixture.Load followed by Snapshot, for
 // the common case of seeding a fixture and reusing it across cases.
-func (f *Fixture) LoadSnapshot(t *testing.T, s *sqlkit.Session) (restore func(t *testing.T)) {
+func (f *Fixture) LoadSnapshot(t testing.TB, s *sqlkit.Session) (restore func(t testing.TB)) {
 	t.Helper()
 	f.Load(t, s)
 	return Snapshot(t, s)
