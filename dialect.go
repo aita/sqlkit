@@ -12,6 +12,16 @@ type PostgreSQLDialect = querysql.PostgreSQLDialect
 // sql.MySQLDialect for its RETURNING and codegen caveats.
 type MySQLDialect = querysql.MySQLDialect
 
+// SQLiteDialect implements SQLite identifier quoting, placeholders, and DDL
+// rendering; see sql.SQLiteDialect. It has no bundled driver and is reached via
+// WithDialect (or DialectForDriver after RegisterDriverDialect).
+type SQLiteDialect = querysql.SQLiteDialect
+
+// LibSQLDialect renders SQL for libSQL (the Turso SQLite fork); see
+// sql.LibSQLDialect. libSQL is SQL-compatible with SQLite, so this embeds
+// SQLiteDialect and differs only in name.
+type LibSQLDialect = querysql.LibSQLDialect
+
 // StandardSQLDialect renders portable ANSI/SQL-standard text; see
 // sql.StandardSQLDialect. It has no bundled driver and is reached via
 // WithDialect (or DialectForDriver after RegisterDriverDialect).

@@ -3,6 +3,7 @@ package sql
 import (
 	"database/sql/driver"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -459,5 +460,106 @@ func TestJSONAccessErrorsAndKeyForms(t *testing.T) {
 	}
 	if !strings.Contains(got, `"a\\\".b"`) {
 		t.Errorf("backslash/quote not escaped in path member: %q", got)
+	}
+}
+
+// --- SQLite and libSQL ---------------------------------------------------
+
+func TestSQLiteDialectMetadataAndByName(t *testing.T) {
+	d := SQLiteDialect{}
+	if d.Name() != "sqlite" || !d.SupportsReturning() {
+		t.Fatalf("sqlite metadata wrong: name=%q returning=%v", d.Name(), d.SupportsReturning())
+	}
+	if got, want := d.QuoteIdent("s.t"), `"s"."t"`; got != want {
+		t.Errorf("QuoteIdent = %q, want %q", got, want)
+	}
+	if got := d.Placeholder(3); got != "?" {
+		t.Errorf("Placeholder = %q, want ?", got)
+	}
+	for _, name := range []string{"sqlite", "sqlite3"} {
+		got, err := DialectByName(name)
+		if err != nil || got.Name() != "sqlite" {
+			t.Fatalf("DialectByName(%q) = %v, %v", name, got, err)
+		}
+	}
+}
+
+func TestLibSQLDialectEmbedsSQLite(t *testing.T) {
+	d := LibSQLDialect{}
+	if d.Name() != "libsql" || !d.SupportsReturning() {
+		t.Fatalf("libsql metadata wrong: name=%q returning=%v", d.Name(), d.SupportsReturning())
+	}
+	got, err := DialectByName("libsql")
+	if err != nil || got.Name() != "libsql" {
+		t.Fatalf("DialectByName(libsql) = %v, %v", got, err)
+	}
+	// libSQL is SQL-compatible with SQLite, so every query compiles identically
+	// under both dialects.
+	queries := []Query{
+		Select(Col("id")).From(Table{Name: NewIdent("users")}).Where(Eq(Col("active"), true)),
+		InsertInto(Table{Name: NewIdent("t")}).Columns("a").Values(1).
+			OnConflict("a").DoUpdate(Set("b", Excluded("b"))),
+		CreateTable(Table{Name: NewIdent("t")}).
+			Column(ColumnDef{Name: NewIdent("id"), Type: EngineType{Name: "INTEGER"}, AutoIncrement: true}).
+			PrimaryKey("id"),
+	}
+	for _, q := range queries {
+		ssql, sargs, serr := q.ToSQL(SQLiteDialect{})
+		lsql, largs, lerr := q.ToSQL(LibSQLDialect{})
+		if serr != nil || lerr != nil {
+			t.Fatalf("compile error: sqlite=%v libsql=%v", serr, lerr)
+		}
+		if ssql != lsql {
+			t.Errorf("libsql output differs from sqlite:\n  sqlite: %q\n  libsql: %q", ssql, lsql)
+		}
+		if !reflect.DeepEqual(sargs, largs) {
+			t.Errorf("libsql args differ: %v vs %v", sargs, largs)
+		}
+	}
+}
+
+func TestSQLiteAutoIncrementInlinesPrimaryKey(t *testing.T) {
+	// SQLite's INTEGER PRIMARY KEY AUTOINCREMENT declares the PK inline, so the
+	// standalone PRIMARY KEY constraint is omitted for that single column.
+	got, _, err := CreateTable(Table{Name: NewIdent("t")}).
+		Column(ColumnDef{Name: NewIdent("id"), Type: EngineType{Name: "INTEGER"}, AutoIncrement: true}).
+		Column(ColumnDef{Name: NewIdent("name"), Type: RawType("TEXT"), NotNull: true}).
+		PrimaryKey("id").
+		ToSQL(SQLiteDialect{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "CREATE TABLE \"t\" (\n    \"id\" INTEGER PRIMARY KEY AUTOINCREMENT,\n    \"name\" TEXT NOT NULL\n);"
+	if got != want {
+		t.Errorf("got\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestSQLiteUpsertAndJSON(t *testing.T) {
+	got, _, err := InsertInto(Table{Name: NewIdent("users")}).Columns("email", "name").
+		Values("a@x", "Alice").OnConflict("email").DoUpdate(Set("name", Excluded("name"))).
+		ToSQL(SQLiteDialect{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `INSERT INTO "users" ("email", "name") VALUES (?, ?) ON CONFLICT ("email") DO UPDATE SET "name" = excluded."name"`; got != want {
+		t.Errorf("upsert:\n got %q\nwant %q", got, want)
+	}
+
+	j, _, err := Select(JSONGet(Col("data"), "a", "b")).From(Table{Name: NewIdent("t")}).ToSQL(SQLiteDialect{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(j, "->") {
+		t.Errorf("expected -> JSON operators in %q", j)
+	}
+}
+
+func TestSQLiteRejectsTruncateAndReplaceView(t *testing.T) {
+	if _, _, err := Truncate(Table{Name: NewIdent("t")}).ToSQL(SQLiteDialect{}); err == nil {
+		t.Error("SQLite TRUNCATE should error")
+	}
+	if _, _, err := Truncate(Table{Name: NewIdent("t")}).ToSQL(LibSQLDialect{}); err == nil {
+		t.Error("libSQL TRUNCATE should error")
 	}
 }
