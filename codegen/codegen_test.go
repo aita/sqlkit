@@ -849,3 +849,52 @@ func TestGenerateCollidingColumns(t *testing.T) {
 		t.Errorf("expected a deduped UserID2 binding field:\n%s", src)
 	}
 }
+
+func TestSQLiteTypeMapping(t *testing.T) {
+	tables := []meta.Table{{
+		Schema: meta.Schema{Name: ""},
+		Name:   "items",
+		Columns: []meta.Column{
+			{Name: "id", Type: meta.Of("sqlite", "integer", 0, 0, 0), PrimaryKey: true, HasDefault: true},
+			{Name: "ratio", Type: meta.Of("sqlite", "real", 0, 0, 0)},
+			{Name: "label", Type: meta.Of("sqlite", "text", 0, 0, 0)},
+			{Name: "active", Type: meta.Of("sqlite", "boolean", 0, 0, 0)},
+			{Name: "created_at", Type: meta.Of("sqlite", "datetime", 0, 0, 0)},
+		},
+	}}
+	body := string(generateSingle(t, tables, Options{PackageName: "appdb", Dialect: "sqlite"}))
+	for _, want := range []string{
+		`sqlkit.NewColumn[int64](info, "id")`,
+		`sqlkit.NewColumn[float64](info, "ratio")`,
+		`sqlkit.NewColumn[string](info, "label")`,
+		`sqlkit.NewColumn[bool](info, "active")`,
+		`sqlkit.NewColumn[time.Time](info, "created_at")`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("SQLite mapping missing %q:\n%s", want, body)
+		}
+	}
+}
+
+// libSQL is type-compatible with SQLite, so it maps the same engine type names
+// to the same Go types.
+func TestLibSQLTypeMapping(t *testing.T) {
+	tables := []meta.Table{{
+		Name: "items",
+		Columns: []meta.Column{
+			{Name: "id", Type: meta.Of("libsql", "integer", 0, 0, 0), PrimaryKey: true},
+			{Name: "amount", Type: meta.Of("libsql", "numeric", 0, 10, 2)},
+			{Name: "blob", Type: meta.Of("libsql", "blob", 0, 0, 0)},
+		},
+	}}
+	body := string(generateSingle(t, tables, Options{PackageName: "appdb", Dialect: "libsql"}))
+	for _, want := range []string{
+		`sqlkit.NewColumn[int64](info, "id")`,
+		`sqlkit.NewColumn[decimal.Decimal](info, "amount")`,
+		`sqlkit.NewColumn[[]byte](info, "blob")`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("libSQL mapping missing %q:\n%s", want, body)
+		}
+	}
+}
