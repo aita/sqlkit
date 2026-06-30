@@ -173,6 +173,13 @@ func (s RefreshMaterializedViewStmt) compileDDL(c *Compiler) (string, error) {
 	if s.Table.Name.IsZero() {
 		return "", fmt.Errorf("sqlkit/sql: REFRESH MATERIALIZED VIEW requires a name")
 	}
+	// PostgreSQL rejects CONCURRENTLY together with WITH NO DATA ("CONCURRENTLY and
+	// WITH NO DATA options cannot be used together"): CONCURRENTLY needs an
+	// already-populated view, WITH NO DATA empties it. Reject the pair at compile
+	// time rather than emit SQL the engine refuses.
+	if s.Concurrently && s.WithNoData {
+		return "", fmt.Errorf("sqlkit/sql: REFRESH MATERIALIZED VIEW cannot combine CONCURRENTLY with WITH NO DATA")
+	}
 	var sb strings.Builder
 	sb.WriteString("REFRESH MATERIALIZED VIEW ")
 	if s.Concurrently {
