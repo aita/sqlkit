@@ -65,9 +65,11 @@ func TestRedactRawWithParser(t *testing.T) {
 	}
 }
 
-// TestRedactRawWithoutParserFallsBack pins that, with no parser, a literal embedded
-// in a raw fragment is NOT reached (documented limitation), while the heuristic
-// still masks a literal compared to a raw reference to a sensitive column.
+// TestRedactRawWithoutParserFallsBack pins the parser-free heuristic: without a
+// parser the redactor cannot reach into a raw fragment precisely, so it masks
+// best-effort — a fragment naming (or compared to) a sensitive column has its
+// single-quoted literals masked, while an unrelated raw fragment is left intact
+// (no over-masking).
 func TestRedactRawWithoutParserFallsBack(t *testing.T) {
 	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
 	m := redaction.New(redaction.Columns("users.name"))
@@ -78,13 +80,24 @@ func TestRedactRawWithoutParserFallsBack(t *testing.T) {
 		t.Errorf("heuristic raw-operand masking = %v, want [*****]", got)
 	}
 
-	// Without a parser, a literal inside the raw fragment is opaque and survives.
+	// Best-effort: a raw fragment naming the sensitive column has its literal masked
+	// even without a parser.
 	q2 := sql.Select(sql.Star()).From(users).Where(sql.Raw("name = 'taro'"))
 	text, _, err := m.Apply(q2).ToSQL(sql.PostgreSQLDialect{})
 	if err != nil {
 		t.Fatalf("ToSQL: %v", err)
 	}
-	if want := "name = 'taro'"; !strings.Contains(text, want) {
-		t.Errorf("expected raw fragment %q to survive unmasked, got %q", want, text)
+	if strings.Contains(text, "taro") {
+		t.Errorf("expected raw fragment literal to be masked, got %q", text)
+	}
+
+	// An unrelated raw fragment (naming no sensitive column) is not over-masked.
+	q3 := sql.Select(sql.Star()).From(users).Where(sql.Raw("status = 'active'"))
+	text3, _, err := m.Apply(q3).ToSQL(sql.PostgreSQLDialect{})
+	if err != nil {
+		t.Fatalf("ToSQL: %v", err)
+	}
+	if !strings.Contains(text3, "'active'") {
+		t.Errorf("non-sensitive raw fragment was masked, got %q", text3)
 	}
 }
