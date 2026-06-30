@@ -26,6 +26,9 @@ const (
 	StmtDelete
 	// StmtDDL is a schema statement (CREATE/ALTER/DROP/TRUNCATE/COMMENT).
 	StmtDDL
+	// StmtMerge is a MERGE, a data-modifying statement that conditionally
+	// inserts, updates, or deletes target rows from a source.
+	StmtMerge
 )
 
 // String renders the kind for logs and reports.
@@ -41,6 +44,8 @@ func (k StmtKind) String() string {
 		return "delete"
 	case StmtDDL:
 		return "ddl"
+	case StmtMerge:
+		return "merge"
 	default:
 		return "unknown"
 	}
@@ -49,9 +54,10 @@ func (k StmtKind) String() string {
 // IsRead reports whether the statement only reads rows.
 func (k StmtKind) IsRead() bool { return k == StmtSelect }
 
-// IsWrite reports whether the statement modifies data (INSERT/UPDATE/DELETE).
+// IsWrite reports whether the statement modifies data
+// (INSERT/UPDATE/DELETE/MERGE).
 func (k StmtKind) IsWrite() bool {
-	return k == StmtInsert || k == StmtUpdate || k == StmtDelete
+	return k == StmtInsert || k == StmtUpdate || k == StmtDelete || k == StmtMerge
 }
 
 // FiltersRows reports whether the statement selects the rows it acts on through
@@ -78,6 +84,8 @@ func KindOf(q sql.Query) (StmtKind, bool) {
 		return StmtUpdate, true
 	case sql.DeleteStmt:
 		return StmtDelete, true
+	case sql.MergeStmt:
+		return StmtMerge, true
 	default:
 		if _, isDDL := ddlTables(v); isDDL {
 			return StmtDDL, true
@@ -99,6 +107,8 @@ func DetectKind(sqlText string) StmtKind {
 		return StmtUpdate
 	case "DELETE":
 		return StmtDelete
+	case "MERGE":
+		return StmtMerge
 	case "CREATE", "ALTER", "DROP", "TRUNCATE", "COMMENT":
 		return StmtDDL
 	default:
