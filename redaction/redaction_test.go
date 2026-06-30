@@ -160,6 +160,34 @@ func TestApplyMasksWindowExpression(t *testing.T) {
 	}
 }
 
+// TestApplyMasksWrapperExpressions checks that a sensitive comparison hidden
+// inside a wrapper expression the rewrite walk must descend into — COUNT, the
+// aggregate/scalar wrappers, a subscript, and JSON construction/access — is
+// masked. Each node type was missing from rewriteExpr's switch, so the walk
+// stopped at the wrapper and the literal leaked (the same shape as the
+// WindowExpression gap). cmp = (name = SECRET) is the sensitive comparison.
+func TestApplyMasksWrapperExpressions(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	const s = "SECRETTARO"
+	cmp := sql.Case().When(sql.Eq(sql.Col("name"), sql.Val(s)), sql.Val(1)).Else(sql.Val(0))
+	sel := func(e sql.Selection) sql.Query { return sql.Select(e).From(users) }
+	cases := []struct {
+		name string
+		q    sql.Query
+	}{
+		{"count", sel(sql.Count(cmp))},
+		{"string_agg", sel(sql.StringAgg(cmp, ","))},
+		{"extract", sel(sql.Extract("year", cmp))},
+		{"position", sel(sql.Position(cmp, sql.Val("y")))},
+		{"subscript", sel(sql.Subscript(cmp, 1))},
+		{"json_object", sel(sql.JSONObject("k", cmp))},
+		{"json_access", sel(sql.JSONGet(cmp, "k"))},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { assertNoLeak(t, tc.name, tc.q, s) })
+	}
+}
+
 // TestApplyMasksNamedWindowClause checks that a sensitive comparison inside a
 // SELECT's WINDOW clause definition (WINDOW w AS (PARTITION BY ... ORDER BY ...))
 // is masked. rewriteSelect must descend into SelectStmt.Windows; without it the
