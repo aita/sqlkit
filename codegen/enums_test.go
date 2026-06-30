@@ -148,6 +148,59 @@ func TestGenerateNoRelationIdentifierCollisions(t *testing.T) {
 	}
 }
 
+// TestGenerateNoRelationTypeCollisions covers the per-relation struct types the
+// relational template declares (<Var><Field>Rel, relationModel.RelType). They are
+// deduped only within a table's relation set, not against the package-wide enum /
+// DTO names, so an enum or DTO whose Go name maps to a relation type emitted a
+// second declaration of it (`redeclared in this block`). Two tables joined by a
+// foreign key yield relation types PostsUserRel (forward) and UsersPostsRel
+// (reverse).
+func TestGenerateNoRelationTypeCollisions(t *testing.T) {
+	relTables := []meta.Table{
+		{Schema: meta.Schema{Name: "public"}, Name: "users",
+			Columns: []meta.Column{{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true}}},
+		{Schema: meta.Schema{Name: "public"}, Name: "posts",
+			Columns: []meta.Column{
+				{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true},
+				{Name: "user_id", Type: meta.Of("postgres", "int8", 0, 0, 0)},
+			},
+			ForeignKeys: []meta.ForeignKey{{Name: "posts_user_id_fkey", Columns: []string{"user_id"},
+				RefSchema: meta.Schema{Name: "public"}, RefTable: "users", RefColumns: []string{"id"}}}},
+	}
+	cases := []struct {
+		name string
+		md   meta.Metadata
+	}{
+		{"enum vs forward relation type", meta.Metadata{Tables: relTables,
+			Enums: []meta.Enum{{Schema: "public", Name: "posts_user_rel", Values: []string{"a"}}}}},
+		{"enum vs reverse relation type", meta.Metadata{Tables: relTables,
+			Enums: []meta.Enum{{Schema: "public", Name: "users_posts_rel", Values: []string{"a"}}}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			files, err := Generate(tc.md, Options{PackageName: "appdb", EmitRelations: true, EmitDTO: true})
+			if err != nil {
+				t.Fatalf("Generate: %v", err)
+			}
+			seen := map[string]string{}
+			for _, f := range files {
+				if !strings.HasSuffix(f.Name, ".go") {
+					continue
+				}
+				for _, id := range topLevelNames(t, f.Name, string(f.Content)) {
+					if id == "_" {
+						continue
+					}
+					if prev, dup := seen[id]; dup {
+						t.Errorf("identifier %q declared in both %s and %s (generated code won't compile)", id, prev, f.Name)
+					}
+					seen[id] = f.Name
+				}
+			}
+		})
+	}
+}
+
 // parseFile asserts the generated source parses and returns it.
 func parseFile(t *testing.T, name, src string) string {
 	t.Helper()

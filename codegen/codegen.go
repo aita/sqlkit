@@ -275,6 +275,21 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 			reserved["new"+varName+"Columns"] = true
 		}
 	}
+	// Build the relations up front (when enabled) so the per-relation struct
+	// types they declare (<Var><Field>Rel) are reserved before enum and DTO names
+	// are assigned — otherwise an enum/DTO whose Go name maps to a relation type
+	// would emit a second declaration of it (code that does not compile). The
+	// reservation only adds set keys, so the iteration order does not affect the
+	// result; the models attach these same relations below.
+	var relations map[string][]relationModel
+	if opts.EmitRelations {
+		relations = buildRelations(tables, bindingName)
+		for _, rels := range relations {
+			for _, r := range rels {
+				reserved[r.RelType] = true
+			}
+		}
+	}
 	// Assign each enum a unique Go type name and unique label const names,
 	// deduped against binding vars and one another and reserved so DTOs and other
 	// enums can't collide. Two enums whose names map to one Go identifier (e.g.
@@ -316,7 +331,6 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 	}
 
 	if opts.EmitRelations {
-		relations := buildRelations(tables, bindingName)
 		for i, tm := range models {
 			tm.Relational = true
 			tm.Relations = relations[qualified(tables[i].Schema.Name, tables[i].Name)]
