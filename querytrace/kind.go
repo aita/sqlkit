@@ -18,4 +18,5 @@ const (
 	StmtUpdate  = analysis.StmtUpdate
 	StmtDelete  = analysis.StmtDelete
 	StmtDDL     = analysis.StmtDDL
+	StmtMerge   = analysis.StmtMerge
 )
