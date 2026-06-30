@@ -263,16 +263,28 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 		reserved[varName] = true
 		reserved[varName+"Table"] = true
 	}
-	// Reserve enum type names too: an enum and a table's DTO can derive the same
-	// Go identifier (enum "mood" and table "moods" both -> "Mood"), which would
-	// emit two `type Mood` declarations. Seeding them here pushes the colliding
-	// DTO to its "Row"-suffixed fallback.
-	for _, enum := range md.Enums {
-		reserved[goName(enum.Name)] = true
+	// Assign each enum a unique Go type name and unique label const names,
+	// deduped against binding vars and one another and reserved so DTOs and other
+	// enums can't collide. Two enums whose names map to one Go identifier (e.g.
+	// "mood" and "mood_" both -> "Mood"), an enum colliding with a binding var,
+	// or a label const colliding with a DTO would otherwise emit two declarations
+	// of the same identifier — code that does not compile. enumGo maps the column
+	// type names to the final (deduped) type so enum-typed columns still resolve.
+	enumModels := make([]enumModel, len(md.Enums))
+	enumGo := map[string]meta.GoType{}
+	for i, e := range md.Enums {
+		typeName := uniqueName(reserved, goName(e.Name))
+		labels := make([]string, len(e.Values))
+		for j, v := range e.Values {
+			labels[j] = uniqueName(reserved, typeName+goName(v))
+		}
+		enumModels[i] = enumModel{Enum: e, TypeName: typeName, Labels: labels}
+		gt := meta.GoType{Name: typeName}
+		enumGo[e.Name] = gt
+		enumGo[e.QualifiedName()] = gt
 	}
 
 	generator := GeneratorID()
-	enumGo := enumGoTypes(md.Enums)
 	models := make([]*tableModel, 0, len(tables))
 	for _, table := range tables {
 		tm, err := buildTable(table, dialect, mapper, bindingName, enumGo)
@@ -303,7 +315,7 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 	if err != nil {
 		return nil, err
 	}
-	if ef, ok, err := enumFile(md.Enums, opts); err != nil {
+	if ef, ok, err := enumFile(enumModels, opts); err != nil {
 		return nil, err
 	} else if ok {
 		files = append(files, ef)
