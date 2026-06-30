@@ -33,6 +33,13 @@ var (
 	// never string content; rewriting it to a single ", " makes separator spacing
 	// canonical so the value-list passes below can assume one form.
 	commaRe = regexp.MustCompile(`\s*,\s*`)
+	// openParenPadRe and closeParenPadRe match whitespace immediately inside a
+	// parenthesis. The value passes have already collapsed literals to "?", so this
+	// is never string content; removing it canonicalizes "( ?, ? )" to "(?, ?)" so
+	// the IN/VALUES arity passes — which anchor on "(?" — match regardless of
+	// incidental padding in hand-written SQL.
+	openParenPadRe  = regexp.MustCompile(`\(\s+`)
+	closeParenPadRe = regexp.MustCompile(`\s+\)`)
 	// inListRe matches an "IN (?, ?, …)" list of two or more placeholders and is
 	// rewritten to the single-item "IN (?)", so that membership tests differing
 	// only in the number of values share a fingerprint. The keyword anchor keeps
@@ -123,5 +130,7 @@ func FingerprintRaw(sqlText string) string {
 func collapse(s string) string {
 	s = whitespaceRe.ReplaceAllString(s, " ")
 	s = commaRe.ReplaceAllString(s, ", ")
+	s = openParenPadRe.ReplaceAllString(s, "(")
+	s = closeParenPadRe.ReplaceAllString(s, ")")
 	return strings.TrimSpace(s)
 }

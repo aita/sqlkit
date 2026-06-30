@@ -56,12 +56,18 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		}
 		return c.nextPlaceholder(), []any{e.Value}, nil
 	case GroupingExpression:
+		if !supportsGroupingSets(c.Dialect) {
+			return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support %s grouping", c.Dialect.Name(), e.Kind)
+		}
 		inner, args, err := c.compileExprList(e.Elements)
 		if err != nil {
 			return "", nil, err
 		}
 		return e.Kind + " (" + inner + ")", args, nil
 	case GroupingSetsExpression:
+		if !supportsGroupingSets(c.Dialect) {
+			return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support GROUPING SETS", c.Dialect.Name())
+		}
 		if len(e.Sets) == 0 {
 			return "", nil, fmt.Errorf("sqlkit/sql: GROUPING SETS requires at least one set")
 		}
@@ -1352,7 +1358,7 @@ func (c *Compiler) CompileUpdate(q UpdateStmt) (string, []any, error) {
 		sb.WriteString(whereSQL)
 		args = append(args, whereArgs...)
 	}
-	if err := c.writeRowLimit(&sb, &args, q.OrderBy, q.HasLimit, q.Limit); err != nil {
+	if err := c.writeRowLimit(&sb, &args, q.OrderBy, q.HasLimit, q.Limit, len(q.From) > 0 || len(q.Joins) > 0); err != nil {
 		return "", nil, err
 	}
 	if err := c.writeReturning(&sb, &args, q.Returning); err != nil {
@@ -1430,7 +1436,7 @@ func (c *Compiler) CompileDelete(q DeleteStmt) (string, []any, error) {
 		sb.WriteString(whereSQL)
 		args = append(args, whereArgs...)
 	}
-	if err := c.writeRowLimit(&sb, &args, q.OrderBy, q.HasLimit, q.Limit); err != nil {
+	if err := c.writeRowLimit(&sb, &args, q.OrderBy, q.HasLimit, q.Limit, hasSources); err != nil {
 		return "", nil, err
 	}
 	if err := c.writeReturning(&sb, &args, q.Returning); err != nil {
@@ -1513,6 +1519,14 @@ func (c *Compiler) assignmentLHS(a Assignment) (string, []any, error) {
 }
 
 // compileExprList compiles a comma-separated list of expressions.
+// supportsGroupingSets reports whether the dialect can render the ROLLUP / CUBE /
+// GROUPING SETS grouping elements. MySQL cannot, so the compiler rejects them
+// rather than emit SQL it would reject (its ROLLUP is the trailing WITH ROLLUP).
+func supportsGroupingSets(d Dialect) bool {
+	g, ok := d.(GroupingSetsDialect)
+	return ok && g.SupportsGroupingSets()
+}
+
 func (c *Compiler) compileExprList(exprs []Expression) (string, []any, error) {
 	var sb strings.Builder
 	var args []any
@@ -1693,13 +1707,18 @@ func (c *Compiler) writeOrderBy(sb *strings.Builder, args *[]any, terms []OrderT
 
 // writeRowLimit renders the "ORDER BY ... LIMIT n" tail of an UPDATE or DELETE,
 // which bounds the affected rows. Only MySQL accepts it on data-modifying
-// statements; other dialects reject it rather than emit invalid SQL.
-func (c *Compiler) writeRowLimit(sb *strings.Builder, args *[]any, orderBy []OrderTerm, hasLimit bool, limit int) error {
+// statements, and only on the single-table form: MySQL rejects ORDER BY / LIMIT
+// on a multi-table (joined) UPDATE or DELETE. Other dialects reject it outright.
+// multiTable reports whether the statement carries join/extra sources.
+func (c *Compiler) writeRowLimit(sb *strings.Builder, args *[]any, orderBy []OrderTerm, hasLimit bool, limit int, multiTable bool) error {
 	if len(orderBy) == 0 && !hasLimit {
 		return nil
 	}
 	if c.Dialect.Name() != "mysql" {
 		return fmt.Errorf("sqlkit/sql: ORDER BY / LIMIT on UPDATE/DELETE is supported only on the mysql dialect")
+	}
+	if multiTable {
+		return fmt.Errorf("sqlkit/sql: MySQL does not allow ORDER BY / LIMIT on a multi-table UPDATE/DELETE")
 	}
 	if err := c.writeOrderBy(sb, args, orderBy); err != nil {
 		return err

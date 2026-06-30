@@ -67,6 +67,12 @@ func PrimaryKeyValues(table Table, row any) ([]any, error) {
 // any field tagged read-only (`sqlkit:",readonly"`), which is never written. It
 // uses the same column-to-field mapping as Scan and Insert. row may be a struct
 // or a pointer to one. It backs the uow package's UPDATE assignment building.
+//
+// A field tagged `sqlkit:",json"` / `,jsonb` is wrapped so it is written as its
+// JSON encoding, exactly as the Insert and Update builders encode it — without
+// the wrapper the uow UPDATE path would hand the raw Go value to the driver,
+// which either errors or stores the wrong value (a write-path asymmetry with
+// INSERT).
 func ColumnValues(table Table, row any) (names []string, values []any, err error) {
 	rv, err := rowStruct(row)
 	if err != nil {
@@ -79,8 +85,12 @@ func ColumnValues(table Table, row any) (names []string, values []any, err error
 		if !ok || f.ReadOnly {
 			continue
 		}
+		value := rv.FieldByIndex(f.Path).Interface()
+		if f.JSON {
+			value = jsonValue{v: value}
+		}
 		names = append(names, name)
-		values = append(values, rv.FieldByIndex(f.Path).Interface())
+		values = append(values, value)
 	}
 	return names, values, nil
 }

@@ -125,6 +125,16 @@ type SnapshotType struct {
 	Length    int
 	Precision int
 	Scale     int
+	Array     bool
+}
+
+// snapshotType rebuilds a meta.Type from a SnapshotType, preserving the array
+// flag so a text[] column does not round-trip back as a scalar text.
+func snapshotType(dialect string, st SnapshotType) meta.Type {
+	if st.Array {
+		return meta.OfArray(dialect, st.Name, st.Length, st.Precision, st.Scale)
+	}
+	return meta.Of(dialect, st.Name, st.Length, st.Precision, st.Scale)
 }
 
 // SnapshotFK is one foreign-key constraint with its referential actions.
@@ -169,7 +179,7 @@ func Resolve(md meta.Metadata, d sql.Dialect) (Snapshot, error) {
 			}
 			sc := SnapshotColumn{
 				Name:       c.Name,
-				Type:       SnapshotType{Name: eng.Name, Length: eng.Length, Precision: eng.Precision, Scale: eng.Scale},
+				Type:       SnapshotType{Name: eng.Name, Length: eng.Length, Precision: eng.Precision, Scale: eng.Scale, Array: eng.Array},
 				Nullable:   c.Nullable,
 				HasDefault: c.HasDefault,
 				PrimaryKey: c.PrimaryKey,
@@ -250,7 +260,7 @@ func (s Snapshot) Metadata() meta.Metadata {
 		for _, sc := range st.Columns {
 			c := meta.Column{
 				Name:       sc.Name,
-				Type:       meta.Of(s.Dialect, sc.Type.Name, sc.Type.Length, sc.Type.Precision, sc.Type.Scale),
+				Type:       snapshotType(s.Dialect, sc.Type),
 				Nullable:   sc.Nullable,
 				HasDefault: sc.HasDefault,
 				PrimaryKey: sc.PrimaryKey,

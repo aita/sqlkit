@@ -1,6 +1,7 @@
 package codegen
 
 import (
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"regexp"
@@ -9,6 +10,84 @@ import (
 
 	"github.com/aita/sqlkit/meta"
 )
+
+// topLevelNames parses src and returns the package-level identifiers it
+// declares (types, consts, vars, funcs). Duplicate declarations are valid Go
+// syntax — only the type checker rejects them — so this is how a "redeclared in
+// this block" collision is detected without a full go/types pass.
+func topLevelNames(t *testing.T, name, src string) []string {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), name, src, parser.AllErrors)
+	if err != nil {
+		t.Fatalf("generated %s does not parse: %v\n%s", name, err, src)
+	}
+	var names []string
+	for _, d := range f.Decls {
+		switch decl := d.(type) {
+		case *ast.GenDecl:
+			for _, spec := range decl.Specs {
+				switch s := spec.(type) {
+				case *ast.TypeSpec:
+					names = append(names, s.Name.Name)
+				case *ast.ValueSpec:
+					for _, id := range s.Names {
+						names = append(names, id.Name)
+					}
+				}
+			}
+		case *ast.FuncDecl:
+			if decl.Recv == nil { // package-level func only
+				names = append(names, decl.Name.Name)
+			}
+		}
+	}
+	return names
+}
+
+// TestGenerateNoIdentifierCollisions covers name collisions across the generated
+// enum types, enum label consts, table binding vars, and DTOs: each must reduce
+// to a distinct package-level Go identifier, or the generated package fails to
+// compile ("redeclared in this block").
+func TestGenerateNoIdentifierCollisions(t *testing.T) {
+	cases := map[string]meta.Metadata{
+		"two enums map to one Go type": {
+			Enums: []meta.Enum{
+				{Schema: "public", Name: "mood", Values: []string{"happy"}},
+				{Schema: "public", Name: "mood_", Values: []string{"sad"}},
+			},
+		},
+		"enum type vs table binding var": {
+			Tables: []meta.Table{{Schema: meta.Schema{Name: "public"}, Name: "mood",
+				Columns: []meta.Column{{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true}}}},
+			Enums: []meta.Enum{{Schema: "public", Name: "mood", Values: []string{"happy"}}},
+		},
+		"enum label const vs DTO type": {
+			Tables: []meta.Table{{Schema: meta.Schema{Name: "public"}, Name: "user_admins",
+				Columns: []meta.Column{{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true}}}},
+			Enums: []meta.Enum{{Schema: "public", Name: "user", Values: []string{"admin"}}},
+		},
+	}
+	for name, md := range cases {
+		t.Run(name, func(t *testing.T) {
+			files, err := Generate(md, Options{PackageName: "appdb", EmitDTO: true})
+			if err != nil {
+				t.Fatalf("Generate: %v", err)
+			}
+			seen := map[string]string{}
+			for _, f := range files {
+				if !strings.HasSuffix(f.Name, ".go") {
+					continue
+				}
+				for _, id := range topLevelNames(t, f.Name, string(f.Content)) {
+					if prev, dup := seen[id]; dup {
+						t.Errorf("identifier %q declared in both %s and %s (generated code won't compile)", id, prev, f.Name)
+					}
+					seen[id] = f.Name
+				}
+			}
+		})
+	}
+}
 
 // parseFile asserts the generated source parses and returns it.
 func parseFile(t *testing.T, name, src string) string {
