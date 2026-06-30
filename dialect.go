@@ -28,12 +28,17 @@ type LibSQLDialect = querysql.LibSQLDialect
 type StandardSQLDialect = querysql.StandardSQLDialect
 
 // driverDialects maps database/sql driver names to dialects. It seeds the names
-// of the drivers sqlkit knows: PostgreSQL (pgx) and MySQL. Extend it with
+// of the drivers sqlkit knows: PostgreSQL (pgx), MySQL, the common SQLite drivers
+// — modernc.org/sqlite registers "sqlite" and mattn/go-sqlite3 registers
+// "sqlite3" — and libSQL (the Turso drivers register "libsql"). Extend it with
 // RegisterDriverDialect for other drivers.
 var driverDialects = map[string]Dialect{
 	"pgx":      querysql.PostgreSQLDialect{},
 	"postgres": querysql.PostgreSQLDialect{},
 	"mysql":    querysql.MySQLDialect{},
+	"sqlite":   querysql.SQLiteDialect{},
+	"sqlite3":  querysql.SQLiteDialect{},
+	"libsql":   querysql.LibSQLDialect{},
 }
 
 // RegisterDriverDialect maps a database/sql driver name to a dialect so Open and
