@@ -2,7 +2,6 @@ package sqltest
 
 import (
 	"context"
-	stdsql "database/sql"
 	"fmt"
 	"sort"
 	"strings"
@@ -11,18 +10,14 @@ import (
 	"github.com/aita/sqlkit"
 )
 
-// Queryer is the read surface the DB-state assertions need, satisfied by
-// *sql.DB, *sql.Tx, and *sql.Conn. It lets the assertions inspect the database
-// after the code under test has run, through a raw database/sql handle and
-// without the sqlkit query builder.
-type Queryer interface {
-	QueryContext(ctx context.Context, query string, args ...any) (*stdsql.Rows, error)
-}
+// The DB-state assertions read through the package's Queryer interface (defined
+// alongside Execer), satisfied by *sql.DB and a case's *sql.Tx, so they inspect
+// the database after the code under test has run without the query builder.
 
 // AssertCount asserts that table holds exactly want rows. It is the after-the-act
 // counterpart of the query spy: where the spy checks which statements ran,
 // AssertCount checks the data they left behind.
-func AssertCount(t *testing.T, q Queryer, dialect sqlkit.Dialect, table string, want int) {
+func AssertCount(t testing.TB, q Queryer, dialect sqlkit.Dialect, table string, want int) {
 	t.Helper()
 	if got := countWhere(t, q, dialect, table, nil); got != want {
 		t.Errorf("sqltest: %s has %d rows, want %d", table, got, want)
@@ -31,7 +26,7 @@ func AssertCount(t *testing.T, q Queryer, dialect sqlkit.Dialect, table string, 
 
 // AssertCountWhere asserts that table holds exactly want rows matching where, a
 // column→value map joined with AND (a nil value becomes IS NULL).
-func AssertCountWhere(t *testing.T, q Queryer, dialect sqlkit.Dialect, table string, where map[string]any, want int) {
+func AssertCountWhere(t testing.TB, q Queryer, dialect sqlkit.Dialect, table string, where map[string]any, want int) {
 	t.Helper()
 	if got := countWhere(t, q, dialect, table, where); got != want {
 		t.Errorf("sqltest: %s has %d rows matching %v, want %d", table, got, where, want)
@@ -39,13 +34,13 @@ func AssertCountWhere(t *testing.T, q Queryer, dialect sqlkit.Dialect, table str
 }
 
 // AssertEmpty asserts that table holds no rows. It is AssertCount(t, …, 0).
-func AssertEmpty(t *testing.T, q Queryer, dialect sqlkit.Dialect, table string) {
+func AssertEmpty(t testing.TB, q Queryer, dialect sqlkit.Dialect, table string) {
 	t.Helper()
 	AssertCount(t, q, dialect, table, 0)
 }
 
 // AssertExists asserts that at least one row of table matches where.
-func AssertExists(t *testing.T, q Queryer, dialect sqlkit.Dialect, table string, where map[string]any) {
+func AssertExists(t testing.TB, q Queryer, dialect sqlkit.Dialect, table string, where map[string]any) {
 	t.Helper()
 	if got := countWhere(t, q, dialect, table, where); got == 0 {
 		t.Errorf("sqltest: no row in %s matches %v, want at least one", table, where)
@@ -53,7 +48,7 @@ func AssertExists(t *testing.T, q Queryer, dialect sqlkit.Dialect, table string,
 }
 
 // AssertNotExists asserts that no row of table matches where.
-func AssertNotExists(t *testing.T, q Queryer, dialect sqlkit.Dialect, table string, where map[string]any) {
+func AssertNotExists(t testing.TB, q Queryer, dialect sqlkit.Dialect, table string, where map[string]any) {
 	t.Helper()
 	if got := countWhere(t, q, dialect, table, where); got != 0 {
 		t.Errorf("sqltest: %d rows in %s match %v, want none", got, table, where)
@@ -70,7 +65,7 @@ func AssertNotExists(t *testing.T, q Queryer, dialect sqlkit.Dialect, table stri
 // driver returns int64(1), "1", or []byte("1") — the comparison is tolerant of
 // the type a column scans back as. A row in want with no match in the table, or
 // an extra row in the table, fails the assertion with a readable diff.
-func AssertTableContents(t *testing.T, q Queryer, dialect sqlkit.Dialect, table string, want []map[string]any) {
+func AssertTableContents(t testing.TB, q Queryer, dialect sqlkit.Dialect, table string, want []map[string]any) {
 	t.Helper()
 	if len(want) == 0 {
 		AssertEmpty(t, q, dialect, table)
@@ -127,34 +122,34 @@ func diffRows(cols []string, want []map[string]any, got [][]any) (missing, extra
 
 // AssertCount asserts table holds exactly want rows, reading through the DB's
 // connection. See the package-level AssertCount.
-func (d *DB) AssertCount(t *testing.T, table string, want int) {
+func (d *DB) AssertCount(t testing.TB, table string, want int) {
 	t.Helper()
 	AssertCount(t, d.db.SQL(), d.db.Dialect(), table, want)
 }
 
 // AssertEmpty asserts table holds no rows, reading through the DB's connection.
-func (d *DB) AssertEmpty(t *testing.T, table string) {
+func (d *DB) AssertEmpty(t testing.TB, table string) {
 	t.Helper()
 	AssertEmpty(t, d.db.SQL(), d.db.Dialect(), table)
 }
 
 // AssertExists asserts at least one row of table matches where, reading through
 // the DB's connection.
-func (d *DB) AssertExists(t *testing.T, table string, where map[string]any) {
+func (d *DB) AssertExists(t testing.TB, table string, where map[string]any) {
 	t.Helper()
 	AssertExists(t, d.db.SQL(), d.db.Dialect(), table, where)
 }
 
 // AssertTableContents asserts table's rows equal want, reading through the DB's
 // connection. See the package-level AssertTableContents.
-func (d *DB) AssertTableContents(t *testing.T, table string, want []map[string]any) {
+func (d *DB) AssertTableContents(t testing.TB, table string, want []map[string]any) {
 	t.Helper()
 	AssertTableContents(t, d.db.SQL(), d.db.Dialect(), table, want)
 }
 
 // countWhere runs SELECT COUNT(*) on table with an optional WHERE and returns
 // the count, failing the test on a query error.
-func countWhere(t *testing.T, q Queryer, dialect sqlkit.Dialect, table string, where map[string]any) int {
+func countWhere(t testing.TB, q Queryer, dialect sqlkit.Dialect, table string, where map[string]any) int {
 	t.Helper()
 	query := "SELECT COUNT(*) FROM " + dialect.QuoteIdent(table)
 	clause, args := buildWhere(dialect, where)
@@ -212,7 +207,7 @@ func buildWhere(dialect sqlkit.Dialect, where map[string]any) (string, []any) {
 
 // queryValues runs query and returns each row as a slice of colCount values,
 // failing the test on error.
-func queryValues(t *testing.T, q Queryer, query string, colCount int) [][]any {
+func queryValues(t testing.TB, q Queryer, query string, colCount int) [][]any {
 	t.Helper()
 	rows, err := q.QueryContext(context.Background(), query)
 	if err != nil {
