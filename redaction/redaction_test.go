@@ -160,6 +160,28 @@ func TestApplyMasksWindowExpression(t *testing.T) {
 	}
 }
 
+// TestApplyMasksNamedWindowClause checks that a sensitive comparison inside a
+// SELECT's WINDOW clause definition (WINDOW w AS (PARTITION BY ... ORDER BY ...))
+// is masked. rewriteSelect must descend into SelectStmt.Windows; without it the
+// literal leaks just as it did for an inline OVER (the WindowExpression case).
+func TestApplyMasksNamedWindowClause(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	const s = "SECRETTARO"
+	cond := sql.Eq(sql.Col("name"), sql.Val(s))
+	cases := []struct {
+		name string
+		q    sql.Query
+	}{
+		{"partition", sql.Select(sql.Func("row_number").Over().Named("w")).From(users).
+			Window(sql.WindowDef("w").PartitionBy(cond))},
+		{"orderby", sql.Select(sql.Func("rank").Over().Named("w")).From(users).
+			Window(sql.WindowDef("w").OrderBy(sql.Asc(cond)))},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { assertNoLeak(t, tc.name, tc.q, s) })
+	}
+}
+
 // TestNumbersAndPlaceholdersNotMasked pins that only string literals are masked.
 func TestNumbersAndPlaceholdersNotMasked(t *testing.T) {
 	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
