@@ -135,6 +135,31 @@ func TestApplyMasksValueSideSubquery(t *testing.T) {
 	}
 }
 
+// TestApplyMasksWindowExpression checks that a sensitive comparison nested inside
+// an OVER (...) construct is masked. The rewrite walk must descend into the
+// windowed function and into the PARTITION BY / ORDER BY expressions; without a
+// WindowExpression case it skips the whole node and a literal compared to a
+// sensitive column leaks (fail-open).
+func TestApplyMasksWindowExpression(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	const s = "SECRETTARO"
+	cond := sql.Eq(sql.Col("name"), sql.Val(s))
+	cases := []struct {
+		name string
+		q    sql.Query
+	}{
+		// the literal hides inside the windowed function's argument
+		{"fn", sql.Select(sql.Func("sum", sql.If(cond, sql.Val(1), sql.Val(0))).Over().PartitionBy(sql.Col("id"))).From(users)},
+		// ... inside PARTITION BY
+		{"partition", sql.Select(sql.Func("row_number").Over().PartitionBy(cond)).From(users)},
+		// ... inside the window's ORDER BY
+		{"orderby", sql.Select(sql.Func("rank").Over().OrderBy(sql.Asc(cond))).From(users)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { assertNoLeak(t, tc.name, tc.q, s) })
+	}
+}
+
 // TestNumbersAndPlaceholdersNotMasked pins that only string literals are masked.
 func TestNumbersAndPlaceholdersNotMasked(t *testing.T) {
 	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
