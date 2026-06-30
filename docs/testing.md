@@ -159,6 +159,30 @@ matches whether the driver returns `int64(1)`, `"1"`, or `[]byte("1")`. On a
 `DB` handle the `db.AssertCount` / `db.AssertEmpty` / `db.AssertExists` /
 `db.AssertTableContents` methods supply the dialect and connection.
 
+## Query plans (EXPLAIN)
+
+A third question, beside *which statements ran* and *what data they left*: will
+the database run a query *efficiently*?
+[`ExplainQuery`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#ExplainQuery)
+runs `EXPLAIN` (it plans, never executes) through the same `Queryer` and returns
+a [`Plan`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#Plan) to assert on:
+
+```go
+plan := sqltest.ExplainQuery(t, db, sqlkit.PostgreSQLDialect{},
+    "SELECT * FROM users WHERE email = $1", "a@example.com")
+plan.AssertNoSeqScan(t)
+plan.AssertUsesIndex(t, "users_email_idx")
+```
+
+`AssertNoSeqScan` catches a query that falls back to a full table scan;
+`AssertUsesIndex` asserts a specific index is read; `AssertContains` /
+`AssertNotContains` match any substring of the plan (the portable check). The
+structural helpers read PostgreSQL's text plan (`Seq Scan`, `Index Scan using
+…`) and MySQL's tabular `EXPLAIN` (the `type` and `key` columns);
+[`NewPlan`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#NewPlan) wraps
+`EXPLAIN` output captured elsewhere, and `Plan.Text` exposes the rendered plan.
+These need a real database, so they belong in the integration suite.
+
 ## Mock database
 
 [`sqltest.NewDB`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#NewDB) is a programmable mock `*sql.DB` for unit tests that should not
