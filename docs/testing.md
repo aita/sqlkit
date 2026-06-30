@@ -85,6 +85,32 @@ func TestBlog(t *testing.T) {
 Foreign-key ordering of inserted *rows* is still the caller's responsibility:
 insert parent rows before the children that reference them.
 
+### Seeding by column name
+
+`InsertRows` and `Fixture` address rows through a generated `sqlkit.Table`
+binding. Code that does not use the builder reaches for
+[`InsertMap`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#InsertMap)
+instead, which seeds a table named by string from `column → value` maps through a
+plain `database/sql` handle:
+
+```go
+sqltest.InsertMap(t, db, sqlkit.PostgreSQLDialect{}, "users",
+    map[string]any{"email": "a@example.com", "name": "alice"},
+    map[string]any{"email": "b@example.com", "name": "bob"},
+)
+id := sqltest.InsertMapID(t, db, sqlkit.PostgreSQLDialect{}, "users", "id",
+    map[string]any{"email": "c@example.com"})
+```
+
+The first argument after `t` is any `Execer` — a `*sql.DB` for auto-commit, or a
+`*sql.Tx` a case rolls back for isolation. The dialect selects identifier quoting
+and the placeholder style, so one call works on PostgreSQL and MySQL alike, and
+[`InsertMapID`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#InsertMapID)
+reads a generated key back the same cross-dialect way `InsertID` does
+(`RETURNING` on PostgreSQL, `Result.LastInsertId` on MySQL). On a `NewRaw`
+handle the `db.InsertMap` / `db.InsertMapID` methods supply the dialect and
+connection for you.
+
 ## Query spy
 
 The same package turns a [`querytrace.Trace`](observability.md) into a **query
