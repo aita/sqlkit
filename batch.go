@@ -107,7 +107,19 @@ func execStatements(ctx context.Context, ex executorBinding, stmts []compiledStm
 	if len(stmts) == 1 {
 		return runExecStmt(ctx, ex, stmts[0].statement(OpExec, ex.sqlDialect(), ex.routeHint()))
 	}
-	if db, ok := ex.(*Database); ok {
+	db, ok := ex.(*Database)
+	if !ok {
+		// A per-statement WithRoute wraps the executor in a routedBinding. Look
+		// through it to the underlying Database so a routed multi-statement write
+		// still runs in one transaction (the route hint is advisory and ignored for
+		// a write) — the same look-through batchExecutor does for the RETURNING
+		// path. A routedBinding over a Session keeps the session's in-flight
+		// transaction, so it falls through to execOn below and is reused as-is.
+		if routed, isRouted := ex.(routedBinding); isRouted {
+			db, ok = routed.base.(*Database)
+		}
+	}
+	if ok {
 		var out stdsql.Result
 		err := db.WithSession(ctx, func(s *Session) error {
 			res, err := execOn(ctx, s, stmts)
