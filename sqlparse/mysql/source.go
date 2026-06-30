@@ -183,6 +183,12 @@ func checkTableName(tn *ast.TableName) error {
 	if strings.Contains(tn.Name.O, ".") || strings.Contains(tn.Schema.O, ".") {
 		return sqlparse.Unsupportedf("table identifier with a dot: %q", tn.Name.O)
 	}
+	// t PARTITION (p0, ...) restricts the scan/modification to the named
+	// partitions; sqlkit cannot model it and dropping it would silently widen the
+	// statement to the whole table. Fall back to raw.
+	if len(tn.PartitionNames) > 0 {
+		return sqlparse.Unsupported("explicit PARTITION selection")
+	}
 	return nil
 }
 
