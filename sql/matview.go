@@ -23,6 +23,9 @@ func (s CreateMaterializedViewStmt) ToSQL(d Dialect) (string, []any, error) {
 	return out, nil, err
 }
 func (s CreateMaterializedViewStmt) compileDDL(c *Compiler) (string, error) {
+	if err := c.requirePostgresObject("materialized views"); err != nil {
+		return "", err
+	}
 	if s.Query == nil {
 		return "", fmt.Errorf("sqlkit/sql: CREATE MATERIALIZED VIEW requires a query")
 	}
@@ -108,6 +111,9 @@ func (s DropMaterializedViewStmt) ToSQL(d Dialect) (string, []any, error) {
 	return out, nil, err
 }
 func (s DropMaterializedViewStmt) compileDDL(c *Compiler) (string, error) {
+	if err := c.requirePostgresObject("materialized views"); err != nil {
+		return "", err
+	}
 	var sb strings.Builder
 	sb.WriteString("DROP MATERIALIZED VIEW ")
 	if s.IfExists {
@@ -170,6 +176,9 @@ func (s RefreshMaterializedViewStmt) ToSQL(d Dialect) (string, []any, error) {
 	return out, nil, err
 }
 func (s RefreshMaterializedViewStmt) compileDDL(c *Compiler) (string, error) {
+	if err := c.requirePostgresObject("materialized views"); err != nil {
+		return "", err
+	}
 	if s.Table.Name.IsZero() {
 		return "", fmt.Errorf("sqlkit/sql: REFRESH MATERIALIZED VIEW requires a name")
 	}

@@ -536,6 +536,18 @@ func (c *Compiler) requireColumnModify(op string) error {
 	return nil
 }
 
+// requirePostgresObject rejects an object kind that exists only in PostgreSQL —
+// sequences, enum types (CREATE TYPE ... AS ENUM), extensions, and materialized
+// views — when compiled for MySQL, which has none of them and whose parser
+// rejects the PostgreSQL DDL this package would otherwise emit. It mirrors
+// requireColumnModify / the single-element-row and FULL JOIN guards.
+func (c *Compiler) requirePostgresObject(feature string) error {
+	if c.Dialect.Name() == "mysql" {
+		return fmt.Errorf("sqlkit/sql: dialect %q does not support %s", c.Dialect.Name(), feature)
+	}
+	return nil
+}
+
 // foreignKeyClause renders an ALTER TABLE "ADD CONSTRAINT ... FOREIGN KEY ..."
 // action; foreignKeyDef renders the same constraint as a CREATE TABLE definition.
 func (c *Compiler) foreignKeyClause(fk ForeignKeyConstraint) (string, error) {
