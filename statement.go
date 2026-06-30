@@ -216,7 +216,7 @@ func (s Statement) Access() Access {
 	case KindInsert, KindUpdate, KindDelete, KindMerge, KindDDL:
 		return AccessWrite
 	case KindSelect, KindRawRead:
-		if s.locksRows() {
+		if s.locksRows() || s.writesViaCTE() {
 			return AccessWrite
 		}
 		return AccessRead
@@ -247,6 +247,52 @@ func (s Statement) locksRows() bool {
 		return q.Stmt().Lock != nil
 	case nil:
 		return hasLockingClause(s.SQL)
+	}
+	return false
+}
+
+// writesViaCTE reports whether a read-kinded statement (a SELECT or set
+// operation) carries a data-modifying CTE — WITH x AS (INSERT/UPDATE/DELETE/MERGE
+// ... RETURNING ...) SELECT .... Such a statement performs a write despite its
+// read top-level kind, so it must route to the primary, not a read replica. It
+// walks the AST itself (like locksRows) — mirroring analysis.writesViaCTE, which
+// classifies the same shape for the tracing layer — so the routing decision does
+// not silently disagree with the analyzer.
+func (s Statement) writesViaCTE() bool {
+	switch q := s.Query.(type) {
+	case SelectQuery:
+		return cteWritesInQuery(q.query)
+	case UnionQuery:
+		return cteWritesInQuery(q.query)
+	case sql.SelectBuilder, sql.CompoundBuilder:
+		return cteWritesInQuery(q)
+	}
+	return false
+}
+
+// cteWritesInQuery reports whether q is a SELECT or set operation whose WITH
+// clause (in either arm, nested) holds a data-modifying CTE body.
+func cteWritesInQuery(q sql.Query) bool {
+	switch v := sql.Unwrap(q).(type) {
+	case sql.SelectStmt:
+		return cteListWrites(v.With)
+	case sql.CompoundStmt:
+		return cteWritesInQuery(v.Left) || cteWritesInQuery(v.Right)
+	}
+	return false
+}
+
+// cteListWrites reports whether any CTE in ctes has a data-modifying body, or
+// itself carries a data-modifying CTE.
+func cteListWrites(ctes []sql.CTE) bool {
+	for _, c := range ctes {
+		switch sql.Unwrap(c.Body()).(type) {
+		case sql.InsertStmt, sql.UpdateStmt, sql.DeleteStmt, sql.MergeStmt:
+			return true
+		}
+		if cteWritesInQuery(c.Body()) {
+			return true
+		}
 	}
 	return false
 }

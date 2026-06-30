@@ -9,7 +9,39 @@ import (
 
 	"github.com/aita/sqlkit"
 	"github.com/aita/sqlkit/internal/testutil"
+	"github.com/aita/sqlkit/sql"
 )
+
+// A SELECT whose WITH clause performs a write — WITH x AS (INSERT ... RETURNING)
+// SELECT * FROM x — is a write for routing and must run on the primary, not a
+// read replica. Its top-level kind is a read, so the routing classifier must walk
+// the CTE bodies (as the analyzer does). A read-only CTE stays a read. Covers
+// both the sqlkit SelectQuery and the raw sql.SelectBuilder query shapes.
+func TestWritableCTERoutesAsWrite(t *testing.T) {
+	users := sql.Table{Name: sql.NewIdent("users")}
+	insert := sql.InsertInto(users).Columns("email").Values("a@example.com").Returning(sql.Col("id"))
+	writeCTE := sql.Select(sql.Col("id")).From(users).CTE("ins").WithBody(insert)
+	readCTE := sql.Select(sql.Col("id")).From(users).CTE("recent")
+
+	cases := []struct {
+		name  string
+		query sql.Query
+		write bool
+	}{
+		{"sql writable CTE", sql.Select(sql.Star()).From(writeCTE).WithCTE(writeCTE), true},
+		{"sql read-only CTE", sql.Select(sql.Star()).From(readCTE).WithCTE(readCTE), false},
+		{"sqlkit writable CTE", sqlkit.Select().From(writeCTE).WithCTE(writeCTE), true},
+		{"sqlkit read-only CTE", sqlkit.Select().From(readCTE).WithCTE(readCTE), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st := sqlkit.Statement{Query: tc.query}
+			if got := st.IsWrite(); got != tc.write {
+				t.Errorf("IsWrite() = %v, want %v (Access=%v) — a write routed to a replica", got, tc.write, st.Access())
+			}
+		})
+	}
+}
 
 // routerFunc adapts a function to the Router interface.
 type routerFunc func(ctx context.Context, stmt sqlkit.Statement) string
