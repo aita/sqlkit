@@ -50,7 +50,7 @@ func NewRaw(db *stdsql.DB, dialect sqlkit.Dialect) *DB {
 // teardown; other objects (types, sequences, functions, tables created through
 // constructs this does not recognise) are not dropped automatically. Add their
 // teardown with a t.Cleanup of your own when needed.
-func (d *DB) SetupSchemaSQL(t *testing.T, ddl ...string) {
+func (d *DB) SetupSchemaSQL(t testing.TB, ddl ...string) {
 	t.Helper()
 	d.applySchemaSQL(t, ddl)
 	t.Cleanup(func() { dropTableNames(t, d.db, d.tables) })
@@ -61,7 +61,7 @@ func (d *DB) SetupSchemaSQL(t *testing.T, ddl ...string) {
 // cleanup: reach for it to reset the schema again within a test, or when
 // something else owns the teardown. The names of the created tables are recorded
 // so a later SetupSchemaSQL, TruncateTables, or manual drop can find them.
-func (d *DB) ApplySchemaSQL(t *testing.T, ddl ...string) {
+func (d *DB) ApplySchemaSQL(t testing.TB, ddl ...string) {
 	t.Helper()
 	d.applySchemaSQL(t, ddl)
 }
@@ -69,7 +69,7 @@ func (d *DB) ApplySchemaSQL(t *testing.T, ddl ...string) {
 // applySchemaSQL splits the DDL into statements, drops the tables they declare
 // (so re-applying is idempotent and a leftover table never blocks the CREATE),
 // executes them in order, and records the created table names for teardown.
-func (d *DB) applySchemaSQL(t *testing.T, ddl []string) {
+func (d *DB) applySchemaSQL(t testing.TB, ddl []string) {
 	t.Helper()
 	var stmts []string
 	for _, text := range ddl {
@@ -91,7 +91,7 @@ func (d *DB) applySchemaSQL(t *testing.T, ddl []string) {
 // needs a meta.Metadata to resolve sqlkit.Table bindings. Called with no names
 // it clears every table the raw schema created (the tables ApplySchemaSQL or
 // SetupSchemaSQL last recorded).
-func (d *DB) TruncateTables(t *testing.T, names ...string) {
+func (d *DB) TruncateTables(t testing.TB, names ...string) {
 	t.Helper()
 	if len(names) == 0 {
 		names = d.tables

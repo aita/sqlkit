@@ -44,7 +44,7 @@ func truncate(t *testing.T, db *sqlkit.Database, md meta.Metadata, tables []sqlk
 // raw-DDL TruncateTables, so both get the same dialect-aware reset (PostgreSQL
 // TRUNCATE ... CASCADE in one statement; MySQL per-table TRUNCATE with
 // foreign-key checks toggled off). An empty list is a no-op.
-func truncateTableNames(t *testing.T, db *sqlkit.Database, names []string) {
+func truncateTableNames(t testing.TB, db *sqlkit.Database, names []string) {
 	t.Helper()
 	if len(names) == 0 {
 		return
@@ -118,7 +118,7 @@ func dropTables(t *testing.T, db *sqlkit.Database, md meta.Metadata) {
 // so both get the same dialect-aware, order-independent teardown (PostgreSQL
 // CASCADE; MySQL foreign-key checks toggled off). Each name is a qualified table
 // name the dialect quotes; an empty list is a no-op.
-func dropTableNames(t *testing.T, db *sqlkit.Database, names []string) {
+func dropTableNames(t testing.TB, db *sqlkit.Database, names []string) {
 	t.Helper()
 	if len(names) == 0 {
 		return
