@@ -27,7 +27,7 @@ import (
 // so 01_users.json loads into users. ex is any Execer (a *sql.DB, or a *sql.Tx a
 // case rolls back), and dialect selects quoting and placeholders as in InsertMap.
 // Subdirectories and files with other extensions are ignored.
-func LoadFixtures(t *testing.T, ex Execer, dialect sqlkit.Dialect, dir string) {
+func LoadFixtures(t testing.TB, ex Execer, dialect sqlkit.Dialect, dir string) {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -52,7 +52,7 @@ func LoadFixtures(t *testing.T, ex Execer, dialect sqlkit.Dialect, dir string) {
 // when the table name is decoupled from the filename or only one file is needed.
 // The format is chosen by the file's extension. An empty file (or empty JSON
 // array) inserts nothing.
-func LoadFixtureFile(t *testing.T, ex Execer, dialect sqlkit.Dialect, table, path string) {
+func LoadFixtureFile(t testing.TB, ex Execer, dialect sqlkit.Dialect, table, path string) {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
