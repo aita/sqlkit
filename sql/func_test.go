@@ -1,6 +1,9 @@
 package sql
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestJSONFunctions(t *testing.T) {
 	assertSQL(t,
@@ -265,6 +268,19 @@ func TestDistinctAggregates(t *testing.T) {
 	// functions, since the remap is for scalars only.
 	assertMySQL(t, Select(CountDistinct(Col("country"))).From(Table{Name: NewIdent("users")}),
 		"SELECT COUNT(DISTINCT `country`) FROM `users`", nil)
+}
+
+// COUNT(DISTINCT *) is invalid in both dialects; the builder accepts
+// CountDistinct(Star()), so the compiler must reject it rather than emit SQL the
+// engine refuses.
+func TestCountDistinctStarRejected(t *testing.T) {
+	q := Select(CountDistinct(Star())).From(Table{Name: NewIdent("users")})
+	for _, d := range []Dialect{PostgreSQLDialect{}, MySQLDialect{}} {
+		if _, _, err := q.ToSQL(d); err == nil ||
+			!strings.Contains(err.Error(), "COUNT(DISTINCT *)") {
+			t.Fatalf("ToSQL(%s) error = %v, want a COUNT(DISTINCT *) rejection", d.Name(), err)
+		}
+	}
 }
 
 func TestNamedWindowClause(t *testing.T) {

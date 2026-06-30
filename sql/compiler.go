@@ -542,6 +542,12 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		if e.All || e.Target == nil {
 			return "COUNT(*)", nil, nil
 		}
+		// COUNT(DISTINCT *) is invalid in both PostgreSQL and MySQL (DISTINCT needs
+		// an expression list, not "*"); reject it at compile time rather than emit
+		// SQL the engine refuses. A plain COUNT(*) is the way to count rows.
+		if _, star := e.Target.(StarSelection); star && e.Distinct {
+			return "", nil, fmt.Errorf("sqlkit/sql: COUNT(DISTINCT *) is not valid SQL; use COUNT(*) or COUNT(DISTINCT column)")
+		}
 		target, args, err := c.CompileSelection(e.Target)
 		if err != nil {
 			return "", nil, err
