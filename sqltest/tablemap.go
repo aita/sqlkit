@@ -25,11 +25,19 @@ type Execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (stdsql.Result, error)
 }
 
-// ExecQueryer adds the read surface InsertMapID needs to read a generated key
-// back with RETURNING. *sql.DB and *sql.Tx satisfy it.
+// Queryer is the read surface the builder-free helpers need (generated-key
+// read-back, the DB-state assertions, EXPLAIN), satisfied by *sql.DB, *sql.Tx,
+// and *sql.Conn.
+type Queryer interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*stdsql.Rows, error)
+}
+
+// ExecQueryer is both surfaces at once — the handle InsertMapID needs to insert
+// and then read a generated key back with RETURNING. *sql.DB and *sql.Tx
+// satisfy it.
 type ExecQueryer interface {
 	Execer
-	QueryContext(ctx context.Context, query string, args ...any) (*stdsql.Rows, error)
+	Queryer
 }
 
 // InsertMap seeds rows into table through ex, addressing columns by name with no
@@ -42,7 +50,7 @@ type ExecQueryer interface {
 // for isolation). All rows insert in one multi-row statement; an empty rows list
 // is a no-op. Foreign-key ordering across tables is the caller's responsibility,
 // the same as InsertRows.
-func InsertMap(t *testing.T, ex Execer, dialect sqlkit.Dialect, table string, rows ...map[string]any) {
+func InsertMap(t testing.TB, ex Execer, dialect sqlkit.Dialect, table string, rows ...map[string]any) {
 	t.Helper()
 	if len(rows) == 0 {
 		return
@@ -63,7 +71,7 @@ func InsertMap(t *testing.T, ex Execer, dialect sqlkit.Dialect, table string, ro
 // cross-dialect wrinkle as InsertID: it reads the key back with RETURNING on
 // PostgreSQL and falls back to Result.LastInsertId on MySQL. It is the
 // catalog-free counterpart of InsertID for a single auto-generated integer key.
-func InsertMapID(t *testing.T, ex ExecQueryer, dialect sqlkit.Dialect, table, idColumn string, row map[string]any) int64 {
+func InsertMapID(t testing.TB, ex ExecQueryer, dialect sqlkit.Dialect, table, idColumn string, row map[string]any) int64 {
 	t.Helper()
 	cols, err := columnsOf([]map[string]any{row})
 	if err != nil {
@@ -106,7 +114,7 @@ func InsertMapID(t *testing.T, ex ExecQueryer, dialect sqlkit.Dialect, table, id
 // columns by name. It is shorthand for InsertMap(t, d.Database().SQL(),
 // d.Database().Dialect(), table, rows...); seed into a *sql.Tx instead when cases
 // run in parallel, so the rows roll back with the case.
-func (d *DB) InsertMap(t *testing.T, table string, rows ...map[string]any) {
+func (d *DB) InsertMap(t testing.TB, table string, rows ...map[string]any) {
 	t.Helper()
 	InsertMap(t, d.db.SQL(), d.db.Dialect(), table, rows...)
 }
@@ -114,7 +122,7 @@ func (d *DB) InsertMap(t *testing.T, table string, rows ...map[string]any) {
 // InsertMapID inserts a single row through the DB's auto-commit handle and
 // returns its database-generated key. It is shorthand for InsertMapID(t,
 // d.Database().SQL(), d.Database().Dialect(), table, idColumn, row).
-func (d *DB) InsertMapID(t *testing.T, table, idColumn string, row map[string]any) int64 {
+func (d *DB) InsertMapID(t testing.TB, table, idColumn string, row map[string]any) int64 {
 	t.Helper()
 	return InsertMapID(t, d.db.SQL(), d.db.Dialect(), table, idColumn, row)
 }
