@@ -26,11 +26,10 @@ var astCmpOpts = cmp.Options{
 //   - the parsed query is structurally identical to want (every field but source
 //     positions, unexported included), proving the parser builds the expected AST
 //     nodes — not merely an SQL string that recompiles the same way;
-//   - that query compiles under PostgreSQLDialect to wantSQL with wantArgs. The
-//     SQLite engine and its dialect were dropped from sqlkit, so a parsed SQLite
-//     statement is exercised against the dialect-agnostic AST and a concrete
-//     output dialect. Because sqlkit parameterizes literals, the recompiled SQL
-//     replaces constants with $N.
+//   - that query compiles under SQLiteDialect to wantSQL with wantArgs,
+//     documenting the output and guarding the sql-core rendering. Because sqlkit
+//     parameterizes literals, the recompiled SQL replaces constants with the
+//     positional "?" placeholder.
 func assertRoundTrip(t *testing.T, input string, want sql.Query, wantSQL string, wantArgs ...any) {
 	t.Helper()
 	got, err := sqlite.ParseOne(input)
@@ -40,7 +39,7 @@ func assertRoundTrip(t *testing.T, input string, want sql.Query, wantSQL string,
 	if diff := cmp.Diff(want, got, astCmpOpts...); diff != "" {
 		t.Fatalf("AST mismatch for %q (-want +got):\n%s", input, diff)
 	}
-	gotSQL, args, err := got.ToSQL(sql.PostgreSQLDialect{})
+	gotSQL, args, err := got.ToSQL(sql.SQLiteDialect{})
 	if err != nil {
 		t.Fatalf("ToSQL() error = %v", err)
 	}
@@ -58,7 +57,7 @@ func assertRoundTrip(t *testing.T, input string, want sql.Query, wantSQL string,
 	}
 }
 
-// assertSQL parses input and checks only that it compiles under PostgreSQLDialect
+// assertSQL parses input and checks only that it compiles under SQLiteDialect
 // to wantSQL with wantArgs. It covers constructs whose expected AST is too
 // verbose to hand-build (recursive CTEs, window definitions); the structural
 // guarantee is carried by the assertRoundTrip cases.
@@ -68,7 +67,7 @@ func assertSQL(t *testing.T, input, wantSQL string, wantArgs ...any) {
 	if err != nil {
 		t.Fatalf("ParseOne(%q) error = %v", input, err)
 	}
-	gotSQL, args, err := got.ToSQL(sql.PostgreSQLDialect{})
+	gotSQL, args, err := got.ToSQL(sql.SQLiteDialect{})
 	if err != nil {
 		t.Fatalf("ToSQL() error = %v", err)
 	}
@@ -100,7 +99,7 @@ func assertRaw(t *testing.T, input string) {
 	if !ok {
 		t.Fatalf("ParseOne(%q) = %T, want sql.RawQuery", input, got)
 	}
-	text, args, err := raw.ToSQL(sql.PostgreSQLDialect{})
+	text, args, err := raw.ToSQL(sql.SQLiteDialect{})
 	if err != nil {
 		t.Fatalf("ToSQL() error = %v", err)
 	}
@@ -126,7 +125,7 @@ func TestSelectColumnsAndWhere(t *testing.T) {
 		"SELECT id, name FROM users WHERE active = 1",
 		sql.Select(sql.Col("id"), sql.Col("name")).From(tbl("users")).
 			Where(sql.Eq(sql.Col("active"), 1)),
-		`SELECT "id", "name" FROM "users" WHERE ("active" = $1)`,
+		`SELECT "id", "name" FROM "users" WHERE ("active" = ?)`,
 		1)
 }
 
@@ -178,7 +177,7 @@ func TestSelectGroupByHaving(t *testing.T) {
 		"SELECT k, COUNT(*) FROM t GROUP BY k HAVING COUNT(*) > 1",
 		sql.Select(sql.Col("k"), sql.CountAll()).From(tbl("t")).
 			GroupBy(sql.Col("k")).Having(sql.Gt(sql.CountAll(), 1)),
-		`SELECT "k", COUNT(*) FROM "t" GROUP BY "k" HAVING (COUNT(*) > $1)`,
+		`SELECT "k", COUNT(*) FROM "t" GROUP BY "k" HAVING (COUNT(*) > ?)`,
 		1)
 }
 
@@ -204,7 +203,7 @@ func TestExprLogicalAndNot(t *testing.T) {
 		sql.Select(sql.Star()).From(tbl("t")).Where(
 			sql.And(sql.Eq(sql.Col("a"), 1),
 				sql.Or(sql.Eq(sql.Col("b"), 2), sql.Not(sql.Eq(sql.Col("c"), 3))))),
-		`SELECT * FROM "t" WHERE (("a" = $1) AND (("b" = $2) OR (NOT ("c" = $3))))`,
+		`SELECT * FROM "t" WHERE (("a" = ?) AND (("b" = ?) OR (NOT ("c" = ?))))`,
 		1, 2, 3)
 }
 
@@ -212,7 +211,7 @@ func TestExprInList(t *testing.T) {
 	assertRoundTrip(t,
 		"SELECT * FROM t WHERE x IN (1, 2, 3)",
 		sql.Select(sql.Star()).From(tbl("t")).Where(sql.In(sql.Col("x"), 1, 2, 3)),
-		`SELECT * FROM "t" WHERE ("x" IN ($1, $2, $3))`,
+		`SELECT * FROM "t" WHERE ("x" IN (?, ?, ?))`,
 		1, 2, 3)
 }
 
@@ -221,7 +220,7 @@ func TestExprBetweenAndIsNull(t *testing.T) {
 		"SELECT * FROM t WHERE (z BETWEEN 1 AND 9) AND (y IS NULL)",
 		sql.Select(sql.Star()).From(tbl("t")).Where(
 			sql.And(sql.Between(sql.Col("z"), 1, 9), sql.IsNull(sql.Col("y")))),
-		`SELECT * FROM "t" WHERE (("z" BETWEEN $1 AND $2) AND ("y" IS NULL))`,
+		`SELECT * FROM "t" WHERE (("z" BETWEEN ? AND ?) AND ("y" IS NULL))`,
 		1, 9)
 }
 
@@ -233,7 +232,7 @@ func TestExprArithmeticAndConcat(t *testing.T) {
 				Right: sql.BinaryExpression{Left: sql.Col("b"), Operator: "*", Right: sql.Val(2)}},
 			sql.Concat(sql.Col("x"), sql.Col("y")),
 		).From(tbl("t")),
-		`SELECT ("a" + ("b" * $1)), ("x" || "y") FROM "t"`,
+		`SELECT ("a" + ("b" * ?)), ("x" || "y") FROM "t"`,
 		2)
 }
 
@@ -248,7 +247,7 @@ func TestExprCase(t *testing.T) {
 	assertRoundTrip(t,
 		"SELECT CASE WHEN a > 0 THEN 'p' ELSE 'n' END FROM t",
 		sql.Select(sql.Case().When(sql.Gt(sql.Col("a"), 0), "p").Else("n")).From(tbl("t")),
-		`SELECT CASE WHEN ("a" > $1) THEN $2 ELSE $3 END FROM "t"`,
+		`SELECT CASE WHEN ("a" > ?) THEN ? ELSE ? END FROM "t"`,
 		0, "p", "n")
 }
 
@@ -300,7 +299,7 @@ func TestCTE(t *testing.T) {
 func TestRecursiveCTE(t *testing.T) {
 	assertSQL(t,
 		"WITH RECURSIVE nums(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM nums WHERE n < 10) SELECT n FROM nums",
-		`WITH RECURSIVE "nums" ("n") AS ((SELECT 1) UNION ALL (SELECT ("n" + $1) FROM "nums" WHERE ("n" < $2))) SELECT "n" FROM "nums"`,
+		`WITH RECURSIVE "nums" ("n") AS ((SELECT 1) UNION ALL (SELECT ("n" + ?) FROM "nums" WHERE ("n" < ?))) SELECT "n" FROM "nums"`,
 		1, 10)
 }
 
@@ -320,7 +319,7 @@ func TestInsertMultiRow(t *testing.T) {
 	assertRoundTrip(t,
 		"INSERT INTO t (a, b) VALUES (1, 2), (3, 4)",
 		sql.InsertInto(tbl("t")).Columns("a", "b").Values(1, 2).Values(3, 4),
-		`INSERT INTO "t" ("a", "b") VALUES ($1, $2), ($3, $4)`,
+		`INSERT INTO "t" ("a", "b") VALUES (?, ?), (?, ?)`,
 		1, 2, 3, 4)
 }
 
@@ -337,7 +336,7 @@ func TestInsertUpsert(t *testing.T) {
 		"INSERT INTO t (a) VALUES (1) ON CONFLICT (a) DO UPDATE SET b = excluded.b",
 		sql.InsertInto(tbl("t")).Columns("a").Values(1).
 			OnConflict("a").DoUpdate(sql.Set("b", sql.Excluded("b"))),
-		`INSERT INTO "t" ("a") VALUES ($1) ON CONFLICT ("a") DO UPDATE SET "b" = excluded."b"`,
+		`INSERT INTO "t" ("a") VALUES (?) ON CONFLICT ("a") DO UPDATE SET "b" = excluded."b"`,
 		1)
 }
 
@@ -345,7 +344,7 @@ func TestInsertDoNothing(t *testing.T) {
 	assertRoundTrip(t,
 		"INSERT INTO t (a) VALUES (1) ON CONFLICT DO NOTHING",
 		sql.InsertInto(tbl("t")).Columns("a").Values(1).DoNothing(),
-		`INSERT INTO "t" ("a") VALUES ($1) ON CONFLICT DO NOTHING`,
+		`INSERT INTO "t" ("a") VALUES (?) ON CONFLICT DO NOTHING`,
 		1)
 }
 
@@ -354,7 +353,7 @@ func TestUpdateReturning(t *testing.T) {
 		"UPDATE t SET a = 1, b = 2 WHERE id = 3 RETURNING id",
 		sql.Update(tbl("t")).Set(sql.Set("a", 1), sql.Set("b", 2)).
 			Where(sql.Eq(sql.Col("id"), 3)).Returning(sql.Col("id")),
-		`UPDATE "t" SET "a" = $1, "b" = $2 WHERE ("id" = $3) RETURNING "id"`,
+		`UPDATE "t" SET "a" = ?, "b" = ? WHERE ("id" = ?) RETURNING "id"`,
 		1, 2, 3)
 }
 
@@ -362,7 +361,7 @@ func TestDelete(t *testing.T) {
 	assertRoundTrip(t,
 		"DELETE FROM t WHERE id = 1",
 		sql.DeleteFrom(tbl("t")).Where(sql.Eq(sql.Col("id"), 1)),
-		`DELETE FROM "t" WHERE ("id" = $1)`,
+		`DELETE FROM "t" WHERE ("id" = ?)`,
 		1)
 }
 
@@ -374,7 +373,7 @@ func TestCreateTable(t *testing.T) {
 			Column(sql.ColumnDef{Name: sql.NewIdent("name"), Type: sql.RawType("TEXT"), NotNull: true}).
 			Column(sql.ColumnDef{Name: sql.NewIdent("age"), Type: sql.RawType("INT"), Default: sql.Raw("0")}).
 			PrimaryKey("id"),
-		"CREATE TABLE \"t\" (\n    \"id\" integer,\n    \"name\" TEXT NOT NULL,\n    \"age\" INT DEFAULT 0,\n    PRIMARY KEY (\"id\")\n);")
+		"CREATE TABLE \"t\" (\n    \"id\" INTEGER PRIMARY KEY AUTOINCREMENT,\n    \"name\" TEXT NOT NULL,\n    \"age\" INT DEFAULT 0\n);")
 }
 
 func TestCreateTableTablePrimaryKey(t *testing.T) {
@@ -399,6 +398,35 @@ func TestDropTable(t *testing.T) {
 		"DROP TABLE IF EXISTS t",
 		sql.DropTable(tbl("t")).IfExists(),
 		`DROP TABLE IF EXISTS "t";`)
+}
+
+// libSQL is the Turso SQLite fork, SQL-compatible with SQLite, so the same
+// rqlite-backed frontend parses it and every parsed query compiles identically
+// under LibSQLDialect and SQLiteDialect.
+func TestLibSQLDialectMatchesSQLite(t *testing.T) {
+	inputs := []string{
+		"SELECT id, name FROM users WHERE active = 1",
+		"INSERT INTO t (a) VALUES (1) ON CONFLICT (a) DO UPDATE SET b = excluded.b",
+		"UPDATE t SET a = 1 WHERE id = 3 RETURNING id",
+		"CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)",
+	}
+	for _, in := range inputs {
+		q, err := sqlite.ParseOne(in)
+		if err != nil {
+			t.Fatalf("ParseOne(%q): %v", in, err)
+		}
+		ssql, sargs, serr := q.ToSQL(sql.SQLiteDialect{})
+		lsql, largs, lerr := q.ToSQL(sql.LibSQLDialect{})
+		if serr != nil || lerr != nil {
+			t.Fatalf("ToSQL(%q) error: sqlite=%v libsql=%v", in, serr, lerr)
+		}
+		if ssql != lsql {
+			t.Errorf("libsql output differs for %q:\n  sqlite: %q\n  libsql: %q", in, ssql, lsql)
+		}
+		if !reflect.DeepEqual(sargs, largs) {
+			t.Errorf("libsql args differ for %q: %v vs %v", in, sargs, largs)
+		}
+	}
 }
 
 // Statements and constructs the typed converters do not model still parse,
