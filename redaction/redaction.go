@@ -232,7 +232,23 @@ func (m *Redactor) rewriteSelect(v sql.SelectStmt, sc *scope) sql.Query {
 	v.GroupBy = m.rewriteExprs(v.GroupBy, sc)
 	v.DistinctOn = m.rewriteExprs(v.DistinctOn, sc)
 	v.OrderBy = m.rewriteOrderTerms(v.OrderBy, sc)
+	v.Windows = m.rewriteNamedWindows(v.Windows, sc)
 	return v
+}
+
+// rewriteNamedWindows rewrites the PARTITION BY / ORDER BY expressions of each
+// WINDOW-clause definition, so a sensitive comparison hidden in a named window
+// (WINDOW w AS (PARTITION BY (ssn = 'x'))) is masked like one in an inline OVER.
+func (m *Redactor) rewriteNamedWindows(windows []sql.NamedWindow, sc *scope) []sql.NamedWindow {
+	if len(windows) == 0 {
+		return windows
+	}
+	out := clone(windows)
+	for i := range out {
+		out[i].Partitions = m.rewriteExprs(out[i].Partitions, sc)
+		out[i].OrderByTerms = m.rewriteOrderTerms(out[i].OrderByTerms, sc)
+	}
+	return out
 }
 
 func (m *Redactor) rewriteInsert(v sql.InsertStmt, sc *scope) sql.Query {
