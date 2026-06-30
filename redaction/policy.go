@@ -83,11 +83,22 @@ func (ps patternPolicy) IsSensitive(schema, table, column string) bool {
 }
 
 // globMatch reports whether value matches the glob pattern, case-insensitively. A
-// malformed pattern matches nothing. A pattern with no wildcards is an exact
-// (folded) comparison, so a plain "table.column" spec behaves as before.
+// pattern with no wildcards is an exact (folded) comparison, so a plain
+// "table.column" spec behaves as before.
+//
+// It falls back to an exact folded comparison whenever path.Match does not match
+// (or rejects the pattern as malformed), so a spec that names an identifier which
+// itself contains a glob metacharacter ([ ] \ * ?) — legal as a quoted identifier
+// — still matches the column it names. Without this, path.Match reads the
+// metacharacter as a wildcard and the spec fails to match its own column, leaving
+// that column's literals unmasked (a fail-open leak). The fallback only ever
+// broadens matching, so it cannot open a leak.
 func globMatch(pattern, value string) bool {
-	ok, err := path.Match(fold(pattern), fold(value))
-	return err == nil && ok
+	fp, fv := fold(pattern), fold(value)
+	if ok, err := path.Match(fp, fv); err == nil && ok {
+		return true
+	}
+	return fp == fv
 }
 
 // CommentPredicate reports whether a column is PII, given its table, column, and

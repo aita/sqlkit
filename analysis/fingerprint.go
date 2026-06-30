@@ -75,13 +75,20 @@ func Fingerprint(q sql.Query, dialect sql.Dialect) (string, bool) {
 	if q == nil {
 		return "", false
 	}
-	normalized, _, err := q.ToSQL(fingerprintDialect{dialect})
+	// Compile with the caller's concrete dialect, not a wrapper. A wrapper that
+	// embeds sql.Dialect to override Placeholder would hide the dialect's optional
+	// capability interfaces (ArrayDialect, JSON, UpsertDialect, FullTextSearcher,
+	// …) from the compiler's type assertions, so any query using one would fail to
+	// compile and Fingerprint would give up (ok=false). Every bind placeholder the
+	// dialect emits ($N, ?, @pN, :name) is collapsed to a constant "?" by the pass
+	// below, so the per-dialect placeholder spelling does not reach the fingerprint.
+	normalized, _, err := q.ToSQL(dialect)
 	if err != nil {
 		return "", false
 	}
-	// A placeholder that reached the AST as a raw fragment (e.g. sql.Raw("$1"))
-	// is re-emitted verbatim and never calls Placeholder, so collapse any such
-	// $N/?/:name to the same canonical "?" that the dialect emits.
+	// Collapse every bind placeholder to the canonical "?" — both the ones the
+	// dialect just emitted and any that reached the AST verbatim as a raw fragment
+	// (e.g. sql.Raw("$1")), which never call Placeholder.
 	normalized = placeholderRe.ReplaceAllString(normalized, "?")
 	// LIMIT/OFFSET counts are integer literals in the SQL, not placeholders;
 	// collapse their operands so paginated reads that differ only in page size
@@ -103,15 +110,6 @@ func collapseValueLists(s string) string {
 	s = valuesRowsRe.ReplaceAllString(s, "${1}")
 	return s
 }
-
-// fingerprintDialect renders a query for fingerprinting: it follows the
-// configured dialect for identifiers and syntax but emits a single "?" for every
-// bind placeholder, so two queries that differ only in their bind values — or in
-// placeholder numbering — recompile to the same canonical string.
-type fingerprintDialect struct{ sql.Dialect }
-
-// Placeholder renders every bind position as "?", regardless of its index.
-func (fingerprintDialect) Placeholder(int) string { return "?" }
 
 // FingerprintRaw normalizes SQL text without a parser: string and numeric
 // literals and bind placeholders all collapse to ?, whitespace is squeezed, and

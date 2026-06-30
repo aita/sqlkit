@@ -229,6 +229,38 @@ func TestResolveColumnThroughCTE(t *testing.T) {
 	}
 }
 
+// TestResolveColumnThroughCTEColumnList checks that a CTE's explicit output
+// column list (WITH c(alias) AS (SELECT name ...)) renames the body projections
+// positionally: a reference to a declared name resolves to the body projection at
+// that position (the underlying base column), not to a like-named one.
+func TestResolveColumnThroughCTEColumnList(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+
+	// WITH c(uid, alias) AS (SELECT id, name FROM users) SELECT * FROM c
+	// → c.alias resolves positionally to the body's 2nd projection, users.name.
+	cte := sql.Select(sql.Col("id"), sql.Col("name")).From(users).CTE("c", sql.Columns("uid", "alias"))
+	scope := analysis.SourcesOf(sql.Select(sql.Star()).From(cte).WithCTE(cte))
+
+	for _, tc := range []struct {
+		name string
+		col  analysis.ColumnRef
+	}{
+		{"qualified renamed", analysis.ColumnRef{Qualifier: sql.NewIdent("c"), Name: sql.NewIdent("alias")}},
+		{"unqualified renamed", analysis.ColumnRef{Name: sql.NewIdent("alias")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := analysis.ResolveColumn(scope, tc.col)
+			if got.Status != analysis.Resolved || got.Table.String() != "users" || got.Column.Name.String() != "name" {
+				t.Fatalf("ResolveColumn = %+v, want users.name Resolved", got)
+			}
+			all := analysis.ResolveColumnAll(scope, tc.col)
+			if len(all) != 1 || all[0].Table.String() != "users" || all[0].Column.Name.String() != "name" {
+				t.Fatalf("ResolveColumnAll = %+v, want [users.name]", all)
+			}
+		})
+	}
+}
+
 // TestResolveColumnThroughSubqueryWildcard checks SELECT * in a subquery lets
 // the outer scope resolve columns through it.
 func TestResolveColumnThroughSubqueryWildcard(t *testing.T) {

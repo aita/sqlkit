@@ -99,7 +99,7 @@ func ResolveColumn(scope []SourceRef, col ColumnRef) Resolution {
 			if !s.Table.IsZero() && s.Subquery == nil {
 				res.Schema, res.Table, res.Status = s.Schema, s.Table, Resolved
 			} else if s.Subquery != nil {
-				return resolveInSubquery(s.Subquery, col)
+				return resolveInSubquery(s.Subquery, throughColumnList(s, col))
 			}
 		}
 		return res
@@ -120,7 +120,7 @@ func ResolveColumn(scope []SourceRef, col ColumnRef) Resolution {
 	}
 	if match != nil {
 		if match.Subquery != nil {
-			return resolveInSubquery(match.Subquery, col)
+			return resolveInSubquery(match.Subquery, throughColumnList(*match, col))
 		}
 		res.Schema, res.Table, res.Status = match.Schema, match.Table, Resolved
 	}
@@ -172,7 +172,7 @@ func resolveAll(scope []SourceRef, col ColumnRef, ctes []sql.CTE, depth int) []R
 			return nil
 		}
 		if s.Subquery != nil {
-			return resolveInSubqueryAll(s.Subquery, col, ctes, depth+1)
+			return resolveInSubqueryAll(s.Subquery, throughColumnList(s, col), ctes, depth+1)
 		}
 		if !s.Table.IsZero() {
 			return []Resolution{{Column: col, Schema: s.Schema, Table: s.Table, Status: Resolved}}
@@ -185,7 +185,7 @@ func resolveAll(scope []SourceRef, col ColumnRef, ctes []sql.CTE, depth int) []R
 	for i := range scope {
 		s := &scope[i]
 		if s.Subquery != nil {
-			out = append(out, resolveInSubqueryAll(s.Subquery, col, ctes, depth+1)...)
+			out = append(out, resolveInSubqueryAll(s.Subquery, throughColumnList(*s, col), ctes, depth+1)...)
 			continue
 		}
 		if !s.Table.IsZero() {
@@ -382,4 +382,51 @@ func matchQualifier(scope []SourceRef, qualifier sql.Ident) (SourceRef, bool) {
 // aliases), so a shared column resolves rather than reporting ambiguity.
 func sameTable(a, b SourceRef) bool {
 	return a.Schema.Equal(b.Schema) && a.Table.Equal(b.Table)
+}
+
+// throughColumnList rewrites col so it can be traced into a source whose CTE
+// declares an explicit output column list (WITH c(a, b) AS ...). Such a list
+// renames the body's projections positionally, so a reference to a declared name
+// must resolve to the body projection at that position, not to a like-named one.
+// When the source declares no list, the name is not in it, or the body projection
+// at that position has no nameable output (a wildcard), col is returned unchanged.
+func throughColumnList(s SourceRef, col ColumnRef) ColumnRef {
+	if len(s.Columns) == 0 {
+		return col
+	}
+	for i, name := range s.Columns {
+		if !name.Equal(col.Name) {
+			continue
+		}
+		if bn, ok := bodyProjectionName(s.Subquery, i); ok {
+			col.Name = bn
+			col.Qualifier = sql.Ident{}
+		}
+		return col
+	}
+	return col
+}
+
+// bodyProjectionName returns the output name of the idx-th projection of a
+// derived source's body — used to map a CTE's declared output column list back to
+// the body's own projection names. It looks through a set operation to its left
+// arm (whose names name the result). It reports ok=false when the position is out
+// of range or its projection has no nameable output (a wildcard or a complex
+// expression), in which case the positional mapping cannot be made.
+func bodyProjectionName(subq sql.Query, idx int) (sql.Ident, bool) {
+	switch v := sql.Unwrap(subq).(type) {
+	case sql.SelectStmt:
+		if idx < 0 || idx >= len(v.Columns) {
+			return sql.Ident{}, false
+		}
+		name, _ := selectionOutput(v.Columns[idx])
+		if name.IsZero() {
+			return sql.Ident{}, false
+		}
+		return name, true
+	case sql.CompoundStmt:
+		return bodyProjectionName(v.Left, idx)
+	default:
+		return sql.Ident{}, false
+	}
 }

@@ -113,6 +113,28 @@ func TestApplyMasksSubquery(t *testing.T) {
 	}
 }
 
+// TestApplyMasksValueSideSubquery checks that when a sensitive column is compared
+// to a subquery, the literal the subquery projects (the compared value) is masked:
+// name = (SELECT 'x'), name IN (SELECT 'x'), name = ANY(SELECT 'x'). A subquery on
+// the value side of a sensitive comparison projects what the column is matched
+// against, so its projected literals must not survive.
+func TestApplyMasksValueSideSubquery(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	const s = "SECRETTARO"
+	proj := sql.As(sql.Concat(sql.Val(s)), "v")
+	cases := []struct {
+		name string
+		q    sql.Query
+	}{
+		{"scalar", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.ScalarSubquery(sql.Select(proj))))},
+		{"in", sql.Select(sql.Star()).From(users).Where(sql.InQuery(sql.Col("name"), sql.Select(proj)))},
+		{"any", sql.Select(sql.Star()).From(users).Where(sql.Any(sql.Col("name"), "=", sql.Select(proj)))},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { assertNoLeak(t, tc.name, tc.q, s) })
+	}
+}
+
 // TestNumbersAndPlaceholdersNotMasked pins that only string literals are masked.
 func TestNumbersAndPlaceholdersNotMasked(t *testing.T) {
 	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
@@ -184,6 +206,20 @@ func TestColumnsGlob(t *testing.T) {
 			name: "plain spec still matches exactly",
 			spec: "users.name",
 			q:    sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Val("taro"))),
+			want: []any{"*****"},
+		},
+		{
+			// An identifier containing a glob metacharacter must match its own spec
+			// (path.Match would read [..] as a class); the exact fallback masks it.
+			name: "identifier with bracket metacharacter matches its spec",
+			spec: "users.c[1]",
+			q:    sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("c[1]"), sql.Val("taro"))),
+			want: []any{"*****"},
+		},
+		{
+			name: "identifier with backslash matches its spec",
+			spec: `users.na\me`,
+			q:    sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col(`na\me`), sql.Val("taro"))),
 			want: []any{"*****"},
 		},
 	}
@@ -842,6 +878,107 @@ func TestApplyNilQuery(t *testing.T) {
 	}
 }
 
+// TestApplyMasksCTEColumnListRename checks that a CTE's explicit output column
+// list — which renames the body's projections (WITH c(alias) AS (SELECT name ...))
+// — does not let a sensitive value escape: a literal compared to the renamed
+// column must still be traced to the underlying base column and masked.
+func TestApplyMasksCTEColumnListRename(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	const s = "SECRETTARO"
+	cte := sql.Select(sql.Col("id"), sql.Col("name")).From(users).CTE("c", sql.Columns("uid", "alias"))
+	cases := []struct {
+		name string
+		q    sql.Query
+	}{
+		{"qualified", sql.Select(sql.Col("c.alias")).From(cte).Where(sql.Eq(sql.Col("c.alias"), sql.Val(s))).WithCTE(cte)},
+		{"unqualified", sql.Select(sql.Col("alias")).From(cte).Where(sql.Eq(sql.Col("alias"), sql.Val(s))).WithCTE(cte)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { assertNoLeak(t, tc.name, tc.q, s) })
+	}
+}
+
+// TestApplyMasksRawFragmentLiterals pins the best-effort, parser-free masking of
+// string literals inside a Raw(...) fragment: when the fragment names a sensitive
+// column (or is the value compared to one) its literals are masked; a fragment
+// that names no sensitive column is left intact (no over-masking of unrelated
+// raw SQL).
+func TestApplyMasksRawFragmentLiterals(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	m := redaction.New(redaction.Columns("users.name"))
+	render := func(q sql.Query) string {
+		text, a, err := m.Apply(q).ToSQL(sql.PostgreSQLDialect{})
+		if err != nil {
+			t.Fatalf("ToSQL: %v", err)
+		}
+		for _, v := range a {
+			if s, ok := v.(string); ok {
+				text += "\x00" + s
+			}
+		}
+		return text
+	}
+
+	t.Run("raw value masked", func(t *testing.T) {
+		q := sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Raw("'SECRETTARO'")))
+		if got := render(q); strings.Contains(got, "SECRETTARO") {
+			t.Errorf("raw value leaked: %s", got)
+		}
+	})
+	t.Run("raw predicate naming the column masked", func(t *testing.T) {
+		q := sql.Select(sql.Star()).From(users).Where(sql.Raw("name = 'SECRETTARO'"))
+		if got := render(q); strings.Contains(got, "SECRETTARO") {
+			t.Errorf("raw predicate leaked: %s", got)
+		}
+	})
+	t.Run("escaped quote does not leak", func(t *testing.T) {
+		q := sql.Select(sql.Star()).From(users).Where(sql.Raw("name = 'O''SECRETTARO'"))
+		if got := render(q); strings.Contains(got, "SECRETTARO") {
+			t.Errorf("raw escaped-quote literal leaked: %s", got)
+		}
+	})
+	t.Run("unrelated raw fragment is not over-masked", func(t *testing.T) {
+		q := sql.Select(sql.Star()).From(users).Where(sql.Raw("status = 'active'"))
+		if got := render(q); !strings.Contains(got, "active") {
+			t.Errorf("non-sensitive raw fragment was masked: %s", got)
+		}
+	})
+}
+
+// TestApplyMasksExcludedComparison checks that a literal compared to the proposed
+// upsert value of a sensitive column — excluded.<col> (PostgreSQL) / VALUES(<col>)
+// (MySQL) — is masked: excluded.<col> reads the target table's column, so the
+// redactor must recognize it as a sensitive reference, not an opaque expression.
+func TestApplyMasksExcludedComparison(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	const s = "SECRETTARO"
+	q := sql.InsertInto(users).Columns("id", "name").Values(1, "ok").
+		OnConflict("id").DoUpdate(sql.Set("id", sql.Col("id"))).
+		Where(sql.Eq(sql.Excluded("name"), sql.Val(s)))
+	assertNoLeak(t, "conflict_where_excluded", q, s)
+}
+
+// TestApplyMasksInsertSelectProjection checks that a literal projected by an
+// INSERT ... SELECT into a sensitive target column is masked: the SELECT
+// projections feed v.Columns positionally, so a sensitive target column's feeding
+// projection must be masked like a VALUES element. Both a plain SELECT and a set
+// operation (each arm) are covered.
+func TestApplyMasksInsertSelectProjection(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	const s = "SECRETTARO"
+	cases := []struct {
+		name string
+		q    sql.Query
+	}{
+		{"literal", sql.InsertInto(users).Columns("name").FromSelect(sql.Select(sql.As(sql.Concat(sql.Val(s)), "name")))},
+		{"union", sql.InsertInto(users).Columns("name").FromSelect(
+			sql.Select(sql.As(sql.Concat(sql.Val(s)), "name")).Union(sql.Select(sql.As(sql.Concat(sql.Val("z")), "name"))))},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { assertNoLeak(t, tc.name, tc.q, s) })
+	}
+}
+
 // assertNoLeak applies the redactor and fails if the secret survives anywhere in
 // the rendered SQL or its bind arguments.
 func assertNoLeak(t *testing.T, name string, q sql.Query, secret string) {
@@ -875,12 +1012,29 @@ func TestApplyMasksWrappedSensitiveLiterals(t *testing.T) {
 	}{
 		{"cast", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Cast(sql.Val(s), "text")))},
 		{"concat", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Concat(sql.Val(s), sql.Val("X"))))},
+		{"binary_concat", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.BinaryExpression{Left: sql.Val(s), Operator: "||", Right: sql.Val("X")}))},
+		{"match_against", sql.Select(sql.Star()).From(users).Where(sql.Match(sql.Col("name")).Against(sql.Val(s)))},
 		{"func", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Func("lower", sql.Val(s))))},
 		{"in_wrapped", sql.Select(sql.Star()).From(users).Where(sql.In(sql.Col("name"), sql.Func("lower", sql.Val(s)), sql.Val("b")))},
 		{"between_wrapped", sql.Select(sql.Star()).From(users).Where(sql.Between(sql.Col("name"), sql.Func("lower", sql.Val(s)), sql.Val("z")))},
 		{"row_pair", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Row(sql.Col("name"), sql.Col("id")), sql.Row(sql.Val(s), sql.Val(1))))},
+		{"row_in", sql.Select(sql.Star()).From(users).Where(sql.In(sql.Row(sql.Col("name"), sql.Col("id")), sql.Row(sql.Val(s), sql.Val(1)), sql.Row(sql.Val("other"), sql.Val(2))))},
+		{"row_distinct", sql.Select(sql.Star()).From(users).Where(sql.IsDistinctFrom(sql.Row(sql.Col("name"), sql.Col("id")), sql.Row(sql.Val(s), sql.Val(1))))},
 		{"case_result", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Case().When(sql.Eq(sql.Col("id"), 1), sql.Val(s)).Else(sql.Val("other"))))},
+		{"simple_case_when", sql.Select(sql.As(sql.CaseOf(sql.Col("name")).When(sql.Val(s), 1).Else(0), "c")).From(users)},
+		{"any_array_ctor", sql.Select(sql.Star()).From(users).Where(sql.AnyArray(sql.Col("name"), "=", sql.Array(sql.Val(s), sql.Val("b"))))},
+		{"any_array_cast", sql.Select(sql.Star()).From(users).Where(sql.AnyArray(sql.Col("name"), "=", sql.Cast(sql.Val("{"+s+"}"), "text[]")))},
 		{"update_set", sql.Update(users).Set(sql.Set("name", sql.Func("lower", sql.Val(s)))).Where(sql.Eq(sql.Col("id"), 1))},
+		// Value-side wrappers maskValue must recurse through, or the embedded literal leaks.
+		{"unary", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Neg(sql.Val(s))))},
+		{"field", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Field(sql.Val(s), "x")))},
+		{"subscript", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Subscript(sql.Cast(sql.Val(s), "text[]"), 1)))},
+		{"json_object", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.JSONObject("k", sql.Val(s))))},
+		{"json_access", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.JSONGetText(sql.Cast(sql.Val(s), "jsonb"), "k")))},
+		{"string_agg", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.StringAgg(sql.Val(s), ",")))},
+		{"extract", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Extract("year", sql.Cast(sql.Val(s), "date"))))},
+		{"position", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Position(sql.Val(s), sql.Col("name"))))},
+		{"window", sql.Select(sql.Star()).From(users).Where(sql.Eq(sql.Col("name"), sql.Over(sql.Func("max", sql.Val(s)))))},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) { assertNoLeak(t, tc.name, tc.q, s) })
