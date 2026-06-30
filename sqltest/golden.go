@@ -1,6 +1,7 @@
 package sqltest
 
 import (
+	"context"
 	stdsql "database/sql"
 	"fmt"
 	"os"
@@ -31,7 +32,7 @@ func updateGolden() bool { return os.Getenv(updateGoldenEnv) != "" }
 // fixtures by hand. It is the text-golden primitive the result helpers build on,
 // and works for any string a test wants to pin (rendered rows, a query log, a
 // report).
-func Golden(t *testing.T, path, got string) {
+func Golden(t testing.TB, path, got string) {
 	t.Helper()
 	if updateGolden() {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -55,7 +56,7 @@ func Golden(t *testing.T, path, got string) {
 // AssertGoldenRows renders rows and compares them to the golden file at path.
 // Add an ORDER BY to the query so the row order — and therefore the golden file
 // — is stable. rows is consumed and closed.
-func AssertGoldenRows(t *testing.T, path string, rows *stdsql.Rows) {
+func AssertGoldenRows(t testing.TB, path string, rows *stdsql.Rows) {
 	t.Helper()
 	got, err := RenderRows(rows)
 	if err != nil {
@@ -64,12 +65,25 @@ func AssertGoldenRows(t *testing.T, path string, rows *stdsql.Rows) {
 	Golden(t, path, got)
 }
 
+// AssertGoldenQuery runs query (with args) through the DB's connection and
+// compares the rendered rows to the golden file at path — the DB-method
+// convenience over AssertGoldenRows. Add an ORDER BY so the row order, and so
+// the golden file, is stable.
+func (d *DB) AssertGoldenQuery(t testing.TB, path, query string, args ...any) {
+	t.Helper()
+	rows, err := d.db.SQL().QueryContext(context.Background(), query, args...)
+	if err != nil {
+		t.Fatalf("sqltest: golden query for %s: %v", path, err)
+	}
+	AssertGoldenRows(t, path, rows)
+}
+
 // AssertGoldenTrace renders trace's report (the same text TextReport produces)
 // and compares it to the golden file at path. Pinning the query log this way
 // catches an accidental change in the SQL an operation issues — a query that
 // turns into an N+1, a new statement, a dropped index hint — that a count-based
 // budget would miss.
-func AssertGoldenTrace(t *testing.T, path string, trace *querytrace.Trace) {
+func AssertGoldenTrace(t testing.TB, path string, trace *querytrace.Trace) {
 	t.Helper()
 	Golden(t, path, querytrace.TextReport(trace))
 }

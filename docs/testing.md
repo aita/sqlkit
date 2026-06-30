@@ -125,7 +125,8 @@ statement, an N+1) shows up as a diff that a count-based budget would miss. Both
 build on [`Golden`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#Golden),
 the text primitive, and
 [`RenderRows`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#RenderRows) is
-exported for custom comparisons.
+exported for custom comparisons. On a `DB` handle, `db.AssertGoldenQuery(t,
+path, query, args...)` runs the query and golden-compares its rows in one call.
 
 Regenerate the files by setting `SQLKIT_UPDATE_GOLDEN` and re-running, then
 commit the result:

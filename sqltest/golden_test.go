@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/aita/sqlkit"
 	"github.com/aita/sqlkit/internal/testutil"
+	"github.com/aita/sqlkit/meta"
 	"github.com/aita/sqlkit/sqltest"
 )
 
@@ -73,4 +75,20 @@ func TestAssertGoldenRows(t *testing.T) {
 	t.Setenv("SQLKIT_UPDATE_GOLDEN", "")
 	r2, _ := fake.DB().QueryContext(context.Background(), "SELECT id FROM users ORDER BY id")
 	sqltest.AssertGoldenRows(t, path, r2)
+}
+
+func TestDBAssertGoldenQuery(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "q.golden")
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}, {int64(2)}}}, nil
+		},
+	}
+	tdb := sqltest.New(sqlkit.WrapDB(fake.DB(), sqlkit.WithDialect(sqlkit.PostgreSQLDialect{})), meta.Metadata{})
+
+	t.Setenv("SQLKIT_UPDATE_GOLDEN", "1")
+	tdb.AssertGoldenQuery(t, path, "SELECT id FROM users ORDER BY id")
+
+	t.Setenv("SQLKIT_UPDATE_GOLDEN", "")
+	tdb.AssertGoldenQuery(t, path, "SELECT id FROM users ORDER BY id")
 }
