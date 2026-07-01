@@ -130,6 +130,33 @@ func TestDDLMySQL(t *testing.T) {
 	}
 }
 
+// TestDDLAutoIncrementNonPrimaryKey covers a serial/AUTO_INCREMENT column that
+// is not the table's primary key (e.g. a unique sequence column) — legal on
+// both dialects (PostgreSQL's serial/bigserial and MySQL's AUTO_INCREMENT
+// neither require the column to be the primary key). ColumnDef must render the
+// auto-increment clause from HasDefault/DefaultExpr alone, not gated on
+// PrimaryKey, or the column silently loses its default with no error.
+func TestDDLAutoIncrementNonPrimaryKey(t *testing.T) {
+	public := meta.Schema{Name: "public"}
+	md := meta.Metadata{
+		Tables: []meta.Table{{
+			Schema: public,
+			Name:   "widgets",
+			Columns: []meta.Column{
+				{Name: "id", Type: meta.Of("mysql", "bigint", 0, 0, 0), PrimaryKey: true},
+				{Name: "seq", Type: meta.Of("mysql", "bigint", 0, 0, 0), HasDefault: true},
+			},
+		}},
+	}
+	got, err := md.CreateSQL(mustDialect(t, "mysql"))
+	if err != nil {
+		t.Fatalf("CreateSQL() error = %v", err)
+	}
+	if !strings.Contains(got, "`seq` bigint NOT NULL AUTO_INCREMENT") {
+		t.Errorf("CreateSQL() missing AUTO_INCREMENT on non-PK column:\n%s", got)
+	}
+}
+
 func TestDDLUnqualified(t *testing.T) {
 	md := meta.Metadata{
 		Tables: []meta.Table{{
