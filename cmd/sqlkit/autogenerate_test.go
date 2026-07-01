@@ -110,6 +110,29 @@ func TestHeadsPropagatesGoListError(t *testing.T) {
 	}
 }
 
+// TestWriteMigrationFileRefusesToOverwrite covers writing a migration to a
+// path that already exists (the same-second filename collision a scripted/CI
+// re-run of autogenerate can produce): it must error rather than silently
+// truncate the existing file's content.
+func TestWriteMigrationFileRefusesToOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "20260101000000_add_widgets.go")
+	if err := writeMigrationFile(path, []byte("package migrations\n// first\n")); err != nil {
+		t.Fatalf("first write: %v", err)
+	}
+	err := writeMigrationFile(path, []byte("package migrations\n// second\n"))
+	if err == nil {
+		t.Fatal("second write to the same path: expected an error, got nil")
+	}
+	got, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !strings.Contains(string(got), "first") {
+		t.Fatalf("file content = %q; the first write was overwritten", got)
+	}
+}
+
 func TestAutogenerateRequiresOneSource(t *testing.T) {
 	// Neither source selected.
 	if err := (&autogenerateCmd{}).Run(); err == nil || !strings.Contains(err.Error(), "exactly one source") {
