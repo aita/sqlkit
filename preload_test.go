@@ -101,6 +101,33 @@ func TestPreloadToOnePopulatesPointerField(t *testing.T) {
 	}
 }
 
+// TestPreloadToOneDuplicateTargetErrors covers a ToOne relation whose target
+// query returns more than one row for a key: ToOne documents that the target
+// yields at most one row per source row (relation.go's Cardinality doc), so a
+// violation must be reported, not silently resolved by keeping an arbitrary
+// match (which is also not even stable, since the follow-up query has no
+// ORDER BY to break the tie deterministically).
+func TestPreloadToOneDuplicateTargetErrors(t *testing.T) {
+	fake := &testutil.Fake{
+		QueryFunc: func(s string, _ []any) (testutil.Result, error) {
+			if contains(s, `"public"."users"`) {
+				return testutil.Result{Columns: []string{"id", "name"}, Rows: [][]driver.Value{
+					{int64(1), "Alice"}, {int64(1), "Alice-Duplicate"},
+				}}, nil
+			}
+			return testutil.Result{Columns: []string{"id", "user_id", "title"}, Rows: [][]driver.Value{
+				{int64(10), int64(1), "a"},
+			}}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+	var posts []prePost2
+	err := db.Select().From(Posts).Preload(Users).All(context.Background()).Scan(&posts)
+	if err == nil {
+		t.Fatal("Preload of a ToOne relation with two rows for the same key: expected an error, got nil")
+	}
+}
+
 // Preload also runs for a single-row terminal (First), populating one parent.
 func TestPreloadSingleStructViaFirst(t *testing.T) {
 	db := sqlkit.WrapDB(postsAndUsersFake().DB())
