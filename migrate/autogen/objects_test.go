@@ -103,3 +103,34 @@ func TestSnapshotRoundTripObjects(t *testing.T) {
 		t.Fatalf("sequences round-trip = %+v want %+v", got.Sequences, md.Sequences)
 	}
 }
+
+// TestRenderManagedSchema covers a managed schema (decl.Create()) hosting only
+// non-table objects: Render must emit CreateSchema before the objects that live
+// in it (or the generated migration's Up fails to apply — "schema does not
+// exist") and DropSchema after them in Down.
+func TestRenderManagedSchema(t *testing.T) {
+	target := func() *decl.Catalog {
+		c := decl.NewCatalog(decl.DefaultSchema("public"))
+		c.Schema("audit", decl.Create()).Enum("kind", "a", "b")
+		return c
+	}
+	res := render(t, meta.Metadata{}, build(t, target()), "postgres", Renames{})
+
+	upSchema := strings.Index(res.Up, `op.CreateSchema("audit")`)
+	upEnum := strings.Index(res.Up, `op.CreateEnum("kind"`)
+	if upSchema < 0 {
+		t.Fatalf("Up missing op.CreateSchema(%q):\n%s", "audit", res.Up)
+	}
+	if upEnum < 0 || upSchema > upEnum {
+		t.Fatalf("op.CreateSchema must precede op.CreateEnum in:\n%s", res.Up)
+	}
+
+	downSchema := strings.Index(res.Down, `op.DropSchema("audit")`)
+	downEnum := strings.Index(res.Down, `op.DropEnum("kind")`)
+	if downSchema < 0 {
+		t.Fatalf("Down missing op.DropSchema(%q):\n%s", "audit", res.Down)
+	}
+	if downEnum < 0 || downSchema < downEnum {
+		t.Fatalf("op.DropSchema must follow op.DropEnum in:\n%s", res.Down)
+	}
+}

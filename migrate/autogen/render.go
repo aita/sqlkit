@@ -205,8 +205,14 @@ func (r *renderer) plan(from, to meta.Metadata) (string, error) {
 	out = append(out, dropTables...)
 	out = append(out, objs.dropSequences...)
 	out = append(out, objs.dropEnums...)
+	// Managed schemas drop after their contained objects and before extensions,
+	// mirroring migrate.Diff / meta.DropSQL.
+	out = append(out, objs.dropSchemas...)
 	out = append(out, objs.dropExtensions...)
+	// Extensions, then managed schemas, then enums and sequences create before the
+	// tables that use them, mirroring migrate.Diff / meta.CreateSQL.
 	out = append(out, objs.createExtensions...)
+	out = append(out, objs.createSchemas...)
 	out = append(out, objs.createEnums...)
 	out = append(out, objs.createSequences...)
 	out = append(out, createTables...)
@@ -226,6 +232,35 @@ func (r *renderer) plan(from, to meta.Metadata) (string, error) {
 // since the Operator qualifies them with the migration's schema.
 func (r *renderer) objectOps(from, to meta.Metadata) renderedObjects {
 	var o renderedObjects
+
+	// Managed schemas (decl.Create()), keyed by name. Mirrors migrate.Diff's
+	// object-level schema handling: only a schema explicitly put under migration
+	// management emits CreateSchema/DropSchema; a schema that merely qualifies a
+	// table is assumed to already exist. Without this, a rendered migration
+	// referenced a managed schema's objects (an enum, a table) with no preceding
+	// CreateSchema, and the generated Up failed to apply ("schema does not exist").
+	newSchema := map[string]bool{}
+	for _, s := range to.Schemas() {
+		if s.Create && s.Name != "" {
+			newSchema[s.Name] = true
+		}
+	}
+	oldSchema := map[string]bool{}
+	for _, s := range from.Schemas() {
+		if s.Create && s.Name != "" {
+			oldSchema[s.Name] = true
+		}
+	}
+	for _, s := range from.Schemas() {
+		if s.Create && s.Name != "" && !newSchema[s.Name] {
+			o.dropSchemas = append(o.dropSchemas, fmt.Sprintf("op.DropSchema(%q)", s.Name))
+		}
+	}
+	for _, s := range to.Schemas() {
+		if s.Create && s.Name != "" && !oldSchema[s.Name] {
+			o.createSchemas = append(o.createSchemas, fmt.Sprintf("op.CreateSchema(%q)", s.Name))
+		}
+	}
 
 	oldExt := map[string]meta.Extension{}
 	for _, e := range from.Extensions {
@@ -350,6 +385,8 @@ func (r *renderer) objectOps(from, to meta.Metadata) renderedObjects {
 
 // renderedObjects holds the rendered op.* calls for each object kind.
 type renderedObjects struct {
+	createSchemas    []string
+	dropSchemas      []string
 	createExtensions []string
 	createEnums      []string
 	createSequences  []string
@@ -980,7 +1017,14 @@ func indexEqual(a, b meta.Index) bool {
 }
 
 func fkEqual(a, b meta.ForeignKey) bool {
-	return a.RefSchema == b.RefSchema && a.RefTable == b.RefTable &&
+	// Compare RefSchema by Name only, not the whole meta.Schema value: Create is a
+	// migration-management flag (whether the referenced schema is put under
+	// CREATE/DROP SCHEMA management), not part of the foreign key's identity, and a
+	// snapshot round-trip always resets it to false (Snapshot only stores the
+	// name). Comparing the struct value made an unchanged FK into a managed schema
+	// look different after a Resolve/Metadata round-trip, emitting a spurious
+	// DropForeignKey+CreateForeignKey pair.
+	return a.RefSchema.Name == b.RefSchema.Name && a.RefTable == b.RefTable &&
 		stringsEqual(a.Columns, b.Columns) && stringsEqual(a.RefColumns, b.RefColumns) &&
 		a.OnDelete == b.OnDelete && a.OnUpdate == b.OnUpdate
 }

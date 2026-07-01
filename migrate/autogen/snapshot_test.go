@@ -2,6 +2,7 @@ package autogen
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/aita/sqlkit/decl"
@@ -121,5 +122,59 @@ func TestSnapshotPreservesFKActions(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("snapshot lost the ON DELETE CASCADE action: %+v", snap.Tables)
+	}
+}
+
+// TestSnapshotPreservesManagedSchema covers a schema put under migration
+// management (decl.Create()): the flag must survive a Resolve/Metadata
+// round-trip, or Render never sees the schema as managed and never emits its
+// CreateSchema/DropSchema (the generated migration then fails to apply).
+func TestSnapshotPreservesManagedSchema(t *testing.T) {
+	c := decl.NewCatalog(decl.DefaultSchema("public"))
+	c.Schema("audit", decl.Create()).Enum("kind", "a", "b")
+	md, err := c.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := Resolve(md, mustDialect(t, "postgres"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rebuilt := snap.Metadata()
+	if len(rebuilt.ManagedSchemas) != 1 || rebuilt.ManagedSchemas[0].Name != "audit" || !rebuilt.ManagedSchemas[0].Create {
+		t.Errorf("managed schema flag lost through Resolve/Metadata round-trip: %+v", rebuilt.ManagedSchemas)
+	}
+}
+
+// TestFKIntoManagedSchemaNoSpuriousChurn covers a foreign key referencing a table
+// in a managed schema: fkEqual must not compare the whole RefSchema value (which
+// includes the Create management flag) — a snapshot round-trip always resets
+// Create to false (Snapshot only stores the schema name), so comparing the struct
+// made an unchanged FK look different and emitted a spurious
+// DropForeignKey+CreateForeignKey pair on every render.
+func TestFKIntoManagedSchemaNoSpuriousChurn(t *testing.T) {
+	c := decl.NewCatalog(decl.DefaultSchema("public"))
+	audit := c.Schema("audit", decl.Create())
+	audit.Table("owner", decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()))
+	audit.Table("log",
+		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+		decl.Column("owner_id", decl.BigInt, decl.References("audit.owner", "id")),
+	)
+	md, err := c.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := Resolve(md, mustDialect(t, "postgres"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundtripped := snap.Metadata()
+
+	res, err := Render(md, roundtripped, Options{Dialect: mustDialect(t, "postgres")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(res.Up, "DropForeignKey") || strings.Contains(res.Up, "CreateForeignKey") {
+		t.Errorf("spurious FK churn for an unchanged FK into a managed schema:\n%s", res.Up)
 	}
 }
