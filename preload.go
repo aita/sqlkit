@@ -245,9 +245,20 @@ func preloadRelation(ctx context.Context, ex executorBinding, dest any, spec pre
 		childByKey[key] = append(childByKey[key], ce)
 	}
 
-	// Assign matched children into each parent's relation field.
+	// Assign matched children into each parent's relation field. A ToOne
+	// relation documents that the target yields at most one row per source
+	// row (relation.go's Cardinality doc); more than one match means that
+	// promise doesn't hold for this data (a hand-declared Relation with the
+	// wrong cardinality, or a target that isn't actually unique on the join
+	// column), so silently keeping an arbitrary match — whichever happened to
+	// scan first, not even stable across runs since the follow-up query has
+	// no ORDER BY — would hide a real data problem instead of surfacing it.
 	for key, indices := range groups {
 		matches := childByKey[key]
+		if !toMany && len(matches) > 1 {
+			return fmt.Errorf("sqlkit: Preload of %q: target %s has %d rows for key %v, want at most one (ToOne)",
+				rel.Name(), target.Info().QualifiedName(), len(matches), key)
+		}
 		for _, i := range indices {
 			field := elemStruct(parents[i], parentPtr).FieldByIndex(destIndex)
 			if toMany {
