@@ -284,6 +284,13 @@ func (m *Migrator) Upgrade(ctx context.Context, target string) error {
 	if err := m.ensureTable(ctx); err != nil {
 		return err
 	}
+
+	lock, err := m.acquireLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.release(ctx) }()
+
 	applied, err := m.appliedRevisions(ctx)
 	if err != nil {
 		return err
