@@ -25,10 +25,11 @@ type Querier interface {
 // catalog.
 func Schema(ctx context.Context, db Querier, dialect, schemaName string) (meta.Metadata, error) {
 	var tables []meta.Table
+	var enums []meta.Enum
 	var err error
 	switch dialect {
 	case "", "postgres", "postgresql", "pgx":
-		tables, err = inspectPostgres(ctx, db, schemaName)
+		tables, enums, err = inspectPostgres(ctx, db, schemaName)
 	case "mysql":
 		tables, err = inspectMySQL(ctx, db, schemaName)
 	default:
@@ -37,7 +38,7 @@ func Schema(ctx context.Context, db Querier, dialect, schemaName string) (meta.M
 	if err != nil {
 		return meta.Metadata{}, err
 	}
-	return meta.Metadata{Tables: tables}, nil
+	return meta.Metadata{Tables: tables, Enums: enums}, nil
 }
 
 // decimalTypes are the SQL types for which a precision/scale is meaningful.
