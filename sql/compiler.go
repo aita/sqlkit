@@ -716,6 +716,36 @@ func (c *Compiler) compileValuesSource(s SourceExpression) (string, []any, error
 		return "", nil, fmt.Errorf("sqlkit/sql: VALUES source needs a column name per value for this dialect")
 	}
 
+	// Per column, find the first row whose value the dialect can type (a NULL
+	// or otherwise unrecognized value in row 0 must not silently leave the
+	// whole column untyped when a later row does carry a typeable value) and
+	// remember which row to attach the CAST to.
+	castRow := make([]int, width)
+	castType := make([]string, width)
+	for i := range castRow {
+		castRow[i] = -1
+	}
+	if !union {
+		if caster, ok := c.Dialect.(ValuesCaster); ok {
+			for ri, row := range v.Rows {
+				if len(row) != width {
+					break // reported below, once, with the row index
+				}
+				for ci, value := range row {
+					if castRow[ci] != -1 {
+						continue
+					}
+					if ve, ok := value.(ValueExpression); ok {
+						if t, ok := caster.ValuesCastType(ve.Value); ok {
+							castRow[ci] = ri
+							castType[ci] = t
+						}
+					}
+				}
+			}
+		}
+	}
+
 	var sb strings.Builder
 	var args []any
 	sb.WriteString("(")
@@ -746,16 +776,11 @@ func (c *Compiler) compileValuesSource(s SourceExpression) (string, []any, error
 			}
 			// PostgreSQL infers an unannotated VALUES parameter as text, which
 			// breaks a join/assignment against a non-text column. Type the first
-			// row's values so the server infers each column's type; other rows
-			// inherit it. (MySQL renders the union form and is not a ValuesCaster.)
-			if !union && ri == 0 {
-				if caster, ok := c.Dialect.(ValuesCaster); ok {
-					if ve, ok := value.(ValueExpression); ok {
-						if castType, ok := caster.ValuesCastType(ve.Value); ok {
-							valueSQL = "CAST(" + valueSQL + " AS " + castType + ")"
-						}
-					}
-				}
+			// typeable row's value in each column so the server infers that
+			// column's type; other rows inherit it. (MySQL renders the union
+			// form and is not a ValuesCaster.)
+			if !union && castRow[ci] == ri {
+				valueSQL = "CAST(" + valueSQL + " AS " + castType[ci] + ")"
 			}
 			sb.WriteString(valueSQL)
 			// Only the first UNION arm names the columns; the rest inherit them.
