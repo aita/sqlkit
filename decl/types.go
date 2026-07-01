@@ -1,6 +1,7 @@
 package decl
 
 import (
+	"fmt"
 	"reflect"
 	"sync"
 
@@ -62,7 +63,19 @@ var (
 //		"postgres": "geometry", "mysql": "geometry",
 //	})
 //	decl.Column("shape", decl.Type("geometry"))
+//
+// dbTypeRegistry is process-global, so it panics on an empty kind (a Type("")
+// column would otherwise silently resolve through it) and on redefining an
+// already-registered (kind, dialect) pair to a different engine name — most
+// often typoing a built-in kind's name (bigint, text, ...), which would
+// otherwise silently retarget every column of that kind, in every catalog
+// sharing the process, to the wrong engine type. Adding a dialect a kind
+// doesn't have yet is unaffected; this only rejects overwriting one it
+// already has.
 func RegisterType(kind string, names map[string]string) {
+	if kind == "" {
+		panic("decl: RegisterType requires a non-empty kind")
+	}
 	dbTypeMu.Lock()
 	defer dbTypeMu.Unlock()
 	existing := dbTypeRegistry[kind]
@@ -71,6 +84,9 @@ func RegisterType(kind string, names map[string]string) {
 		dbTypeRegistry[kind] = existing
 	}
 	for dialect, name := range names {
+		if prev, ok := existing[dialect]; ok && prev != name {
+			panic(fmt.Sprintf("decl: RegisterType(%q) redefines dialect %q from %q to %q", kind, dialect, prev, name))
+		}
 		existing[dialect] = name
 	}
 }
