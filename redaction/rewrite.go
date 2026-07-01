@@ -206,6 +206,21 @@ func (m *Redactor) rewriteExpr(e sql.Expression, sc *scope) sql.Expression {
 			x.Query = m.rewriteQuery(x.Query, sc, sc.childCTEs)
 		}
 		return x
+	case sql.GroupingExpression:
+		// ROLLUP(...)/CUBE(...): a GROUP BY grouping element wrapping a list of
+		// expressions, which may themselves carry a sensitive comparison (e.g.
+		// ROLLUP(CASE WHEN name = 'x' THEN ...)) rather than being bare columns.
+		x.Elements = m.rewriteExprs(x.Elements, sc)
+		return x
+	case sql.GroupingSetsExpression:
+		// GROUPING SETS ((...), (...)): each set is its own list of grouping
+		// elements, so recurse into every set independently.
+		sets := make([][]sql.Expression, len(x.Sets))
+		for i, set := range x.Sets {
+			sets[i] = m.rewriteExprs(set, sc)
+		}
+		x.Sets = sets
+		return x
 	case sql.RawExpression:
 		// An opaque SQL fragment. With a parser configured, re-parse it into a typed
 		// expression so its inner literals are masked precisely.

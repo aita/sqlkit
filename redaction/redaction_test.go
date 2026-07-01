@@ -534,6 +534,32 @@ func TestRewriteCompound(t *testing.T) {
 	}
 }
 
+// TestRewriteGroupingExpressionMasksNestedLiteral covers a GROUP BY grouping
+// element (ROLLUP/CUBE/GROUPING SETS) wrapping a non-column expression that
+// itself carries a sensitive comparison. rewriteExpr's switch had no case for
+// sql.GroupingExpression/sql.GroupingSetsExpression, so such an element fell
+// through to the unrecursed default leaf case and its literal survived
+// unmasked — a fail-open PII leak.
+func TestRewriteGroupingExpressionMasksNestedLiteral(t *testing.T) {
+	m := redaction.New(redaction.Columns("users.name"))
+	caseExpr := sql.Case().When(sql.Eq(sql.Col("name"), sql.Val("secretname")), sql.Val(1)).Else(sql.Val(0))
+
+	rollup := sql.Select(sql.CountAll()).From(tblUsers).GroupBy(sql.Rollup(caseExpr))
+	if got := args(t, m.Apply(rollup)); !reflect.DeepEqual(got, []any{"*****", 1, 0}) {
+		t.Errorf("ROLLUP masked args = %v, want [***** 1 0]", got)
+	}
+
+	cube := sql.Select(sql.CountAll()).From(tblUsers).GroupBy(sql.Cube(caseExpr))
+	if got := args(t, m.Apply(cube)); !reflect.DeepEqual(got, []any{"*****", 1, 0}) {
+		t.Errorf("CUBE masked args = %v, want [***** 1 0]", got)
+	}
+
+	sets := sql.Select(sql.CountAll()).From(tblUsers).GroupBy(sql.GroupingSets([]sql.Expression{caseExpr}))
+	if got := args(t, m.Apply(sets)); !reflect.DeepEqual(got, []any{"*****", 1, 0}) {
+		t.Errorf("GROUPING SETS masked args = %v, want [***** 1 0]", got)
+	}
+}
+
 // TestCombinePolicy covers Combine: a column is masked when any member policy
 // marks it sensitive, and nil members are ignored.
 func TestCombinePolicy(t *testing.T) {
