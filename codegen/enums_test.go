@@ -89,6 +89,88 @@ func TestGenerateNoIdentifierCollisions(t *testing.T) {
 	}
 }
 
+// structFieldNames returns the field names declared directly on the named
+// struct type in src (not promoted/embedded fields), for detecting a
+// duplicate field within one struct — a case topLevelNames can't see, since
+// the struct's own type name is declared only once no matter how many
+// duplicate fields it holds inside.
+func structFieldNames(t *testing.T, name, src, structName string) []string {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), name, src, parser.AllErrors)
+	if err != nil {
+		t.Fatalf("generated %s does not parse: %v\n%s", name, err, src)
+	}
+	var names []string
+	for _, d := range f.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			ts, ok := spec.(*ast.TypeSpec)
+			if !ok || ts.Name.Name != structName {
+				continue
+			}
+			st, ok := ts.Type.(*ast.StructType)
+			if !ok {
+				continue
+			}
+			for _, field := range st.Fields.List {
+				for _, id := range field.Names {
+					names = append(names, id.Name)
+				}
+			}
+		}
+	}
+	return names
+}
+
+// TestGenerateNoColumnRelationFieldCollisions covers the <Var>Filter struct,
+// which combines a table's (deduped) column fields and its relation fields in
+// one struct declaration. buildRelations reserves column field names to keep
+// a relation from colliding with one, but it must reserve the same
+// post-dedup names buildTable actually assigns — not each column's raw,
+// undeduped fieldName — or a relation name that happens to equal a renamed
+// (suffixed) column field produces a duplicate struct field (syntactically
+// legal Go, but "redeclared in this block" once type-checked).
+//
+// books has two columns colliding on the Go field "Author" ("author" and
+// "author_", deduped to Author and Author2) plus a single-column FK
+// "author2_id" whose derived relation name is also "Author2".
+func TestGenerateNoColumnRelationFieldCollisions(t *testing.T) {
+	md := meta.Metadata{
+		Tables: []meta.Table{
+			{Schema: meta.Schema{Name: "public"}, Name: "authors",
+				Columns: []meta.Column{{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true}}},
+			{Schema: meta.Schema{Name: "public"}, Name: "books",
+				Columns: []meta.Column{
+					{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true},
+					{Name: "author", Type: meta.Of("postgres", "text", 0, 0, 0)},
+					{Name: "author_", Type: meta.Of("postgres", "text", 0, 0, 0)},
+					{Name: "author2_id", Type: meta.Of("postgres", "int8", 0, 0, 0)},
+				},
+				ForeignKeys: []meta.ForeignKey{{Name: "books_author2_id_fkey", Columns: []string{"author2_id"},
+					RefSchema: meta.Schema{Name: "public"}, RefTable: "authors", RefColumns: []string{"id"}}}},
+		},
+	}
+	files, err := Generate(md, Options{PackageName: "appdb", EmitRelations: true})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, f := range files {
+		if !strings.HasSuffix(f.Name, ".go") {
+			continue
+		}
+		for _, name := range structFieldNames(t, f.Name, string(f.Content), "BooksFilter") {
+			if seen[name] {
+				t.Errorf("field %q declared twice in BooksFilter (generated code won't compile)", name)
+			}
+			seen[name] = true
+		}
+	}
+}
+
 // parseFile asserts the generated source parses and returns it.
 func parseFile(t *testing.T, name, src string) string {
 	t.Helper()
