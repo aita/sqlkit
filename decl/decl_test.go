@@ -849,3 +849,41 @@ func TestRegisterTypeAndDialects(t *testing.T) {
 		t.Errorf("geometry should be unavailable on an unregistered dialect")
 	}
 }
+
+// TestRegisterTypeRejectsEmptyKind: an empty kind is invalid input, not a
+// legitimate way to reach the Type("") escape-hatch fallback.
+func TestRegisterTypeRejectsEmptyKind(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("RegisterType(\"\", ...) should panic")
+		}
+	}()
+	decl.RegisterType("", map[string]string{"postgres": "whatever"})
+}
+
+// TestRegisterTypeRejectsBuiltinRedefinition: dbTypeRegistry is process-global,
+// so silently letting a later RegisterType call redefine an already-registered
+// (kind, dialect) pair — most often a typo'd built-in kind name like "bigint"
+// — would retarget every column of that kind, in every catalog sharing the
+// process, to the wrong engine type with no error. RegisterType must panic
+// instead, leaving the existing mapping untouched.
+func TestRegisterTypeRejectsBuiltinRedefinition(t *testing.T) {
+	before, ok := decl.BigInt.Engine("postgres")
+	if !ok {
+		t.Fatal("precondition: BigInt should resolve on postgres")
+	}
+
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("RegisterType redefining bigint's postgres name should panic")
+			}
+		}()
+		decl.RegisterType("bigint", map[string]string{"postgres": "text"})
+	}()
+
+	after, ok := decl.BigInt.Engine("postgres")
+	if !ok || after != before {
+		t.Fatalf("BigInt Engine(postgres) = %+v after a rejected redefinition, want unchanged %+v", after, before)
+	}
+}
