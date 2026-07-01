@@ -235,3 +235,22 @@ func TestUnmodeledConstructFallsBackToRaw(t *testing.T) {
 		t.Fatalf("ParseOne returned %T, want a RawQuery", q)
 	}
 }
+
+// A WITH RECURSIVE SEARCH BREADTH/DEPTH FIRST clause adds a synthetic ordering
+// column, and CYCLE adds cycle-detection columns and can affect recursion
+// termination; a WINDOW definition extending another named window inherits
+// that window's ORDER BY/frame. sqlkit has no AST node for any of these, so
+// silently dropping them would change the statement's meaning — they must
+// round-trip as a raw passthrough instead.
+func TestSearchCycleAndWindowExtendsWindowFallBackToRaw(t *testing.T) {
+	for _, input := range []string{
+		"WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM t WHERE n < 5) SEARCH DEPTH FIRST BY n SET seq SELECT n FROM t",
+		"WITH RECURSIVE t(n, path) AS (SELECT 1, ARRAY[1] UNION ALL SELECT n + 1, path || n FROM t WHERE n < 5) CYCLE n SET is_cycle USING path SELECT n FROM t",
+		"SELECT sum(x) OVER w FROM t WINDOW w AS (base_win PARTITION BY y), base_win AS (ORDER BY z)",
+	} {
+		raw := assertRaw(t, input)
+		if raw.SQL() == "" {
+			t.Errorf("empty raw SQL for %q", input)
+		}
+	}
+}

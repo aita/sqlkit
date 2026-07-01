@@ -340,6 +340,13 @@ func convertWindow(fn sql.Expression, w *pg.WindowDef) (sql.Expression, error) {
 
 // convertNamedWindow converts a SELECT-level WINDOW clause definition.
 func convertNamedWindow(w *pg.WindowDef) (sql.NamedWindow, error) {
+	// A WINDOW entry can extend another named window ("w AS (base_win PARTITION
+	// BY ...)"), inheriting its ORDER BY/frame. sql.NamedWindow has no field for
+	// that base-window reference, so silently ignoring Refname would drop the
+	// inherited clauses rather than erroring — fall back to raw instead.
+	if w.GetRefname() != "" {
+		return sql.NamedWindow{}, sqlparse.Unsupported("WINDOW definition extending another named window")
+	}
 	def := sql.WindowDef(w.GetName())
 	if parts := w.GetPartitionClause(); len(parts) > 0 {
 		exprs := make([]sql.Expression, 0, len(parts))
