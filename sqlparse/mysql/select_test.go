@@ -466,3 +466,45 @@ func TestTableIdentifierWithDotFallsBackToRaw(t *testing.T) {
 func TestSelectPartitionSelectionFallsBackToRaw(t *testing.T) {
 	assertRaw(t, "SELECT a FROM t PARTITION (p0)")
 }
+
+// A parenthesized set operation carrying its own ORDER BY / LIMIT / OFFSET,
+// wrapped in an outer LIMIT/ORDER BY/set operation, cannot be modeled: sqlkit's
+// CompoundBuilder.Limit/Offset/OrderBy set the clause on the SAME struct rather
+// than adding a nesting level, so applying the outer clause after the inner one
+// silently overwrote it instead of preserving both scopes — a silent WRONG
+// RESULT, not merely an unmodeled construct (fuzz-adjacent: found by code audit,
+// confirmed by direct reproduction). It must fall back to raw.
+func TestNestedSetOperationLimitFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "(SELECT 1 UNION SELECT 2 LIMIT 1) LIMIT 2")
+	assertRaw(t, "(SELECT 1 UNION SELECT 2 ORDER BY 1) LIMIT 2")
+}
+
+// SELECT ... INTO OUTFILE writes the result to a file instead of returning rows;
+// dropping it would silently turn a file-export statement into a plain read.
+func TestSelectIntoOutfileFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT id FROM t INTO OUTFILE '/tmp/x'")
+}
+
+// SQL_CALC_FOUND_ROWS changes what a following SELECT FOUND_ROWS() reports;
+// STRAIGHT_JOIN / HIGH_PRIORITY / SQL_BIG_RESULT are plan directives. None has a
+// sqlkit node, so each must round-trip as raw rather than be silently dropped.
+func TestSelectStmtOptsFallBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT SQL_CALC_FOUND_ROWS id FROM t LIMIT 5")
+	assertRaw(t, "SELECT STRAIGHT_JOIN id FROM t")
+	assertRaw(t, "SELECT HIGH_PRIORITY id FROM t")
+}
+
+// STRAIGHT_JOIN as a join operator forces left-to-right join order; sqlkit has no
+// node for it, so it must round-trip as raw rather than render as a plain JOIN
+// (which lets the optimizer reorder).
+func TestStraightJoinFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT a.id FROM t AS a STRAIGHT_JOIN t AS b ON a.id=b.id")
+}
+
+// USE/FORCE/IGNORE INDEX table hints have no sqlkit node; dropping one changes
+// only index selection normally, but FORCE INDEX can turn a missing-index plan
+// into a hard error the original query would not hit. Falls back to raw.
+func TestTableIndexHintFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT id FROM t USE INDEX (idx) WHERE id>1")
+	assertRaw(t, "SELECT id FROM t FORCE INDEX (idx) WHERE id>1")
+}
