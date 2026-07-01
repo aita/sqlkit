@@ -599,12 +599,16 @@ func (s *Scope) flushManaged(ctx context.Context, ts *tableState) error {
 		if err != nil {
 			return err
 		}
-		assignments := diffAssignments(ts.table, tr, names, vals)
+		meta, err := sqlkit.ColumnMetadata(tr.ptr, names)
+		if err != nil {
+			return err
+		}
+		assignments, guard := diffAssignments(ts.table, tr, names, vals, meta)
 		if len(assignments) == 0 {
 			continue
 		}
-		if !bulk || hasNullAssignment(assignments) {
-			if err := s.execRowUpdate(ctx, ts, tr.pk, assignments); err != nil {
+		if !bulk || hasNullAssignment(assignments) || guard != nil {
+			if err := s.execRowUpdate(ctx, ts, tr.pk, assignments, guard); err != nil {
 				return err
 			}
 			continue
@@ -627,15 +631,15 @@ func (s *Scope) flushUpdates(ctx context.Context, ts *tableState) error {
 		if ts.removedIdx[pkString(ts.key, pk)] {
 			continue
 		}
-		assignments, err := updateAssignments(ts.table, row)
+		assignments, guard, err := updateAssignments(ts.table, row)
 		if err != nil {
 			return err
 		}
 		if len(assignments) == 0 {
 			continue
 		}
-		if !bulk || hasNullAssignment(assignments) {
-			if err := s.execRowUpdate(ctx, ts, pk, assignments); err != nil {
+		if !bulk || hasNullAssignment(assignments) || guard != nil {
+			if err := s.execRowUpdate(ctx, ts, pk, assignments, guard); err != nil {
 				return err
 			}
 			continue
@@ -681,9 +685,28 @@ type pendingUpdate struct {
 }
 
 // execRowUpdate runs one single-row UPDATE by primary key — the unbatched path.
-func (s *Scope) execRowUpdate(ctx context.Context, ts *tableState, pk []any, assignments []sql.Assignment) error {
-	if _, err := s.ex.Update(ts.table).Set(assignments...).Where(pkPredicates(ts.table, pk)...).Exec(ctx); err != nil {
+// A non-nil guard adds the optimistic-lock predicate (WHERE version = current,
+// ANDed onto the primary-key predicate) and reports sqlkit.ErrVersionConflict
+// when the statement affects no row: either the primary key is gone or another
+// writer already advanced the version column past current.
+func (s *Scope) execRowUpdate(ctx context.Context, ts *tableState, pk []any, assignments []sql.Assignment, guard *versionGuard) error {
+	predicates := pkPredicates(ts.table, pk)
+	if guard != nil {
+		predicates = append(predicates, sqlkit.Cond(sql.Eq(sql.Col(guard.column), sql.Val(guard.current))))
+	}
+	res, err := s.ex.Update(ts.table).Set(assignments...).Where(predicates...).Exec(ctx)
+	if err != nil {
 		return fmt.Errorf("uow: update %s: %w", ts.key, err)
+	}
+	if guard == nil {
+		return nil
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("uow: update %s: %w", ts.key, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("uow: update %s: %w", ts.key, sqlkit.ErrVersionConflict)
 	}
 	return nil
 }
@@ -701,7 +724,9 @@ func (s *Scope) flushBulkUpdates(ctx context.Context, ts *tableState, pending []
 	for _, sig := range order {
 		group := groups[sig]
 		if len(group) == 1 {
-			if err := s.execRowUpdate(ctx, ts, group[0].pk, group[0].assignments); err != nil {
+			// pending never carries a version-guarded row (see flushManaged/
+			// flushUpdates), so no guard applies here.
+			if err := s.execRowUpdate(ctx, ts, group[0].pk, group[0].assignments, nil); err != nil {
 				return err
 			}
 			continue
@@ -817,43 +842,84 @@ func (s *Scope) stateFor(table sqlkit.Table) (*tableState, error) {
 	return ts, nil
 }
 
+// versionGuard is an optimistic-lock predicate to AND onto an UPDATE's WHERE:
+// the version column matches current, so a row another writer already
+// advanced past current matches nothing and execRowUpdate reports
+// sqlkit.ErrVersionConflict.
+type versionGuard struct {
+	column  string
+	current any
+}
+
 // diffAssignments builds SET assignments for the managed entity's changed,
-// non-primary-key columns by comparing current values to the snapshot.
-func diffAssignments(table sqlkit.Table, tr *tracked, names []string, vals []any) []sql.Assignment {
+// non-primary-key columns by comparing current values to the snapshot. A
+// version-tagged column is never diffed (app code does not mutate it itself):
+// it is unconditionally bumped (col = col + 1) and its current snapshot value
+// becomes the returned guard, mirroring update.go's SetStruct so optimistic
+// locking works the same through uow as through the direct builder path. A
+// touch-tagged column is unconditionally set to CURRENT_TIMESTAMP, regardless
+// of whether it changed, since app code does not maintain it either.
+func diffAssignments(table sqlkit.Table, tr *tracked, names []string, vals []any, meta map[string]sqlkit.ColumnMeta) ([]sql.Assignment, *versionGuard) {
 	pk := pkNameSet(table)
 	snap := make(map[string]any, len(tr.snapNames))
 	for i, n := range tr.snapNames {
 		snap[n] = tr.snapVals[i]
 	}
 	var out []sql.Assignment
+	var guard *versionGuard
 	for i, name := range names {
 		if pk[name] {
 			continue
 		}
-		if old, ok := snap[name]; ok && valueEqual(old, normalize(vals[i])) {
-			continue
+		m := meta[name]
+		switch {
+		case m.Version:
+			out = append(out, sql.Set(name, sql.Add(sql.Col(name), sql.Val(1))))
+			guard = &versionGuard{column: name, current: vals[i]}
+		case m.Touch:
+			out = append(out, sql.Set(name, sql.CurrentTimestamp()))
+		default:
+			if old, ok := snap[name]; ok && valueEqual(old, normalize(vals[i])) {
+				continue
+			}
+			out = append(out, sql.Set(name, sql.Val(vals[i])))
 		}
-		out = append(out, sql.Set(name, sql.Val(vals[i])))
 	}
-	return out
+	return out, guard
 }
 
 // updateAssignments builds SET assignments for every mapped non-primary-key
-// column of a detached row.
-func updateAssignments(table sqlkit.Table, row any) ([]sql.Assignment, error) {
+// column of a detached row. As in diffAssignments, a version-tagged column is
+// bumped with its current value returned as the guard rather than copied, and
+// a touch-tagged column is unconditionally set to CURRENT_TIMESTAMP.
+func updateAssignments(table sqlkit.Table, row any) ([]sql.Assignment, *versionGuard, error) {
 	names, values, err := sqlkit.ColumnValues(table, row)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	meta, err := sqlkit.ColumnMetadata(row, names)
+	if err != nil {
+		return nil, nil, err
 	}
 	pk := pkNameSet(table)
 	assignments := make([]sql.Assignment, 0, len(names))
+	var guard *versionGuard
 	for i, name := range names {
 		if pk[name] {
 			continue
 		}
-		assignments = append(assignments, sql.Set(name, sql.Val(values[i])))
+		m := meta[name]
+		switch {
+		case m.Version:
+			assignments = append(assignments, sql.Set(name, sql.Add(sql.Col(name), sql.Val(1))))
+			guard = &versionGuard{column: name, current: values[i]}
+		case m.Touch:
+			assignments = append(assignments, sql.Set(name, sql.CurrentTimestamp()))
+		default:
+			assignments = append(assignments, sql.Set(name, sql.Val(values[i])))
+		}
 	}
-	return assignments, nil
+	return assignments, guard, nil
 }
 
 // splitConfig resolves whether the flush should batch its UPDATE/DELETE work and
