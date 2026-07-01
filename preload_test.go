@@ -490,6 +490,12 @@ func TestPreloadSkipsNullParentKey(t *testing.T) {
 	if len(users[1].Posts) != 0 {
 		t.Fatalf("nil-key user should have no posts, got %+v", users[1].Posts)
 	}
+	// A nil-key parent has no children for the exact same reason a
+	// resolved-but-childless parent does (zero matches); both must get the
+	// same representation, a non-nil empty slice, not Go's nil zero value.
+	if users[1].Posts == nil {
+		t.Fatalf("nil-key user's Posts should be a non-nil empty slice, got nil")
+	}
 }
 
 // TestPreloadThroughSessionUsesItsChunkSize covers Session.preloadChunkSize: a
