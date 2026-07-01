@@ -33,6 +33,21 @@ func convertSelect(s *ast.SelectStmt, tp tablePos) (sql.Query, error) {
 	if s.Fields == nil {
 		return nil, sqlparse.Unsupported("SELECT without a field list")
 	}
+	// SELECT ... INTO OUTFILE/DUMPFILE writes the result to a file instead of
+	// returning rows; sqlkit has no node for it, and dropping it would silently
+	// turn a file-export statement into a plain read. Fall back to raw.
+	if s.SelectIntoOpt != nil {
+		return nil, sqlparse.Unsupported("SELECT ... INTO")
+	}
+	// SQL_CALC_FOUND_ROWS makes a following SELECT FOUND_ROWS() report the total
+	// row count ignoring this statement's LIMIT; dropping it would silently change
+	// that companion query's result. The other SelectStmtOpts flags are
+	// plan/scheduling directives (STRAIGHT_JOIN, HIGH/LOW_PRIORITY, SQL_BIG_RESULT,
+	// ...) sqlkit does not model either; fall back to raw for the whole set so none
+	// is silently dropped.
+	if o := s.SelectStmtOpts; o != nil && (o.CalcFoundRows || o.StraightJoin || o.SQLBigResult || o.SQLSmallResult || o.SQLBufferResult || o.Priority != 0) {
+		return nil, sqlparse.Unsupported("a SELECT option (SQL_CALC_FOUND_ROWS, STRAIGHT_JOIN, HIGH_PRIORITY, ...)")
+	}
 
 	columns, err := convertFieldList(s.Fields)
 	if err != nil {
@@ -193,6 +208,17 @@ func convertSetOpr(s *ast.SetOprStmt, tp tablePos) (sql.Query, error) {
 		// A single-element list collapses to a plain query.
 		return q, nil
 	}
+	if s.OrderBy != nil || s.Limit != nil {
+		// CompoundBuilder.OrderBy/Limit/Offset set the clause on the compound's OWN
+		// fields rather than wrapping it in a further nesting level, so applying one
+		// here when the compound already carries its own (from a nested, parenthesized
+		// set-operation list — e.g. "(a UNION b LIMIT 1) LIMIT 2") would silently
+		// overwrite it instead of preserving both scopes — a silent wrong-result bug,
+		// not merely an unmodeled construct. Fall back to raw.
+		if err := rejectClauseOverwrite(compound); err != nil {
+			return nil, err
+		}
+	}
 	if s.OrderBy != nil {
 		terms, err := convertByItems(s.OrderBy.Items)
 		if err != nil {
@@ -217,6 +243,19 @@ func convertSetOpr(s *ast.SetOprStmt, tp tablePos) (sql.Query, error) {
 		}
 	}
 	return compound, nil
+}
+
+// rejectClauseOverwrite reports an error when compound already carries its own
+// ORDER BY / LIMIT / OFFSET (set by a nested, parenthesized set-operation list),
+// so a caller about to apply another one at an outer scope falls back to raw
+// instead of silently overwriting it — see convertSetOpr and convertSetOprList,
+// the two levels that can each apply these clauses to the same builder.
+func rejectClauseOverwrite(compound sql.CompoundBuilder) error {
+	st := compound.Stmt()
+	if len(st.OrderBy) > 0 || st.HasLimit || st.HasOffset {
+		return sqlparse.Unsupported("nested set operation carrying its own ORDER BY / LIMIT / OFFSET")
+	}
+	return nil
 }
 
 func convertSetOprList(list *ast.SetOprSelectList, tp tablePos) (sql.Query, error) {
@@ -265,6 +304,12 @@ func convertSetOprList(list *ast.SetOprSelectList, tp tablePos) (sql.Query, erro
 		compound, ok := result.(sql.CompoundBuilder)
 		if !ok {
 			return nil, sqlparse.Unsupported("ORDER BY / LIMIT on a single-select set list")
+		}
+		// See rejectClauseOverwrite: a nested list already applied its own ORDER BY /
+		// LIMIT / OFFSET to this same compound (fields, not a further nesting level),
+		// so applying this list's clause would silently overwrite it.
+		if err := rejectClauseOverwrite(compound); err != nil {
+			return nil, err
 		}
 		if list.OrderBy != nil {
 			terms, err := convertByItems(list.OrderBy.Items)
