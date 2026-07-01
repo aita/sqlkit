@@ -241,8 +241,9 @@ func TestUnmodeledConstructFallsBackToRaw(t *testing.T) {
 // statement's meaning). Each of these carries a meaning-bearing attribute the
 // typed converters do not represent — an explicit SIMILAR TO ESCAPE, a CTE
 // materialization fence, a FROM column-alias list, FROM ONLY, FETCH WITH TIES,
-// or GROUP BY DISTINCT — so it must round-trip as raw, not a modeled query that
-// erases the attribute.
+// GROUP BY DISTINCT, a WITH RECURSIVE SEARCH/CYCLE clause, or a WINDOW
+// definition extending another named window — so it must round-trip as raw,
+// not a modeled query that erases the attribute.
 func TestUnmodeledClausesFallBackToRaw(t *testing.T) {
 	for _, input := range []string{
 		"SELECT a FROM t WHERE x SIMILAR TO 'a%' ESCAPE '!'",
@@ -252,6 +253,9 @@ func TestUnmodeledClausesFallBackToRaw(t *testing.T) {
 		"SELECT a FROM ONLY t",
 		"SELECT a FROM t ORDER BY a FETCH FIRST 2 ROWS WITH TIES",
 		"SELECT a FROM t GROUP BY DISTINCT a, b",
+		"WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM t WHERE n < 5) SEARCH DEPTH FIRST BY n SET seq SELECT n FROM t",
+		"WITH RECURSIVE t(n, path) AS (SELECT 1, ARRAY[1] UNION ALL SELECT n + 1, path || n FROM t WHERE n < 5) CYCLE n SET is_cycle USING path SELECT n FROM t",
+		"SELECT sum(x) OVER w FROM t WINDOW w AS (base_win PARTITION BY y), base_win AS (ORDER BY z)",
 	} {
 		raw := assertRaw(t, input)
 		if raw.SQL() == "" {
