@@ -276,6 +276,42 @@ func TestGenerateEnumColumn(t *testing.T) {
 	}
 }
 
+// TestGenerateArrayEnumColumn covers a column whose DB type is an array of an
+// enum (mood[]): the generated column must be a slice of the enum type,
+// Column[[]Mood], not the bare element type Column[Mood]. meta.OfArray stands
+// in for a decl.Array(decl.EnumType("mood")) column — the resolved Engine
+// carries Array=true, same as the introspection would produce for mood[].
+func TestGenerateArrayEnumColumn(t *testing.T) {
+	md := meta.Metadata{
+		Enums: []meta.Enum{{Name: "mood", Values: []string{"happy", "sad"}}},
+		Tables: []meta.Table{{
+			Name: "users",
+			Columns: []meta.Column{
+				{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true},
+				{Name: "moods", Type: meta.OfArray("postgres", "mood", 0, 0, 0)},
+			},
+		}},
+	}
+	files, err := Generate(md, Options{PackageName: "appdb"})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	var tables string
+	for _, f := range files {
+		if f.Name == "tables.go" {
+			tables = string(f.Content)
+		}
+	}
+	if !strings.Contains(tables, "Column[[]Mood]") {
+		t.Fatalf("tables.go missing %q in:\n%s", "Column[[]Mood]", tables)
+	}
+	// A slice is already nilable, so applyNullable must not wrap it again into
+	// *[]Mood — guard against a regression that double-wraps array columns.
+	if strings.Contains(tables, "Column[*[]Mood]") {
+		t.Fatalf("tables.go must not double-wrap array-of-enum column as Column[*[]Mood]:\n%s", tables)
+	}
+}
+
 // TestGenerateEnumCollidingLabels covers the enum analogue of the colliding
 // column class: distinct labels that map to the same Go name ("foo", "foo_" and
 // "foo__" all yield "Foo") must dedupe into distinct const identifiers rather
