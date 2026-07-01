@@ -507,3 +507,41 @@ func TestScanJSONColumn(t *testing.T) {
 		t.Fatalf("items[1].Meta = %#v, want nil for NULL", items[1].Meta)
 	}
 }
+
+// TestScanJSONColumnResetsOnReusedDestination covers scanning into the same
+// destination struct across two single-row Scan calls (the Get/One pattern, as
+// opposed to All's always-fresh struct per row). json.Unmarshal merges into an
+// already-populated map/struct rather than replacing it, so a jsonScanner that
+// doesn't reset its destination first would leak the previous row's keys into
+// the new value, or leave a stale value in place when the new row's column is
+// NULL — both silent wrong data with no error.
+func TestScanJSONColumnResetsOnReusedDestination(t *testing.T) {
+	calls := 0
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			calls++
+			if calls == 1 {
+				return testutil.Result{
+					Columns: []string{"id", "sku", "meta", "rev", "created"},
+					Rows:    [][]driver.Value{{int64(1), "abc", []byte(`{"a":1,"b":2}`), int64(1), int64(0)}},
+				}, nil
+			}
+			return testutil.Result{
+				Columns: []string{"id", "sku", "meta", "rev", "created"},
+				Rows:    [][]driver.Value{{int64(2), "def", []byte(`{"b":99}`), int64(1), int64(0)}},
+			}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var item Item
+	if err := db.Select().From(Items).One(context.Background()).Scan(&item); err != nil {
+		t.Fatalf("first scan: %v", err)
+	}
+	if err := db.Select().From(Items).One(context.Background()).Scan(&item); err != nil {
+		t.Fatalf("second scan: %v", err)
+	}
+	if want := map[string]any{"b": float64(99)}; !reflect.DeepEqual(item.Meta, want) {
+		t.Fatalf("item.Meta = %#v, want %#v (row 1's \"a\" key must not survive)", item.Meta, want)
+	}
+}
