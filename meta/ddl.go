@@ -27,9 +27,10 @@ import (
 //
 // Default expressions render only when the model carries them (Column.DefaultExpr,
 // declared as decl.Default(sql.Raw("now()"))), compiled for the dialect; an
-// integer primary key with a default but no expression renders as a serial
-// (PostgreSQL) or AUTO_INCREMENT (MySQL) column. It returns an error if a column
-// has no type on the dialect or a default/check expression cannot be compiled.
+// integer column with a default but no expression renders as a serial
+// (PostgreSQL) or AUTO_INCREMENT (MySQL) column, whether or not it is the
+// primary key. It returns an error if a column has no type on the dialect or a
+// default/check expression cannot be compiled.
 func (md Metadata) CreateSQL(d sql.Dialect) (string, error) {
 	var stmts []string
 	for _, s := range md.Schemas() {
@@ -223,13 +224,21 @@ func (ct columnType) RenderAutoIncrement(d sql.Dialect) (string, bool) {
 // ColumnDef builds the dialect-independent sql.ColumnDef for the column — the
 // building block of CREATE TABLE and ALTER TABLE ADD COLUMN. The portable type
 // resolves when the statement is compiled for a dialect.
+//
+// A serial/auto-increment column (HasDefault with no DefaultExpr) renders as
+// such regardless of PrimaryKey: PostgreSQL's serial/bigserial and MySQL's
+// AUTO_INCREMENT are both valid on a non-primary-key column (e.g. a unique
+// sequence column), and introspection already reports one that way — gating on
+// PrimaryKey here would silently drop the clause when such a column round-trips
+// through introspect-then-regenerate, or when a decl.Default() is declared on a
+// non-PK column.
 func (c Column) ColumnDef() sql.ColumnDef {
 	return sql.ColumnDef{
 		Name:          sql.NewIdent(c.Name),
 		Type:          columnType{name: c.Name, typ: c.Type},
 		NotNull:       !c.Nullable,
 		Default:       c.DefaultExpr,
-		AutoIncrement: c.PrimaryKey && c.HasDefault && c.DefaultExpr == nil,
+		AutoIncrement: c.HasDefault && c.DefaultExpr == nil,
 		Comment:       c.Comment,
 	}
 }
