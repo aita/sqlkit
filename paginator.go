@@ -298,7 +298,17 @@ func (pg *Paginator) rowValues(elem reflect.Value) ([]any, error) {
 		if !ok {
 			return nil, fmt.Errorf("sqlkit: Paginate row has no field for key column %q", k.col.ColumnName())
 		}
-		values[i] = elem.FieldByIndex(path).Interface()
+		fv := elem.FieldByIndex(path)
+		// A NULL key value cannot anchor a keyset seek: SQL's > / < / = against NULL
+		// are never true, so the next page's predicate would match no rows and
+		// silently drop the rest of the result. Reject it loudly instead of encoding
+		// a cursor that pages into an empty set. A key column must be non-NULL
+		// (typically the ordered columns are declared NOT NULL, ending in a unique
+		// key); a nil pointer field is the NULL a nullable column scans as.
+		if fv.Kind() == reflect.Pointer && fv.IsNil() {
+			return nil, fmt.Errorf("sqlkit: Paginate cannot build a cursor at a NULL value for key column %q; keyset pagination requires non-NULL key columns", k.col.ColumnName())
+		}
+		values[i] = fv.Interface()
 	}
 	return values, nil
 }
