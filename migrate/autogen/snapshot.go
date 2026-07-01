@@ -33,6 +33,17 @@ type Snapshot struct {
 	Sequences         []SnapshotSequence
 	MaterializedViews []SnapshotMaterializedView
 	Grants            []SnapshotGrant
+	// ManagedSchemas are the schemas put under migration management
+	// (meta.Metadata.ManagedSchemas / decl.Create()). Without this field, a
+	// managed schema's Create flag never survived a Resolve/Metadata round-trip,
+	// so Render never saw it as managed and never emitted its CreateSchema /
+	// DropSchema.
+	ManagedSchemas []SnapshotSchema
+}
+
+// SnapshotSchema is one schema put under migration management.
+type SnapshotSchema struct {
+	Name string
 }
 
 // SnapshotExtension is one database extension.
@@ -217,6 +228,13 @@ func Resolve(md meta.Metadata, d sql.Dialect) (Snapshot, error) {
 		}
 		snap.Tables = append(snap.Tables, st)
 	}
+	// Managed schemas (md.Schemas() folds ManagedSchemas with table schemas,
+	// reporting Create=true if any occurrence asks for it — see meta.Metadata.Schemas).
+	for _, s := range md.Schemas() {
+		if s.Create && s.Name != "" {
+			snap.ManagedSchemas = append(snap.ManagedSchemas, SnapshotSchema{Name: s.Name})
+		}
+	}
 	// Non-table objects carry no portable types or expressions, so they copy
 	// across unchanged.
 	for _, e := range md.Extensions {
@@ -289,6 +307,9 @@ func (s Snapshot) Metadata() meta.Metadata {
 			t.Checks = append(t.Checks, meta.Check{Name: ck.Name, Expression: sql.Raw(ck.Expression)})
 		}
 		md.Tables = append(md.Tables, t)
+	}
+	for _, ms := range s.ManagedSchemas {
+		md.ManagedSchemas = append(md.ManagedSchemas, meta.Schema{Name: ms.Name, Create: true})
 	}
 	for _, e := range s.Extensions {
 		md.Extensions = append(md.Extensions, meta.Extension{Name: e.Name, Schema: e.Schema})
