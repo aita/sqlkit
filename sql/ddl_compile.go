@@ -545,9 +545,15 @@ func (c *Compiler) foreignKeyClause(fk ForeignKeyConstraint) (string, error) {
 // table constraint, shared by CREATE TABLE and ALTER TABLE ADD. Both column
 // lists must be non-empty, mirroring the UNIQUE and KEY constraint guards, so a
 // degenerate constraint errors rather than emitting "FOREIGN KEY () REFERENCES".
+// They must also be the same length: a referencing/referenced column-list arity
+// mismatch is rejected here at compile time rather than left to render as SQL
+// every engine rejects at execution time.
 func (c *Compiler) foreignKeyDef(fk ForeignKeyConstraint) (string, error) {
 	if len(fk.Columns) == 0 || len(fk.RefColumns) == 0 {
 		return "", fmt.Errorf("sqlkit/sql: FOREIGN KEY requires at least one referencing and one referenced column")
+	}
+	if len(fk.Columns) != len(fk.RefColumns) {
+		return "", fmt.Errorf("sqlkit/sql: FOREIGN KEY has %d referencing column(s) but %d referenced column(s)", len(fk.Columns), len(fk.RefColumns))
 	}
 	clause := "CONSTRAINT " + c.Dialect.QuoteName(fk.Name.String()) +
 		" FOREIGN KEY (" + c.quoteAll(fk.Columns) + ")" +
