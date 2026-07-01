@@ -192,11 +192,18 @@ func matviewEqual(a, b meta.MaterializedView, dialect sql.Dialect) (bool, error)
 	return at == bt, nil
 }
 
-// grantKey identifies a grant by its object type and objects, so a change to the
-// privileges or grantees of the same target is detected as a modification rather
-// than an unrelated add and drop.
+// grantKey identifies a grant by its target (object type, objects, and
+// grantees), so a change to the privileges of the same target/grantees is
+// detected as a modification rather than an unrelated add and drop. Grantees
+// must be part of the key: a schema can declare several distinct GRANTs on
+// the same object (e.g. SELECT to one role and INSERT to another on the same
+// table) — a real, common ACL shape, not a variant of one grant — and
+// omitting Grantees would collapse them onto the same map entry, silently
+// losing one grant (an unpaired REVOKE with no matching re-GRANT) or
+// manufacturing spurious modify-churn between two unrelated, unchanged grants
+// that happen to share a target.
 func grantKey(g meta.Grant) string {
-	return g.ObjectType + "\x00" + strings.Join(g.Objects, ",")
+	return g.ObjectType + "\x00" + strings.Join(g.Objects, ",") + "\x00" + strings.Join(g.Grantees, ",")
 }
 
 // appendedEnumValues reports whether next is old with only labels appended (old
