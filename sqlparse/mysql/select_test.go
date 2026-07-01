@@ -413,6 +413,15 @@ func TestSelectWindowFrameFallsBackToRaw(t *testing.T) {
 	assertRaw(t, "SELECT SUM(x) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM t")
 }
 
+// IGNORE NULLS/RESPECT NULLS and FROM FIRST/FROM LAST change which row a
+// window function like LAG/NTH_VALUE returns; sql.WindowExpression has no
+// field for either, so they must round-trip raw rather than be silently
+// dropped.
+func TestSelectWindowNullTreatmentFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT LAG(x) IGNORE NULLS OVER (ORDER BY id) FROM t")
+	assertRaw(t, "SELECT NTH_VALUE(x, 2) FROM LAST OVER (ORDER BY id) FROM t")
+}
+
 // GROUP BY ... WITH ROLLUP has no typed home and round-trips raw (companion to the
 // existing rollup test, exercised here with HAVING).
 func TestSelectScalarSubqueryInWhere(t *testing.T) {
