@@ -2,6 +2,7 @@ package otelquery_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -143,6 +144,36 @@ func TestExportTraceWarningsAsErrors(t *testing.T) {
 	}
 	if stmt.Status().Code != codes.Error {
 		t.Errorf("statement span status = %v, want Error", stmt.Status().Code)
+	}
+}
+
+// TestExportTraceDriverErrorStatusSurvivesErrorWarning covers a statement that
+// both failed at the driver (ev.Err) and carries a SeverityError warning (e.g.
+// ForbidQueries) under WithWarningsAsErrors: the span status must keep the
+// driver error's own message as its description, not the generic warning
+// code — the warning is still visible as its own span event either way, but
+// the primary status field is the one field most backends surface without
+// digging into events, so it must carry the actual failure, not a fallback
+// obscuring it.
+func TestExportTraceDriverErrorStatusSurvivesErrorWarning(t *testing.T) {
+	exp, sr := recorder(t, otelquery.WithWarningsAsErrors())
+
+	trace := qt.New("CacheHit")
+	ctx := qt.ForbidQueries(qt.WithTrace(context.Background(), trace))
+	ev := queryEvent()
+	ev.Err = errors.New("pq: deadlock detected")
+	trace.RecordStatement(ctx, ev)
+	exp.ExportTrace(context.Background(), trace)
+
+	stmt := findSpan(sr.Ended(), "SELECT users")
+	if stmt == nil {
+		t.Fatal("statement span not found")
+	}
+	if stmt.Status().Code != codes.Error {
+		t.Fatalf("statement span status = %v, want Error", stmt.Status().Code)
+	}
+	if got, want := stmt.Status().Description, "pq: deadlock detected"; got != want {
+		t.Errorf("statement span status description = %q, want %q (the driver error, not the warning code)", got, want)
 	}
 }
 
