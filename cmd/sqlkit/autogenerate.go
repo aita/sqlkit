@@ -132,7 +132,7 @@ func (c *autogenerateCmd) Run() error {
 		return err
 	}
 	path := filepath.Join(c.Migrations, file.name)
-	if err := os.WriteFile(path, file.content, 0o644); err != nil {
+	if err := writeMigrationFile(path, file.content); err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stdout, "created %s\nReview it before applying; auto-generated migrations can need adjustment.\n", path) //nolint:errcheck // best-effort write to stdout
@@ -304,6 +304,24 @@ func renderMigrationFile(d migrationData) (migrationFile, error) {
 	}
 	name := time.Now().UTC().Format("20060102150405") + "_" + slug(d.Name) + ".go"
 	return migrationFile{name: name, content: formatted}, nil
+}
+
+// writeMigrationFile writes content to path, refusing to overwrite an
+// existing file: the filename is second-resolution, so generating two
+// migrations with the same name within the same second (a plausible
+// scripted/CI re-run) would otherwise silently truncate the first file's
+// content with no error and a misleading "created" success message.
+func writeMigrationFile(path string, content []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf("%s already exists (two migrations generated within the same second); wait a moment and retry", path)
+		}
+		return err
+	}
+	defer f.Close()
+	_, err = f.Write(content)
+	return err
 }
 
 // slug turns a migration name into a filename-safe lowercase token.
