@@ -122,6 +122,30 @@ func TestDiffNonAppendEnumRecreates(t *testing.T) {
 	}
 }
 
+// TestDiffDistinctGrantsOnSameObjectDoNotCollide covers two separate GRANTs on
+// the same object (SELECT to one role, INSERT to another) — a normal ACL
+// shape, not a variant of one grant. grantKey used to key only on
+// (ObjectType, Objects), so the second grant's map entry silently overwrote
+// the first: an unrelated, unchanged grant compared against the wrong entry
+// and REVOKEd with no matching re-GRANT to replace it.
+func TestDiffDistinctGrantsOnSameObjectDoNotCollide(t *testing.T) {
+	old := meta.Metadata{Grants: []meta.Grant{
+		{Privileges: []string{"SELECT"}, Objects: []string{"employees"}, Grantees: []string{"analyst"}},
+	}}
+	next := meta.Metadata{Grants: []meta.Grant{
+		{Privileges: []string{"SELECT"}, Objects: []string{"employees"}, Grantees: []string{"analyst"}}, // unchanged
+		{Privileges: []string{"INSERT"}, Objects: []string{"employees"}, Grantees: []string{"writer"}},  // newly added
+	}}
+	stmts := renderAll(t, mustDiff(t, old, next))
+	joined := strings.Join(stmts, "\n")
+	if strings.Contains(joined, "REVOKE") {
+		t.Fatalf("unchanged grant to %q must not be revoked:\n%s", "analyst", joined)
+	}
+	if !strings.Contains(joined, `GRANT INSERT ON TABLE "employees" TO "writer"`) {
+		t.Fatalf("missing GRANT for the newly added grantee:\n%s", joined)
+	}
+}
+
 func mustDiff(t *testing.T, old, next meta.Metadata) []sql.Statement {
 	t.Helper()
 	stmts, err := migrate.Diff(old, next, pg(t))

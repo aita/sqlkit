@@ -41,6 +41,29 @@ func TestRenderObjects(t *testing.T) {
 	}
 }
 
+// TestRenderDistinctGrantsOnSameObjectDoNotCollide covers two separate GRANTs
+// on the same object (SELECT to one role, INSERT to another) — a normal ACL
+// shape, not a variant of one grant. grantKey used to key only on
+// (ObjectType, Objects), so the second grant's map entry silently overwrote
+// the first: an unrelated, unchanged grant compared against the wrong entry
+// and revoked with no matching re-grant to replace it.
+func TestRenderDistinctGrantsOnSameObjectDoNotCollide(t *testing.T) {
+	source := meta.Metadata{Grants: []meta.Grant{
+		{Privileges: []string{"SELECT"}, Objects: []string{"employees"}, Grantees: []string{"analyst"}},
+	}}
+	target := meta.Metadata{Grants: []meta.Grant{
+		{Privileges: []string{"SELECT"}, Objects: []string{"employees"}, Grantees: []string{"analyst"}}, // unchanged
+		{Privileges: []string{"INSERT"}, Objects: []string{"employees"}, Grantees: []string{"writer"}},  // newly added
+	}}
+	res := render(t, source, target, "postgres", Renames{})
+	if strings.Contains(res.Up, "op.Revoke(") {
+		t.Fatalf("unchanged grant to %q must not be revoked, Up:\n%s", "analyst", res.Up)
+	}
+	if !strings.Contains(res.Up, "writer") {
+		t.Fatalf("missing grant for the newly added grantee, Up:\n%s", res.Up)
+	}
+}
+
 // TestRenderAppendedEnum covers the common enum change in the codegen-ops path:
 // appending a label renders op.AddEnumValue (one per added label, in order), not
 // op.DropEnum + op.CreateEnum. The reverse direction (Down) removes the label,
