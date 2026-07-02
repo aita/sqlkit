@@ -3,6 +3,8 @@ package otelquery_test
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -144,6 +146,41 @@ func TestExportTraceWarningsAsErrors(t *testing.T) {
 	}
 	if stmt.Status().Code != codes.Error {
 		t.Errorf("statement span status = %v, want Error", stmt.Status().Code)
+	}
+}
+
+// TestExportTraceLabelAttributesAreDeterministic covers ev.Labels/mark Attrs,
+// both Go maps: building their span attributes by ranging the map directly
+// produced a different attribute order across otherwise-identical runs. Order
+// doesn't matter to OTel itself, but repeats the operation many times (per
+// SKILL.md's determinism guidance) so a single lucky iteration order can't
+// mask the bug the way one assertion would.
+func TestExportTraceLabelAttributesAreDeterministic(t *testing.T) {
+	labelOrder := func() []string {
+		exp, sr := recorder(t)
+		trace := qt.New("op")
+		ev := queryEvent()
+		ev.Labels = map[string]string{"f": "1", "e": "2", "d": "3", "c": "4", "b": "5", "a": "6"}
+		trace.RecordStatement(context.Background(), ev)
+		exp.ExportTrace(context.Background(), trace)
+
+		stmt := findSpan(sr.Ended(), "SELECT users")
+		if stmt == nil {
+			t.Fatal("statement span not found")
+		}
+		var order []string
+		for _, kv := range stmt.Attributes() {
+			if strings.HasPrefix(string(kv.Key), "querytrace.label.") {
+				order = append(order, string(kv.Key))
+			}
+		}
+		return order
+	}
+	first := labelOrder()
+	for i := 0; i < 100; i++ {
+		if got := labelOrder(); !slices.Equal(got, first) {
+			t.Fatalf("label attribute order varies across runs: %v vs %v", first, got)
+		}
 	}
 }
 
