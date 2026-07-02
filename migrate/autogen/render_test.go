@@ -158,6 +158,29 @@ func TestRenderModifyColumn(t *testing.T) {
 	}
 }
 
+// TestRenderModifyColumnBareDefaultToggle covers columnPropsChanged: a bare
+// decl.Default() (HasDefault true, no expression — auto-increment) appearing
+// on a column must still trigger op.ModifyColumn, even though both the old
+// and new column's rendered default text are "" (a plain nil-DefaultExpr
+// comparison can't tell "no default" from "bare default" apart). Applying the
+// generated migration to PostgreSQL will itself fail loudly at that point
+// (sql.compileRestateColumn rejects an ALTER onto a bare default), but the
+// change must not be silently missing from the generated file in the first
+// place — that was the actual bug (a migration that looks complete on review
+// but omits the column's new auto-increment default entirely).
+func TestRenderModifyColumnBareDefaultToggle(t *testing.T) {
+	source := decl.NewCatalog(decl.DefaultSchema("public"))
+	source.Table("users", decl.Column("id", decl.BigInt, decl.PrimaryKey()))
+	target := decl.NewCatalog(decl.DefaultSchema("public"))
+	target.Table("users", decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()))
+
+	res := render(t, build(t, source), build(t, target), "postgres", Renames{})
+	want := `op.ModifyColumn("users", decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()))`
+	if !strings.Contains(res.Up, want) {
+		t.Errorf("Up missing %q (the bare-default toggle must not be silently dropped):\n%s", want, res.Up)
+	}
+}
+
 func TestRenderColumnRename(t *testing.T) {
 	source := decl.NewCatalog(decl.DefaultSchema("public"))
 	source.Table("users",

@@ -819,7 +819,11 @@ func (r *renderer) columnPropsChanged(oc, nc meta.Column) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return od != nd, nil
+	// od/nd alone can't see a bare (auto-increment) default: a nil DefaultExpr
+	// renders "" whether or not HasDefault is set, so a column gaining or
+	// losing a bare decl.Default() would otherwise compare equal and the
+	// change would be silently dropped from the rendered migration.
+	return od != nd || oc.HasDefault != nc.HasDefault, nil
 }
 
 func (r *renderer) sameType(a, b meta.Column) bool {

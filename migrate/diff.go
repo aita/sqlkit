@@ -290,14 +290,18 @@ func columnAlterations(alter *sql.AlterTableBuilder, oc, nc meta.Column, d sql.D
 	if err != nil {
 		return false, err
 	}
-	defaultChanged := oldDefault != newDefault
+	// oldDefault/newDefault alone can't see a bare (auto-increment) default: a
+	// nil DefaultExpr renders "" whether or not HasDefault is set, so a column
+	// gaining or losing a bare decl.Default() would otherwise compare equal and
+	// the change would be silently dropped from the diff.
+	defaultChanged := oldDefault != newDefault || oc.HasDefault != nc.HasDefault
 	if !typeChanged && !nullChanged && !defaultChanged {
 		return false, nil
 	}
 
 	if d.Name() == "mysql" {
 		// MySQL restates the column in one MODIFY COLUMN; nc.ColumnDef carries the
-		// new type, nullability, and default.
+		// new type, nullability, and default (including AutoIncrement).
 		*alter = alter.RestateColumn(nc.ColumnDef())
 		return true, nil
 	}
@@ -315,9 +319,17 @@ func columnAlterations(alter *sql.AlterTableBuilder, oc, nc meta.Column, d sql.D
 		}
 	}
 	if defaultChanged {
-		if nc.DefaultExpr != nil {
+		switch {
+		case nc.DefaultExpr != nil:
 			*alter = alter.SetDefault(nc.Name, nc.DefaultExpr)
-		} else {
+		case nc.HasDefault:
+			// A bare default (HasDefault, no DefaultExpr) means "auto-increment" —
+			// PostgreSQL has no ALTER COLUMN form of that; it only exists as
+			// CREATE TABLE's bigserial sugar over a backing sequence. Reject
+			// rather than fall through to DROP DEFAULT below, which would emit
+			// valid SQL that silently does the opposite of what was asked.
+			return false, fmt.Errorf("migrate: column %q: cannot ALTER a bare (auto-increment) default onto an existing column on the %s dialect; set an explicit DefaultExpr, or recreate the column", nc.Name, d.Name())
+		default:
 			*alter = alter.DropDefault(nc.Name)
 		}
 	}
