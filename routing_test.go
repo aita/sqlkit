@@ -201,6 +201,30 @@ func TestReadWriteRouterSingleDatabase(t *testing.T) {
 	}
 }
 
+// An AccessUnknown statement (an opaque raw string the classifier can't read,
+// e.g. one starting with a CTE) must go to the primary, on the same "stay on
+// the safe side" contract as a write — never to a read replica.
+func TestReadWriteRouterUnknownAccessGoesToPrimary(t *testing.T) {
+	primary, replica := rowFake(), rowFake()
+	router := sqlkit.NewRouter(map[string]sqlkit.Backend{
+		"default": sqlkit.DB(primary.DB()),
+		"replica": sqlkit.DB(replica.DB()),
+	}, sqlkit.ReadWriteRouter(sqlkit.WithReplicas("replica")))
+	db := sqlkit.WrapExecutor(router)
+	ctx := context.Background()
+
+	var out []User
+	if err := db.RawSQL(ctx, "WITH t AS (SELECT 1) SELECT * FROM t").Scan(&out); err != nil {
+		t.Fatalf("RawSQL Scan error = %v", err)
+	}
+	if len(primary.Queries()) != 1 {
+		t.Fatalf("AccessUnknown statement must hit primary, primary queries = %d", len(primary.Queries()))
+	}
+	if len(replica.Queries()) != 0 {
+		t.Fatalf("AccessUnknown statement must never hit a replica, replica queries = %d", len(replica.Queries()))
+	}
+}
+
 // ReadWriteRouter balances reads round-robin across several replicas.
 func TestReadWriteRouterBalancesReplicas(t *testing.T) {
 	primary, ra, rb := rowFake(), rowFake(), rowFake()
