@@ -821,37 +821,65 @@ func TestRegisterTypeAndDialects(t *testing.T) {
 	}
 }
 
+// buildValidCatalog builds a minimal valid catalog, so any Build error it
+// returns comes from the process-global type registry, not the catalog itself.
+func buildValidCatalog() error {
+	cat := decl.NewCatalog()
+	cat.Table("users", decl.Column("id", decl.BigInt, decl.PrimaryKey()))
+	_, err := cat.Build()
+	return err
+}
+
 // TestRegisterTypeRejectsEmptyKind: an empty kind is invalid input, not a
-// legitimate way to reach the Type("") escape-hatch fallback.
+// legitimate way to reach the Type("") escape-hatch fallback. RegisterType has
+// no error return, so the invalid call is recorded and reported by the next
+// Build, and the registry stays untouched.
 func TestRegisterTypeRejectsEmptyKind(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatal("RegisterType(\"\", ...) should panic")
-		}
-	}()
+	t.Cleanup(decl.ResetRegisterTypeErrs)
+
 	decl.RegisterType("", map[string]string{"postgres": "whatever"})
+
+	err := buildValidCatalog()
+	if err == nil {
+		t.Fatal("Build should report the empty-kind RegisterType call")
+	}
+	if want := `RegisterType requires a non-empty kind`; !strings.Contains(err.Error(), want) {
+		t.Fatalf("Build error = %q, want it to contain %q", err, want)
+	}
+	// The rejected registration must not create a resolvable Type("") entry.
+	if _, ok := decl.Type("").Engine("postgres"); ok {
+		t.Errorf("Type(\"\") should not resolve after a rejected empty-kind registration")
+	}
+
+	decl.ResetRegisterTypeErrs()
+	if err := buildValidCatalog(); err != nil {
+		t.Fatalf("Build after resetting recorded registry errors = %v, want nil", err)
+	}
 }
 
 // TestRegisterTypeRejectsBuiltinRedefinition: dbTypeRegistry is process-global,
 // so silently letting a later RegisterType call redefine an already-registered
 // (kind, dialect) pair — most often a typo'd built-in kind name like "bigint"
 // — would retarget every column of that kind, in every catalog sharing the
-// process, to the wrong engine type with no error. RegisterType must panic
-// instead, leaving the existing mapping untouched.
+// process, to the wrong engine type with no error. RegisterType must leave the
+// existing mapping untouched and record an error that the next Build reports.
 func TestRegisterTypeRejectsBuiltinRedefinition(t *testing.T) {
+	t.Cleanup(decl.ResetRegisterTypeErrs)
+
 	before, ok := decl.BigInt.Engine("postgres")
 	if !ok {
 		t.Fatal("precondition: BigInt should resolve on postgres")
 	}
 
-	func() {
-		defer func() {
-			if recover() == nil {
-				t.Fatal("RegisterType redefining bigint's postgres name should panic")
-			}
-		}()
-		decl.RegisterType("bigint", map[string]string{"postgres": "text"})
-	}()
+	decl.RegisterType("bigint", map[string]string{"postgres": "text"})
+
+	err := buildValidCatalog()
+	if err == nil {
+		t.Fatal("Build should report the conflicting RegisterType call")
+	}
+	if want := `RegisterType("bigint") redefines dialect "postgres" from "int8" to "text"`; !strings.Contains(err.Error(), want) {
+		t.Fatalf("Build error = %q, want it to contain %q", err, want)
+	}
 
 	after, ok := decl.BigInt.Engine("postgres")
 	if !ok || after != before {

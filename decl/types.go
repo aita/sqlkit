@@ -1,8 +1,10 @@
 package decl
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"sync"
 
 	"github.com/aita/sqlkit/meta"
@@ -49,6 +51,11 @@ type DataType struct {
 var (
 	dbTypeMu       sync.RWMutex
 	dbTypeRegistry = map[string]map[string]string{}
+	// dbTypeErrs records invalid RegisterType calls (empty kind, conflicting
+	// redefinition). RegisterType has no error return, so following the
+	// package's collect-then-report pattern the errors surface from
+	// Catalog.Build. Guarded by dbTypeMu like the registry itself.
+	dbTypeErrs []error
 )
 
 // RegisterType registers (or extends) the engine type names a type kind resolves
@@ -64,31 +71,51 @@ var (
 //	})
 //	decl.Column("shape", decl.Type("geometry"))
 //
-// dbTypeRegistry is process-global, so it panics on an empty kind (a Type("")
-// column would otherwise silently resolve through it) and on redefining an
-// already-registered (kind, dialect) pair to a different engine name — most
+// dbTypeRegistry is process-global, so RegisterType rejects an empty kind (a
+// Type("") column would otherwise silently resolve through it) and redefining
+// an already-registered (kind, dialect) pair to a different engine name — most
 // often typoing a built-in kind's name (bigint, text, ...), which would
 // otherwise silently retarget every column of that kind, in every catalog
-// sharing the process, to the wrong engine type. Adding a dialect a kind
-// doesn't have yet is unaffected; this only rejects overwriting one it
-// already has.
+// sharing the process, to the wrong engine type. A rejected registration
+// leaves the registry untouched and is recorded as an error that the next
+// Catalog.Build (or BuildTable) reports, since RegisterType itself has no
+// error return. Adding a dialect a kind doesn't have yet is unaffected; this
+// only rejects overwriting one it already has.
 func RegisterType(kind string, names map[string]string) {
-	if kind == "" {
-		panic("decl: RegisterType requires a non-empty kind")
-	}
 	dbTypeMu.Lock()
 	defer dbTypeMu.Unlock()
+	if kind == "" {
+		dbTypeErrs = append(dbTypeErrs, errors.New("RegisterType requires a non-empty kind"))
+		return
+	}
 	existing := dbTypeRegistry[kind]
 	if existing == nil {
 		existing = make(map[string]string, len(names))
 		dbTypeRegistry[kind] = existing
 	}
-	for dialect, name := range names {
+	// Iterate dialects in sorted order so a call with several conflicting
+	// entries records its errors deterministically.
+	dialects := make([]string, 0, len(names))
+	for dialect := range names {
+		dialects = append(dialects, dialect)
+	}
+	sort.Strings(dialects)
+	for _, dialect := range dialects {
+		name := names[dialect]
 		if prev, ok := existing[dialect]; ok && prev != name {
-			panic(fmt.Sprintf("decl: RegisterType(%q) redefines dialect %q from %q to %q", kind, dialect, prev, name))
+			dbTypeErrs = append(dbTypeErrs, fmt.Errorf("RegisterType(%q) redefines dialect %q from %q to %q", kind, dialect, prev, name))
+			continue
 		}
 		existing[dialect] = name
 	}
+}
+
+// registerTypeErrs snapshots the invalid RegisterType calls recorded so far,
+// for Catalog.Build to report.
+func registerTypeErrs() []error {
+	dbTypeMu.RLock()
+	defer dbTypeMu.RUnlock()
+	return append([]error(nil), dbTypeErrs...)
 }
 
 // lookupDBType returns the registered per-dialect names for a kind.

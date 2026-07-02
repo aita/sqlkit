@@ -19,6 +19,10 @@ import (
 // renderer consume.
 func (d *Catalog) Build() (meta.Metadata, error) {
 	errs := append([]error(nil), d.errs...)
+	// Invalid RegisterType calls (empty kind, conflicting redefinition) have no
+	// error return of their own; they are recorded on the type registry and
+	// reported here, the package's collect-then-report point.
+	errs = append(errs, registerTypeErrs()...)
 
 	// Resolve foreign keys into a copy of the tables so Build stays pure: a table
 	// starts with no foreign keys, so the first append allocates a fresh slice
