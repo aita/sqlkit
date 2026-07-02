@@ -9,6 +9,7 @@ import (
 
 	"github.com/aita/sqlkit"
 	"github.com/aita/sqlkit/internal/testutil"
+	"github.com/aita/sqlkit/sql"
 )
 
 // routerFunc adapts a function to the Router interface.
@@ -485,6 +486,45 @@ func TestStatementAccess(t *testing.T) {
 				t.Fatalf("IsWrite() = %v, want %v", got, want)
 			}
 		})
+	}
+}
+
+// TestStatementAccessWritableCTEAndBareAST covers two gaps Access() used to
+// miss because it only recognized sqlkit's typed SelectQuery/UnionQuery and
+// the sql package's *Builder types, never a bare parsed/hand-built AST (what
+// a parser, or RawSQL given a sql.Query, hands back) nor a data-modifying CTE
+// under a top-level SELECT. Both must report AccessWrite — a false AccessRead
+// here would route a write to a read replica.
+func TestStatementAccessWritableCTEAndBareAST(t *testing.T) {
+	users := sql.Table{Name: sql.NewIdent("users")}
+
+	// A read-only CTE stays a read.
+	readCTE := sql.Select(sql.Col("id")).From(users).CTE("recent")
+	readQuery := sql.Select(sql.Star()).From(readCTE).WithCTE(readCTE)
+	if got := (sqlkit.Statement{Op: sqlkit.OpQuery, Query: readQuery}).Access(); got != sqlkit.AccessRead {
+		t.Errorf("read-only CTE Access() = %v, want AccessRead", got)
+	}
+
+	// A data-modifying CTE writes even though the top-level statement is a
+	// SELECT: WITH ins AS (INSERT ... RETURNING ...) SELECT * FROM ins.
+	insert := sql.InsertInto(users).Columns("email").Values("a@example.com").Returning(sql.Col("id"))
+	writeCTE := readCTE.WithBody(insert)
+	writeQuery := sql.Select(sql.Star()).From(writeCTE).WithCTE(writeCTE)
+	if got := (sqlkit.Statement{Op: sqlkit.OpQuery, Query: writeQuery}).Access(); got != sqlkit.AccessWrite {
+		t.Errorf("data-modifying CTE Access() = %v, want AccessWrite (would route the write to a read replica)", got)
+	}
+
+	// A bare sql.SelectStmt (not wrapped in sql.SelectBuilder) — what a parser,
+	// or RawSQL given a built sql.Query, produces — with a locking clause.
+	bareLocking := sql.Select(sql.Star()).From(users).ForUpdate().Stmt()
+	if got := (sqlkit.Statement{Op: sqlkit.OpQuery, Query: bareLocking}).Access(); got != sqlkit.AccessWrite {
+		t.Errorf("bare locking SelectStmt Access() = %v, want AccessWrite", got)
+	}
+
+	// A bare sql.SelectStmt without a locking clause stays a read.
+	bareRead := sql.Select(sql.Star()).From(users).Stmt()
+	if got := (sqlkit.Statement{Op: sqlkit.OpQuery, Query: bareRead}).Access(); got != sqlkit.AccessRead {
+		t.Errorf("bare SelectStmt Access() = %v, want AccessRead", got)
 	}
 }
 
