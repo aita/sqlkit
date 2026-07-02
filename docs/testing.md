@@ -85,6 +85,34 @@ func TestBlog(t *testing.T) {
 Foreign-key ordering of inserted *rows* is still the caller's responsibility:
 insert parent rows before the children that reference them.
 
+### Without a sqlkit catalog
+
+`New` needs a `meta.Metadata` (a built schema catalog) to render the schema and
+to know which tables to drop and truncate. Code that does not use the catalog —
+a project on plain `database/sql`, `sqlx`, or `pgx` — reaches for
+[`sqltest.NewRaw`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#NewRaw)
+instead, which wraps a standard `*sql.DB` and manages the schema from raw DDL:
+
+```go
+func TestUsers(t *testing.T) {
+    tdb := sqltest.NewRaw(openTestDB(t), sqlkit.PostgreSQLDialect{})
+    tdb.SetupSchemaSQL(t, `
+        CREATE TABLE users (id BIGSERIAL PRIMARY KEY, email TEXT NOT NULL);
+        CREATE TABLE posts (id BIGSERIAL PRIMARY KEY, user_id BIGINT REFERENCES users(id));
+    `) // applied now, the created tables dropped on t.Cleanup
+
+    // ... exercise the code under test against the seeded data.
+}
+```
+
+`SetupSchemaSQL` (apply now, drop on `t.Cleanup`) and `ApplySchemaSQL` (apply,
+no teardown) take one or more DDL strings — pass an embedded `.sql` file as
+easily as an inline literal. The teardown is the same foreign-key-safe drop the
+catalog path uses (`CASCADE` on PostgreSQL, foreign-key checks toggled on
+MySQL), driven by the `CREATE TABLE` names parsed from the DDL; `TruncateTables`
+resets the data between cases. The `Tx`, `Snapshot`, and seeding helpers all
+work on a `NewRaw` handle unchanged.
+
 ### Seeding by column name
 
 `InsertRows` and `Fixture` address rows through a generated `sqlkit.Table`

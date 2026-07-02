@@ -28,6 +28,11 @@ import (
 type DB struct {
 	db *sqlkit.Database
 	md meta.Metadata
+	// tables holds the qualified names of the tables a raw-DDL schema created
+	// (via ApplySchemaSQL/SetupSchemaSQL), in creation order. It drives the
+	// foreign-key-safe teardown of a DB built with NewRaw, where there is no
+	// meta.Metadata to enumerate. It stays nil for a metadata-backed DB.
+	tables []string
 }
 
 // New wraps db as a throwaway test database. It only builds the handle — it
