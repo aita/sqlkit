@@ -181,7 +181,8 @@ _ = codegen.Write("appdb", files) // or inspect files[i].Content yourself
 ```
 
 The mapper's hooks are consulted most-specific first (`OverrideFunc`, then
-`ColumnOverrides`, then `Overrides`), falling through to the built-in type
+`ColumnOverrides`, then `Overrides`, then a Go type pinned on the column at the
+schema source via `decl`'s `DataType.Go`), falling through to the built-in type
 tables; nullability is applied on top, so overrides pin the bare type. Exact
 numeric (`decimal`/`numeric`) columns map to `shopspring/decimal` by default —
 `float64` cannot scan them without losing precision — and the import lands in
