@@ -111,6 +111,29 @@ reads a generated key back the same cross-dialect way `InsertID` does
 handle the `db.InsertMap` / `db.InsertMapID` methods supply the dialect and
 connection for you.
 
+### Fixtures from files
+
+[`LoadFixtures`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#LoadFixtures)
+seeds a directory of per-table `.json` / `.csv` files — the file-based,
+language-agnostic counterpart of `Fixture` (which declares rows as Go structs),
+in the style of Rails and go-testfixtures:
+
+```go
+sqltest.LoadFixtures(t, db, sqlkit.PostgreSQLDialect{}, "testdata/blog")
+// testdata/blog/01_users.json, testdata/blog/02_posts.csv → tables users, posts
+```
+
+Each file seeds the table named after it. Files load in lexical filename order,
+so a numeric prefix controls foreign-key order (parents before children) and is
+stripped from the table name, so `01_users.json` loads into `users`. JSON files
+are an array of `{column: value}` objects (numbers stay integers when whole,
+`null` is `NULL`, a nested array/object seeds a JSON column as text); CSV files
+have a header row of column names with the token `\N` meaning `NULL`. Each row
+keeps its own column set, so a row that omits a column gets that column's
+database default.
+[`LoadFixtureFile`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#LoadFixtureFile)
+loads a single file when the table name is decoupled from the filename.
+
 ## Query spy
 
 The same package turns a [`querytrace.Trace`](observability.md) into a **query
