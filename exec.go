@@ -304,7 +304,17 @@ func (r Rows) scanBatched(dest any) (err error) {
 	if scanErr == nil {
 		dv.Elem().Set(acc)
 	}
-	if err := afterQuery(r.ctx, ex.hooks(), Statement{Op: OpQuery, Dialect: dialect}, dest, scanErr); err != nil {
+	// This summary Statement carries no SQL/AST (the chunks are conceptually one
+	// result, not any single statement), so Kind's no-AST fallback classifies it
+	// from Op alone: OpExec for a batched write (RETURNING split by AutoChunk)
+	// keeps Kind/Access/IsWrite reporting a write here too, matching the doc
+	// contract ("a write carried over the row-returning path... is still
+	// reported as a write") that the per-chunk statements above already satisfy.
+	afterOp := OpQuery
+	if r.batchWrite {
+		afterOp = OpExec
+	}
+	if err := afterQuery(r.ctx, ex.hooks(), Statement{Op: afterOp, Dialect: dialect}, dest, scanErr); err != nil {
 		return err
 	}
 	if len(r.preloads) > 0 {
