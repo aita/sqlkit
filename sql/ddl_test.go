@@ -926,3 +926,40 @@ func TestDDLCompileRemainingBranches(t *testing.T) {
 	// CREATE VIEW whose body fails to compile.
 	errOn("view bad body", pg, CreateView(tbl, Select(bad).From(orgs)))
 }
+
+// PostgreSQL-only object kinds — sequences, enum types (CREATE TYPE ... AS ENUM),
+// extensions, and materialized views — have no MySQL equivalent, so compiling
+// their DDL for MySQL must fail with a descriptive error naming the dialect rather
+// than emit SQL the engine rejects. PostgreSQL still renders each.
+func TestPostgresOnlyObjectsRejectedOnMySQL(t *testing.T) {
+	mv := Table{Name: NewIdent("mv")}
+	body := Select(Col("id")).From(Table{Name: NewIdent("t")})
+	cases := []struct {
+		name    string
+		stmt    Statement
+		feature string
+	}{
+		{"create sequence", CreateSequence(Table{Name: NewIdent("s")}), "sequences"},
+		{"drop sequence", DropSequence("s"), "sequences"},
+		{"create enum", CreateEnum("mood", "happy", "sad"), "enum types"},
+		{"drop type", DropType("mood"), "enum types"},
+		{"alter type add value", AlterTypeAddValue("mood", "meh"), "enum types"},
+		{"alter type rename value", AlterTypeRenameValue("mood", "sad", "down"), "enum types"},
+		{"create extension", CreateExtension("hstore"), "extensions"},
+		{"drop extension", DropExtension("hstore"), "extensions"},
+		{"create materialized view", CreateMaterializedView(mv, body), "materialized views"},
+		{"drop materialized view", DropMaterializedView(mv), "materialized views"},
+		{"refresh materialized view", RefreshMaterializedView(mv), "materialized views"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, _, err := tc.stmt.ToSQL(MySQLDialect{}); err == nil ||
+				!strings.Contains(err.Error(), tc.feature) {
+				t.Errorf("ToSQL(mysql) error = %v, want a rejection mentioning %q", err, tc.feature)
+			}
+			if _, _, err := tc.stmt.ToSQL(PostgreSQLDialect{}); err != nil {
+				t.Errorf("ToSQL(postgres) error = %v, want success", err)
+			}
+		})
+	}
+}

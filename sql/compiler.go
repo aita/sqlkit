@@ -716,6 +716,36 @@ func (c *Compiler) compileValuesSource(s SourceExpression) (string, []any, error
 		return "", nil, fmt.Errorf("sqlkit/sql: VALUES source needs a column name per value for this dialect")
 	}
 
+	// Per column, find the first row whose value the dialect can type (a NULL
+	// or otherwise unrecognized value in row 0 must not silently leave the
+	// whole column untyped when a later row does carry a typeable value) and
+	// remember which row to attach the CAST to.
+	castRow := make([]int, width)
+	castType := make([]string, width)
+	for i := range castRow {
+		castRow[i] = -1
+	}
+	if !union {
+		if caster, ok := c.Dialect.(ValuesCaster); ok {
+			for ri, row := range v.Rows {
+				if len(row) != width {
+					break // reported below, once, with the row index
+				}
+				for ci, value := range row {
+					if castRow[ci] != -1 {
+						continue
+					}
+					if ve, ok := value.(ValueExpression); ok {
+						if t, ok := caster.ValuesCastType(ve.Value); ok {
+							castRow[ci] = ri
+							castType[ci] = t
+						}
+					}
+				}
+			}
+		}
+	}
+
 	var sb strings.Builder
 	var args []any
 	sb.WriteString("(")
@@ -746,16 +776,11 @@ func (c *Compiler) compileValuesSource(s SourceExpression) (string, []any, error
 			}
 			// PostgreSQL infers an unannotated VALUES parameter as text, which
 			// breaks a join/assignment against a non-text column. Type the first
-			// row's values so the server infers each column's type; other rows
-			// inherit it. (MySQL renders the union form and is not a ValuesCaster.)
-			if !union && ri == 0 {
-				if caster, ok := c.Dialect.(ValuesCaster); ok {
-					if ve, ok := value.(ValueExpression); ok {
-						if castType, ok := caster.ValuesCastType(ve.Value); ok {
-							valueSQL = "CAST(" + valueSQL + " AS " + castType + ")"
-						}
-					}
-				}
+			// typeable row's value in each column so the server infers that
+			// column's type; other rows inherit it. (MySQL renders the union
+			// form and is not a ValuesCaster.)
+			if !union && castRow[ci] == ri {
+				valueSQL = "CAST(" + valueSQL + " AS " + castType[ci] + ")"
 			}
 			sb.WriteString(valueSQL)
 			// Only the first UNION arm names the columns; the rest inherit them.
@@ -804,6 +829,13 @@ func (c *Compiler) CompileJoin(join JoinClause) (string, []any, error) {
 	}
 	if join.On != nil && len(join.Using) > 0 {
 		return "", nil, fmt.Errorf("sqlkit/sql: a join cannot carry both ON and USING")
+	}
+	// MySQL has no FULL [OUTER] JOIN; emitting it verbatim produces SQL the engine
+	// rejects. Surface it as a descriptive compile-time error naming the dialect,
+	// the same stance the compiler takes for other dialect-unsupported constructs
+	// (a single-element row, GROUPING SETS, …).
+	if c.Dialect.Name() == "mysql" && strings.Contains(strings.ToUpper(join.Kind), "FULL") {
+		return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support a FULL JOIN", c.Dialect.Name())
 	}
 	sourceSQL, args, err := c.CompileSource(join.Source)
 	if err != nil {
@@ -1338,7 +1370,7 @@ func (c *Compiler) CompileUpdate(q UpdateStmt) (string, []any, error) {
 
 	where := q.Where
 	if !inline {
-		if err := rejectOuterJoins(q.Joins); err != nil {
+		if err := rejectUnfoldableJoins(q.Joins); err != nil {
 			return "", nil, err
 		}
 		if sources := joinSources(q.From, q.Joins); len(sources) > 0 {
@@ -1410,7 +1442,7 @@ func (c *Compiler) CompileDelete(q DeleteStmt) (string, []any, error) {
 			args = append(args, joinArgs...)
 		}
 	} else {
-		if err := rejectOuterJoins(q.Joins); err != nil {
+		if err := rejectUnfoldableJoins(q.Joins); err != nil {
 			return "", nil, err
 		}
 		sb.WriteString("DELETE FROM ")
@@ -1455,16 +1487,27 @@ func joinSources(sources []Source, joins []JoinClause) []Source {
 	return out
 }
 
-// rejectOuterJoins errors on any non-inner join, for the standard FROM/USING
-// form (PostgreSQL) that folds join ON predicates into WHERE. That folding is
-// correct only for inner joins: a LEFT JOIN flattened this way would silently
-// become an inner join (e.g. an "outer row with no match" predicate turns
-// unsatisfiable), so reject it rather than emit wrong-set-of-rows SQL.
-func rejectOuterJoins(joins []JoinClause) error {
+// rejectUnfoldableJoins errors on any join whose condition the standard
+// FROM/USING form (PostgreSQL) cannot fold into WHERE. That fold takes only an
+// inner join's ON predicate, so two cases must be rejected rather than silently
+// mis-rendered:
+//
+//   - a non-inner join (LEFT/RIGHT/FULL): flattening its ON into WHERE would
+//     collapse the outer join to an inner one (an "outer row with no match"
+//     predicate turns unsatisfiable), changing the set of rows;
+//   - a NATURAL or USING join: its condition lives in the Natural/Using fields,
+//     not On, and foldJoinOns folds only On — so the condition would be dropped
+//     entirely, leaving an unconstrained cross product that updates/deletes every
+//     target row.
+func rejectUnfoldableJoins(joins []JoinClause) error {
 	for _, join := range joins {
 		if join.Kind != "JOIN" {
 			return fmt.Errorf("sqlkit/sql: %s in a multi-table UPDATE/DELETE is unsupported for this dialect "+
 				"(its ON would fold into WHERE, collapsing the outer join to an inner one); use an inner Join", join.Kind)
+		}
+		if join.Natural || len(join.Using) > 0 {
+			return fmt.Errorf("sqlkit/sql: a NATURAL or USING join in a multi-table UPDATE/DELETE is unsupported " +
+				"for this dialect (its condition cannot fold into WHERE); use an inner Join with an explicit ON")
 		}
 	}
 	return nil
