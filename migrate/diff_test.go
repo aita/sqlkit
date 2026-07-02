@@ -320,3 +320,48 @@ func TestDiffDeterministicDropOrder(t *testing.T) {
 		}
 	}
 }
+
+// A migration that introduces (or removes) a managed schema with objects in it
+// must emit CREATE SCHEMA before the objects and DROP SCHEMA after them — without
+// it the apply fails ("schema does not exist") or leaves an orphaned schema. The
+// diff engine omitted schema statements entirely (the #157 fix landed only in
+// meta.CreateSQL/DropSQL).
+func TestDiffManagedSchemaCreateAndDrop(t *testing.T) {
+	withSchema := meta.Metadata{
+		ManagedSchemas: []meta.Schema{{Name: "audit", Create: true}},
+		Tables:         []meta.Table{tbl("log", col("id", "int8"))},
+	}
+	withSchema.Tables[0].Schema = meta.Schema{Name: "audit"}
+
+	indexOf := func(rows []string, prefix string) int {
+		for i, r := range rows {
+			if strings.HasPrefix(r, prefix) {
+				return i
+			}
+		}
+		return -1
+	}
+
+	create := diff(t, md(), withSchema)
+	cs, ct := indexOf(create, `CREATE SCHEMA IF NOT EXISTS "audit"`), indexOf(create, `CREATE TABLE "audit"."log"`)
+	if cs < 0 {
+		t.Fatalf("create diff omitted CREATE SCHEMA: %v", create)
+	}
+	if ct < 0 || cs > ct {
+		t.Fatalf("CREATE SCHEMA must precede CREATE TABLE: %v", create)
+	}
+
+	drop := diff(t, withSchema, md())
+	ds, dt := indexOf(drop, `DROP SCHEMA IF EXISTS "audit"`), indexOf(drop, `DROP TABLE`)
+	if ds < 0 {
+		t.Fatalf("drop diff omitted DROP SCHEMA: %v", drop)
+	}
+	if dt < 0 || ds < dt {
+		t.Fatalf("DROP SCHEMA must follow DROP TABLE: %v", drop)
+	}
+
+	// An unchanged managed schema emits no schema statement.
+	if got := diff(t, withSchema, withSchema); len(got) != 0 {
+		t.Fatalf("no-op diff emitted statements: %v", got)
+	}
+}
