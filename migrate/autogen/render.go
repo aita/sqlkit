@@ -191,7 +191,10 @@ func (r *renderer) plan(from, to meta.Metadata) (string, error) {
 		}
 	}
 
-	objs := r.objectOps(from, to)
+	objs, err := r.objectOps(from, to)
+	if err != nil {
+		return "", err
+	}
 
 	// Renames run first: a renamed table must exist under its new name before
 	// the drops, alters, and re-adds that diffTable emitted against that name.
@@ -224,7 +227,7 @@ func (r *renderer) plan(from, to meta.Metadata) (string, error) {
 // objectOps renders the op.* calls that reconcile the non-table objects
 // (extensions, enums, sequences) between from and to. Names are rendered bare,
 // since the Operator qualifies them with the migration's schema.
-func (r *renderer) objectOps(from, to meta.Metadata) renderedObjects {
+func (r *renderer) objectOps(from, to meta.Metadata) (renderedObjects, error) {
 	var o renderedObjects
 
 	oldExt := map[string]meta.Extension{}
@@ -323,7 +326,11 @@ func (r *renderer) objectOps(from, to meta.Metadata) renderedObjects {
 	}
 	for _, v := range to.MaterializedViews {
 		if old, ok := oldMV[v.QualifiedName()]; !ok || !r.matviewEqual(old, v) {
-			o.createMatviews = append(o.createMatviews, r.matviewCreate(v))
+			create, err := r.matviewCreate(v)
+			if err != nil {
+				return renderedObjects{}, err
+			}
+			o.createMatviews = append(o.createMatviews, create)
 		}
 	}
 
@@ -345,7 +352,7 @@ func (r *renderer) objectOps(from, to meta.Metadata) renderedObjects {
 			o.createGrants = append(o.createGrants, r.grantCreate(g))
 		}
 	}
-	return o
+	return o, nil
 }
 
 // renderedObjects holds the rendered op.* calls for each object kind.
@@ -410,16 +417,19 @@ func (r *renderer) matviewEqual(a, b meta.MaterializedView) bool {
 	return at == bt
 }
 
-func (r *renderer) matviewCreate(v meta.MaterializedView) string {
+func (r *renderer) matviewCreate(v meta.MaterializedView) (string, error) {
 	r.usesSQL = true
-	body, _, _ := v.Query.ToSQL(r.dialect)
+	body, _, err := v.Query.ToSQL(r.dialect)
+	if err != nil {
+		return "", fmt.Errorf("autogen: materialized view %q: %w", v.Name, err)
+	}
 	var opts strings.Builder
 	if len(v.Columns) > 0 {
 		fmt.Fprintf(&opts, ", func(s sql.CreateMaterializedViewBuilder) sql.CreateMaterializedViewBuilder {\nreturn s.Columns(%s)\n}", quotedList(v.Columns))
 	} else if v.WithNoData {
 		opts.WriteString(", func(s sql.CreateMaterializedViewBuilder) sql.CreateMaterializedViewBuilder {\nreturn s.WithNoData()\n}")
 	}
-	return fmt.Sprintf("op.CreateMaterializedView(%q, sql.RawSQL(%q)%s)", v.Name, body, opts.String())
+	return fmt.Sprintf("op.CreateMaterializedView(%q, sql.RawSQL(%q)%s)", v.Name, body, opts.String()), nil
 }
 
 func (r *renderer) grantCreate(g meta.Grant) string {

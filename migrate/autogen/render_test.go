@@ -1,6 +1,7 @@
 package autogen
 
 import (
+	"errors"
 	"fmt"
 	"go/format"
 	"strings"
@@ -340,6 +341,33 @@ func TestRenderPlainForeignKeyNoDeclImport(t *testing.T) {
 	}
 	if res.UsesDecl {
 		t.Errorf("a plain foreign key must not flag the decl import (unused import); Up=%s", res.Up)
+	}
+}
+
+// erroringQuery is a sql.Query whose ToSQL always fails, used to exercise the
+// materialized-view create path when the view's query cannot compile for the
+// target dialect.
+type erroringQuery struct{}
+
+func (erroringQuery) ToSQL(sql.Dialect) (string, []any, error) {
+	return "", nil, errors.New("erroringQuery: cannot compile")
+}
+
+// TestRenderMaterializedViewCompileErrorPropagates covers matviewCreate: a
+// materialized view whose query fails to compile for the target dialect must
+// fail Render with a descriptive error, not silently emit
+// op.CreateMaterializedView with an empty sql.RawSQL("") body that only fails
+// later, at apply time, against the real engine.
+func TestRenderMaterializedViewCompileErrorPropagates(t *testing.T) {
+	target := meta.Metadata{MaterializedViews: []meta.MaterializedView{
+		{Schema: "public", Name: "totals", Query: erroringQuery{}},
+	}}
+	_, err := Render(meta.Metadata{}, target, Options{Dialect: mustDialect(t, "postgres")})
+	if err == nil {
+		t.Fatal("expected Render to error on an uncompilable materialized view query, got nil")
+	}
+	if !strings.Contains(err.Error(), "totals") {
+		t.Fatalf("error should name the offending view: %v", err)
 	}
 }
 
