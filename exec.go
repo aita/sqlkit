@@ -308,7 +308,10 @@ func (r Rows) scanBatched(dest any) (err error) {
 		return err
 	}
 	if len(r.preloads) > 0 {
-		return applyPreloads(r.ctx, ex, dest, r.preloads)
+		// Route through preloadBinding, not the batch executor ex: a NoPropagate
+		// WithRoute detaches the preload follow-up onto its own binding (see
+		// Scan's identical call), and that must hold for a split base query too.
+		return applyPreloads(r.ctx, r.preloadBinding(), dest, r.preloads)
 	}
 	return nil
 }

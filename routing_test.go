@@ -408,6 +408,50 @@ func TestWithRouteNoPropagateLeavesPreloadToRouter(t *testing.T) {
 	}
 }
 
+// TestScanBatchedPreloadHonorsNoPropagate covers the split-query path of the
+// same guarantee TestWithRouteNoPropagateLeavesPreloadToRouter checks for an
+// unsplit one: scanBatched (a base query whose IN list auto-chunks into
+// several statements) must still route its Preload follow-up through
+// preloadEx, not through the batch executor derived from the hinted binding —
+// otherwise NoPropagate silently stops working the moment a preloaded query
+// also splits.
+func TestScanBatchedPreloadHonorsNoPropagate(t *testing.T) {
+	mk := func() *testutil.Fake {
+		return &testutil.Fake{QueryFunc: func(s string, _ []any) (testutil.Result, error) {
+			if strings.Contains(s, `"public"."posts"`) {
+				return testutil.Result{Columns: []string{"id", "user_id", "title"}, Rows: [][]driver.Value{
+					{int64(10), int64(1), "a"},
+				}}, nil
+			}
+			return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}}}, nil
+		}}
+	}
+	primary, replica := mk(), mk()
+	router := sqlkit.NewRouter(map[string]sqlkit.Backend{
+		"default": sqlkit.DB(primary.DB()),
+		"replica": sqlkit.DB(replica.DB()),
+	}, rwSplit)
+	db := sqlkit.WrapExecutor(router, sqlkit.WithAutoChunk(true))
+	ctx := context.Background()
+
+	var users []preUser
+	err := db.Select(Users.ID).From(Users).Where(Users.ID.In(1, 2)).
+		AutoChunk(sqlkit.ChunkSize(1)).
+		Preload(Posts).
+		All(ctx, sqlkit.WithRoute("default", sqlkit.NoPropagate)).Scan(&users)
+	if err != nil {
+		t.Fatalf("Preload error = %v", err)
+	}
+	// Both split base chunks hinted to primary; the child preload routes
+	// independently (by rwSplit's read policy) to the replica.
+	if len(primary.Queries()) != 2 {
+		t.Fatalf("both base chunks should hit primary, primary queries = %d", len(primary.Queries()))
+	}
+	if len(replica.Queries()) != 1 {
+		t.Fatalf("the preload should route to replica, replica queries = %d", len(replica.Queries()))
+	}
+}
+
 // preloadRoutedDB wires two backends whose fakes both serve the users base query
 // and the posts follow-up, so a test can see which backend each landed on.
 func preloadRoutedDB(t *testing.T) (*sqlkit.Database, *testutil.Fake, *testutil.Fake) {
