@@ -212,6 +212,33 @@ func TestDeleteReturningSplitsByInList(t *testing.T) {
 	}
 }
 
+// TestBatchedReturningWriteReportsIsWriteTrue covers the single summary
+// AfterQuery hook call scanBatched makes after a RETURNING write split by
+// AutoChunk: the per-chunk statements correctly carry SQL text, but the
+// summary call passed a bare Statement{Op: OpQuery} with no SQL/AST, which
+// falls through Kind's no-AST fallback to Op alone -- OpQuery reads as
+// KindSelect regardless of the underlying statement being a write, so a hook
+// consulting stmt.IsWrite()/Kind()/Access() (an audit log, a read/write
+// metrics collector) sees a write reported as a read.
+func TestBatchedReturningWriteReportsIsWriteTrue(t *testing.T) {
+	fake := returningFake(func(args []any) int { return len(args) })
+	obs := &captureResults{}
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true), sqlkit.WithHooks(obs.hooks()))
+
+	ids := []int64{1, 2, 3, 4, 5}
+	var out []User
+	if err := db.Delete(Users).Where(Users.ID.In(ids...)).AutoChunk(sqlkit.ChunkSize(2)).
+		Returning().All(context.Background()).Scan(&out); err != nil {
+		t.Fatalf("delete returning error = %v", err)
+	}
+	if len(obs.stmts) != 1 {
+		t.Fatalf("AfterQuery calls = %d, want 1", len(obs.stmts))
+	}
+	if !obs.stmts[0].IsWrite() {
+		t.Errorf("batched RETURNING write's summary Statement.IsWrite() = false, want true (Kind = %s)", obs.stmts[0].Kind())
+	}
+}
+
 func TestWithAutoChunkFalseDisablesSplitting(t *testing.T) {
 	fake := &testutil.Fake{}
 	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(false))
