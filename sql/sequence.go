@@ -31,6 +31,9 @@ func (s CreateSequenceStmt) ToSQL(d Dialect) (string, []any, error) {
 	return out, nil, err
 }
 func (s CreateSequenceStmt) compileDDL(c *Compiler) (string, error) {
+	if err := c.requirePostgresObject("sequences"); err != nil {
+		return "", err
+	}
 	if s.Sequence.Name.IsZero() {
 		return "", fmt.Errorf("sqlkit/sql: CREATE SEQUENCE requires a name")
 	}
@@ -158,6 +161,9 @@ func (s DropSequenceStmt) ToSQL(d Dialect) (string, []any, error) {
 	return out, nil, err
 }
 func (s DropSequenceStmt) compileDDL(c *Compiler) (string, error) {
+	if err := c.requirePostgresObject("sequences"); err != nil {
+		return "", err
+	}
 	if len(s.Names) == 0 {
 		return "", fmt.Errorf("sqlkit/sql: DROP SEQUENCE requires a name")
 	}
