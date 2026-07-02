@@ -366,8 +366,11 @@ func writeScaffold(dir, pkg, name, downField string) (path, revision string, err
 		}
 		return "", "", err
 	}
-	defer f.Close()
 	if _, err := f.Write([]byte(content)); err != nil {
+		_ = f.Close()
+		return "", "", err
+	}
+	if err := f.Close(); err != nil {
 		return "", "", err
 	}
 	return path, revision, nil

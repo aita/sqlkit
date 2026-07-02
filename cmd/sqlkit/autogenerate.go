@@ -330,9 +330,11 @@ func writeMigrationFile(path string, content []byte) error {
 		}
 		return err
 	}
-	defer f.Close()
-	_, err = f.Write(content)
-	return err
+	if _, err := f.Write(content); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // slug turns a migration name into a filename-safe lowercase token.
