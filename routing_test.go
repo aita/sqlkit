@@ -456,6 +456,12 @@ func TestStatementKindAndIsWrite(t *testing.T) {
 		{"raw-select", sqlkit.Statement{Op: sqlkit.OpQuery, SQL: "SELECT 1"}, sqlkit.KindRawRead, false},
 		{"raw-select-for-update", sqlkit.Statement{Op: sqlkit.OpQuery, SQL: "SELECT * FROM users FOR UPDATE"}, sqlkit.KindRawRead, true},
 		{"raw-unknown", sqlkit.Statement{Op: sqlkit.OpQuery, SQL: "UPDATE users SET x = 1"}, sqlkit.KindRawUnknown, true},
+		// A DDL statement (e.g. run through RawSQL(...).Scan(...), which always
+		// sets Op: OpQuery even for a DDL query — unlike Database.Exec/Session.Exec,
+		// which set Op: OpExec) must still classify as DDL/write from its AST
+		// shape alone, not fall back to Op and misreport a read.
+		{"ddl-via-query-op", sqlkit.Statement{Op: sqlkit.OpQuery, Query: sql.CreateTable(sql.Table{Name: sql.NewIdent("t")}).
+			Column(sql.ColumnDef{Name: sql.NewIdent("id"), Type: sql.EngineType{Name: "int8"}})}, sqlkit.KindDDL, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
