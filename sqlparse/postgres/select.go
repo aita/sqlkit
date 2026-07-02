@@ -416,6 +416,17 @@ func convertWith(wc *pg.WithClause) ([]sql.CTE, error) {
 		if cte == nil {
 			return nil, sqlparse.Unsupportedf("WITH item %T", node.GetNode())
 		}
+		// SEARCH BREADTH/DEPTH FIRST adds a synthetic ordering column and CYCLE
+		// adds cycle-detection columns that can also change recursion termination;
+		// sqlkit has no AST node for either, so dropping them would silently
+		// change the result's column set (and, for CYCLE, its termination
+		// behavior). Fall back to raw.
+		if cte.GetSearchClause() != nil {
+			return nil, sqlparse.Unsupported("CTE with SEARCH clause")
+		}
+		if cte.GetCycleClause() != nil {
+			return nil, sqlparse.Unsupported("CTE with CYCLE clause")
+		}
 		// [NOT] MATERIALIZED is an optimizer fence sqlkit cannot model; dropping it
 		// would erase a forced/forbidden-inlining directive that can change the
 		// execution semantics of a side-effecting CTE. Fall back to raw.
