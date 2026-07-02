@@ -423,6 +423,18 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 			return "", nil, err
 		}
 		args = append(args, patternArgs...)
+		if e.Escape != nil {
+			escapeSQL, escapeArgs, err := c.CompileExpression(e.Escape)
+			if err != nil {
+				return "", nil, err
+			}
+			args = append(args, escapeArgs...)
+			escaper, ok := c.Dialect.(SimilarToEscaper)
+			if !ok {
+				return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support SIMILAR TO ... ESCAPE", c.Dialect.Name())
+			}
+			return escaper.SimilarToEscape(leftSQL, patternSQL, escapeSQL, e.Negate), args, nil
+		}
 		matcher, ok := c.Dialect.(SimilarToMatcher)
 		if !ok {
 			return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support SIMILAR TO", c.Dialect.Name())
@@ -738,13 +750,30 @@ func (c *Compiler) CompileSource(source Source) (string, []any, error) {
 		compiled := lateral + "(" + sql + ")"
 		if !s.Alias.IsZero() {
 			compiled += " AS " + c.Dialect.QuoteName(s.Alias.String())
+			if len(s.AliasColumns) > 0 {
+				compiled += "("
+				for i, col := range s.AliasColumns {
+					if i > 0 {
+						compiled += ", "
+					}
+					compiled += c.Dialect.QuoteName(col.String())
+				}
+				compiled += ")"
+			}
 		}
 		return compiled, args, nil
 	}
 	if s.Name.IsZero() {
 		return "", nil, fmt.Errorf("sqlkit/sql: missing source name")
 	}
-	compiled := lateral + c.Dialect.QuoteIdent(s.Name.String())
+	only := ""
+	if s.Only {
+		if d, ok := c.Dialect.(FromOnlyDialect); !ok || !d.SupportsFromOnly() {
+			return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support FROM ONLY", c.Dialect.Name())
+		}
+		only = "ONLY "
+	}
+	compiled := lateral + only + c.Dialect.QuoteIdent(s.Name.String())
 	if !s.Alias.IsZero() {
 		compiled += " AS " + c.Dialect.QuoteName(s.Alias.String())
 	}
@@ -1067,7 +1096,14 @@ func (c *Compiler) CompileSelect(q SelectStmt) (string, []any, error) {
 		args = append(args, whereArgs...)
 	}
 	if len(q.GroupBy) > 0 {
-		sb.WriteString(" GROUP BY ")
+		if q.GroupByDistinct {
+			if d, ok := c.Dialect.(GroupByDistinctDialect); !ok || !d.SupportsGroupByDistinct() {
+				return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support GROUP BY DISTINCT", c.Dialect.Name())
+			}
+			sb.WriteString(" GROUP BY DISTINCT ")
+		} else {
+			sb.WriteString(" GROUP BY ")
+		}
 		for i, expr := range q.GroupBy {
 			if i > 0 {
 				sb.WriteString(", ")
@@ -1133,12 +1169,25 @@ func (c *Compiler) CompileSelect(q SelectStmt) (string, []any, error) {
 		}
 	}
 	if q.HasLimit {
-		v, err := limitCount("LIMIT", q.Limit)
-		if err != nil {
-			return "", nil, err
+		if q.FetchWithTies {
+			if d, ok := c.Dialect.(FetchWithTiesDialect); !ok || !d.SupportsFetchWithTies() {
+				return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support FETCH ... WITH TIES", c.Dialect.Name())
+			}
+			v, err := limitCount("FETCH FIRST", q.Limit)
+			if err != nil {
+				return "", nil, err
+			}
+			sb.WriteString(" FETCH FIRST ")
+			sb.WriteString(v)
+			sb.WriteString(" ROWS WITH TIES")
+		} else {
+			v, err := limitCount("LIMIT", q.Limit)
+			if err != nil {
+				return "", nil, err
+			}
+			sb.WriteString(" LIMIT ")
+			sb.WriteString(v)
 		}
-		sb.WriteString(" LIMIT ")
-		sb.WriteString(v)
 	} else if q.HasOffset && c.Dialect.Name() == "mysql" {
 		// MySQL has no bare OFFSET — OFFSET is only valid after a LIMIT. Emit
 		// MySQL's documented "all rows" sentinel count so the OFFSET is accepted;

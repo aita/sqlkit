@@ -495,3 +495,36 @@ func TestGroupByMixedRollupCube(t *testing.T) {
 			GroupBy(sql.Col("a"), sql.Rollup(sql.Col("b")), sql.Cube(sql.Col("c"))),
 		`SELECT "a", "b", "c" FROM "t" GROUP BY "a", ROLLUP ("b"), CUBE ("c")`)
 }
+
+func TestFetchWithTiesModeled(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT a FROM t ORDER BY a FETCH FIRST 5 ROWS WITH TIES",
+		sql.Select(sql.Col("a")).From(sql.Table{Name: sql.NewIdent("t")}).
+			OrderBy(sql.Asc(sql.Col("a"))).Limit(5).FetchWithTies(),
+		`SELECT "a" FROM "t" ORDER BY "a" FETCH FIRST 5 ROWS WITH TIES`)
+}
+
+func TestGroupByDistinctModeled(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT a, count(*) FROM t GROUP BY DISTINCT a",
+		sql.Select(sql.Col("a"), sql.CountAll()).From(sql.Table{Name: sql.NewIdent("t")}).
+			GroupBy(sql.Col("a")).GroupByDistinctOn(),
+		`SELECT "a", COUNT(*) FROM "t" GROUP BY DISTINCT "a"`)
+}
+
+func TestSubqueryAliasColumnsModeled(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT x, y FROM (SELECT 1, 2) AS t(x, y)",
+		sql.Select(sql.Col("x"), sql.Col("y")).
+			From(sql.AliasWithColumns(sql.Select(sql.Raw("1"), sql.Raw("2")), "t", "x", "y")),
+		`SELECT "x", "y" FROM (SELECT 1, 2) AS "t"("x", "y")`)
+}
+
+func TestSimilarToEscapeModeled(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT id FROM t WHERE name SIMILAR TO 'a%' ESCAPE '!'",
+		sql.Select(sql.Col("id")).From(sql.Table{Name: sql.NewIdent("t")}).
+			Where(sql.SimilarToExpression{Left: sql.Col("name"), Pattern: sql.Val("a%"), Escape: sql.Val("!")}),
+		`SELECT "id" FROM "t" WHERE ("name" SIMILAR TO $1 ESCAPE $2)`,
+		"a%", "!")
+}

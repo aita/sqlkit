@@ -19,22 +19,24 @@ type compilable interface {
 // HasOffset distinguish a zero LIMIT/OFFSET from none.
 type SelectStmt struct {
 	posField
-	With       []CTE
-	From       Source
-	Columns    []Selection
-	Joins      []JoinClause
-	Where      Expression
-	GroupBy    []Expression
-	Having     Expression
-	OrderBy    []OrderTerm
-	Limit      int
-	HasLimit   bool
-	Offset     int
-	HasOffset  bool
-	Distinct   bool
-	DistinctOn []Expression
-	Windows    []NamedWindow
-	Lock       *lockClause
+	With            []CTE
+	From            Source
+	Columns         []Selection
+	Joins           []JoinClause
+	Where           Expression
+	GroupBy         []Expression
+	GroupByDistinct bool
+	Having          Expression
+	OrderBy         []OrderTerm
+	Limit           int
+	HasLimit        bool
+	FetchWithTies   bool
+	Offset          int
+	HasOffset       bool
+	Distinct        bool
+	DistinctOn      []Expression
+	Windows         []NamedWindow
+	Lock            *lockClause
 }
 
 // lockClause is a SELECT row-locking clause: a strength (UPDATE / SHARE / NO KEY
@@ -186,6 +188,13 @@ func (b SelectBuilder) GroupBy(exprs ...Expression) SelectBuilder {
 	return b
 }
 
+// GroupByDistinctOn marks the GROUP BY clause as GROUP BY DISTINCT (PostgreSQL
+// 16+), eliminating duplicate grouping sets before aggregation.
+func (b SelectBuilder) GroupByDistinctOn() SelectBuilder {
+	b.s.GroupByDistinct = true
+	return b
+}
+
 // Having sets the HAVING predicate.
 func (b SelectBuilder) Having(expr Expression) SelectBuilder {
 	b.s.Having = expr
@@ -210,6 +219,15 @@ func (b SelectBuilder) OrderBy(terms ...OrderTerm) SelectBuilder {
 func (b SelectBuilder) Limit(n int) SelectBuilder {
 	b.s.Limit = n
 	b.s.HasLimit = true
+	return b
+}
+
+// FetchWithTies marks the LIMIT as FETCH FIRST n ROWS WITH TIES (SQL:2008,
+// PostgreSQL 13+), keeping rows that are equal to the last row by the current
+// ORDER BY. The clause renders as FETCH FIRST n ROWS WITH TIES on dialects that
+// support it; others reject it at compile time.
+func (b SelectBuilder) FetchWithTies() SelectBuilder {
+	b.s.FetchWithTies = true
 	return b
 }
 

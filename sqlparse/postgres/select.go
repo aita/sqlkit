@@ -99,6 +99,9 @@ func convertSelect(s *pg.SelectStmt) (sql.Query, error) {
 			exprs = append(exprs, expr)
 		}
 		q = q.GroupBy(exprs...)
+		if s.GetGroupDistinct() {
+			q = q.GroupByDistinctOn()
+		}
 	}
 
 	if having := s.GetHavingClause(); having != nil {
@@ -137,6 +140,9 @@ func convertSelect(s *pg.SelectStmt) (sql.Query, error) {
 		return nil, err
 	} else if ok {
 		q = q.Limit(n)
+		if s.GetLimitOption() == pg.LimitOption_LIMIT_OPTION_WITH_TIES {
+			q = q.FetchWithTies()
+		}
 	}
 	if n, ok, err := limitValue(s.GetLimitOffset()); err != nil {
 		return nil, err

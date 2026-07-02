@@ -8,11 +8,13 @@ type Source interface {
 // SourceExpression is the compiled representation of a FROM/JOIN source.
 type SourceExpression struct {
 	posField
-	Name    Ident
-	Query   Query
-	Values  *ValuesClause
-	Alias   Ident
-	Lateral bool
+	Name         Ident
+	Query        Query
+	Values       *ValuesClause
+	Alias        Ident
+	AliasColumns []Ident // (alias)(c1, c2, ...) column aliases on a subquery source
+	Lateral      bool
+	Only         bool // FROM ONLY t (PostgreSQL inheritance control)
 }
 
 // SQLSource marks SourceExpression as a Source.
@@ -80,6 +82,20 @@ func Lateral(source Source) SourceExpression {
 	expr := source.SQLSource()
 	expr.Lateral = true
 	return expr
+}
+
+// OnlyFrom marks a table source as FROM ONLY, suppressing PostgreSQL
+// inheritance so only the named table is scanned (not its child tables).
+func OnlyFrom(source Source) SourceExpression {
+	expr := source.SQLSource()
+	expr.Only = true
+	return expr
+}
+
+// AliasWithColumns creates a subquery source with alias and column names,
+// rendering as (subquery) AS alias(c1, c2, ...).
+func AliasWithColumns(query Query, alias string, columns ...string) SourceExpression {
+	return SourceExpression{Query: query, Alias: NewIdent(alias), AliasColumns: idents(columns)}
 }
 
 // Subquery creates a FROM/JOIN source from a query and alias.

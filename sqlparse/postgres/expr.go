@@ -848,27 +848,38 @@ func convertSimilar(e *pg.A_Expr, op string) (sql.Expression, error) {
 	if err != nil {
 		return nil, err
 	}
-	pattern, err := similarPattern(e.GetRexpr())
+	pattern, escape, err := similarPattern(e.GetRexpr())
 	if err != nil {
 		return nil, err
 	}
-	if op == "!~" {
-		return positioned(sql.NotSimilarTo(left, pattern), e.GetLocation()), nil
-	}
-	return positioned(sql.SimilarTo(left, pattern), e.GetLocation()), nil
+	negate := op == "!~"
+	expr := sql.SimilarToExpression{Left: left, Pattern: pattern, Negate: negate, Escape: escape}
+	return positioned(expr, e.GetLocation()), nil
 }
 
-func similarPattern(node *pg.Node) (sql.Expression, error) {
+func similarPattern(node *pg.Node) (pattern sql.Expression, escape sql.Expression, err error) {
 	if fc := node.GetFuncCall(); fc != nil && len(fc.GetArgs()) >= 1 {
 		name, err := funcName(fc.GetFuncname())
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if name == "similar_to_escape" {
-			return convertExpr(fc.GetArgs()[0])
+			pat, err := convertExpr(fc.GetArgs()[0])
+			if err != nil {
+				return nil, nil, err
+			}
+			if len(fc.GetArgs()) >= 2 {
+				esc, err := convertExpr(fc.GetArgs()[1])
+				if err != nil {
+					return nil, nil, err
+				}
+				return pat, esc, nil
+			}
+			return pat, nil, nil
 		}
 	}
-	return convertExpr(node)
+	pat, err := convertExpr(node)
+	return pat, nil, err
 }
 
 func convertMinMax(e *pg.MinMaxExpr) (sql.Expression, error) {

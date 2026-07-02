@@ -341,6 +341,7 @@ type SimilarToExpression struct {
 	Left    Expression
 	Pattern Expression
 	Negate  bool
+	Escape  Expression // ESCAPE char, nil when absent
 }
 
 func (SimilarToExpression) SQLExpression() {}

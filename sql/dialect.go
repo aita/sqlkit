@@ -344,6 +344,36 @@ type OrderByUsingDialect interface {
 	SupportsOrderByUsing() bool
 }
 
+// FetchWithTiesDialect is an optional capability a Dialect implements to allow
+// FETCH FIRST n ROWS WITH TIES (SQL:2008, PostgreSQL 13+). The compiler
+// detects it with a type assertion; a dialect without it rejects the clause at
+// compile time.
+type FetchWithTiesDialect interface {
+	SupportsFetchWithTies() bool
+}
+
+// GroupByDistinctDialect is an optional capability a Dialect implements to allow
+// GROUP BY DISTINCT (PostgreSQL 16+). The compiler detects it with a type
+// assertion; a dialect without it rejects the clause at compile time.
+type GroupByDistinctDialect interface {
+	SupportsGroupByDistinct() bool
+}
+
+// FromOnlyDialect is an optional capability a Dialect implements to allow FROM
+// ONLY table (PostgreSQL inheritance control). The compiler detects it with a
+// type assertion; a dialect without it rejects the clause at compile time.
+type FromOnlyDialect interface {
+	SupportsFromOnly() bool
+}
+
+// SimilarToEscaper extends SimilarToMatcher with an ESCAPE clause. The compiler
+// checks for it when the expression carries a non-nil Escape; a dialect that
+// implements SimilarToMatcher but not SimilarToEscaper rejects the ESCAPE at
+// compile time.
+type SimilarToEscaper interface {
+	SimilarToEscape(left, pattern, escape string, negate bool) string
+}
+
 // DialectByName returns the Dialect for a name: "postgres"/"postgresql" (or
 // empty, the default), "mysql", or "standard"/"ansi"/"sql" (the SQL standard /
 // ANSI text target). It errors on an unknown name.
@@ -385,6 +415,14 @@ func renderSimilarTo(left, pattern string, negate bool) string {
 		operator = "NOT SIMILAR TO"
 	}
 	return "(" + left + " " + operator + " " + pattern + ")"
+}
+
+func renderSimilarToEscape(left, pattern, escape string, negate bool) string {
+	operator := "SIMILAR TO"
+	if negate {
+		operator = "NOT SIMILAR TO"
+	}
+	return "(" + left + " " + operator + " " + pattern + " ESCAPE " + escape + ")"
 }
 
 // renderLockClause renders a "FOR <strength> [OF ...] [NOWAIT|SKIP LOCKED]"
@@ -647,6 +685,20 @@ func (PostgreSQLDialect) SupportsCTEMaterialization() bool { return true }
 
 // SupportsOrderByUsing reports PostgreSQL's support for ORDER BY ... USING <op>.
 func (PostgreSQLDialect) SupportsOrderByUsing() bool { return true }
+
+// SupportsFetchWithTies reports PostgreSQL's support for FETCH ... WITH TIES.
+func (PostgreSQLDialect) SupportsFetchWithTies() bool { return true }
+
+// SupportsGroupByDistinct reports PostgreSQL's support for GROUP BY DISTINCT.
+func (PostgreSQLDialect) SupportsGroupByDistinct() bool { return true }
+
+// SupportsFromOnly reports PostgreSQL's support for FROM ONLY.
+func (PostgreSQLDialect) SupportsFromOnly() bool { return true }
+
+// SimilarToEscape renders SIMILAR TO ... ESCAPE '...' for PostgreSQL.
+func (PostgreSQLDialect) SimilarToEscape(left, pattern, escape string, negate bool) string {
+	return renderSimilarToEscape(left, pattern, escape, negate)
+}
 
 // LockClause renders PostgreSQL's row-locking clause; it supports all four lock
 // strengths (UPDATE, NO KEY UPDATE, SHARE, KEY SHARE).
@@ -996,6 +1048,11 @@ func (StandardSQLDialect) Regexp(left, pattern string, negate, caseInsensitive b
 // SimilarTo renders the SQL-standard SIMILAR TO / NOT SIMILAR TO predicate.
 func (StandardSQLDialect) SimilarTo(left, pattern string, negate bool) string {
 	return renderSimilarTo(left, pattern, negate)
+}
+
+// SimilarToEscape renders the SQL-standard SIMILAR TO ... ESCAPE '...' predicate.
+func (StandardSQLDialect) SimilarToEscape(left, pattern, escape string, negate bool) string {
+	return renderSimilarToEscape(left, pattern, escape, negate)
 }
 
 // RenderFunc remaps canonical function names to their SQL-standard spelling.

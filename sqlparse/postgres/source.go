@@ -134,10 +134,14 @@ func convertRangeVar(rv *pg.RangeVar) (sql.Source, error) {
 	if err != nil {
 		return nil, err
 	}
-	if alias := rv.GetAlias(); alias != nil && alias.GetAliasname() != "" {
-		return sql.SourceAlias(table, alias.GetAliasname()), nil
+	var source sql.Source = table
+	if !rv.GetInh() {
+		source = sql.OnlyFrom(source)
 	}
-	return table, nil
+	if alias := rv.GetAlias(); alias != nil && alias.GetAliasname() != "" {
+		return sql.SourceAlias(source, alias.GetAliasname()), nil
+	}
+	return source, nil
 }
 
 func convertRangeSubselect(rs *pg.RangeSubselect) (sql.Source, error) {
@@ -149,7 +153,19 @@ func convertRangeSubselect(rs *pg.RangeSubselect) (sql.Source, error) {
 	if alias == nil || alias.GetAliasname() == "" {
 		return nil, sqlparse.Unsupported("subquery source without an alias")
 	}
-	source := sql.Alias(query, alias.GetAliasname())
+	var source sql.SourceExpression
+	if cols := alias.GetColnames(); len(cols) > 0 {
+		names := make([]string, 0, len(cols))
+		for _, col := range cols {
+			if col.GetString_() == nil {
+				return nil, sqlparse.Unsupportedf("subquery alias column %T", col.GetNode())
+			}
+			names = append(names, col.GetString_().GetSval())
+		}
+		source = sql.AliasWithColumns(query, alias.GetAliasname(), names...)
+	} else {
+		source = sql.Alias(query, alias.GetAliasname())
+	}
 	if rs.GetLateral() {
 		return sql.Lateral(source), nil
 	}

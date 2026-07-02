@@ -392,13 +392,12 @@ func TestExprNotILike(t *testing.T) {
 		"x")
 }
 
-// FROM ONLY t drops the ONLY qualifier (the builder does not model inheritance
-// control) and parses to a plain table source.
+// FROM ONLY t preserves the ONLY qualifier in the typed AST.
 func TestSelectFromOnly(t *testing.T) {
 	assertRoundTrip(t,
 		"SELECT a FROM ONLY t",
-		sql.Select(sql.Col("a")).From(sql.Table{Name: sql.NewIdent("t")}),
-		`SELECT "a" FROM "t"`)
+		sql.Select(sql.Col("a")).From(sql.OnlyFrom(sql.Table{Name: sql.NewIdent("t")})),
+		`SELECT "a" FROM ONLY "t"`)
 }
 
 // A set-returning function in FROM is not modeled and round-trips raw.
