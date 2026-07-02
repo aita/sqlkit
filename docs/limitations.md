@@ -22,7 +22,7 @@ from a gap that may close:
 | **PostgreSQL** | Primary target; the default and the most exercised dialect. Full feature surface. |
 | **MySQL** | Supported with a subset of features (see below). Backtick quoting, `?` placeholders. |
 | Standard | A minimal reference dialect; many features are rejected on it. |
-| SQLite | **Not currently available.** The earlier SQLite dialect was withdrawn and its implementation is being reworked; target PostgreSQL or MySQL for now. |
+| SQLite | **Not currently available.** No `Dialect` implementation exists for it; target PostgreSQL or MySQL for now. |
 
 `Open` infers the dialect from the driver name (`"mysql"` → MySQL, otherwise
 PostgreSQL); override with `WithDialect`.
@@ -51,6 +51,7 @@ PostgreSQL); override with `WithDialect`.
 | Aliased `VALUES` derived-table source | ✅ | ⚠️ | MySQL can't alias `VALUES` columns, so sqlkit renders it as a `UNION ALL` of `SELECT`s (equivalent result, different SQL text). |
 | Schema introspection — [`introspection.Schema`](https://pkg.go.dev/github.com/aita/sqlkit/introspection#Schema) | ✅ | ✅ | Constructs the [`meta`](https://pkg.go.dev/github.com/aita/sqlkit/meta) model can't represent are skipped on import. |
 | Transactional (atomic) migrations | ✅ | ❌ | MySQL commits DDL implicitly and can't roll a partly-applied migration back — see [Migrations](#migrations). |
+| Sequences, `CREATE TYPE ... AS ENUM`, extensions, materialized views, `CREATE`/`DROP FUNCTION` | ✅ | ❌ | MySQL has none of these object kinds. |
 
 The matrix records engine *capabilities*, so a ❌/⚠️ cell is 🔒 inherent (the
 target engine can't express it) unless its Notes say 🚧.
@@ -77,9 +78,10 @@ trade convenience for correctness:
   compiles the full value list into one statement regardless.
 - **`IN` splits only when it is the whole query.** A `Select` whose sole `Where`
   is a column `In(...)` splits and concatenates rows. Adding `ORDER BY`,
-  `GROUP BY`, `DISTINCT`, `HAVING`, or `LIMIT`/`OFFSET` marks it **unsafe to
-  split** (results can't be combined across chunks): it runs as a single
-  statement and can still hit the bind limit. Batch those yourself with
+  `GROUP BY`, `DISTINCT` (including `DISTINCT ON`), `HAVING`, `LIMIT`/`OFFSET`,
+  or a window function marks it **unsafe to split** (results can't be combined
+  across chunks): it runs as a single statement and can still hit the bind
+  limit. Batch those yourself with
   [`sqlkit.InBatches`](https://pkg.go.dev/github.com/aita/sqlkit#InBatches).
 - **`NOT IN` is never split.** A row is excluded only if it appears in *no*
   chunk, which splitting cannot guarantee — a very large `NOT IN` must fit in one
