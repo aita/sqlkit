@@ -73,6 +73,13 @@ func (r Result) Empty() bool {
 // Render diffs source against target and returns the Operator-DSL bodies for a
 // migration's Up (source -> target) and Down (target -> source, a best-effort
 // reverse). Statements are ordered for safety, mirroring migrate.Diff.
+//
+// The rendered op.* calls carry no schema qualification: a Migrator/Operator
+// is configured with one fixed schema, so a table in a catalog's OTHER managed
+// schema (Catalog.Schema(name, decl.Create())) renders as if it belonged to
+// the Operator's schema instead of its own. Review generated output before
+// applying it against a catalog with tables in more than one managed schema
+// (see docs/limitations.md).
 func Render(source, target meta.Metadata, opts Options) (Result, error) {
 	if opts.Dialect == nil {
 		return Result{}, fmt.Errorf("autogen: Render needs a dialect")

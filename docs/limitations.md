@@ -109,6 +109,13 @@ trade convenience for correctness:
   human — **review the result before applying.** A column with no resolved type
   on the target dialect, or a default expression that cannot be parsed, makes the
   diff fail rather than guess.
+- 🚧 **Autogenerate targets one schema.** A `Migrator`/`Operator` is configured
+  with a single schema, so `autogen.Render`'s `op.CreateTable`/`op.AddColumn`/…
+  calls carry no schema qualification of their own — a catalog with tables in
+  more than one managed schema (`Catalog.Schema(name, decl.Create())`) renders a
+  migration that silently targets the `Operator`'s configured schema for every
+  table, not each table's own. `migrate.Diff` (the non-generated path) has no
+  such limit. Review generated output for a multi-schema catalog before applying.
 
 ## Code generation
 
