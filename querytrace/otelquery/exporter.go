@@ -202,7 +202,11 @@ func (e *Exporter) recordStatement(ctx context.Context, ev qt.Event, warnings []
 
 	for _, w := range warnings {
 		addWarningEvent(span, w)
-		if e.warningsAsError && w.Severity == qt.SeverityError {
+		// A driver error already set the span's Error status above, with the
+		// actual error text as the description. Don't let a warning's SetStatus
+		// call clobber that description with just the warning code — the
+		// warning is still recorded as its own span event either way.
+		if e.warningsAsError && w.Severity == qt.SeverityError && ev.Err == nil {
 			span.SetStatus(codes.Error, string(w.Code))
 		}
 	}
