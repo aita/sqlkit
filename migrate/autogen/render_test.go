@@ -263,6 +263,35 @@ func TestRenderNoChange(t *testing.T) {
 	}
 }
 
+// TestRenderGrantsDistinctGranteesOnSameObject mirrors
+// migrate.TestDiffGrantsDistinctGranteesOnSameObject for the autogen renderer's
+// own copy of grantKey: two distinct grants on the same object (different
+// grantees, different privileges) must not collide in the diff map, or adding
+// one silently drops the op.Revoke for the other with no matching op.Grant.
+func TestRenderGrantsDistinctGranteesOnSameObject(t *testing.T) {
+	aliceSelect := meta.Grant{
+		Privileges: []string{"SELECT"}, ObjectType: "TABLE",
+		Objects: []string{"public.posts"}, Grantees: []string{"alice"},
+	}
+	source := meta.Metadata{Grants: []meta.Grant{aliceSelect}}
+	target := meta.Metadata{Grants: []meta.Grant{
+		aliceSelect, // unchanged
+		{
+			Privileges: []string{"INSERT"}, ObjectType: "TABLE",
+			Objects: []string{"public.posts"}, Grantees: []string{"bob"},
+		},
+	}}
+	res := render(t, source, target, "postgres", Renames{})
+	assertValidGo(t, res.Up)
+
+	if strings.Contains(res.Up, "op.Revoke") {
+		t.Fatalf("alice's unchanged grant must not be revoked:\n%s", res.Up)
+	}
+	if !strings.Contains(res.Up, `sql.Grant("INSERT").OnType("TABLE", "public.posts").To("bob")`) {
+		t.Fatalf("missing bob's new grant:\n%s", res.Up)
+	}
+}
+
 func TestRenderIndexesAsVariadic(t *testing.T) {
 	source := decl.NewCatalog(decl.DefaultSchema("public"))
 	source.Table("users", decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()))

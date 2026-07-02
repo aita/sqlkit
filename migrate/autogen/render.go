@@ -365,10 +365,13 @@ type renderedObjects struct {
 	alterEnums []string
 }
 
-// grantKey identifies a grant by its target (object type and objects), so a
-// change to the privileges or grantees of the same target is one modification.
+// grantKey identifies a grant by its full (privileges, type, objects, grantees)
+// tuple. Keying on the target alone (object type + objects) would collide two
+// distinct grants on the same object for different grantees or privilege sets
+// into one map slot, silently dropping one of them from the diff.
 func grantKey(g meta.Grant) string {
-	return g.ObjectType + "\x00" + strings.Join(g.Objects, ",")
+	return strings.Join(g.Privileges, ",") + "\x00" + g.ObjectType + "\x00" +
+		strings.Join(g.Objects, ",") + "\x00" + strings.Join(g.Grantees, ",")
 }
 
 // appendedEnumValues reports whether next is old with only labels appended (old
