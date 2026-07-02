@@ -59,6 +59,14 @@ func flattenJoin(node ast.ResultSetNode, tp tablePos) (sql.Source, []joinSpec, e
 // CrossJoin carrying an ON/USING condition, a comma or CROSS JOIN as a bare
 // CrossJoin, and tags NATURAL joins with NaturalJoin.
 func joinSpecFor(j *ast.Join, right sql.Source) (joinSpec, error) {
+	// STRAIGHT_JOIN forces the optimizer to read the left table before the right,
+	// overriding its own join-order choice. sqlkit has no node for the modifier, so
+	// rendering it as a plain JOIN would silently drop that ordering hint (a
+	// performance/plan directive, not a row-set change). Fall back to raw so the
+	// hint survives, matching sqlkit's stance on other dropped modifiers.
+	if j.StraightJoin {
+		return joinSpec{}, sqlparse.Unsupported("STRAIGHT_JOIN")
+	}
 	kind := "JOIN"
 	switch j.Tp {
 	case ast.LeftJoin:
@@ -182,6 +190,13 @@ func checkTableName(tn *ast.TableName) error {
 	}
 	if strings.Contains(tn.Name.O, ".") || strings.Contains(tn.Schema.O, ".") {
 		return sqlparse.Unsupportedf("table identifier with a dot: %q", tn.Name.O)
+	}
+	// t USE/FORCE/IGNORE INDEX (...) is a planner hint sqlkit has no node for;
+	// dropping it changes only index selection, not the row set, but FORCE INDEX
+	// can also turn a missing-index plan into a hard error the unmodified query
+	// would not hit. Fall back to raw so the hint survives.
+	if len(tn.IndexHints) > 0 {
+		return sqlparse.Unsupported("table index hint (USE/FORCE/IGNORE INDEX)")
 	}
 	// t PARTITION (p0, ...) restricts the scan/modification to the named
 	// partitions; sqlkit cannot model it and dropping it would silently widen the
