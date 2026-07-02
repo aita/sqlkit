@@ -394,6 +394,55 @@ func TestNestedScopeRollback(t *testing.T) {
 	}
 }
 
+// TestNestedScopeSecondFlushFailureDoesNotUndoFirst covers a nested scope
+// flushed twice (the documented "reused for another round" pattern): the
+// second round's own failure must roll back only that round's staged work,
+// not the first round's already-successful flush. Flush used to reuse the
+// scope's own savepoint (opened once, lazily, on the first round) for every
+// round's error recovery, so a later round's failure rolled all the way back
+// to before the first round ran, silently discarding it.
+func TestNestedScopeSecondFlushFailureDoesNotUndoFirst(t *testing.T) {
+	calls := 0
+	fake := &testutil.Fake{
+		ExecFunc: func(s string, _ []any) error {
+			if strings.Contains(s, "INSERT") {
+				calls++
+				if calls == 2 {
+					return errors.New("boom")
+				}
+			}
+			return nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+	err := db.WithSession(ctx(), func(s *sqlkit.Session) error {
+		child := uow.NewScope(s).NewScope()
+		if err := child.Add(newUsers(), userRow{Email: "first@x"}); err != nil {
+			return err
+		}
+		if err := child.Flush(ctx()); err != nil {
+			t.Fatalf("first flush: %v", err)
+		}
+		if err := child.Add(newUsers(), userRow{Email: "second@x"}); err != nil {
+			return err
+		}
+		if err := child.Flush(ctx()); err == nil {
+			t.Fatal("expected second flush to fail")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("with session: %v", err)
+	}
+	stmts := strings.Join(fake.Statements(), "\n")
+	if strings.Contains(stmts, "ROLLBACK TO SAVEPOINT sp_1") {
+		t.Fatalf("second flush's failure must not roll back to the scope's own base savepoint (sp_1), undoing the first round too:\n%s", stmts)
+	}
+	if !strings.Contains(stmts, "ROLLBACK TO SAVEPOINT sp_2") {
+		t.Fatalf("expected the second round's own savepoint (sp_2) to be rolled back:\n%s", stmts)
+	}
+}
+
 func TestNestedScopeRequiresTransaction(t *testing.T) {
 	fake := &testutil.Fake{}
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB())) // a Database is not savepoint-capable

@@ -360,6 +360,12 @@ func (s *Scope) Remove(table sqlkit.Table, rows ...any) error {
 // directly on the executor. On success the staged inserts/updates/deletes are
 // cleared and managed entities' snapshots are refreshed, so the scope can be
 // reused for another round.
+//
+// A later round on the same nested scope is wrapped in its own savepoint,
+// nested inside the scope's own: a failure there rolls back only that
+// round's staged work, not any earlier round already flushed successfully in
+// this scope. The scope's own savepoint still spans every round, so Rollback
+// can undo the whole scope at once regardless of how many rounds it took.
 func (s *Scope) Flush(ctx context.Context) error {
 	if s.parent == nil {
 		return s.flush(ctx)
@@ -374,12 +380,22 @@ func (s *Scope) Flush(ctx context.Context) error {
 			return err
 		}
 		s.savepoint = name
+		if err := s.flush(ctx); err != nil {
+			_ = sp.RollbackTo(ctx, s.savepoint)
+			return err
+		}
+		return nil
 	}
-	if err := s.flush(ctx); err != nil {
-		_ = sp.RollbackTo(ctx, s.savepoint)
+	round, err := sp.Savepoint(ctx)
+	if err != nil {
 		return err
 	}
-	return nil
+	if err := s.flush(ctx); err != nil {
+		_ = sp.RollbackTo(ctx, round)
+		_ = sp.Release(ctx, round)
+		return err
+	}
+	return sp.Release(ctx, round)
 }
 
 // Rollback undoes a nested scope's flushed work by rolling back to its savepoint
