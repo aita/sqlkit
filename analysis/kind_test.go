@@ -54,6 +54,27 @@ func TestKindHelpers(t *testing.T) {
 	}
 }
 
+// REPLACE INTO is MySQL's insert-or-replace: a write. The parsed-AST path
+// (KindOf, via sql.InsertStmt's Replace flag) already classified it correctly;
+// DetectKind's raw-text fallback fell through to StmtUnknown (IsWrite false),
+// so a REPLACE INTO analyzed without a parser (or after a parse failure)
+// silently bypassed a ForbidWrites/ReadOnly guard.
+func TestReplaceIntoIsAWrite(t *testing.T) {
+	users := sql.Table{Name: sql.NewIdent("users")}
+	q := sql.ReplaceInto(users).Columns("id", "name").Values(1, "a")
+
+	if k, ok := analysis.KindOf(q); !ok || k != analysis.StmtInsert || !k.IsWrite() {
+		t.Errorf("KindOf = (%v, %v); want (insert, true) with IsWrite true", k, ok)
+	}
+	if k := analysis.DetectKind("REPLACE INTO users (id, name) VALUES (1, 'a')"); k != analysis.StmtInsert || !k.IsWrite() {
+		t.Errorf("DetectKind = %v; want insert (a write)", k)
+	}
+	an := analysis.New().Analyze("REPLACE INTO users (id, name) VALUES (1, 'a')", q)
+	if !an.IsWrite() {
+		t.Errorf("Analyze.IsWrite() = false; want true for a REPLACE INTO")
+	}
+}
+
 func TestKindOfAndTablesDDL(t *testing.T) {
 	users := sql.Table{Name: sql.NewIdent("users")}
 	orders := sql.Table{Name: sql.NewIdent("orders")}

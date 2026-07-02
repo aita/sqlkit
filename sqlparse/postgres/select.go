@@ -367,13 +367,25 @@ func limitValue(node *pg.Node) (int, bool, error) {
 // convertValuesList converts a standalone VALUES statement into a ValuesQuery.
 func convertValuesList(rows []*pg.Node) (sql.Query, error) {
 	q := sql.Values()
+	width := -1
 	for _, rowNode := range rows {
 		row := rowNode.GetList()
 		if row == nil {
 			return nil, sqlparse.Unsupportedf("VALUES row %T", rowNode.GetNode())
 		}
-		cells := make([]any, 0, len(row.GetItems()))
-		for _, item := range row.GetItems() {
+		items := row.GetItems()
+		// A standalone VALUES whose rows differ in width is a semantic error the
+		// engine rejects, and sqlkit's ValuesQuery requires a uniform width (ToSQL
+		// errors on a mismatch). Building a typed ValuesQuery here would therefore
+		// yield a Query that cannot render; fall back to raw so the statement
+		// round-trips as its original text, as the INSERT ... VALUES path already does.
+		if width < 0 {
+			width = len(items)
+		} else if len(items) != width {
+			return nil, sqlparse.Unsupported("VALUES rows of differing widths")
+		}
+		cells := make([]any, 0, len(items))
+		for _, item := range items {
 			expr, err := convertExpr(item)
 			if err != nil {
 				return nil, err

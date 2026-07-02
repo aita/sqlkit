@@ -205,10 +205,21 @@ func (c *autogenerateCmd) gitSnapshot(importPath, ref, dialect string) (autogen.
 // heads compiles the migrations package and prints its current head revisions,
 // without touching a database.
 func (c *autogenerateCmd) heads() ([]string, error) {
+	// A filesystem path (not a bare import path) that doesn't exist yet is
+	// genuinely "no migrations package yet" — the first migration. Check this
+	// directly, the same condition resolveImportPath uses to decide whether to
+	// shell out to `go list` at all, rather than inferring it from a `go list`
+	// failure below: a real failure there (e.g. two conflicting `package`
+	// clauses in an existing migrations directory) must not be swallowed as
+	// "no heads," or autogenerate would silently write a second, unlinked root
+	// migration on top of an already-broken package instead of reporting the
+	// break.
+	if (strings.HasPrefix(c.Migrations, ".") || strings.HasPrefix(c.Migrations, "/")) && !filepathExists(c.Migrations) {
+		return nil, nil
+	}
 	pkg, err := resolveImportPath(c.Migrations)
 	if err != nil {
-		// No migrations package yet: treat as no heads (first migration).
-		return nil, nil
+		return nil, err
 	}
 	if !identRe.MatchString(c.Registry) {
 		return nil, fmt.Errorf("invalid --registry %q: must be a Go identifier", c.Registry)

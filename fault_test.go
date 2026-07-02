@@ -426,3 +426,39 @@ func TestUntouchedSessionCloseAndCommitDoNotBegin(t *testing.T) {
 			fake.Begins(), fake.Commits(), fake.Rollbacks())
 	}
 }
+
+// TestBatchedScanRollsBackOnPanic verifies a panic that unwinds through a
+// batched (auto-chunked) scan — after every chunk's own read already
+// succeeded, from an AfterQuery hook or a Preload — still rolls back the
+// snapshot transaction batchExecutor opened, instead of committing it: the
+// named return err scanBatched commits or rolls back on is still nil at the
+// point of the panic, so a naive `defer func() { err = finish(err) }()` would
+// call finish(nil), which commits, moments before the panic escapes.
+func TestBatchedScanRollsBackOnPanic(t *testing.T) {
+	fake := idFromArgsFake()
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true), sqlkit.WithHooks(sqlkit.Hooks{
+		AfterQuery: func(context.Context, sqlkit.Statement, any, error) error {
+			panic("hook panic")
+		},
+	}))
+
+	defer func() {
+		p := recover()
+		if p == nil {
+			t.Fatal("panic was swallowed, want re-panic")
+		}
+		if got, ok := p.(string); !ok || got != "hook panic" {
+			t.Fatalf("recovered %v, want \"hook panic\"", p)
+		}
+		if fake.Begins() != 1 || fake.Commits() != 0 || fake.Rollbacks() != 1 {
+			t.Fatalf("begins=%d commits=%d rollbacks=%d, want 1/0/1 after panic",
+				fake.Begins(), fake.Commits(), fake.Rollbacks())
+		}
+	}()
+
+	ids := []int64{1, 2, 3, 4, 5, 6, 7}
+	var users []User
+	_ = db.Select().From(Users).Where(Users.ID.In(ids...)).AutoChunk(sqlkit.ChunkSize(3)).
+		All(context.Background()).Scan(&users)
+	t.Fatal("Scan returned, want it to re-panic")
+}
