@@ -413,6 +413,15 @@ func TestSelectWindowFrameFallsBackToRaw(t *testing.T) {
 	assertRaw(t, "SELECT SUM(x) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM t")
 }
 
+// IGNORE NULLS/RESPECT NULLS and FROM FIRST/FROM LAST change which row a
+// window function like LAG/NTH_VALUE returns; sql.WindowExpression has no
+// field for either, so they must round-trip raw rather than be silently
+// dropped.
+func TestSelectWindowNullTreatmentFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT LAG(x) IGNORE NULLS OVER (ORDER BY id) FROM t")
+	assertRaw(t, "SELECT NTH_VALUE(x, 2) FROM LAST OVER (ORDER BY id) FROM t")
+}
+
 // GROUP BY ... WITH ROLLUP has no typed home and round-trips raw (companion to the
 // existing rollup test, exercised here with HAVING).
 func TestSelectScalarSubqueryInWhere(t *testing.T) {
@@ -500,4 +509,11 @@ func TestStraightJoinFallsBackToRaw(t *testing.T) {
 func TestTableIndexHintFallsBackToRaw(t *testing.T) {
 	assertRaw(t, "SELECT id FROM t USE INDEX (idx) WHERE id>1")
 	assertRaw(t, "SELECT id FROM t FORCE INDEX (idx) WHERE id>1")
+}
+
+// t PARTITION (p0) restricts the scan to named partitions; the builder cannot
+// model it, so it must round-trip as raw rather than drop the PARTITION (which
+// would silently widen the query to the whole table).
+func TestSelectPartitionSelectionFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT a FROM t PARTITION (p0)")
 }

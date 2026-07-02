@@ -198,6 +198,12 @@ func checkTableName(tn *ast.TableName) error {
 	if len(tn.IndexHints) > 0 {
 		return sqlparse.Unsupported("table index hint (USE/FORCE/IGNORE INDEX)")
 	}
+	// t PARTITION (p0, ...) restricts the scan/modification to the named
+	// partitions; sqlkit cannot model it and dropping it would silently widen the
+	// statement to the whole table. Fall back to raw.
+	if len(tn.PartitionNames) > 0 {
+		return sqlparse.Unsupported("explicit PARTITION selection")
+	}
 	return nil
 }
 
