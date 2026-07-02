@@ -163,12 +163,39 @@ func (s Statement) Kind() StatementKind {
 		}
 		return classifyRawSQL(s.SQL)
 	default:
-		// An AST we do not recognize (e.g. a DDL statement run through Exec).
-		// Fall back to Op: a writing Exec is DDL, a reading Query is a select.
+		// A DDL statement (CreateTable, AlterTable, ...) is recognized directly
+		// so it classifies correctly regardless of Op: Database.Exec/Session.Exec
+		// always set Op: OpExec for DDL, but RawSQL's Rows-based path always sets
+		// Op: OpQuery even when the query passed in is a DDL builder/AST — falling
+		// back to Op alone would then misreport a DDL statement run through
+		// RawSQL(...).Scan(...) as KindSelect (a read).
+		if isDDLQuery(s.Query) {
+			return KindDDL
+		}
+		// An AST we do not recognize by shape at all. Fall back to Op: a writing
+		// Exec is DDL, a reading Query is a select.
 		if s.Op == OpExec {
 			return KindDDL
 		}
 		return KindSelect
+	}
+}
+
+// isDDLQuery reports whether q is one of the sql package's DDL statement
+// types (its builder form or the built AST — sql.Unwrap resolves either),
+// mirroring the DDL type list analysis.KindOf recognizes.
+func isDDLQuery(q sql.Query) bool {
+	switch sql.Unwrap(q).(type) {
+	case sql.CreateTableStmt, sql.AlterTableStmt, sql.DropTableStmt,
+		sql.CreateViewStmt, sql.DropViewStmt,
+		sql.CreateIndexStmt, sql.DropIndexStmt,
+		sql.DropForeignKeyStmt,
+		sql.CommentOnTableStmt, sql.CommentOnColumnStmt,
+		sql.TruncateStmt,
+		sql.CreateSchemaStmt, sql.DropSchemaStmt:
+		return true
+	default:
+		return false
 	}
 }
 
