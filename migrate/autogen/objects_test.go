@@ -64,6 +64,43 @@ func TestRenderDistinctGrantsOnSameObjectDoNotCollide(t *testing.T) {
 	}
 }
 
+// TestRenderSeparateGrantsToSameGranteeDoNotCollide covers two GRANTs that
+// share the object and the grantee but were declared separately with
+// different privileges (SELECT to analyst, INSERT to analyst) — again a
+// normal ACL shape, not a variant of one grant. grantKey used to omit
+// Privileges, so the two grants collided on one map entry: with nothing
+// changed the render manufactured op.Revoke/op.Grant churn, and with the
+// declarations reordered it emitted an unpaired op.Revoke that silently
+// dropped a privilege the source schema still declares.
+func TestRenderSeparateGrantsToSameGranteeDoNotCollide(t *testing.T) {
+	grants := func() []meta.Grant {
+		return []meta.Grant{
+			{Privileges: []string{"SELECT"}, Objects: []string{"employees"}, Grantees: []string{"analyst"}},
+			{Privileges: []string{"INSERT"}, Objects: []string{"employees"}, Grantees: []string{"analyst"}},
+		}
+	}
+	source := meta.Metadata{Grants: grants()}
+
+	// Nothing changed (even with the declarations reordered): no grant ops.
+	reordered := grants()
+	reordered[0], reordered[1] = reordered[1], reordered[0]
+	res := render(t, source, meta.Metadata{Grants: reordered}, "postgres", Renames{})
+	if strings.Contains(res.Up, "op.Revoke(") || strings.Contains(res.Up, "op.Grant(") {
+		t.Fatalf("unchanged grants must not render grant ops, Up:\n%s", res.Up)
+	}
+
+	// Changing one of the two grants is a drop+create of that grant only.
+	changed := grants()
+	changed[1].Privileges = []string{"INSERT", "UPDATE"}
+	res = render(t, source, meta.Metadata{Grants: changed}, "postgres", Renames{})
+	if strings.Contains(res.Up, `sql.Revoke("SELECT")`) {
+		t.Fatalf("unchanged SELECT grant must not be revoked, Up:\n%s", res.Up)
+	}
+	if !strings.Contains(res.Up, `sql.Revoke("INSERT")`) || !strings.Contains(res.Up, `sql.Grant("INSERT", "UPDATE")`) {
+		t.Fatalf("changed grant must be dropped and recreated, Up:\n%s", res.Up)
+	}
+}
+
 // TestRenderAppendedEnum covers the common enum change in the codegen-ops path:
 // appending a label renders op.AddEnumValue (one per added label, in order), not
 // op.DropEnum + op.CreateEnum. The reverse direction (Down) removes the label,

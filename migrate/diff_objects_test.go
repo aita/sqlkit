@@ -146,6 +146,42 @@ func TestDiffDistinctGrantsOnSameObjectDoNotCollide(t *testing.T) {
 	}
 }
 
+// TestDiffSeparateGrantsToSameGranteeDoNotCollide covers two GRANTs that
+// share the object and the grantee but were declared separately with
+// different privileges (SELECT to analyst, INSERT to analyst) — again a
+// normal ACL shape, not a variant of one grant. grantKey used to omit
+// Privileges, so the two grants collided on one map entry: with nothing
+// changed the diff manufactured REVOKE/GRANT churn, and with the declarations
+// reordered it emitted an unpaired REVOKE that silently dropped a privilege
+// the source schema still declares.
+func TestDiffSeparateGrantsToSameGranteeDoNotCollide(t *testing.T) {
+	grants := func() []meta.Grant {
+		return []meta.Grant{
+			{Privileges: []string{"SELECT"}, Objects: []string{"employees"}, Grantees: []string{"analyst"}},
+			{Privileges: []string{"INSERT"}, Objects: []string{"employees"}, Grantees: []string{"analyst"}},
+		}
+	}
+	old := meta.Metadata{Grants: grants()}
+
+	// Nothing changed (even with the declarations reordered): no statements.
+	reordered := grants()
+	reordered[0], reordered[1] = reordered[1], reordered[0]
+	if stmts := renderAll(t, mustDiff(t, old, meta.Metadata{Grants: reordered})); len(stmts) != 0 {
+		t.Fatalf("unchanged grants must not produce statements:\n%s", strings.Join(stmts, "\n"))
+	}
+
+	// Changing one of the two grants is a drop+create of that grant only.
+	changed := grants()
+	changed[1].Privileges = []string{"INSERT", "UPDATE"}
+	joined := strings.Join(renderAll(t, mustDiff(t, old, meta.Metadata{Grants: changed})), "\n")
+	if strings.Contains(joined, "REVOKE SELECT") {
+		t.Fatalf("unchanged SELECT grant must not be revoked:\n%s", joined)
+	}
+	if !strings.Contains(joined, "REVOKE INSERT") || !strings.Contains(joined, "GRANT INSERT, UPDATE") {
+		t.Fatalf("changed grant must be dropped and recreated:\n%s", joined)
+	}
+}
+
 func mustDiff(t *testing.T, old, next meta.Metadata) []sql.Statement {
 	t.Helper()
 	stmts, err := migrate.Diff(old, next, pg(t))

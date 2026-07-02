@@ -365,17 +365,23 @@ type renderedObjects struct {
 	alterEnums []string
 }
 
-// grantKey identifies a grant by its target (object type, objects, and
-// grantees), so a change to the privileges of the same target/grantees is one
-// modification. Grantees must be part of the key: a schema can declare
-// several distinct GRANTs on the same object (e.g. SELECT to one role and
-// INSERT to another on the same table) — a real, common ACL shape, not a
-// variant of one grant — and omitting Grantees would collapse them onto the
-// same map entry, silently losing one grant (an unpaired REVOKE with no
-// matching re-GRANT) or manufacturing spurious modify-churn between two
-// unrelated, unchanged grants that happen to share a target.
+// grantKey identifies a grant by its full definition — the (privileges,
+// object type, objects, grantees) tuple. Every field must be part of the key:
+// a schema can declare several distinct GRANTs that share an object (e.g.
+// SELECT to one role and INSERT to another, or SELECT and INSERT declared
+// separately to the same role) — a real, common ACL shape, not variants of
+// one grant — and omitting any field would collapse them onto the same map
+// entry, silently losing one grant (an unpaired REVOKE with no matching
+// re-GRANT) or manufacturing spurious REVOKE+GRANT churn between unchanged
+// grants. The diff renders any keyed modification as drop+create anyway, so
+// keying by the full definition loses nothing. List fields join on "\x1f"
+// (unit separator) so an element containing the separator cannot alias a
+// different split of the same characters (["a,b"] vs ["a", "b"]).
 func grantKey(g meta.Grant) string {
-	return g.ObjectType + "\x00" + strings.Join(g.Objects, ",") + "\x00" + strings.Join(g.Grantees, ",")
+	return g.ObjectType + "\x00" +
+		strings.Join(g.Privileges, "\x1f") + "\x00" +
+		strings.Join(g.Objects, "\x1f") + "\x00" +
+		strings.Join(g.Grantees, "\x1f")
 }
 
 // appendedEnumValues reports whether next is old with only labels appended (old
