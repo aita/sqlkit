@@ -3,11 +3,13 @@ package uow_test
 // Version/touch column handling in the snapshot-diff (diffAssignments, managed
 // entities) and detached (updateAssignments, Update()) UPDATE paths: both must
 // treat a `sqlkit:",version"` field as a bump-and-guard rather than a plain
-// diffed column, and a `sqlkit:",touch"` field as an unconditional
-// CURRENT_TIMESTAMP() rather than a copy of the struct's current value — the
-// same special-casing update.go's SetStruct already applies to the direct
-// builder path (see structAssignments). Split out from scope_test.go per the
-// version/touch-tag concern (see TestManagedDirtyUpdatesOnlyChangedColumns and
+// diffed column, and a `sqlkit:",touch"` field as a CURRENT_TIMESTAMP() rather
+// than a copy of the struct's current value — the same special-casing
+// update.go's SetStruct already applies to the direct builder path (see
+// structAssignments). On the managed path both ride along with a real column
+// change only: a clean entity flushes nothing, preserving uow's dirty-tracking
+// contract. Split out from scope_test.go per the version/touch-tag concern
+// (see TestManagedDirtyUpdatesOnlyChangedColumns and
 // TestExplicitUpdateWritesAllColumns there for the plain-column case this
 // mirrors).
 
@@ -141,9 +143,10 @@ func TestManagedTouchAlwaysSetsCurrentTimestamp(t *testing.T) {
 	}
 }
 
-func TestManagedTouchOnlyStillUpdates(t *testing.T) {
-	// Nothing but the touch column "changes" (it never diffs); the UPDATE must
-	// still fire rather than being dropped as a no-op.
+func TestManagedUnchangedVersionTouchFlushesNothing(t *testing.T) {
+	// No real column changed: the version bump and touch stamp only ride along
+	// with an actual change, so a pure Get+Flush must stay a no-op (uow's
+	// dirty-tracking contract) — no UPDATE, no version advance, no touch.
 	fake := &testutil.Fake{QueryFunc: accountResult(1, 100, 7)}
 	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()))
 	var a accountRow
@@ -154,8 +157,28 @@ func TestManagedTouchOnlyStillUpdates(t *testing.T) {
 	if err := scope.Flush(ctx()); err != nil {
 		t.Fatalf("flush: %v", err)
 	}
-	if got := len(fake.Execs()); got != 1 {
-		t.Fatalf("got %d execs, want 1 UPDATE (version bump always fires): %v", got, fake.Statements())
+	if got := len(fake.Execs()); got != 0 {
+		t.Fatalf("got %d execs, want 0 (unchanged managed row must not UPDATE): %v", got, fake.Statements())
+	}
+}
+
+func TestManagedVersionGuardOnlyWithRealChange(t *testing.T) {
+	// Even with RowsAffected forced to 0 (which would trip the version guard if
+	// an UPDATE were issued), a clean entity flushes nothing and reports no
+	// spurious ErrVersionConflict.
+	zero := int64(0)
+	fake := &testutil.Fake{QueryFunc: accountResult(1, 100, 7), RowsAffected: &zero}
+	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()))
+	var a accountRow
+	found, err := scope.Get(ctx(), newAccounts(), &a, int64(1))
+	if err != nil || !found {
+		t.Fatalf("Get = %v, %v", found, err)
+	}
+	if err := scope.Flush(ctx()); err != nil {
+		t.Fatalf("Flush() = %v, want nil (no UPDATE, so no guard to conflict)", err)
+	}
+	if got := len(fake.Execs()); got != 0 {
+		t.Fatalf("got %d execs, want 0: %v", got, fake.Statements())
 	}
 }
 

@@ -853,16 +853,23 @@ type versionGuard struct {
 // diffAssignments builds SET assignments for the managed entity's changed,
 // non-primary-key columns by comparing current values to the snapshot. A
 // version-tagged column is never diffed (app code does not mutate it itself):
-// it is unconditionally bumped (col = col + 1) and its current snapshot value
-// becomes the returned guard, mirroring update.go's SetStruct so optimistic
-// locking works the same through uow as through the direct builder path. A
-// touch-tagged column is unconditionally set to CURRENT_TIMESTAMP, regardless
-// of whether it changed, since app code does not maintain it either.
+// it is bumped (col = col + 1) and its current snapshot value becomes the
+// returned guard, mirroring update.go's SetStruct so optimistic locking works
+// the same through uow as through the direct builder path. A touch-tagged
+// column is set to CURRENT_TIMESTAMP regardless of whether it changed, since
+// app code does not maintain it either.
+//
+// Both ride along with a real change only: when no ordinary column differs
+// from the snapshot the entity is clean, and per uow's dirty-tracking contract
+// a clean entity flushes nothing — no UPDATE, no version bump, no touch.
 func diffAssignments(table sqlkit.Table, tr *tracked, names []string, vals []any, meta map[string]sqlkit.ColumnMeta) ([]sql.Assignment, *versionGuard) {
 	pk := pkNameSet(table)
 	snap := make(map[string]any, len(tr.snapNames))
 	for i, n := range tr.snapNames {
 		snap[n] = tr.snapVals[i]
+	}
+	if !hasRealChange(pk, snap, names, vals, meta) {
+		return nil, nil
 	}
 	var out []sql.Assignment
 	var guard *versionGuard
@@ -885,6 +892,26 @@ func diffAssignments(table sqlkit.Table, tr *tracked, names []string, vals []any
 		}
 	}
 	return out, guard
+}
+
+// hasRealChange reports whether any ordinary (non-primary-key, non-version,
+// non-touch) column differs from its snapshot value. Version and touch columns
+// are excluded because the app never maintains them itself — counting them
+// would turn every clean entity into a perpetual write.
+func hasRealChange(pk map[string]bool, snap map[string]any, names []string, vals []any, meta map[string]sqlkit.ColumnMeta) bool {
+	for i, name := range names {
+		if pk[name] {
+			continue
+		}
+		if m := meta[name]; m.Version || m.Touch {
+			continue
+		}
+		if old, ok := snap[name]; ok && valueEqual(old, normalize(vals[i])) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // updateAssignments builds SET assignments for every mapped non-primary-key
