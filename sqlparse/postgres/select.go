@@ -41,6 +41,18 @@ func convertSelect(s *pg.SelectStmt) (sql.Query, error) {
 	if len(s.GetTargetList()) == 0 {
 		return nil, sqlparse.Unsupported("SELECT without a target list")
 	}
+	// FETCH FIRST n ROWS WITH TIES returns the rows tying the last ordered row,
+	// not a strict count; sqlkit renders only a plain LIMIT, so modeling it would
+	// silently drop WITH TIES and change the row count. Fall back to raw.
+	if s.GetLimitOption() == pg.LimitOption_LIMIT_OPTION_WITH_TIES {
+		return nil, sqlparse.Unsupported("FETCH ... WITH TIES")
+	}
+	// GROUP BY DISTINCT de-duplicates the generated grouping sets (meaningful with
+	// ROLLUP/CUBE/GROUPING SETS); sqlkit cannot model the DISTINCT, so dropping it
+	// would change which group rows are produced. Fall back to raw.
+	if s.GetGroupDistinct() {
+		return nil, sqlparse.Unsupported("GROUP BY DISTINCT")
+	}
 
 	columns, err := convertTargetList(s.GetTargetList())
 	if err != nil {
@@ -367,13 +379,25 @@ func limitValue(node *pg.Node) (int, bool, error) {
 // convertValuesList converts a standalone VALUES statement into a ValuesQuery.
 func convertValuesList(rows []*pg.Node) (sql.Query, error) {
 	q := sql.Values()
+	width := -1
 	for _, rowNode := range rows {
 		row := rowNode.GetList()
 		if row == nil {
 			return nil, sqlparse.Unsupportedf("VALUES row %T", rowNode.GetNode())
 		}
-		cells := make([]any, 0, len(row.GetItems()))
-		for _, item := range row.GetItems() {
+		items := row.GetItems()
+		// A standalone VALUES whose rows differ in width is a semantic error the
+		// engine rejects, and sqlkit's ValuesQuery requires a uniform width (ToSQL
+		// errors on a mismatch). Building a typed ValuesQuery here would therefore
+		// yield a Query that cannot render; fall back to raw so the statement
+		// round-trips as its original text, as the INSERT ... VALUES path already does.
+		if width < 0 {
+			width = len(items)
+		} else if len(items) != width {
+			return nil, sqlparse.Unsupported("VALUES rows of differing widths")
+		}
+		cells := make([]any, 0, len(items))
+		for _, item := range items {
 			expr, err := convertExpr(item)
 			if err != nil {
 				return nil, err
@@ -402,6 +426,12 @@ func convertWith(wc *pg.WithClause) ([]sql.CTE, error) {
 		}
 		if cte.GetCycleClause() != nil {
 			return nil, sqlparse.Unsupported("CTE with CYCLE clause")
+		}
+		// [NOT] MATERIALIZED is an optimizer fence sqlkit cannot model; dropping it
+		// would erase a forced/forbidden-inlining directive that can change the
+		// execution semantics of a side-effecting CTE. Fall back to raw.
+		if cte.GetCtematerialized() != pg.CTEMaterialize_CTEMaterializeDefault {
+			return nil, sqlparse.Unsupported("CTE with [NOT] MATERIALIZED")
 		}
 		body, err := convertSelect(cte.GetCtequery().GetSelectStmt())
 		if err != nil {

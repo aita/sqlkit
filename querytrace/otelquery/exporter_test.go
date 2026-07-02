@@ -2,6 +2,9 @@ package otelquery_test
 
 import (
 	"context"
+	"errors"
+	"slices"
+	"strings"
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -143,6 +146,71 @@ func TestExportTraceWarningsAsErrors(t *testing.T) {
 	}
 	if stmt.Status().Code != codes.Error {
 		t.Errorf("statement span status = %v, want Error", stmt.Status().Code)
+	}
+}
+
+// TestExportTraceLabelAttributesAreDeterministic covers ev.Labels/mark Attrs,
+// both Go maps: building their span attributes by ranging the map directly
+// produced a different attribute order across otherwise-identical runs. Order
+// doesn't matter to OTel itself, but repeats the operation many times (per
+// SKILL.md's determinism guidance) so a single lucky iteration order can't
+// mask the bug the way one assertion would.
+func TestExportTraceLabelAttributesAreDeterministic(t *testing.T) {
+	labelOrder := func() []string {
+		exp, sr := recorder(t)
+		trace := qt.New("op")
+		ev := queryEvent()
+		ev.Labels = map[string]string{"f": "1", "e": "2", "d": "3", "c": "4", "b": "5", "a": "6"}
+		trace.RecordStatement(context.Background(), ev)
+		exp.ExportTrace(context.Background(), trace)
+
+		stmt := findSpan(sr.Ended(), "SELECT users")
+		if stmt == nil {
+			t.Fatal("statement span not found")
+		}
+		var order []string
+		for _, kv := range stmt.Attributes() {
+			if strings.HasPrefix(string(kv.Key), "querytrace.label.") {
+				order = append(order, string(kv.Key))
+			}
+		}
+		return order
+	}
+	first := labelOrder()
+	for i := 0; i < 100; i++ {
+		if got := labelOrder(); !slices.Equal(got, first) {
+			t.Fatalf("label attribute order varies across runs: %v vs %v", first, got)
+		}
+	}
+}
+
+// TestExportTraceDriverErrorStatusSurvivesErrorWarning covers a statement that
+// both failed at the driver (ev.Err) and carries a SeverityError warning (e.g.
+// ForbidQueries) under WithWarningsAsErrors: the span status must keep the
+// driver error's own message as its description, not the generic warning
+// code — the warning is still visible as its own span event either way, but
+// the primary status field is the one field most backends surface without
+// digging into events, so it must carry the actual failure, not a fallback
+// obscuring it.
+func TestExportTraceDriverErrorStatusSurvivesErrorWarning(t *testing.T) {
+	exp, sr := recorder(t, otelquery.WithWarningsAsErrors())
+
+	trace := qt.New("CacheHit")
+	ctx := qt.ForbidQueries(qt.WithTrace(context.Background(), trace))
+	ev := queryEvent()
+	ev.Err = errors.New("pq: deadlock detected")
+	trace.RecordStatement(ctx, ev)
+	exp.ExportTrace(context.Background(), trace)
+
+	stmt := findSpan(sr.Ended(), "SELECT users")
+	if stmt == nil {
+		t.Fatal("statement span not found")
+	}
+	if stmt.Status().Code != codes.Error {
+		t.Fatalf("statement span status = %v, want Error", stmt.Status().Code)
+	}
+	if got, want := stmt.Status().Description, "pq: deadlock detected"; got != want {
+		t.Errorf("statement span status description = %q, want %q (the driver error, not the warning code)", got, want)
 	}
 }
 

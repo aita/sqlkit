@@ -254,3 +254,45 @@ func TestSearchCycleAndWindowExtendsWindowFallBackToRaw(t *testing.T) {
 		}
 	}
 }
+
+// Clauses pg_query accepts but sqlkit cannot model faithfully must fall back to a
+// raw passthrough rather than be silently dropped (which would change the
+// statement's meaning). Each of these carries a meaning-bearing attribute the
+// typed converters do not represent — an explicit SIMILAR TO ESCAPE, a CTE
+// materialization fence, a FROM column-alias list, FROM ONLY, FETCH WITH TIES,
+// or GROUP BY DISTINCT — so it must round-trip as raw, not a modeled query that
+// erases the attribute.
+func TestUnmodeledClausesFallBackToRaw(t *testing.T) {
+	for _, input := range []string{
+		"SELECT a FROM t WHERE x SIMILAR TO 'a%' ESCAPE '!'",
+		"WITH c AS MATERIALIZED (SELECT 1 AS a) SELECT a FROM c",
+		"WITH c AS NOT MATERIALIZED (SELECT 1 AS a) SELECT a FROM c",
+		"SELECT x FROM (SELECT 1 AS a) AS s(x)",
+		"SELECT a FROM ONLY t",
+		"SELECT a FROM t ORDER BY a FETCH FIRST 2 ROWS WITH TIES",
+		"SELECT a FROM t GROUP BY DISTINCT a, b",
+	} {
+		raw := assertRaw(t, input)
+		if raw.SQL() == "" {
+			t.Errorf("empty raw SQL for %q", input)
+		}
+	}
+}
+
+// The default-escape SIMILAR TO and a plain table/derived-table alias are still
+// modeled (not regressed to raw by the ESCAPE / column-list guards).
+func TestSimilarAndAliasStillModeled(t *testing.T) {
+	for _, input := range []string{
+		"SELECT a FROM t WHERE x SIMILAR TO 'a%'",
+		"SELECT a FROM t AS s",
+		"SELECT x FROM (SELECT 1 AS x) AS s",
+	} {
+		q, err := postgres.ParseOne(input)
+		if err != nil {
+			t.Fatalf("ParseOne(%q) error = %v", input, err)
+		}
+		if _, ok := q.(sql.RawQuery); ok {
+			t.Errorf("%q regressed to a RawQuery; want a modeled query", input)
+		}
+	}
+}

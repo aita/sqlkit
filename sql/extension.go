@@ -20,6 +20,9 @@ func (s CreateExtensionStmt) ToSQL(d Dialect) (string, []any, error) {
 	return out, nil, err
 }
 func (s CreateExtensionStmt) compileDDL(c *Compiler) (string, error) {
+	if err := c.requirePostgresObject("extensions"); err != nil {
+		return "", err
+	}
 	if s.Name.IsZero() {
 		return "", fmt.Errorf("sqlkit/sql: CREATE EXTENSION requires a name")
 	}
@@ -84,6 +87,9 @@ func (s DropExtensionStmt) ToSQL(d Dialect) (string, []any, error) {
 	return out, nil, err
 }
 func (s DropExtensionStmt) compileDDL(c *Compiler) (string, error) {
+	if err := c.requirePostgresObject("extensions"); err != nil {
+		return "", err
+	}
 	if len(s.Names) == 0 {
 		return "", fmt.Errorf("sqlkit/sql: DROP EXTENSION requires a name")
 	}
