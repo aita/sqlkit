@@ -97,6 +97,42 @@ func TestWriteMigrationFileRefusesToOverwrite(t *testing.T) {
 	}
 }
 
+// TestHeadsMissingMigrationsDirIsNoHeads covers the genuine "first migration"
+// case: a --migrations directory that doesn't exist yet on disk. heads() must
+// treat it as no heads rather than erroring.
+func TestHeadsMissingMigrationsDirIsNoHeads(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "go.mod"), "module headstest\n\ngo 1.21\n")
+	t.Chdir(dir)
+
+	cmd := &autogenerateCmd{Migrations: "./migrations", Registry: "Registry"}
+	heads, err := cmd.heads()
+	if err != nil {
+		t.Fatalf("heads() with no migrations directory: %v", err)
+	}
+	if len(heads) != 0 {
+		t.Fatalf("heads = %v, want none", heads)
+	}
+}
+
+// TestHeadsPropagatesGoListError covers an existing --migrations directory
+// that fails to compile as a package (here: two conflicting `package`
+// clauses): heads() must report the error, not silently treat it as "no
+// migrations yet" — swallowing it would let autogenerate write a second,
+// unlinked root migration on top of an already-broken package.
+func TestHeadsPropagatesGoListError(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "go.mod"), "module headstest\n\ngo 1.21\n")
+	writeTestFile(t, filepath.Join(dir, "migrations", "a.go"), "package migrations\n")
+	writeTestFile(t, filepath.Join(dir, "migrations", "b.go"), "package othername\n")
+	t.Chdir(dir)
+
+	cmd := &autogenerateCmd{Migrations: "./migrations", Registry: "Registry"}
+	if _, err := cmd.heads(); err == nil {
+		t.Fatal("heads() with a broken migrations package: expected an error, got nil")
+	}
+}
+
 func TestAutogenerateRequiresOneSource(t *testing.T) {
 	// Neither source selected.
 	if err := (&autogenerateCmd{}).Run(); err == nil || !strings.Contains(err.Error(), "exactly one source") {

@@ -264,7 +264,19 @@ func (r Rows) scanBatched(dest any) (err error) {
 		return fmt.Errorf("sqlkit: a split query scans into a pointer to a slice, got %T", dest)
 	}
 	ex, finish := r.batchExecutor()
-	defer func() { err = finish(err) }()
+	// A panic unwinding through here (from a hook or Preload below) must still
+	// roll back any transaction batchExecutor opened — the named return err is
+	// still nil at that point, and finish(nil) commits, so a plain
+	// `defer func() { err = finish(err) }()` would commit a batch right before
+	// the panic escapes. Recover, force the rollback, then re-panic so the
+	// panic still propagates to the caller unchanged.
+	defer func() {
+		if p := recover(); p != nil {
+			_ = finish(errors.New("sqlkit: panic during batched scan"))
+			panic(p)
+		}
+		err = finish(err)
+	}()
 
 	sliceType := dv.Elem().Type()
 	dialect := ex.sqlDialect()

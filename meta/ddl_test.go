@@ -262,6 +262,42 @@ func TestDDLManagedSchemaCreatedAndDropped(t *testing.T) {
 	}
 }
 
+// TestDDLExtensionSchemaOrder covers an extension installed into a schema
+// this same Metadata also manages (Extension.Schema + a matching
+// ManagedSchemas/Create entry): CREATE SCHEMA must precede CREATE EXTENSION
+// ... WITH SCHEMA, or a real engine rejects the extension (the schema doesn't
+// exist yet), and DROP EXTENSION must precede DROP SCHEMA, or dropping the
+// still-non-empty schema fails.
+func TestDDLExtensionSchemaOrder(t *testing.T) {
+	pg := mustDialect(t, "postgres")
+	md := meta.Metadata{
+		Extensions:     []meta.Extension{{Name: "pgcrypto", Schema: "extensions"}},
+		ManagedSchemas: []meta.Schema{{Name: "extensions", Create: true}},
+	}
+	got, err := md.CreateSQL(pg)
+	if err != nil {
+		t.Fatalf("CreateSQL() error = %v", err)
+	}
+	schemaIdx := strings.Index(got, `CREATE SCHEMA IF NOT EXISTS "extensions"`)
+	extIdx := strings.Index(got, `CREATE EXTENSION IF NOT EXISTS "pgcrypto"`)
+	if schemaIdx < 0 || extIdx < 0 {
+		t.Fatalf("missing CREATE SCHEMA or CREATE EXTENSION:\n%s", got)
+	}
+	if schemaIdx > extIdx {
+		t.Errorf("CREATE SCHEMA must precede CREATE EXTENSION ... WITH SCHEMA:\n%s", got)
+	}
+
+	drop := md.DropSQL(pg)
+	dropSchemaIdx := strings.Index(drop, `DROP SCHEMA IF EXISTS "extensions"`)
+	dropExtIdx := strings.Index(drop, `DROP EXTENSION IF EXISTS "pgcrypto"`)
+	if dropSchemaIdx < 0 || dropExtIdx < 0 {
+		t.Fatalf("missing DROP SCHEMA or DROP EXTENSION:\n%s", drop)
+	}
+	if dropExtIdx > dropSchemaIdx {
+		t.Errorf("DROP EXTENSION must precede DROP SCHEMA:\n%s", drop)
+	}
+}
+
 func TestDDLUnsupportedDialect(t *testing.T) {
 	if _, err := sql.DialectByName("oracle"); err == nil {
 		t.Error("DialectByName(oracle): expected error")
