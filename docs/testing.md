@@ -234,6 +234,41 @@ structural helpers read PostgreSQL's text plan (`Seq Scan`, `Index Scan using
 `EXPLAIN` output captured elsewhere, and `Plan.Text` exposes the rendered plan.
 These need a real database, so they belong in the integration suite.
 
+## Golden files
+
+For results too wide to spell out as literals — a report query, a denormalized
+view — pin the output to a golden file instead and let the test regenerate it on
+a deliberate change:
+
+```go
+rows, _ := db.QueryContext(ctx, "SELECT id, email, status FROM users ORDER BY id")
+sqltest.AssertGoldenRows(t, "testdata/users.golden", rows)
+```
+
+[`AssertGoldenRows`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#AssertGoldenRows)
+renders the rows as a stable tab-separated table (a `NULL` is literal, columns
+are text, so the form is driver-independent) and compares it to the file; add an
+`ORDER BY` so the row order is stable.
+[`AssertGoldenTrace`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#AssertGoldenTrace)
+does the same for a [`querytrace.Trace`](observability.md)'s report, pinning the
+*query log* so an accidental change in the SQL an operation issues (a new
+statement, an N+1) shows up as a diff that a count-based budget would miss. Both
+build on [`Golden`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#Golden),
+the text primitive, and
+[`RenderRows`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#RenderRows) is
+exported for custom comparisons. On a `DB` handle, `db.AssertGoldenQuery(t,
+path, query, args...)` runs the query and golden-compares its rows in one call.
+
+Regenerate the files by setting `SQLKIT_UPDATE_GOLDEN` and re-running, then
+commit the result:
+
+```sh
+SQLKIT_UPDATE_GOLDEN=1 go test ./...
+```
+
+(An environment variable rather than a `-update` flag, so importing `sqltest`
+never adds a flag to an unrelated binary.)
+
 ## Mock database
 
 [`sqltest.NewDB`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#NewDB) is a programmable mock `*sql.DB` for unit tests that should not
