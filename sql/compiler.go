@@ -542,11 +542,23 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		if e.All || e.Target == nil {
 			return "COUNT(*)", nil, nil
 		}
-		// COUNT(DISTINCT *) is invalid in both PostgreSQL and MySQL (DISTINCT needs
-		// an expression list, not "*"); reject it at compile time rather than emit
-		// SQL the engine refuses. A plain COUNT(*) is the way to count rows.
-		if _, star := e.Target.(StarSelection); star && e.Distinct {
-			return "", nil, fmt.Errorf("sqlkit/sql: COUNT(DISTINCT *) is not valid SQL; use COUNT(*) or COUNT(DISTINCT column)")
+		if s, star := e.Target.(StarSelection); star && e.Distinct {
+			// COUNT(DISTINCT *) with an unqualified star is invalid in both
+			// PostgreSQL and MySQL (DISTINCT needs an expression list, not "*");
+			// reject it at compile time rather than emit SQL the engine refuses.
+			// A plain COUNT(*) is the way to count rows.
+			if s.Qualifier.IsZero() {
+				return "", nil, fmt.Errorf("sqlkit/sql: COUNT(DISTINCT *) is not valid SQL; use COUNT(*) or COUNT(DISTINCT column)")
+			}
+			// The qualified form COUNT(DISTINCT t.*) is a whole-row reference —
+			// valid PostgreSQL and the standard idiom for counting distinct rows —
+			// but MySQL's grammar has no whole-row reference inside COUNT, so it
+			// would reject the emitted SQL. Surface it as a descriptive
+			// compile-time error naming the dialect, like the FULL JOIN and
+			// single-element-row guards.
+			if c.Dialect.Name() == "mysql" {
+				return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support COUNT(DISTINCT %s.*); use COUNT(DISTINCT column)", c.Dialect.Name(), s.Qualifier.String())
+			}
 		}
 		target, args, err := c.CompileSelection(e.Target)
 		if err != nil {
