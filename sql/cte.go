@@ -9,16 +9,18 @@ package sql
 //	Select(active.Col("id")).From(active).WithCTE(active)
 type CTE struct {
 	posField
-	name      Ident
-	columns   []Ident // optional explicit output column list
-	query     Query
-	recursive bool
+	name         Ident
+	columns      []Ident // optional explicit output column list
+	query        Query
+	recursive    bool
+	materialized *bool // nil=default, true=MATERIALIZED, false=NOT MATERIALIZED
 }
 
 // cteOptions accumulates the optional settings applied by CTEOption.
 type cteOptions struct {
-	columns   []Ident
-	recursive bool
+	columns      []Ident
+	recursive    bool
+	materialized *bool
 }
 
 // CTEOption configures a CTE created with Query.CTE.
@@ -38,6 +40,20 @@ func Columns(names ...string) CTEOption {
 	return func(o *cteOptions) { o.columns = idents(names) }
 }
 
+// Materialized marks the CTE as MATERIALIZED, forcing the planner to evaluate
+// it once and store the result. PostgreSQL 12+; other dialects reject it at
+// compile time via the CTEMaterializationDialect capability.
+func Materialized() CTEOption {
+	return func(o *cteOptions) { v := true; o.materialized = &v }
+}
+
+// NotMaterialized marks the CTE as NOT MATERIALIZED, allowing the planner to
+// inline it into the outer query. PostgreSQL 12+; other dialects reject it at
+// compile time via the CTEMaterializationDialect capability.
+func NotMaterialized() CTEOption {
+	return func(o *cteOptions) { v := false; o.materialized = &v }
+}
+
 // CTE wraps this SELECT as a common table expression named name.
 func (b SelectBuilder) CTE(name string, opts ...CTEOption) CTE {
 	return newCTE(name, b.s, opts)
@@ -54,7 +70,7 @@ func newCTE(name string, query Query, opts []CTEOption) CTE {
 	for _, opt := range opts {
 		opt(&o)
 	}
-	return CTE{name: NewIdent(name), columns: o.columns, query: query, recursive: o.recursive}
+	return CTE{name: NewIdent(name), columns: o.columns, query: query, recursive: o.recursive, materialized: o.materialized}
 }
 
 // Col references one of the CTE's output columns, qualified by the CTE name.

@@ -1,7 +1,6 @@
 package postgres_test
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/aita/sqlkit/sql"
@@ -28,24 +27,80 @@ func TestSelectWithoutTargetListFallsBackToRaw(t *testing.T) {
 	assertRaw(t, "SELECT")
 }
 
-// ORDER BY ... USING <operator> selects a custom ordering operator that
-// sqlkit's OrderTerm (ASC/DESC only) cannot represent. It must fall back to a
-// raw passthrough so the operator survives, rather than render as a plain
-// ascending sort (a silent meaning change — USING > is descending).
-func TestOrderByUsingOperatorFallsBackToRaw(t *testing.T) {
-	for _, src := range []string{
+func TestOrderByUsingOperatorModeled(t *testing.T) {
+	assertRoundTrip(t,
 		"SELECT a FROM t ORDER BY a USING >",
+		sql.Select(sql.Col("a")).From(sql.Table{Name: sql.NewIdent("t")}).
+			OrderBy(sql.Using(sql.Col("a"), ">")),
+		`SELECT "a" FROM "t" ORDER BY "a" USING >`)
+
+	assertRoundTrip(t,
 		"SELECT a FROM t ORDER BY a USING ~<~",
-	} {
-		raw := assertRaw(t, src)
-		text, _, err := raw.ToSQL(sql.PostgreSQLDialect{})
-		if err != nil {
-			t.Fatalf("ToSQL(%q) error = %v", src, err)
-		}
-		if !strings.Contains(text, "USING") {
-			t.Errorf("raw fallback for %q dropped the USING operator: %q", src, text)
-		}
-	}
+		sql.Select(sql.Col("a")).From(sql.Table{Name: sql.NewIdent("t")}).
+			OrderBy(sql.Using(sql.Col("a"), "~<~")),
+		`SELECT "a" FROM "t" ORDER BY "a" USING ~<~`)
+}
+
+func TestAggregateFilterModeled(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT sum(a) FILTER (WHERE b > 0) FROM t",
+		sql.Select(sql.Func("sum", sql.Col("a")).FilterWhere(sql.Gt(sql.Col("b"), 0))).
+			From(sql.Table{Name: sql.NewIdent("t")}),
+		`SELECT sum("a") FILTER (WHERE ("b" > $1)) FROM "t"`, 0)
+}
+
+func TestCountFilterModeled(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT count(*) FILTER (WHERE b > 0) FROM t",
+		sql.Select(sql.CountAll().FilterWhere(sql.Gt(sql.Col("b"), 0))).
+			From(sql.Table{Name: sql.NewIdent("t")}),
+		`SELECT COUNT(*) FILTER (WHERE ("b" > $1)) FROM "t"`, 0)
+}
+
+func TestAggregateOrderByModeled(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT array_agg(a ORDER BY b) FROM t",
+		sql.Select(sql.Func("array_agg", sql.Col("a")).AggOrderBy(sql.Asc(sql.Col("b")))).
+			From(sql.Table{Name: sql.NewIdent("t")}),
+		`SELECT array_agg("a" ORDER BY "b") FROM "t"`)
+}
+
+func TestCTEMaterializedModeled(t *testing.T) {
+	assertRoundTrip(t,
+		"WITH x AS MATERIALIZED (SELECT 1 AS n) SELECT n FROM x",
+		sql.Select(sql.Col("n")).From(sql.Table{Name: sql.NewIdent("x")}).
+			WithCTE(sql.Select(sql.As(sql.Raw("1"), "n")).CTE("x", sql.Materialized())),
+		`WITH "x" AS MATERIALIZED (SELECT 1 AS "n") SELECT "n" FROM "x"`,
+	)
+}
+
+func TestCTENotMaterializedModeled(t *testing.T) {
+	assertRoundTrip(t,
+		"WITH x AS NOT MATERIALIZED (SELECT 1 AS n) SELECT n FROM x",
+		sql.Select(sql.Col("n")).From(sql.Table{Name: sql.NewIdent("x")}).
+			WithCTE(sql.Select(sql.As(sql.Raw("1"), "n")).CTE("x", sql.NotMaterialized())),
+		`WITH "x" AS NOT MATERIALIZED (SELECT 1 AS "n") SELECT "n" FROM "x"`,
+	)
+}
+
+func TestWindowExtendsWindowModeled(t *testing.T) {
+	assertRoundTrip(t,
+		"SELECT sum(x) OVER w FROM t WINDOW base_win AS (ORDER BY z), w AS (base_win PARTITION BY y)",
+		sql.Select(sql.Func("sum", sql.Col("x")).Over().Named("w")).
+			From(sql.Table{Name: sql.NewIdent("t")}).
+			Window(
+				sql.WindowDef("base_win").OrderBy(sql.Asc(sql.Col("z"))),
+				sql.WindowDef("w").Extends("base_win").PartitionBy(sql.Col("y")),
+			),
+		`SELECT sum("x") OVER "w" FROM "t" WINDOW "base_win" AS (ORDER BY "z"), "w" AS ("base_win" PARTITION BY "y")`)
+}
+
+func TestWithinGroupStillFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY x) FROM t")
+}
+
+func TestVariadicStillFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT concat(VARIADIC ARRAY['a', 'b'])")
 }
 
 func TestSelectWhereAndArgs(t *testing.T) {

@@ -35,6 +35,14 @@ func funcName(nodes []*pg.Node) (string, error) {
 }
 
 func convertFuncCall(fc *pg.FuncCall) (sql.Expression, error) {
+	// WITHIN GROUP and VARIADIC are not modeled in the typed AST.
+	if fc.GetAggWithinGroup() {
+		return nil, sqlparse.Unsupported("WITHIN GROUP (ordered-set aggregate)")
+	}
+	if fc.GetFuncVariadic() {
+		return nil, sqlparse.Unsupported("VARIADIC function call")
+	}
+
 	name, err := funcName(fc.GetFuncname())
 	if err != nil {
 		return nil, err
@@ -55,6 +63,37 @@ func convertFuncCall(fc *pg.FuncCall) (sql.Expression, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Apply in-aggregate ORDER BY (e.g. array_agg(x ORDER BY y)).
+	if aggOrder := fc.GetAggOrder(); len(aggOrder) > 0 {
+		terms, err := convertSortClause(aggOrder)
+		if err != nil {
+			return nil, err
+		}
+		switch f := base.(type) {
+		case sql.FuncExpression:
+			base = f.AggOrderBy(terms...)
+		default:
+			return nil, sqlparse.Unsupported("in-aggregate ORDER BY on non-generic function")
+		}
+	}
+
+	// Apply FILTER (WHERE ...) to the aggregate.
+	if aggFilter := fc.GetAggFilter(); aggFilter != nil {
+		filterExpr, err := convertExpr(aggFilter)
+		if err != nil {
+			return nil, err
+		}
+		switch f := base.(type) {
+		case sql.FuncExpression:
+			base = f.FilterWhere(filterExpr)
+		case sql.CountExpression:
+			base = f.FilterWhere(filterExpr)
+		default:
+			return nil, sqlparse.Unsupported("FILTER on non-aggregate expression")
+		}
+	}
+
 	base = positioned(base, fc.GetLocation())
 
 	if fc.GetOver() != nil {
@@ -341,6 +380,9 @@ func convertWindow(fn sql.Expression, w *pg.WindowDef) (sql.Expression, error) {
 // convertNamedWindow converts a SELECT-level WINDOW clause definition.
 func convertNamedWindow(w *pg.WindowDef) (sql.NamedWindow, error) {
 	def := sql.WindowDef(w.GetName())
+	if ref := w.GetRefname(); ref != "" {
+		def = def.Extends(ref)
+	}
 	if parts := w.GetPartitionClause(); len(parts) > 0 {
 		exprs := make([]sql.Expression, 0, len(parts))
 		for _, p := range parts {

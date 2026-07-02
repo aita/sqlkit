@@ -619,9 +619,10 @@ func As(selection Selection, alias string) AliasedSelection {
 // OrderTerm is one ORDER BY term.
 type OrderTerm struct {
 	posField
-	Expr  Expression
-	Desc  bool
-	Nulls string // "", "FIRST", or "LAST" (PostgreSQL NULLS ordering)
+	Expr    Expression
+	Desc    bool
+	Nulls   string // "", "FIRST", or "LAST" (PostgreSQL NULLS ordering)
+	UsingOp string // USING <operator>, e.g. ">" (PostgreSQL; empty for ASC/DESC)
 }
 
 // Asc creates an ascending ORDER BY term.
@@ -629,6 +630,12 @@ func Asc(expr Expression) OrderTerm { return OrderTerm{Expr: expr} }
 
 // Desc creates a descending ORDER BY term.
 func Desc(expr Expression) OrderTerm { return OrderTerm{Expr: expr, Desc: true} }
+
+// Using creates an ORDER BY ... USING <operator> term (PostgreSQL). The
+// operator selects a custom ordering (e.g. ">" for descending by the > operator).
+func Using(expr Expression, op string) OrderTerm {
+	return OrderTerm{Expr: expr, UsingOp: op}
+}
 
 // NullsFirst orders NULLs before non-NULLs (PostgreSQL NULLS FIRST). It is a
 // PostgreSQL extension; MySQL does not accept the NULLS clause.
@@ -746,10 +753,13 @@ func (e WindowExpression) Named(name string) WindowExpression {
 
 // NamedWindow defines a reusable window in a SELECT's WINDOW clause, referenced
 // from an OVER clause by name (WindowExpression.Named). It renders as
-// "name AS (PARTITION BY ... ORDER BY ... frame)".
+// "name AS ([refname] PARTITION BY ... ORDER BY ... frame)". RefName, when set,
+// names a base window this definition extends (inheriting its PARTITION BY /
+// ORDER BY / frame), as in "w AS (base_win PARTITION BY y)".
 type NamedWindow struct {
 	posField
 	Name         Ident
+	RefName      Ident // base window this definition extends, zero when standalone
 	Partitions   []Expression
 	OrderByTerms []OrderTerm
 	FrameClause  string
@@ -758,6 +768,13 @@ type NamedWindow struct {
 // WindowDef starts a named window definition for a SELECT's WINDOW clause; chain
 // PartitionBy / OrderBy / Frame to build it.
 func WindowDef(name string) NamedWindow { return NamedWindow{Name: NewIdent(name)} }
+
+// Extends sets the base window this definition inherits from, as in
+// WindowDef("w").Extends("base_win").PartitionBy(...) for "w AS (base_win ...)".
+func (w NamedWindow) Extends(baseName string) NamedWindow {
+	w.RefName = NewIdent(baseName)
+	return w
+}
 
 // PartitionBy adds PARTITION BY expressions to the window definition.
 func (w NamedWindow) PartitionBy(exprs ...Expression) NamedWindow {

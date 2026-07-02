@@ -14,11 +14,16 @@ package sql
 // FuncExpression is a function call such as COALESCE(a, b) or SUM(x). With
 // Distinct set it renders an aggregate over distinct values, name(DISTINCT
 // args...), as in SUM(DISTINCT x); DISTINCT is meaningful only for aggregates.
+// Filter adds a FILTER (WHERE ...) clause to an aggregate (standard SQL,
+// PostgreSQL; not supported on MySQL). OrderBy adds an in-aggregate ORDER BY
+// (e.g. array_agg(x ORDER BY y)), meaningful only for ordered-set aggregates.
 type FuncExpression struct {
 	posField
 	Name     string
 	Args     []Expression
 	Distinct bool
+	Filter   Expression  // FILTER (WHERE ...), nil when absent
+	OrderBy  []OrderTerm // in-aggregate ORDER BY, nil when absent
 }
 
 func (FuncExpression) SQLExpression() {}
@@ -40,6 +45,22 @@ func Func(name string, args ...any) FuncExpression {
 func DistinctFunc(name string, args ...any) FuncExpression {
 	f := Func(name, args...)
 	f.Distinct = true
+	return f
+}
+
+// FilterWhere adds a FILTER (WHERE expr) clause to the aggregate, restricting
+// the rows it processes. Standard SQL, supported by PostgreSQL; MySQL does not
+// accept it. The dialect capability AggregateFilterDialect gates compilation.
+func (f FuncExpression) FilterWhere(expr Expression) FuncExpression {
+	f.Filter = expr
+	return f
+}
+
+// AggOrderBy adds an in-aggregate ORDER BY clause, as in
+// array_agg(x ORDER BY y). Meaningful only for ordered-set aggregates on
+// PostgreSQL; MySQL uses GROUP_CONCAT ... ORDER BY instead.
+func (f FuncExpression) AggOrderBy(terms ...OrderTerm) FuncExpression {
+	f.OrderBy = append(append([]OrderTerm(nil), f.OrderBy...), terms...)
 	return f
 }
 
@@ -108,10 +129,17 @@ type CountExpression struct {
 	Target   Selection
 	All      bool
 	Distinct bool
+	Filter   Expression // FILTER (WHERE ...), nil when absent
 }
 
 func (CountExpression) SQLExpression() {}
 func (CountExpression) SQLSelection()  {}
+
+// FilterWhere adds a FILTER (WHERE expr) clause to the COUNT aggregate.
+func (e CountExpression) FilterWhere(expr Expression) CountExpression {
+	e.Filter = expr
+	return e
+}
 
 // Over turns the aggregate into a window expression.
 func (e CountExpression) Over() WindowExpression { return WindowExpression{Fn: e} }

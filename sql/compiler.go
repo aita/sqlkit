@@ -482,7 +482,7 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		// falls through to the default name(args...) rendering unchanged. DISTINCT
 		// aggregates skip the remap: the remapped names are scalar functions, not
 		// aggregates, so DISTINCT never applies to them.
-		if !e.Distinct {
+		if !e.Distinct && len(e.OrderBy) == 0 && e.Filter == nil {
 			if fr, ok := c.Dialect.(FuncRenderer); ok {
 				if out, handled := fr.RenderFunc(e.Name, compiled); handled {
 					return out, args, nil
@@ -493,7 +493,46 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		if e.Distinct {
 			distinct = "DISTINCT "
 		}
-		return e.Name + "(" + distinct + strings.Join(compiled, ", ") + ")", args, nil
+		var sb strings.Builder
+		sb.WriteString(e.Name)
+		sb.WriteString("(")
+		sb.WriteString(distinct)
+		sb.WriteString(strings.Join(compiled, ", "))
+		if len(e.OrderBy) > 0 {
+			if d, ok := c.Dialect.(AggregateOrderByDialect); !ok || !d.SupportsAggregateOrderBy() {
+				return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support in-aggregate ORDER BY", c.Dialect.Name())
+			}
+			sb.WriteString(" ORDER BY ")
+			for i, term := range e.OrderBy {
+				if i > 0 {
+					sb.WriteString(", ")
+				}
+				termSQL, termArgs, err := c.CompileExpression(term.Expr)
+				if err != nil {
+					return "", nil, err
+				}
+				sb.WriteString(termSQL)
+				if err := c.writeOrderModifiers(&sb, term); err != nil {
+					return "", nil, err
+				}
+				args = append(args, termArgs...)
+			}
+		}
+		sb.WriteString(")")
+		if e.Filter != nil {
+			if d, ok := c.Dialect.(AggregateFilterDialect); !ok || !d.SupportsAggregateFilter() {
+				return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support FILTER (WHERE ...)", c.Dialect.Name())
+			}
+			filterSQL, filterArgs, err := c.CompileExpression(e.Filter)
+			if err != nil {
+				return "", nil, err
+			}
+			sb.WriteString(" FILTER (WHERE ")
+			sb.WriteString(filterSQL)
+			sb.WriteString(")")
+			args = append(args, filterArgs...)
+		}
+		return sb.String(), args, nil
 	case ExtractExpression:
 		if e.Field == "" {
 			return "", nil, fmt.Errorf("sqlkit/sql: EXTRACT requires a field")
@@ -539,17 +578,34 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		}
 		return "CAST(" + operandSQL + " AS " + e.Type + ")", args, nil
 	case CountExpression:
+		var countSQL string
+		var args []any
 		if e.All || e.Target == nil {
-			return "COUNT(*)", nil, nil
+			countSQL = "COUNT(*)"
+		} else {
+			target, targetArgs, err := c.CompileSelection(e.Target)
+			if err != nil {
+				return "", nil, err
+			}
+			args = targetArgs
+			if e.Distinct {
+				countSQL = "COUNT(DISTINCT " + target + ")"
+			} else {
+				countSQL = "COUNT(" + target + ")"
+			}
 		}
-		target, args, err := c.CompileSelection(e.Target)
-		if err != nil {
-			return "", nil, err
+		if e.Filter != nil {
+			if d, ok := c.Dialect.(AggregateFilterDialect); !ok || !d.SupportsAggregateFilter() {
+				return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support FILTER (WHERE ...)", c.Dialect.Name())
+			}
+			filterSQL, filterArgs, err := c.CompileExpression(e.Filter)
+			if err != nil {
+				return "", nil, err
+			}
+			countSQL += " FILTER (WHERE " + filterSQL + ")"
+			args = append(args, filterArgs...)
 		}
-		if e.Distinct {
-			return "COUNT(DISTINCT " + target + ")", args, nil
-		}
-		return "COUNT(" + target + ")", args, nil
+		return countSQL, args, nil
 	case CaseExpression:
 		if len(e.Whens) == 0 {
 			return "", nil, fmt.Errorf("sqlkit/sql: CASE requires at least one WHEN arm")
@@ -906,7 +962,18 @@ func (c *Compiler) compileWith(ctes []CTE) (string, []any, error) {
 			}
 			sb.WriteString(")")
 		}
-		sb.WriteString(" AS (")
+		sb.WriteString(" AS ")
+		if cte.materialized != nil {
+			if d, ok := c.Dialect.(CTEMaterializationDialect); !ok || !d.SupportsCTEMaterialization() {
+				return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support [NOT] MATERIALIZED CTEs", c.Dialect.Name())
+			}
+			if *cte.materialized {
+				sb.WriteString("MATERIALIZED ")
+			} else {
+				sb.WriteString("NOT MATERIALIZED ")
+			}
+		}
+		sb.WriteString("(")
 		body, bodyArgs, err := c.compileSubquery(cte.query)
 		if err != nil {
 			return "", nil, err
@@ -1037,6 +1104,12 @@ func (c *Compiler) CompileSelect(q SelectStmt) (string, []any, error) {
 			}
 			sb.WriteString(c.Dialect.QuoteName(w.Name.String()))
 			sb.WriteString(" AS (")
+			if !w.RefName.IsZero() {
+				sb.WriteString(c.Dialect.QuoteName(w.RefName.String()))
+				if body != "" {
+					sb.WriteString(" ")
+				}
+			}
 			sb.WriteString(body)
 			sb.WriteString(")")
 			args = append(args, bodyArgs...)
@@ -1712,7 +1785,13 @@ func (c *Compiler) compileWindowParts(partitions []Expression, order []OrderTerm
 // is rejected on a dialect that does not support it (MySQL) rather than emitted
 // as SQL that dialect cannot parse.
 func (c *Compiler) writeOrderModifiers(sb *strings.Builder, term OrderTerm) error {
-	if term.Desc {
+	if term.UsingOp != "" {
+		if d, ok := c.Dialect.(OrderByUsingDialect); !ok || !d.SupportsOrderByUsing() {
+			return fmt.Errorf("sqlkit/sql: dialect %q does not support ORDER BY ... USING", c.Dialect.Name())
+		}
+		sb.WriteString(" USING ")
+		sb.WriteString(term.UsingOp)
+	} else if term.Desc {
 		sb.WriteString(" DESC")
 	}
 	if term.Nulls != "" {

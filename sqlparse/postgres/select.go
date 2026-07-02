@@ -1,6 +1,8 @@
 package postgres
 
 import (
+	"strings"
+
 	"github.com/aita/sqlkit/sql"
 	"github.com/aita/sqlkit/sqlparse"
 	pg "github.com/pganalyze/pg_query_go/v6"
@@ -330,16 +332,28 @@ func convertSortClause(nodes []*pg.Node) ([]sql.OrderTerm, error) {
 		if err != nil {
 			return nil, err
 		}
-		// ORDER BY ... USING <operator> selects a custom ordering operator (and
-		// reverses direction for >). sqlkit's OrderTerm models only ASC/DESC, so
-		// fall back to a raw passthrough rather than silently drop the operator and
-		// change the sort meaning.
+		var term sql.OrderTerm
 		if sb.GetSortbyDir() == pg.SortByDir_SORTBY_USING {
-			return nil, sqlparse.Unsupported("ORDER BY ... USING operator")
-		}
-		term := sql.Asc(expr)
-		if sb.GetSortbyDir() == pg.SortByDir_SORTBY_DESC {
-			term = sql.Desc(expr)
+			ops := sb.GetUseOp()
+			if len(ops) == 0 {
+				return nil, sqlparse.Unsupported("ORDER BY ... USING without operator")
+			}
+			// The operator is typically a single-element list of String nodes
+			// giving the operator name (e.g. ">", "<", "~<~").
+			opParts := make([]string, 0, len(ops))
+			for _, op := range ops {
+				if s := op.GetString_(); s != nil {
+					opParts = append(opParts, s.GetSval())
+				} else {
+					return nil, sqlparse.Unsupportedf("ORDER BY USING operator %T", op.GetNode())
+				}
+			}
+			term = sql.Using(expr, strings.Join(opParts, "."))
+		} else {
+			term = sql.Asc(expr)
+			if sb.GetSortbyDir() == pg.SortByDir_SORTBY_DESC {
+				term = sql.Desc(expr)
+			}
 		}
 		switch sb.GetSortbyNulls() {
 		case pg.SortByNulls_SORTBY_NULLS_FIRST:
@@ -413,6 +427,14 @@ func convertWith(wc *pg.WithClause) ([]sql.CTE, error) {
 			return nil, sqlparse.Unsupportedf("CTE body %T", body)
 		}
 
+		// SEARCH and CYCLE clauses are not modeled in the typed AST.
+		if cte.GetSearchClause() != nil {
+			return nil, sqlparse.Unsupported("SEARCH clause on recursive CTE")
+		}
+		if cte.GetCycleClause() != nil {
+			return nil, sqlparse.Unsupported("CYCLE clause on recursive CTE")
+		}
+
 		var opts []sql.CTEOption
 		if cols := cte.GetAliascolnames(); len(cols) > 0 {
 			names := make([]string, 0, len(cols))
@@ -426,6 +448,12 @@ func convertWith(wc *pg.WithClause) ([]sql.CTE, error) {
 		}
 		if wc.GetRecursive() {
 			opts = append(opts, sql.Recursive())
+		}
+		switch cte.GetCtematerialized() {
+		case pg.CTEMaterialize_CTEMaterializeAlways:
+			opts = append(opts, sql.Materialized())
+		case pg.CTEMaterialize_CTEMaterializeNever:
+			opts = append(opts, sql.NotMaterialized())
 		}
 		ctes = append(ctes, maker.CTE(cte.GetCtename(), opts...))
 	}

@@ -312,6 +312,38 @@ type NullSafeEqualityDialect interface {
 // FullTextSearcher (the optional full-text-search capability) and the
 // MatchExpression it renders live in fulltext.go.
 
+// AggregateFilterDialect is an optional capability a Dialect implements to
+// allow FILTER (WHERE ...) clauses on aggregates. Standard SQL and PostgreSQL
+// support them; MySQL does not. The compiler detects it with a type assertion;
+// a dialect without it rejects the clause at compile time.
+type AggregateFilterDialect interface {
+	SupportsAggregateFilter() bool
+}
+
+// AggregateOrderByDialect is an optional capability a Dialect implements to
+// allow in-aggregate ORDER BY clauses (e.g. array_agg(x ORDER BY y)).
+// PostgreSQL supports them; MySQL does not (it uses GROUP_CONCAT ... ORDER BY
+// instead). The compiler detects it with a type assertion; a dialect without
+// it rejects the clause at compile time.
+type AggregateOrderByDialect interface {
+	SupportsAggregateOrderBy() bool
+}
+
+// CTEMaterializationDialect is an optional capability a Dialect implements to
+// allow [NOT] MATERIALIZED hints on CTEs (PostgreSQL 12+). The compiler detects
+// it with a type assertion; a dialect without it rejects the hint at compile
+// time.
+type CTEMaterializationDialect interface {
+	SupportsCTEMaterialization() bool
+}
+
+// OrderByUsingDialect is an optional capability a Dialect implements to allow
+// ORDER BY ... USING <operator> (PostgreSQL). The compiler detects it with a
+// type assertion; a dialect without it rejects the clause at compile time.
+type OrderByUsingDialect interface {
+	SupportsOrderByUsing() bool
+}
+
 // DialectByName returns the Dialect for a name: "postgres"/"postgresql" (or
 // empty, the default), "mysql", or "standard"/"ansi"/"sql" (the SQL standard /
 // ANSI text target). It errors on an unknown name.
@@ -603,6 +635,18 @@ func (PostgreSQLDialect) SupportsGroupingSets() bool { return true }
 
 // SupportsNullsOrdering reports PostgreSQL's support for NULLS FIRST/LAST.
 func (PostgreSQLDialect) SupportsNullsOrdering() bool { return true }
+
+// SupportsAggregateFilter reports PostgreSQL's support for FILTER (WHERE ...).
+func (PostgreSQLDialect) SupportsAggregateFilter() bool { return true }
+
+// SupportsAggregateOrderBy reports PostgreSQL's support for in-aggregate ORDER BY.
+func (PostgreSQLDialect) SupportsAggregateOrderBy() bool { return true }
+
+// SupportsCTEMaterialization reports PostgreSQL's support for [NOT] MATERIALIZED.
+func (PostgreSQLDialect) SupportsCTEMaterialization() bool { return true }
+
+// SupportsOrderByUsing reports PostgreSQL's support for ORDER BY ... USING <op>.
+func (PostgreSQLDialect) SupportsOrderByUsing() bool { return true }
 
 // LockClause renders PostgreSQL's row-locking clause; it supports all four lock
 // strengths (UPDATE, NO KEY UPDATE, SHARE, KEY SHARE).
