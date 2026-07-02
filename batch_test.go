@@ -237,6 +237,32 @@ func TestDeleteReturningSplitsByInList(t *testing.T) {
 	}
 }
 
+// TestDeleteReturningSplitsByFilterInList covers Filter's In(...) term rather
+// than Column[T].In directly: the two must behave identically for AutoChunk
+// splitting. Filter's In previously built its predicate via a plain
+// Cond(sql.In(...)), which carries none of the chunk metadata Column[T].In
+// attaches, so a Filter-driven IN silently never split regardless of
+// AutoChunk/ChunkSize -- a large ID list would produce one oversized
+// statement instead of several within the bind-parameter limit.
+func TestDeleteReturningSplitsByFilterInList(t *testing.T) {
+	fake := returningFake(func(args []any) int { return len(args) })
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true))
+
+	ids := []any{int64(1), int64(2), int64(3), int64(4), int64(5)}
+	var out []User
+	err := db.Delete(Users).Filter(filterTerms{ID: sqlkit.In(ids...)}).
+		AutoChunk(sqlkit.ChunkSize(2)).Returning().All(context.Background()).Scan(&out)
+	if err != nil {
+		t.Fatalf("delete returning error = %v", err)
+	}
+	if n := len(fake.Queries()); n != 3 {
+		t.Fatalf("queries = %d, want 3 (2+2+1 ids)", n)
+	}
+	if len(out) != 5 {
+		t.Fatalf("returned rows = %d, want 5 (concatenated)", len(out))
+	}
+}
+
 // TestBatchedReturningWriteReportsIsWriteTrue covers the single summary
 // AfterQuery hook call scanBatched makes after a RETURNING write split by
 // AutoChunk: the per-chunk statements correctly carry SQL text, but the
