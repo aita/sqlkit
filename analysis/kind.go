@@ -26,6 +26,12 @@ const (
 	StmtDelete
 	// StmtDDL is a schema statement (CREATE/ALTER/DROP/TRUNCATE/COMMENT).
 	StmtDDL
+	// StmtCall is a stored procedure call (CALL). Its effects are not
+	// statically knowable — the procedure body may read, write, or do
+	// nothing — so IsWrite reports true to stay on the safe side, the same
+	// fail-safe stance StmtKind takes nowhere else but that Statement.Access's
+	// AccessUnknown documents for an equivalent case.
+	StmtCall
 )
 
 // String renders the kind for logs and reports.
@@ -41,6 +47,8 @@ func (k StmtKind) String() string {
 		return "delete"
 	case StmtDDL:
 		return "ddl"
+	case StmtCall:
+		return "call"
 	default:
 		return "unknown"
 	}
@@ -49,9 +57,10 @@ func (k StmtKind) String() string {
 // IsRead reports whether the statement only reads rows.
 func (k StmtKind) IsRead() bool { return k == StmtSelect }
 
-// IsWrite reports whether the statement modifies data (INSERT/UPDATE/DELETE).
+// IsWrite reports whether the statement modifies data (INSERT/UPDATE/DELETE),
+// or might (CALL, whose procedure body is not statically knowable).
 func (k StmtKind) IsWrite() bool {
-	return k == StmtInsert || k == StmtUpdate || k == StmtDelete
+	return k == StmtInsert || k == StmtUpdate || k == StmtDelete || k == StmtCall
 }
 
 // FiltersRows reports whether the statement selects the rows it acts on through
@@ -99,6 +108,15 @@ func DetectKind(sqlText string) StmtKind {
 		return StmtUpdate
 	case "DELETE":
 		return StmtDelete
+	case "CALL":
+		// A stored procedure call: sqlparse frontends have no AST for it and
+		// fall back to a raw passthrough, so KindOf never classifies one —
+		// every CALL reaches DetectKind. Without this case it fell through to
+		// StmtUnknown, whose IsWrite() is false: a procedure that writes
+		// internally would silently bypass ForbidWrites/ReadOnly enforcement,
+		// with no signal at all (unlike a rejected construct, which at least
+		// fails loudly).
+		return StmtCall
 	case "CREATE", "ALTER", "DROP", "TRUNCATE", "COMMENT":
 		return StmtDDL
 	default:
