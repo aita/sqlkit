@@ -2,6 +2,7 @@ package autogen
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -850,7 +851,7 @@ func (r *renderer) columnPropsChanged(oc, nc meta.Column) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return od != nd, nil
+	return r.normalizeExprText(od) != r.normalizeExprText(nd), nil
 }
 
 func (r *renderer) sameType(a, b meta.Column) bool {
@@ -896,7 +897,76 @@ func (r *renderer) checkEqual(a, b meta.Check) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return ta == tb, nil
+	return r.normalizeExprText(ta) == r.normalizeExprText(tb), nil
+}
+
+// normalizeExprText loosens default/check expression text for comparison only
+// (never for code generation — callers pass the *unnormalized* text to
+// exprText/fmt.Sprintf when emitting Go source). On PostgreSQL, pg_get_expr
+// and pg_get_constraintdef render a literal with an explicit trailing type
+// cast (e.g. "'active'::character varying", "0::numeric"), which a
+// hand-written decl.Default/decl.Check literal (e.g. "'active'", "0")
+// normally omits. Comparing the raw text byte-for-byte would then report a
+// spurious diff for nearly every introspected default/check on --from-db,
+// even when nothing changed. Stripping a trailing top-level "::type" before
+// comparing fixes that common case without touching the emitted source.
+func (r *renderer) normalizeExprText(text string) string {
+	if r.dialect.Name() != "postgres" {
+		return text
+	}
+	return stripPGCast(text)
+}
+
+// pgCastSuffix matches a trailing "::type" cast: a bare or double-quoted type
+// name, optionally schema-qualified, with optional array brackets or a
+// precision/scale argument list.
+var pgCastSuffix = regexp.MustCompile(`^(?:"?[A-Za-z_][A-Za-z0-9_]*"?\.)?"?[A-Za-z_][A-Za-z0-9_ ]*"?(?:\[\])?(?:\([0-9,\s]*\))?$`)
+
+// stripPGCast removes one trailing "::type" cast from s, when "::" appears at
+// bracket/paren depth 0 and outside a quoted string literal (so it is never
+// mistaken for a "::" that happens to occur inside a string value or nested
+// inside a function call's arguments).
+func stripPGCast(s string) string {
+	idx := topLevelDoubleColon(s)
+	if idx < 0 {
+		return s
+	}
+	suffix := s[idx+2:]
+	if !pgCastSuffix.MatchString(strings.TrimSpace(suffix)) {
+		return s
+	}
+	return strings.TrimSpace(s[:idx])
+}
+
+// topLevelDoubleColon returns the index of the last "::" in s that sits
+// outside any single-quoted string and at bracket/paren depth 0, or -1.
+func topLevelDoubleColon(s string) int {
+	depth := 0
+	inQuote := false
+	last := -1
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case inQuote:
+			if c == '\'' {
+				if i+1 < len(s) && s[i+1] == '\'' { // "''" escapes a quote in the literal
+					i++
+					continue
+				}
+				inQuote = false
+			}
+		case c == '\'':
+			inQuote = true
+		case c == '(' || c == '[':
+			depth++
+		case c == ')' || c == ']':
+			depth--
+		case depth == 0 && c == ':' && i+1 < len(s) && s[i+1] == ':':
+			last = i
+			i++
+		}
+	}
+	return last
 }
 
 // --- small rendering and lookup helpers ---
