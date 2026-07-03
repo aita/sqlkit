@@ -423,3 +423,22 @@ func TestDiffManagedSchemaCreateAndDrop(t *testing.T) {
 		t.Fatalf("no-op diff emitted statements: %v", got)
 	}
 }
+
+func TestDiffFKEqualIgnoresSchemaCreateFlag(t *testing.T) {
+	c := col("user_id", "int8")
+	mkTable := func(create bool) meta.Table {
+		tb := tbl("posts", col("id", "int8"), c)
+		tb.ForeignKeys = []meta.ForeignKey{{
+			Name: "fk_posts_user", Columns: []string{"user_id"},
+			RefSchema: meta.Schema{Name: "public", Create: create}, RefTable: "users", RefColumns: []string{"id"},
+		}}
+		return tb
+	}
+	users := tbl("users", col("id", "int8"))
+	old := md(users, mkTable(false))
+	next := md(users, mkTable(true))
+	got := diff(t, old, next)
+	if len(got) != 0 {
+		t.Fatalf("changing only Schema.Create should not alter FK; got %v", got)
+	}
+}

@@ -418,7 +418,7 @@ func indexEqual(a, b meta.Index) bool {
 }
 
 func fkEqual(a, b meta.ForeignKey) bool {
-	return a.RefSchema == b.RefSchema && a.RefTable == b.RefTable &&
+	return a.RefSchema.Name == b.RefSchema.Name && a.RefTable == b.RefTable &&
 		stringsEqual(a.Columns, b.Columns) && stringsEqual(a.RefColumns, b.RefColumns) &&
 		a.OnDelete == b.OnDelete && a.OnUpdate == b.OnUpdate
 }
