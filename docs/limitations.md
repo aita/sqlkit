@@ -42,7 +42,7 @@ PostgreSQL); override with `WithDialect`.
 | Row locks `ForUpdate` / `ForShare` | ✅ | ✅ | MySQL 8.0+. Refine with [`SkipLocked`](https://pkg.go.dev/github.com/aita/sqlkit#SkipLocked)/[`NoWait`](https://pkg.go.dev/github.com/aita/sqlkit#NoWait)/[`LockOf`](https://pkg.go.dev/github.com/aita/sqlkit#LockOf). |
 | `ForKeyShare` / `ForNoKeyUpdate` | ✅ | ❌ | Extra PostgreSQL lock strengths. |
 | Arrays — [`sql.Array`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Array), `EqAny`/`NeAll`, [`decl.Array`](https://pkg.go.dev/github.com/aita/sqlkit/decl#Array) | ✅ | ❌ | MySQL has no array type. |
-| JSON path access — [`sql.JSONGet`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGet) / [`JSONGetText`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGetText) | ✅ | ❌ | 🚧 MySQL has JSON path functions; sqlkit just doesn't map to them yet. The `json`/`jsonb` struct-tag round-trip (whole-value marshal) works on both. |
+| JSON path access — [`sql.JSONGet`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGet) / [`JSONGetText`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGetText) | ✅ | ✅ | Maps to `JSON_EXTRACT` / `JSON_UNQUOTE(JSON_EXTRACT(...))` on MySQL. The `json`/`jsonb` struct-tag round-trip (whole-value marshal) works on both. |
 | Full-text search — [`sqlkit.Match`](https://pkg.go.dev/github.com/aita/sqlkit#Match) | ✅ | ⚠️ | MySQL: the columns need a `FULLTEXT` index. Boolean mode / a text-search config needs the `sql` package (below). |
 | Regex match — `~` / `~*` | ✅ | ❌ | MySQL can't express a case-insensitive regex inline (collation-dependent). |
 | `SIMILAR TO` / `NOT SIMILAR TO` | ✅ | ❌ | SQL-standard pattern matching. |
