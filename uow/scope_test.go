@@ -406,6 +406,57 @@ func TestNestedScopeRequiresTransaction(t *testing.T) {
 	}
 }
 
+func TestNestedScopeSecondFlushFailureOnlyRollsBackSecondFlush(t *testing.T) {
+	injectedErr := errors.New("boom")
+	insertCalls := 0
+	fake := &testutil.Fake{
+		ExecFunc: func(query string, _ []any) error {
+			if strings.HasPrefix(query, "INSERT") {
+				insertCalls++
+				if insertCalls == 2 {
+					return injectedErr
+				}
+			}
+			return nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+	err := db.WithSession(ctx(), func(s *sqlkit.Session) error {
+		child := uow.NewScope(s).NewScope()
+		if err := child.Add(newUsers(), userRow{Email: "a@x"}); err != nil {
+			return err
+		}
+		if err := child.Flush(ctx()); err != nil {
+			return err
+		}
+		if err := child.Add(newUsers(), userRow{Email: "b@x"}); err != nil {
+			return err
+		}
+		err := child.Flush(ctx())
+		if !errors.Is(err, injectedErr) {
+			t.Fatalf("second flush err = %v, want %v", err, injectedErr)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("with session: %v", err)
+	}
+	stmts := fake.Statements()
+	joined := strings.Join(stmts, "\n")
+	var rollbackSP string
+	for _, s := range stmts {
+		if strings.HasPrefix(s, "ROLLBACK TO SAVEPOINT ") {
+			rollbackSP = strings.TrimPrefix(s, "ROLLBACK TO SAVEPOINT ")
+		}
+	}
+	if rollbackSP == "" {
+		t.Fatalf("expected a ROLLBACK TO SAVEPOINT:\n%s", joined)
+	}
+	if rollbackSP == "sp_1" {
+		t.Fatalf("second flush failure rolled back to the scope's original savepoint sp_1, should only undo the second flush:\n%s", joined)
+	}
+}
+
 // --- identity reconciliation ---
 
 func TestGeneratorMismatchConflicts(t *testing.T) {
