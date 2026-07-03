@@ -474,6 +474,48 @@ func preloadRoutedDB(t *testing.T) (*sqlkit.Database, *testutil.Fake, *testutil.
 	return sqlkit.WrapExecutor(router), primary, replica
 }
 
+// TestRoutedSelectSplitGetsReadSnapshot guards a routed (per-statement
+// WithRoute) split SELECT against losing the REPEATABLE READ snapshot:
+// batchExecutor must unwrap the routedBinding even for reads so the chunks run
+// inside one snapshot transaction.
+func TestRoutedSelectSplitGetsReadSnapshot(t *testing.T) {
+	primary := &testutil.Fake{QueryFunc: func(_ string, args []any) (testutil.Result, error) {
+		rows := make([][]driver.Value, 0, len(args))
+		for _, a := range args {
+			rows = append(rows, []driver.Value{a, "x@example.com", nil})
+		}
+		return testutil.Result{Columns: []string{"id", "email", "name"}, Rows: rows}, nil
+	}}
+	replica := &testutil.Fake{QueryFunc: func(_ string, _ []any) (testutil.Result, error) {
+		return testutil.Result{Columns: []string{"id", "email", "name"}}, nil
+	}}
+	router := sqlkit.NewRouter(map[string]sqlkit.Backend{
+		"default": sqlkit.DB(primary.DB()),
+		"replica": sqlkit.DB(replica.DB()),
+	}, rwSplit)
+	db := sqlkit.WrapExecutor(router, sqlkit.WithAutoChunk(true))
+
+	var users []User
+	ids := []int64{1, 2, 3, 4, 5}
+	err := db.Select().From(Users).Where(Users.ID.In(ids...)).
+		AutoChunk(sqlkit.ChunkSize(2)).
+		All(context.Background(), sqlkit.WithRoute("default")).Scan(&users)
+	if err != nil {
+		t.Fatalf("routed select error = %v", err)
+	}
+	if len(users) != 5 {
+		t.Fatalf("users = %d, want 5", len(users))
+	}
+	// The split read chunks must share one snapshot transaction on the primary
+	// (the hinted backend), even though WithRoute wrapped the executor in a
+	// routedBinding. Without the fix, batchExecutor could not look through the
+	// routedBinding to the *Database, so each chunk ran as an independent
+	// auto-commit read with no snapshot.
+	if opts := primary.BeginOptions(); len(opts) != 1 {
+		t.Fatalf("primary begins = %d, want 1 (chunks must share one snapshot tx)", len(opts))
+	}
+}
+
 func TestStatementKindAndIsWrite(t *testing.T) {
 	cases := []struct {
 		name  string
