@@ -253,7 +253,7 @@ func (s Statement) selectQuery() sql.Query {
 	case UnionQuery:
 		return q.query
 	case sql.SelectBuilder, sql.CompoundBuilder, sql.SelectStmt, sql.CompoundStmt:
-		return q.(sql.Query)
+		return q
 	}
 	return nil
 }
