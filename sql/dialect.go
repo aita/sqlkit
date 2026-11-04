@@ -267,6 +267,18 @@ type DistinctOnDialect interface {
 	SupportsDistinctOn() bool
 }
 
+// GroupingSetsDialect is an optional capability a Dialect implements to allow the
+// ROLLUP / CUBE / GROUPING SETS grouping elements in a GROUP BY clause.
+// PostgreSQL and standard SQL support them; MySQL has no such grammar (its only
+// rollup spelling is the trailing GROUP BY ... WITH ROLLUP), so the compiler
+// rejects them at compile time rather than emit SQL MySQL cannot parse. The
+// compiler detects the capability with a type assertion, so adding it is not a
+// breaking change to Dialect; a dialect that does not implement it (or returns
+// false) rejects grouping sets at compile time.
+type GroupingSetsDialect interface {
+	SupportsGroupingSets() bool
+}
+
 // NullsOrderingDialect is an optional capability a Dialect implements to allow
 // NULLS FIRST / NULLS LAST modifiers on ORDER BY terms. PostgreSQL and standard
 // SQL support them; MySQL does not, so the compiler rejects the modifier there
@@ -477,8 +489,14 @@ var pgCanonical = map[string]string{
 }
 
 // pgLengthTypes/pgDecimalTypes are keyed by the canonical (rendered) name.
+// pgDecimalTypes lists both spellings PostgreSQL accepts for the same type
+// (DECIMAL is a pure alias for NUMERIC) — like the MySQL and Standard
+// dialects' equivalent maps — so a column declared with the engine name
+// "decimal" (via meta.Of or a hand-built sql.EngineType, not just the
+// decl.Decimal() registry path, which normalizes to "numeric" first) still
+// renders its precision/scale instead of silently dropping them.
 var pgLengthTypes = map[string]bool{"varchar": true, "char": true}
-var pgDecimalTypes = map[string]bool{"numeric": true}
+var pgDecimalTypes = map[string]bool{"numeric": true, "decimal": true}
 
 func (PostgreSQLDialect) ColumnType(name string, length, precision, scale int) string {
 	n := strings.ToLower(name)
@@ -585,6 +603,9 @@ func (PostgreSQLDialect) SimilarTo(left, pattern string, negate bool) string {
 
 // SupportsDistinctOn reports PostgreSQL's support for SELECT DISTINCT ON.
 func (PostgreSQLDialect) SupportsDistinctOn() bool { return true }
+
+// SupportsGroupingSets reports PostgreSQL's support for ROLLUP/CUBE/GROUPING SETS.
+func (PostgreSQLDialect) SupportsGroupingSets() bool { return true }
 
 // SupportsNullsOrdering reports PostgreSQL's support for NULLS FIRST/LAST.
 func (PostgreSQLDialect) SupportsNullsOrdering() bool { return true }
@@ -875,6 +896,9 @@ func (StandardSQLDialect) SupportsMerge() bool { return true }
 
 // SupportsNullsOrdering reports support for NULLS FIRST/LAST (standard SQL).
 func (StandardSQLDialect) SupportsNullsOrdering() bool { return true }
+
+// SupportsGroupingSets reports standard SQL's support for ROLLUP/CUBE/GROUPING SETS.
+func (StandardSQLDialect) SupportsGroupingSets() bool { return true }
 
 var standardLengthTypes = map[string]bool{"varchar": true, "char": true, "character": true}
 var standardDecimalTypes = map[string]bool{"numeric": true, "decimal": true}

@@ -31,10 +31,12 @@
 // resolution is followed only to a bounded depth, beyond which it goes untraced.
 //
 // A raw SQL fragment — Raw(...) or RawSQL(...) — is opaque text. By default the
-// redactor scans it for the sensitive column names it mentions, so a literal
-// compared to such a fragment is masked, but a literal embedded inside the fragment
-// is out of reach. Configure WithRawParser to lift that limit: the fragment is
-// re-parsed into typed AST, masked like any expression, and substituted back.
+// redactor scans it for the sensitive column names it mentions; when it finds one
+// (or the fragment is itself the value compared to a sensitive column) it masks
+// every string literal in the fragment — a fail-safe heuristic that cannot tell
+// which literal pairs with the column, so it over-masks rather than leak. Configure
+// WithRawParser for precise, per-literal masking: the fragment is re-parsed into
+// typed AST, masked like any expression, and substituted back.
 package redaction
 
 import (
@@ -72,12 +74,14 @@ func WithMask(mask string) Option {
 }
 
 // WithRawParser configures a parser used to re-parse raw SQL — Raw(...) expression
-// fragments and RawSQL(...) statements — so the literals inside them are masked too.
-// Without it a raw fragment is opaque: the redactor only scans it for sensitive
-// column names to decide whether a literal compared to it should be masked, and
-// cannot reach a sensitive literal embedded in the fragment itself. With it, a
-// fragment that the parser can model is rewritten like any typed expression. A
-// fragment that does not parse, or that the frontend cannot model, is left untouched.
+// fragments and RawSQL(...) statements — so the literals inside them are masked
+// precisely. Without it a raw fragment is opaque: the redactor scans it for
+// sensitive column names and, when it finds one, masks every string literal in the
+// fragment as a fail-safe heuristic (over-masking, since it cannot tell which
+// literal pairs with the column). With it, a fragment that the parser can model is
+// rewritten like any typed expression, masking only the literals actually tied to a
+// sensitive column. A fragment that does not parse, or that the frontend cannot
+// model, falls back to the heuristic.
 func WithRawParser(p RawParser) Option {
 	return func(m *Redactor) { m.rawParser = p }
 }
@@ -228,7 +232,23 @@ func (m *Redactor) rewriteSelect(v sql.SelectStmt, sc *scope) sql.Query {
 	v.GroupBy = m.rewriteExprs(v.GroupBy, sc)
 	v.DistinctOn = m.rewriteExprs(v.DistinctOn, sc)
 	v.OrderBy = m.rewriteOrderTerms(v.OrderBy, sc)
+	v.Windows = m.rewriteNamedWindows(v.Windows, sc)
 	return v
+}
+
+// rewriteNamedWindows rewrites the PARTITION BY / ORDER BY expressions of each
+// WINDOW-clause definition, so a sensitive comparison hidden in a named window
+// (WINDOW w AS (PARTITION BY (ssn = 'x'))) is masked like one in an inline OVER.
+func (m *Redactor) rewriteNamedWindows(windows []sql.NamedWindow, sc *scope) []sql.NamedWindow {
+	if len(windows) == 0 {
+		return windows
+	}
+	out := clone(windows)
+	for i := range out {
+		out[i].Partitions = m.rewriteExprs(out[i].Partitions, sc)
+		out[i].OrderByTerms = m.rewriteOrderTerms(out[i].OrderByTerms, sc)
+	}
+	return out
 }
 
 func (m *Redactor) rewriteInsert(v sql.InsertStmt, sc *scope) sql.Query {
@@ -236,6 +256,9 @@ func (m *Redactor) rewriteInsert(v sql.InsertStmt, sc *scope) sql.Query {
 		// The target's columns are named positionally by v.Columns; mask the value
 		// in each row whose column is sensitive. Without a column list the positions
 		// are the table's own columns, which we cannot name here, so only recurse.
+		// (The compiler rejects a columnless INSERT VALUES outright, so this shape
+		// never reaches SQL — unlike the analogous MERGE ... THEN INSERT VALUES,
+		// which the compiler accepts; see rewriteInsertValues.)
 		sensitive := make([]bool, len(v.Columns))
 		for i, c := range v.Columns {
 			sensitive[i] = m.isSensitive(sc, analysis.NamedColumn(c))
@@ -255,7 +278,19 @@ func (m *Redactor) rewriteInsert(v sql.InsertStmt, sc *scope) sql.Query {
 		v.Rows = rows
 	}
 	if v.Select != nil {
-		v.Select = m.rewriteQuery(v.Select, sc.parent, sc.childCTEs)
+		rewritten := m.rewriteQuery(v.Select, sc.parent, sc.childCTEs)
+		// INSERT ... SELECT feeds the SELECT's projections into v.Columns
+		// positionally, so a literal projected into a sensitive target column must
+		// be masked just like a VALUES element. (Without a column list the positions
+		// are the table's own columns, which we cannot name here.)
+		if len(v.Columns) > 0 {
+			sensitive := make([]bool, len(v.Columns))
+			for i, c := range v.Columns {
+				sensitive[i] = m.isSensitive(sc, analysis.NamedColumn(c))
+			}
+			rewritten = m.maskSelectProjections(rewritten, sensitive)
+		}
+		v.Select = rewritten
 	}
 	if v.Conflict != nil {
 		c := *v.Conflict
@@ -308,6 +343,83 @@ func (m *Redactor) rewriteMerge(v sql.MergeStmt, sc *scope) sql.Query {
 	return v
 }
 
+// maskSelectProjections masks the i-th projection of an INSERT ... SELECT's
+// result when sensitive[i] is set — the projection feeds the i-th (sensitive)
+// target column, so a literal there is a value assigned to that column. It
+// descends into both arms of a set operation so every UNION arm is masked, and
+// leaves a projection whose position cannot be mapped (a wildcard, or an index
+// past the column list) untouched. Only the value of a matched projection is
+// masked (maskValue), so a projected base column is unchanged.
+func (m *Redactor) maskSelectProjections(q sql.Query, sensitive []bool) sql.Query {
+	switch v := sql.Unwrap(q).(type) {
+	case sql.SelectStmt:
+		if len(v.Columns) == 0 {
+			return q
+		}
+		cols := clone(v.Columns)
+		for i := range cols {
+			if i < len(sensitive) && sensitive[i] {
+				cols[i] = m.maskSelection(cols[i])
+			}
+		}
+		v.Columns = cols
+		return v
+	case sql.CompoundStmt:
+		v.Left = m.maskSelectProjections(v.Left, sensitive)
+		v.Right = m.maskSelectProjections(v.Right, sensitive)
+		return v
+	default:
+		return q
+	}
+}
+
+// maskAllProjections masks every projection of a query — used for a subquery that
+// stands on the value side of a comparison against a sensitive column
+// (name = (SELECT 'x'), name IN (SELECT 'x'), name = ANY(SELECT 'x')), where the
+// projected value is what the sensitive column is compared to. It descends into
+// both arms of a set operation. maskSelection masks only literal-bearing
+// projections, so a projected base column is left unchanged.
+func (m *Redactor) maskAllProjections(q sql.Query) sql.Query {
+	if q == nil {
+		return q
+	}
+	switch v := sql.Unwrap(q).(type) {
+	case sql.SelectStmt:
+		if len(v.Columns) == 0 {
+			return q
+		}
+		cols := clone(v.Columns)
+		for i := range cols {
+			cols[i] = m.maskSelection(cols[i])
+		}
+		v.Columns = cols
+		return v
+	case sql.CompoundStmt:
+		v.Left = m.maskAllProjections(v.Left)
+		v.Right = m.maskAllProjections(v.Right)
+		return v
+	default:
+		return q
+	}
+}
+
+// maskSelection masks the value expression a SELECT-list item projects, looking
+// through an AS alias; a wildcard or non-expression item is left unchanged.
+func (m *Redactor) maskSelection(s sql.Selection) sql.Selection {
+	switch x := s.(type) {
+	case sql.AliasedSelection:
+		x.Selection = m.maskSelection(x.Selection)
+		return x
+	case sql.Expression:
+		if masked, ok := m.maskValue(x).(sql.Selection); ok {
+			return masked
+		}
+		return s
+	default:
+		return s
+	}
+}
+
 // rewriteInsertValues masks the values whose paired InsertColumns are sensitive
 // (the MERGE ... WHEN NOT MATCHED THEN INSERT form), recursing through the rest.
 func (m *Redactor) rewriteInsertValues(columns []sql.Ident, values []sql.Expression, sc *scope) []sql.Expression {
@@ -316,9 +428,20 @@ func (m *Redactor) rewriteInsertValues(columns []sql.Ident, values []sql.Express
 	}
 	out := clone(values)
 	for i := range out {
-		if i < len(columns) && m.isSensitive(sc, analysis.NamedColumn(columns[i])) {
+		switch {
+		case i < len(columns):
+			if m.isSensitive(sc, analysis.NamedColumn(columns[i])) {
+				out[i] = m.maskValue(out[i])
+			} else {
+				out[i] = m.rewriteExpr(out[i], sc)
+			}
+		case m.maskUnresolved:
+			// No column list (a valid MERGE ... THEN INSERT VALUES that assigns the
+			// table's own column order): this value's target column can't be named,
+			// so its sensitivity can't be resolved. Fail safe like any other
+			// unresolved reference, rather than assume it's fine and leak it.
 			out[i] = m.maskValue(out[i])
-		} else {
+		default:
 			out[i] = m.rewriteExpr(out[i], sc)
 		}
 	}

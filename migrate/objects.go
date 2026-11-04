@@ -59,9 +59,9 @@ func (o *Operator) CreateEnum(name string, values ...string) {
 	o.emit(sql.CreateEnum(o.qualified(name), values...))
 }
 
-// DropEnum drops an enum type if it exists (DROP TYPE ... IF EXISTS).
+// DropEnum drops an enum type if it exists (DROP TYPE ... IF EXISTS CASCADE).
 func (o *Operator) DropEnum(name string) {
-	o.emit(sql.DropType(o.qualified(name)).IfExists())
+	o.emit(sql.DropType(o.qualified(name)).IfExists().Cascade())
 }
 
 // AddEnumValue adds a label to an existing enum type (ALTER TYPE ... ADD VALUE).

@@ -375,6 +375,59 @@ func TestColumnValues(t *testing.T) {
 	}
 }
 
+// TestColumnValuesEncodesJSONColumn covers the write-path symmetry between the
+// Insert builder and the uow UPDATE path (which builds its assignments from
+// ColumnValues): a `sqlkit:",json"` column must reach the driver as its JSON
+// encoding through both paths, not as the raw Go value.
+func TestColumnValuesEncodesJSONColumn(t *testing.T) {
+	item := Item{ID: 1, SKU: "x", Meta: map[string]any{"k": "v"}}
+
+	names, values, err := sqlkit.ColumnValues(Items, item)
+	if err != nil {
+		t.Fatalf("ColumnValues() error = %v", err)
+	}
+	var meta any
+	for i, n := range names {
+		if n == "meta" {
+			meta = values[i]
+		}
+	}
+	if meta == nil {
+		t.Fatal("ColumnValues() did not return the meta column")
+	}
+	valuer, ok := meta.(driver.Valuer)
+	if !ok {
+		t.Fatalf("ColumnValues() meta = %#v (%T), want a driver.Valuer carrying the JSON encoding", meta, meta)
+	}
+	got, err := valuer.Value()
+	if err != nil {
+		t.Fatalf("meta.Value() error = %v", err)
+	}
+	want := []byte(`{"k":"v"}`)
+	if b, ok := got.([]byte); !ok || string(b) != string(want) {
+		t.Fatalf("ColumnValues() meta driver value = %#v, want JSON %q", got, want)
+	}
+
+	// The same value must match what the Insert builder emits for that column.
+	_, insArgs, err := sqlkit.Insert(Items).Values(item).ToSQL(sql.PostgreSQLDialect{})
+	if err != nil {
+		t.Fatalf("insert ToSQL: %v", err)
+	}
+	var insMeta any
+	for _, a := range insArgs {
+		if vr, ok := a.(driver.Valuer); ok {
+			if dv, err := vr.Value(); err == nil {
+				if b, ok := dv.([]byte); ok && string(b) == string(want) {
+					insMeta = dv
+				}
+			}
+		}
+	}
+	if insMeta == nil {
+		t.Fatalf("Insert did not emit the JSON-encoded meta value; args = %#v", insArgs)
+	}
+}
+
 // TestColumnValuesSkipsUnmappedColumns covers a row struct that only provides a
 // subset of the table's columns: the others are skipped.
 func TestColumnValuesSkipsUnmappedColumns(t *testing.T) {
@@ -452,5 +505,43 @@ func TestScanJSONColumn(t *testing.T) {
 	}
 	if items[1].Meta != nil {
 		t.Fatalf("items[1].Meta = %#v, want nil for NULL", items[1].Meta)
+	}
+}
+
+// TestScanJSONColumnResetsOnReusedDestination covers scanning into the same
+// destination struct across two single-row Scan calls (the Get/One pattern, as
+// opposed to All's always-fresh struct per row). json.Unmarshal merges into an
+// already-populated map/struct rather than replacing it, so a jsonScanner that
+// doesn't reset its destination first would leak the previous row's keys into
+// the new value, or leave a stale value in place when the new row's column is
+// NULL — both silent wrong data with no error.
+func TestScanJSONColumnResetsOnReusedDestination(t *testing.T) {
+	calls := 0
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			calls++
+			if calls == 1 {
+				return testutil.Result{
+					Columns: []string{"id", "sku", "meta", "rev", "created"},
+					Rows:    [][]driver.Value{{int64(1), "abc", []byte(`{"a":1,"b":2}`), int64(1), int64(0)}},
+				}, nil
+			}
+			return testutil.Result{
+				Columns: []string{"id", "sku", "meta", "rev", "created"},
+				Rows:    [][]driver.Value{{int64(2), "def", []byte(`{"b":99}`), int64(1), int64(0)}},
+			}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+
+	var item Item
+	if err := db.Select().From(Items).One(context.Background()).Scan(&item); err != nil {
+		t.Fatalf("first scan: %v", err)
+	}
+	if err := db.Select().From(Items).One(context.Background()).Scan(&item); err != nil {
+		t.Fatalf("second scan: %v", err)
+	}
+	if want := map[string]any{"b": float64(99)}; !reflect.DeepEqual(item.Meta, want) {
+		t.Fatalf("item.Meta = %#v, want %#v (row 1's \"a\" key must not survive)", item.Meta, want)
 	}
 }

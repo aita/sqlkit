@@ -262,17 +262,61 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 		varName := bindingName(table)
 		reserved[varName] = true
 		reserved[varName+"Table"] = true
+		// With relations enabled the relational template also declares
+		// package-level <Var>Columns / <Var>Filter types and a new<Var>Columns
+		// constructor for every table (see buildTable and the relational
+		// template). Reserve them too, or an enum/DTO whose name maps to one of
+		// these identifiers would emit a second declaration of it — code that
+		// does not compile. <Var>Rels is only declared for a table that has
+		// relations, so it is reserved below once those are known.
+		if opts.EmitRelations {
+			reserved[varName+"Columns"] = true
+			reserved[varName+"Filter"] = true
+			reserved["new"+varName+"Columns"] = true
+		}
 	}
-	// Reserve enum type names too: an enum and a table's DTO can derive the same
-	// Go identifier (enum "mood" and table "moods" both -> "Mood"), which would
-	// emit two `type Mood` declarations. Seeding them here pushes the colliding
-	// DTO to its "Row"-suffixed fallback.
-	for _, enum := range md.Enums {
-		reserved[goName(enum.Name)] = true
+	// Build the relations up front (when enabled) so the per-relation struct
+	// types they declare (<Var><Field>Rel) are reserved before enum and DTO names
+	// are assigned — otherwise an enum/DTO whose Go name maps to a relation type
+	// would emit a second declaration of it (code that does not compile). The
+	// reservation only adds set keys, so the iteration order does not affect the
+	// result; the models attach these same relations below.
+	var relations map[string][]relationModel
+	if opts.EmitRelations {
+		relations = buildRelations(tables, bindingName)
+		for _, rels := range relations {
+			for _, r := range rels {
+				reserved[r.RelType] = true
+			}
+		}
+		for _, table := range tables {
+			if len(relations[qualified(table.Schema.Name, table.Name)]) > 0 {
+				reserved[bindingName(table)+"Rels"] = true
+			}
+		}
+	}
+	// Assign each enum a unique Go type name and unique label const names,
+	// deduped against binding vars and one another and reserved so DTOs and other
+	// enums can't collide. Two enums whose names map to one Go identifier (e.g.
+	// "mood" and "mood_" both -> "Mood"), an enum colliding with a binding var,
+	// or a label const colliding with a DTO would otherwise emit two declarations
+	// of the same identifier — code that does not compile. enumGo maps the column
+	// type names to the final (deduped) type so enum-typed columns still resolve.
+	enumModels := make([]enumModel, len(md.Enums))
+	enumGo := map[string]meta.GoType{}
+	for i, e := range md.Enums {
+		typeName := uniqueName(reserved, goName(e.Name))
+		labels := make([]string, len(e.Values))
+		for j, v := range e.Values {
+			labels[j] = uniqueName(reserved, typeName+goName(v))
+		}
+		enumModels[i] = enumModel{Enum: e, TypeName: typeName, Labels: labels}
+		gt := meta.GoType{Name: typeName}
+		enumGo[e.Name] = gt
+		enumGo[e.QualifiedName()] = gt
 	}
 
 	generator := GeneratorID()
-	enumGo := enumGoTypes(md.Enums)
 	models := make([]*tableModel, 0, len(tables))
 	for _, table := range tables {
 		tm, err := buildTable(table, dialect, mapper, bindingName, enumGo)
@@ -292,7 +336,6 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 	}
 
 	if opts.EmitRelations {
-		relations := buildRelations(tables, bindingName)
 		for i, tm := range models {
 			tm.Relational = true
 			tm.Relations = relations[qualified(tables[i].Schema.Name, tables[i].Name)]
@@ -303,7 +346,7 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 	if err != nil {
 		return nil, err
 	}
-	if ef, ok, err := enumFile(md.Enums, opts); err != nil {
+	if ef, ok, err := enumFile(enumModels, opts); err != nil {
 		return nil, err
 	} else if ok {
 		files = append(files, ef)

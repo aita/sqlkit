@@ -103,3 +103,33 @@ func TestSnapshotRoundTripObjects(t *testing.T) {
 		t.Fatalf("sequences round-trip = %+v want %+v", got.Sequences, md.Sequences)
 	}
 }
+
+// An enum present in the source (e.g. read back by --from-db introspection) but
+// not declared in the target must not be dropped while a target column still
+// uses it by type name: DropEnum cascades, so it would drop that column and its
+// data. With no remaining user it is dropped as before.
+func TestRenderUndeclaredEnumStillUsedIsKept(t *testing.T) {
+	source := meta.Metadata{
+		Enums: []meta.Enum{{Schema: "public", Name: "mood", Values: []string{"happy", "sad"}}},
+		Tables: []meta.Table{{Schema: meta.Schema{Name: "public"}, Name: "people", Columns: []meta.Column{
+			{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true},
+			{Name: "feeling", Type: meta.Of("postgres", "mood", 0, 0, 0)},
+		}}},
+	}
+	target := source
+	target.Enums = nil // the catalog references the type without declaring it
+
+	res := render(t, source, target, "postgres", Renames{})
+	if strings.Contains(res.Up, "op.DropEnum") {
+		t.Fatalf("Up drops an enum a target column still uses:\n%s", res.Up)
+	}
+
+	unused := meta.Metadata{Tables: []meta.Table{{Schema: meta.Schema{Name: "public"}, Name: "people", Columns: []meta.Column{
+		{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true},
+	}}}}
+	source.Tables = unused.Tables
+	res = render(t, source, unused, "postgres", Renames{})
+	if !strings.Contains(res.Up, `op.DropEnum("mood")`) {
+		t.Fatalf("Up should drop an enum nothing uses:\n%s", res.Up)
+	}
+}

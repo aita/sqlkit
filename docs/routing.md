@@ -48,7 +48,14 @@ func (ShardByTenant) Route(ctx context.Context, stmt sqlkit.Statement) string {
 Route on **`Kind`/`IsWrite`, not `Op`**: an `INSERT/UPDATE/DELETE ... RETURNING`
 runs through the row-returning path with `Op == `[`OpQuery`](https://pkg.go.dev/github.com/aita/sqlkit#OpQuery) yet is a write, and a
 locking read (`SELECT ... FOR UPDATE`) takes row locks — `stmt.IsWrite()` reports
-both correctly so they never land on a read replica. For the three-way
+both correctly so they never land on a read replica. A data-modifying CTE
+(`WITH x AS (INSERT/UPDATE/DELETE ... RETURNING ...) SELECT ...`) is likewise a
+write even though its top-level statement is a `SELECT`; `IsWrite()` detects it
+**from the parsed AST**, so a router that runs builder-produced or parsed
+statements keeps it off replicas. The keyword-guess fallback (a raw SQL string
+analyzed without a parser) cannot see into the CTE body, so attach a
+[`WithRoute`](https://pkg.go.dev/github.com/aita/sqlkit#WithRoute) hint to such
+raw statements if you route them. For the three-way
 read/write/**undetermined** distinction (an opaque raw string whose nature
 cannot be inferred, which `IsWrite` folds to the safe write side), branch on
 `stmt.Access()` and handle [`AccessUnknown`](https://pkg.go.dev/github.com/aita/sqlkit#AccessUnknown) yourself.
@@ -69,12 +76,22 @@ db.Select().From(Users).Preload(Posts).All(ctx, sqlkit.WithRoute("replica", sqlk
 **Sessions** pin to one backend. A transaction cannot span backends, so the
 `Router` is consulted once, at `Begin`, from the session's `WithRoute` hint and
 read-only intent; every statement in the session then runs on that backend. A
-read-only session routes to a read replica without a hint:
+read-only session routes to a read replica without a hint. `WithRoute` alone,
+without `ReadOnly`, is a no-op under the built-in `ReadWriteRouter`: a session
+that might later write must never pin to a replica, so the router only honors a
+session-level route hint when it is also marked read-only — pass both together
+to pin a read-only session to a specific replica:
 
 ```go
-db.NewSession(sqlkit.WithRoute("replica"))
+db.NewSession(sqlkit.WithRoute("replica")) // ReadWriteRouter ignores this; runs on the primary
 db.NewSession(sqlkit.WithTxOptions(sqlkit.TxOptions{ReadOnly: true})) // -> replica via the router
+db.NewSession(sqlkit.WithRoute("replica"), sqlkit.WithTxOptions(sqlkit.TxOptions{ReadOnly: true})) // -> replica, pinned
 ```
+
+A hand-written `Router` can honor a plain `WithRoute` hint regardless of
+read-only intent by checking `stmt.RouteHint` before `stmt.IsWrite()` — see
+`rwSplit` in the package tests for the pattern — but the built-in
+`ReadWriteRouter` deliberately does not, to stay safe by default.
 
 A per-statement `WithRoute` inside a pinned session that names a *different*
 backend is [`ErrRouteConflict`](https://pkg.go.dev/github.com/aita/sqlkit#ErrRouteConflict) (a distributed transaction the router will not

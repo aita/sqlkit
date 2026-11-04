@@ -144,3 +144,78 @@ func countUser(t *testing.T, db *sqlkit.Database, email string) int64 {
 }
 
 func errorsIsNoRows(err error) bool { return errors.Is(err, sqlkit.ErrNoRows) }
+
+// uowDocsTable is a minimal hand-written binding for a table with a JSON
+// column, used only by TestUnitOfWorkJSONColumnBatchedUpdate.
+type uowDocsTable struct {
+	info sqlkit.TableInfo
+	ID   sqlkit.Column[int64]
+	Meta sqlkit.Column[[]byte]
+}
+
+func newUOWDocs() uowDocsTable {
+	info := sqlkit.TableInfo{Schema: testSchema, Name: "uow_docs"}
+	return uowDocsTable{info: info, ID: sqlkit.NewColumn[int64](info, "id"), Meta: sqlkit.NewColumn[[]byte](info, "meta")}
+}
+func (t uowDocsTable) Info() sqlkit.TableInfo             { return t.info }
+func (t uowDocsTable) SQLSource() sqlkit.SourceExpression { return t.info.SQLSource() }
+func (t uowDocsTable) Columns() []sqlkit.AnyColumn        { return []sqlkit.AnyColumn{t.ID, t.Meta} }
+func (t uowDocsTable) PrimaryKey() []sqlkit.AnyColumn     { return []sqlkit.AnyColumn{t.ID} }
+func (t uowDocsTable) Defaulted() []sqlkit.AnyColumn      { return nil }
+
+type uowDoc struct {
+	ID   int64
+	Meta map[string]any `sqlkit:"meta,json"`
+}
+
+// TestUnitOfWorkJSONColumnBatchedUpdate flushes changes to a json-tagged column
+// on several managed rows with batching on. A batched flush merges single-PK
+// updates into one VALUES-join UPDATE, where an opaque JSON parameter has no
+// type the engine can infer; the uow must fall back to per-row UPDATEs for such
+// values so the flush succeeds and the JSON lands intact.
+func TestUnitOfWorkJSONColumnBatchedUpdate(t *testing.T) {
+	eachEngine(t, func(t *testing.T, eng engine, db *sqlkit.Database) {
+		ctx := context.Background()
+		jsonType := "JSONB"
+		if eng.name == "mysql" {
+			jsonType = "JSON"
+		}
+		table := db.Dialect().QuoteIdent(testSchema + ".uow_docs")
+		if _, err := db.SQL().ExecContext(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.SQL().ExecContext(ctx, "CREATE TABLE "+table+" (id BIGINT PRIMARY KEY, meta "+jsonType+" NOT NULL)"); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _, _ = db.SQL().ExecContext(context.Background(), "DROP TABLE IF EXISTS "+table) })
+		docs := newUOWDocs()
+		if _, err := db.Insert(docs).Values([]uowDoc{{ID: 1, Meta: map[string]any{"v": 1}}, {ID: 2, Meta: map[string]any{"v": 2}}}).Exec(ctx); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+
+		err := db.WithSession(ctx, func(s *sqlkit.Session) error {
+			scope := uow.NewScope(s, uow.WithBatchSize(10))
+			var rows []uowDoc
+			if err := scope.Find(ctx, docs, &rows); err != nil {
+				return err
+			}
+			for i := range rows {
+				rows[i].Meta["v"] = rows[i].ID * 10
+			}
+			return scope.Flush(ctx)
+		})
+		if err != nil {
+			t.Fatalf("flush: %v", err)
+		}
+
+		var got []uowDoc
+		if err := db.Select().From(docs).OrderBy(docs.ID.Asc()).All(ctx).Scan(&got); err != nil {
+			t.Fatalf("read back: %v", err)
+		}
+		for _, d := range got {
+			if v, _ := d.Meta["v"].(float64); int64(v) != d.ID*10 {
+				t.Errorf("doc %d meta = %v, want v=%d", d.ID, d.Meta, d.ID*10)
+			}
+		}
+	})
+}

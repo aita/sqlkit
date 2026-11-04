@@ -86,7 +86,7 @@ var demos = []demo{
 		Path:    "/search",
 		Title:   "Leaked cursor + query budget",
 		Desc:    "Fans out a string of lookups past the per-request budget and leaves a cursor open.",
-		Expect:  []string{"too_many_queries", "rows_not_closed"},
+		Expect:  []string{"too_many_queries", "query_in_loop", "rows_not_closed"},
 		Handler: (*server).demoSearch,
 	},
 	{
