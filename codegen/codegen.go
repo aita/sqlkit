@@ -263,14 +263,14 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 		reserved[varName] = true
 		reserved[varName+"Table"] = true
 		// With relations enabled the relational template also declares
-		// package-level <Var>Columns / <Var>Rels / <Var>Filter types and a
-		// new<Var>Columns constructor (see buildTable and the relational
+		// package-level <Var>Columns / <Var>Filter types and a new<Var>Columns
+		// constructor for every table (see buildTable and the relational
 		// template). Reserve them too, or an enum/DTO whose name maps to one of
 		// these identifiers would emit a second declaration of it — code that
-		// does not compile.
+		// does not compile. <Var>Rels is only declared for a table that has
+		// relations, so it is reserved below once those are known.
 		if opts.EmitRelations {
 			reserved[varName+"Columns"] = true
-			reserved[varName+"Rels"] = true
 			reserved[varName+"Filter"] = true
 			reserved["new"+varName+"Columns"] = true
 		}
@@ -287,6 +287,11 @@ func Generate(md meta.Metadata, opts Options) ([]File, error) {
 		for _, rels := range relations {
 			for _, r := range rels {
 				reserved[r.RelType] = true
+			}
+		}
+		for _, table := range tables {
+			if len(relations[qualified(table.Schema.Name, table.Name)]) > 0 {
+				reserved[bindingName(table)+"Rels"] = true
 			}
 		}
 	}
