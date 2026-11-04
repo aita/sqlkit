@@ -101,6 +101,14 @@ type Scope struct {
 	// WithAutoChunk setting. See WithAutoChunk.
 	autoChunk *bool
 
+	// autoflush, when set, flushes pending work before a Get/Find read so the
+	// read observes the scope's own not-yet-flushed changes. See WithAutoflush.
+	autoflush bool
+
+	// hooks observe the flush lifecycle; each may implement BeforeFlushHook
+	// and/or AfterFlushHook. See WithFlushHook.
+	hooks []any
+
 	// nesting
 	parent    *Scope
 	savepoint string
@@ -182,6 +190,8 @@ func (s *Scope) NewScope() *Scope {
 		identities: s.identities,
 		batchSize:  s.batchSize,
 		autoChunk:  s.autoChunk,
+		autoflush:  s.autoflush,
+		hooks:      s.hooks,
 		tables:     map[string]*tableState{},
 		parent:     s,
 	}
@@ -220,6 +230,9 @@ type tracked struct {
 // row was found. Mutating dest afterward and calling Flush emits an UPDATE of
 // only the changed columns.
 func (s *Scope) Get(ctx context.Context, table sqlkit.Table, dest any, pk ...any) (bool, error) {
+	if err := s.maybeAutoflush(ctx); err != nil {
+		return false, err
+	}
 	ts, err := s.stateFor(table)
 	if err != nil {
 		return false, err
@@ -249,6 +262,9 @@ func (s *Scope) Get(ctx context.Context, table sqlkit.Table, dest any, pk ...any
 // slice) and tracks each as a managed entity. With no predicates it loads the
 // whole table.
 func (s *Scope) Find(ctx context.Context, table sqlkit.Table, dest any, predicates ...sqlkit.Predicate) error {
+	if err := s.maybeAutoflush(ctx); err != nil {
+		return err
+	}
 	ts, err := s.stateFor(table)
 	if err != nil {
 		return err
@@ -373,30 +389,46 @@ func (s *Scope) Remove(table sqlkit.Table, rows ...any) error {
 // directly on the executor. On success the staged inserts/updates/deletes are
 // cleared and managed entities' snapshots are refreshed, so the scope can be
 // reused for another round.
+//
+// Registered BeforeFlush hooks run first, before anything is written; an error
+// from one aborts the flush with the staged work intact. AfterFlush hooks run
+// once the flush has succeeded, with a ChangeSet of what was written; an error
+// from one is returned but does not undo the flush (see AfterFlushHook).
 func (s *Scope) Flush(ctx context.Context) error {
+	changes, err := s.flushGuarded(ctx)
+	if err != nil {
+		return err
+	}
+	return s.runAfterFlush(ctx, changes)
+}
+
+// flushGuarded runs flush — inside a guard savepoint on a nested scope — and
+// returns the ChangeSet snapshot of the work it wrote, for the AfterFlush hooks.
+func (s *Scope) flushGuarded(ctx context.Context) (*ChangeSet, error) {
 	if s.parent == nil {
 		return s.flush(ctx)
 	}
 	sp, ok := s.ex.(savepointer)
 	if !ok {
-		return ErrNestingRequiresTx
+		return nil, ErrNestingRequiresTx
 	}
 	if s.savepoint == "" {
 		name, err := sp.Savepoint(ctx)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		s.savepoint = name
 	}
 	guard, err := sp.Savepoint(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if err := s.flush(ctx); err != nil {
+	changes, err := s.flush(ctx)
+	if err != nil {
 		_ = sp.RollbackTo(ctx, guard)
-		return err
+		return nil, err
 	}
-	return nil
+	return changes, nil
 }
 
 // Rollback undoes a nested scope's flushed work by rolling back to its savepoint
@@ -428,26 +460,34 @@ func (s *Scope) Rollback(ctx context.Context) error {
 // the reverse order (children before parents). flushOrder supplies the
 // foreign-key-aware table order; within a phase each table's own work runs as a
 // unit.
-func (s *Scope) flush(ctx context.Context) error {
+//
+// The BeforeFlush hooks run first, against the live staged work (so they can
+// still change it). It returns a snapshot of the work it then wrote, for the
+// AfterFlush hooks, or nil when none is registered.
+func (s *Scope) flush(ctx context.Context) (*ChangeSet, error) {
 	s.versionWrites = nil
+	if err := s.runBeforeFlush(ctx); err != nil {
+		return nil, err
+	}
+	changes := s.captureChanges()
 	order := s.flushOrder()
 	for _, name := range order {
 		if err := s.flushInserts(ctx, s.tables[name]); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	for _, name := range order {
 		ts := s.tables[name]
 		if err := s.flushManaged(ctx, ts); err != nil {
-			return err
+			return nil, err
 		}
 		if err := s.flushUpdates(ctx, ts); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	for i := len(order) - 1; i >= 0; i-- {
 		if err := s.flushRemovals(ctx, s.tables[order[i]]); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	// Success: write the bumped version values back into their rows (so the
@@ -456,7 +496,7 @@ func (s *Scope) flush(ctx context.Context) error {
 	// another mutate/flush cycle.
 	for _, w := range s.versionWrites {
 		if err := sqlkit.SetColumns(w.row, []string{w.column}, []any{w.next}); err != nil {
-			return fmt.Errorf("uow: write back version %s: %w", w.column, err)
+			return nil, fmt.Errorf("uow: write back version %s: %w", w.column, err)
 		}
 	}
 	s.versionWrites = nil
@@ -472,7 +512,7 @@ func (s *Scope) flush(ctx context.Context) error {
 			}
 		}
 	}
-	return nil
+	return changes, nil
 }
 
 // flushOrder returns the staged tables ordered so each table follows the tables
@@ -633,7 +673,7 @@ func (s *Scope) flushManaged(ctx context.Context, ts *tableState) error {
 		if len(assignments) == 0 {
 			continue
 		}
-		if !bulk || hasNullAssignment(assignments) || guard != nil {
+		if !bulk || hasNullAssignment(assignments) || hasValuerAssignment(assignments) || guard != nil {
 			if err := s.execRowUpdate(ctx, ts, tr.pk, assignments, guard); err != nil {
 				return err
 			}
@@ -665,7 +705,7 @@ func (s *Scope) flushUpdates(ctx context.Context, ts *tableState) error {
 		if len(assignments) == 0 {
 			continue
 		}
-		if !bulk || hasNullAssignment(assignments) || guard != nil {
+		if !bulk || hasNullAssignment(assignments) || hasValuerAssignment(assignments) || guard != nil {
 			if err := s.execRowUpdate(ctx, ts, pk, assignments, guard); err != nil {
 				return err
 			}
@@ -1100,6 +1140,25 @@ func hasNullAssignment(assignments []sql.Assignment) bool {
 	for _, a := range assignments {
 		if v, ok := a.Value.(sql.ValueExpression); ok && v.Value == nil {
 			return true
+		}
+	}
+	return false
+}
+
+// hasValuerAssignment reports whether any assignment binds a value through a
+// driver.Valuer — most notably a json-tagged column, which ColumnValues wraps
+// for JSON encoding. Such a value reaches the driver as the opaque output of
+// Value() (e.g. JSON bytes), which a VALUES source cannot carry as a typed
+// column: the parameter is untyped there and the target column's type cannot be
+// inferred (PostgreSQL rejects it), whereas a single-row UPDATE assigns straight
+// to the column and infers the type. So these rows are flushed individually, the
+// same per-row fallback hasNullAssignment uses.
+func hasValuerAssignment(assignments []sql.Assignment) bool {
+	for _, a := range assignments {
+		if v, ok := a.Value.(sql.ValueExpression); ok {
+			if _, ok := v.Value.(stddriver.Valuer); ok {
+				return true
+			}
 		}
 	}
 	return false
