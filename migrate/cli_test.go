@@ -102,6 +102,49 @@ func TestCLINewScaffold(t *testing.T) {
 	}
 }
 
+// TestCLINewScaffoldSameSecondCollisionErrors covers two "new" invocations with
+// the same name in the same directory close enough together to land on the
+// same second-resolution filename (a plausible scripted/CI re-run). The second
+// call must error rather than silently overwrite the first migration's file —
+// os.WriteFile has no existence check, so it would otherwise truncate the
+// first file's content (and its distinct revision) with no error and a
+// misleading "created" success message.
+func TestCLINewScaffoldSameSecondCollisionErrors(t *testing.T) {
+	dir := t.TempDir()
+	m := migrate.New(sqlkit.WrapDB((&testutil.Fake{}).DB()), nil)
+
+	if err := migrate.NewCLI().Dispatch(m.Runner(context.Background()), []string{"new", "add widgets", "--dir", dir, "--package", "migrations"}); err != nil {
+		t.Fatalf("first new: %v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("created %d files, want 1", len(entries))
+	}
+	firstContent, err := os.ReadFile(filepath.Join(dir, entries[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = migrate.NewCLI().Dispatch(m.Runner(context.Background()), []string{"new", "add widgets", "--dir", dir, "--package", "migrations"})
+
+	entries, rerr := os.ReadDir(dir)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if len(entries) == 1 {
+		content, rerr := os.ReadFile(filepath.Join(dir, entries[0].Name()))
+		if rerr == nil && string(content) != string(firstContent) {
+			t.Fatalf("second new silently overwrote the first migration file (err = %v)", err)
+		}
+	}
+	if err == nil && len(entries) == 1 {
+		t.Fatal("second new reported success but only one file exists: it overwrote the first")
+	}
+}
+
 func TestCLINewScaffoldEqualsFlags(t *testing.T) {
 	dir := t.TempDir()
 	m := migrate.New(sqlkit.WrapDB((&testutil.Fake{}).DB()),

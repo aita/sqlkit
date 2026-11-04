@@ -39,6 +39,10 @@ func (d *Catalog) Build() (meta.Metadata, error) {
 		len(d.sequences) == 0 && len(d.matviews) == 0 && len(d.grants) == 0 {
 		errs = append(errs, errors.New("catalog declares no objects"))
 	}
+
+	if !d.skipEnumCheck {
+		errs = append(errs, d.validateEnumRefs(tables)...)
+	}
 	if len(errs) > 0 {
 		return meta.Metadata{}, fmt.Errorf("decl: invalid catalog: %w", errors.Join(errs...))
 	}
@@ -51,6 +55,35 @@ func (d *Catalog) Build() (meta.Metadata, error) {
 		Grants:            append([]meta.Grant(nil), d.grants...),
 		ManagedSchemas:    d.managedSchemas(),
 	}, nil
+}
+
+// validateEnumRefs reports a descriptive error for every column declared with
+// EnumType(name) whose name doesn't match a declared Enum — the same
+// dangling-reference check resolveFK already applies to References/ForeignKey
+// targets, extended to enum-typed columns. A bare name matches an enum in any
+// schema (ambiguous only in the pathological case of two same-named enums in
+// different schemas, which is the caller's to disambiguate by qualifying);
+// name resolves to Type("mood")-style DataTypes untouched, since DataType.Engine
+// can't tell those apart from EnumType("mood") and they may legitimately name a
+// type the catalog doesn't declare.
+func (d *Catalog) validateEnumRefs(tables []meta.Table) []error {
+	declared := map[string]bool{}
+	for _, e := range d.enums {
+		declared[e.Name] = true
+		declared[e.QualifiedName()] = true
+	}
+	var errs []error
+	for _, t := range tables {
+		for _, c := range t.Columns {
+			dt, ok := c.Type.(DataType)
+			if !ok || dt.enumTypeName == "" || declared[dt.enumTypeName] {
+				continue
+			}
+			errs = append(errs, fmt.Errorf("table %q column %q: type references enum %q, which is not declared in the catalog",
+				t.Name, c.Name, dt.enumTypeName))
+		}
+	}
+	return errs
 }
 
 // managedSchemas returns the schemas marked for creation (Catalog.Schema with
@@ -83,6 +116,7 @@ func (d *Catalog) managedSchemas() []meta.Schema {
 // (e.g. the migrate operator) instead.
 func BuildTable(schema, name string, elements ...TableElement) (meta.Table, error) {
 	cat := NewCatalog(DefaultSchema(schema))
+	cat.skipEnumCheck = true
 	cat.Table(name, elements...)
 	md, err := cat.Build()
 	if err != nil {

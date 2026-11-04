@@ -27,6 +27,7 @@ type SelectQuery struct {
 	hasCols    bool
 	base       Table         // the From table, when the source is one; powers Filter/Get
 	preloads   []preloadSpec // relations eager-loaded at Scan after the base rows
+	folds      []foldSpec    // relations joined and folded into nested fields at Scan
 	query      sql.SelectBuilder
 	err        error // deferred build error (e.g. from Filter), surfaced at the terminal
 	// batch holds a lone column IN back from q.query so All can split its
@@ -491,6 +492,11 @@ func (q SelectQuery) All(ctx context.Context, opts ...ExecOption) Rows {
 	if q.err != nil {
 		return ErrRows(q.err)
 	}
+	if len(q.folds) > 0 {
+		if st := q.query.Stmt(); st.HasLimit || st.HasOffset {
+			return ErrRows(errFoldUnsupported("LIMIT/OFFSET"))
+		}
+	}
 	// Pass the builder (not finalQuery) so newRows can consult splitStatements; the
 	// non-split path compiles SelectQuery.ToSQL, which folds the IN identically.
 	return q.rows(ctx, q, opts)
@@ -503,7 +509,7 @@ func (q SelectQuery) rows(ctx context.Context, query sql.Query, opts []ExecOptio
 	ex, preloadEx := applyExecOptions(q.ex, opts)
 	rows := newRows(ctx, ex, query)
 	rows.preloadEx = preloadEx
-	return q.withPreloads(rows)
+	return q.withFolds(q.withPreloads(rows))
 }
 
 // splitStatements implements splitter: it splits a deferred lone column IN across
@@ -517,7 +523,9 @@ func (q SelectQuery) splitStatements(ex executorBinding) ([]compiledStmt, bool, 
 	// statements would recompute it over each chunk's rows alone (ROW_NUMBER
 	// restarting per chunk, etc.). queryHasWindow catches an inline OVER in the
 	// projection, which the per-clause batchUnsafe flags cannot see.
-	if q.batchUnsafe || q.chunkOff || queryHasWindow(q.query) {
+	// A folded query's rows are joined parent+child rows that Scan folds back
+	// together; splitting the IN would scan the chunks flat, without folding.
+	if q.batchUnsafe || q.chunkOff || queryHasWindow(q.query) || len(q.folds) > 0 {
 		return nil, false, false, nil
 	}
 	dialect := ex.sqlDialect()
@@ -545,6 +553,9 @@ func (q SelectQuery) First(ctx context.Context, opts ...ExecOption) Rows {
 	if q.err != nil {
 		return ErrRows(q.err)
 	}
+	if len(q.folds) > 0 {
+		return ErrRows(errFoldUnsupported("First"))
+	}
 	return q.rows(ctx, q.finalQuery().Limit(1), opts)
 }
 
@@ -555,6 +566,9 @@ func (q SelectQuery) First(ctx context.Context, opts ...ExecOption) Rows {
 func (q SelectQuery) One(ctx context.Context, opts ...ExecOption) Rows {
 	if q.err != nil {
 		return ErrRows(q.err)
+	}
+	if len(q.folds) > 0 {
+		return ErrRows(errFoldUnsupported("One"))
 	}
 	ex, preloadEx := applyExecOptions(q.ex, opts)
 	rows := newRows(ctx, ex, q.finalQuery().Limit(2))
@@ -572,6 +586,9 @@ func (q SelectQuery) Page(ctx context.Context, limit, offset int, opts ...ExecOp
 	if q.err != nil {
 		return ErrRows(q.err)
 	}
+	if len(q.folds) > 0 {
+		return ErrRows(errFoldUnsupported("Page"))
+	}
 	return q.rows(ctx, q.finalQuery().Limit(limit).Offset(offset), opts)
 }
 
@@ -580,6 +597,9 @@ func (q SelectQuery) Page(ctx context.Context, limit, offset int, opts ...ExecOp
 func (q SelectQuery) Count(ctx context.Context, opts ...ExecOption) (int64, error) {
 	if q.err != nil {
 		return 0, q.err
+	}
+	if len(q.folds) > 0 {
+		return 0, errFoldUnsupported("Count")
 	}
 	ex, _ := applyExecOptions(q.ex, opts)
 	count := sql.Select(sql.CountAll()).From(sql.Alias(q.finalQuery(), "q"))
@@ -594,6 +614,9 @@ func (q SelectQuery) Count(ctx context.Context, opts ...ExecOption) (int64, erro
 func (q SelectQuery) Get(ctx context.Context, pk ...any) Rows {
 	if q.err != nil {
 		return ErrRows(q.err)
+	}
+	if len(q.folds) > 0 {
+		return ErrRows(errFoldUnsupported("Get"))
 	}
 	if q.base == nil {
 		return ErrRows(fmt.Errorf("sqlkit: Get requires From to be a table"))

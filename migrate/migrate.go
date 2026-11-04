@@ -277,10 +277,17 @@ func (m *Migrator) DownTo(ctx context.Context, revision string) error {
 //   - "head" / "heads" / "" — every pending migration;
 //   - "+N" — the next N pending migrations in topological order;
 //   - a revision id (or unique prefix) — that revision and its unapplied ancestors.
+//
+// On PostgreSQL and MySQL it holds the migration lock for the run, so
+// concurrent Migrators on the same tracking table apply each migration once.
 func (m *Migrator) Upgrade(ctx context.Context, target string) error {
 	if m.planErr != nil {
 		return m.planErr
 	}
+	return m.withLock(ctx, func(m *Migrator) error { return m.upgrade(ctx, target) })
+}
+
+func (m *Migrator) upgrade(ctx context.Context, target string) error {
 	if err := m.ensureTable(ctx); err != nil {
 		return err
 	}
@@ -334,10 +341,16 @@ func (m *Migrator) applyPending(ctx context.Context, applied map[string]bool, li
 //   - "-N" — the N most recently applied migrations;
 //   - a revision id (or unique prefix) — every applied descendant of it (the
 //     database ends up at that revision).
+//
+// Like Upgrade, it holds the migration lock for the run.
 func (m *Migrator) Downgrade(ctx context.Context, target string) error {
 	if m.planErr != nil {
 		return m.planErr
 	}
+	return m.withLock(ctx, func(m *Migrator) error { return m.downgrade(ctx, target) })
+}
+
+func (m *Migrator) downgrade(ctx context.Context, target string) error {
 	if err := m.ensureTable(ctx); err != nil {
 		return err
 	}
@@ -463,10 +476,16 @@ func (m *Migrator) resolve(target string) (string, error) {
 // becomes exactly the inclusive ancestors of revision: "head" stamps everything,
 // "base"/"" stamps nothing applied. Migrations newly considered applied get an
 // "up" row; ones no longer in range get a "down" row. No DDL runs.
+//
+// Like Upgrade, it holds the migration lock while it writes.
 func (m *Migrator) Stamp(ctx context.Context, revision string) error {
 	if m.planErr != nil {
 		return m.planErr
 	}
+	return m.withLock(ctx, func(m *Migrator) error { return m.stamp(ctx, revision) })
+}
+
+func (m *Migrator) stamp(ctx context.Context, revision string) error {
 	if err := m.ensureTable(ctx); err != nil {
 		return err
 	}
@@ -829,7 +848,7 @@ func (m *Migrator) historyRows(ctx context.Context) ([]MigrationEvent, error) {
 
 // timestampType resolves the timestamp engine type for the dialect.
 func timestampType(d sql.Dialect) sql.EngineType {
-	if d.Name() == "mysql" {
+	if name := d.Name(); name == "mysql" || name == "sqlite" || name == "libsql" {
 		return sql.EngineType{Name: "datetime"}
 	}
 	return sql.EngineType{Name: "timestamptz"}
@@ -839,8 +858,12 @@ func timestampType(d sql.Dialect) sql.EngineType {
 // dialect. PostgreSQL renders int8 as bigserial; MySQL needs bigint to be
 // recognized as an AUTO_INCREMENT integer (it does not know "int8").
 func autoIncrIDType(d sql.Dialect) sql.EngineType {
-	if d.Name() == "mysql" {
+	switch d.Name() {
+	case "mysql":
 		return sql.EngineType{Name: "bigint"}
+	case "sqlite", "libsql":
+		// The rowid alias must be declared INTEGER PRIMARY KEY.
+		return sql.EngineType{Name: "integer"}
 	}
 	return sql.EngineType{Name: "int8"}
 }

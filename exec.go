@@ -97,6 +97,10 @@ type executorBinding interface {
 	// automatic split. Explicit chunking (AutoChunk, InBatches) does
 	// not consult it.
 	maxBindParams() int
+	// maxStatementBytes is the estimated-statement-size cap (bytes) that additionally
+	// splits a bulk INSERT with large string/BLOB rows (MySQL max_allowed_packet), or
+	// 0 when byte-aware splitting is off — unconfigured, or auto-chunk disabled.
+	maxStatementBytes() int
 	// executor returns the terminal that runs compiled statements: the
 	// connection-backed default, or a WrapExecutor database's custom one.
 	executor() Executor
@@ -151,6 +155,11 @@ type Rows struct {
 	// preloads are relations eager-loaded after a successful Scan, set by
 	// SelectQuery terminals when Preload was registered.
 	preloads []preloadSpec
+	// folds are relations joined into the base query and folded into nested
+	// destination fields during Scan, set by SelectQuery terminals when FoldRel
+	// was registered. foldBase is the From table the fold projection expands from.
+	folds    []foldSpec
+	foldBase Table
 	// batches, when non-empty, holds several compiled statements whose rows Scan
 	// concatenates into the destination slice. It is set by All when a large IN
 	// list is split to stay within the bind-parameter limit; sqlText/args are
@@ -174,7 +183,7 @@ func newRows(ctx context.Context, ex executorBinding, query sql.Query) Rows {
 			return Rows{err: err}
 		}
 		if split {
-			return Rows{ctx: ctx, ex: ex, preloadEx: ex, batches: stmts, batchWrite: write}
+			return Rows{ctx: ctx, ex: ex, preloadEx: ex, query: query, batches: stmts, batchWrite: write}
 		}
 	}
 	sqlText, args, err := query.ToSQL(ex.sqlDialect())
@@ -226,6 +235,9 @@ func (r Rows) Scan(dest any) error {
 	}
 	scanErr := func() error {
 		defer rows.Close()
+		if len(r.folds) > 0 {
+			return foldScanRows(rows, dest, r.foldBase, r.folds)
+		}
 		if r.exactlyOne {
 			return scanExactlyOne(rows, dest)
 		}
@@ -264,7 +276,19 @@ func (r Rows) scanBatched(dest any) (err error) {
 		return fmt.Errorf("sqlkit: a split query scans into a pointer to a slice, got %T", dest)
 	}
 	ex, finish := r.batchExecutor()
-	defer func() { err = finish(err) }()
+	// A panic unwinding through here (from a hook or Preload below) must still
+	// roll back any transaction batchExecutor opened — the named return err is
+	// still nil at that point, and finish(nil) commits, so a plain
+	// `defer func() { err = finish(err) }()` would commit a batch right before
+	// the panic escapes. Recover, force the rollback, then re-panic so the
+	// panic still propagates to the caller unchanged.
+	defer func() {
+		if p := recover(); p != nil {
+			_ = finish(errors.New("sqlkit: panic during batched scan"))
+			panic(p)
+		}
+		err = finish(err)
+	}()
 
 	sliceType := dv.Elem().Type()
 	dialect := ex.sqlDialect()
@@ -292,11 +316,19 @@ func (r Rows) scanBatched(dest any) (err error) {
 	if scanErr == nil {
 		dv.Elem().Set(acc)
 	}
-	if err := afterQuery(r.ctx, ex.hooks(), Statement{Op: OpQuery, Dialect: dialect}, dest, scanErr); err != nil {
+	// The summary Statement carries the builder (no single SQL text: the chunks
+	// are conceptually one result), so Kind/Access/IsWrite classify it from the
+	// AST — a split RETURNING write reports as the write it is, and a split
+	// SELECT as a select — rather than from Op alone, where OpQuery always reads
+	// as KindSelect.
+	if err := afterQuery(r.ctx, ex.hooks(), Statement{Op: OpQuery, Query: r.query, Dialect: dialect}, dest, scanErr); err != nil {
 		return err
 	}
 	if len(r.preloads) > 0 {
-		return applyPreloads(r.ctx, ex, dest, r.preloads)
+		// Route through preloadBinding, not the batch executor ex: a NoPropagate
+		// WithRoute detaches the preload follow-up onto its own binding (see
+		// Scan's identical call), and that must hold for a split base query too.
+		return applyPreloads(r.ctx, r.preloadBinding(), dest, r.preloads)
 	}
 	return nil
 }
@@ -312,14 +344,18 @@ func (r Rows) scanBatched(dest any) (err error) {
 func (r Rows) batchExecutor() (executorBinding, func(error) error) {
 	noop := func(err error) error { return err }
 	db, ok := r.ex.(*Database)
+	var routeHint string
 	if !ok {
-		// A per-statement WithRoute wraps the executor in a routedBinding. For a
-		// write batch — which must be atomic and whose route hint the router
-		// ignores anyway — look through it to the underlying Database so the chunks
-		// still run in one transaction. A routedBinding over a Session already has
-		// the session's transaction, so it (like a bare Session) is reused as-is.
-		if routed, isRouted := r.ex.(routedBinding); isRouted && r.batchWrite {
+		// A per-statement WithRoute wraps the executor in a routedBinding. Look
+		// through it to the underlying Database so both write batches (atomicity)
+		// and read batches (snapshot consistency) get their transaction wrapper.
+		// The route hint is forwarded to the session so its transaction opens on
+		// the same backend the caller intended. A routedBinding over a Session
+		// already has the session's transaction, so it (like a bare Session) is
+		// reused as-is.
+		if routed, isRouted := r.ex.(routedBinding); isRouted {
 			db, ok = routed.base.(*Database)
+			routeHint = routed.hint
 		}
 		if !ok {
 			return r.ex, noop
@@ -327,8 +363,12 @@ func (r Rows) batchExecutor() (executorBinding, func(error) error) {
 	}
 	var session *Session
 	if r.batchWrite {
-		session = db.NewSession(db.batchWriteSessionOptions()...)
-	} else if s, on := db.newBatchReadSession(); on {
+		opts := db.batchWriteSessionOptions()
+		if routeHint != "" {
+			opts = append(opts, WithRoute(routeHint))
+		}
+		session = db.NewSession(opts...)
+	} else if s, on := db.newBatchReadSession(routeHint); on {
 		session = s
 	}
 	if session == nil {

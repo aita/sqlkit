@@ -39,11 +39,15 @@ func (a *Assertion) fail(format string, args ...any) {
 
 // reads counts the read statements directly rather than subtracting writes from
 // the total: a DDL statement (CREATE/ALTER/DROP) is neither a read nor a write,
-// so QueryCount-WriteCount would miscount it as a read.
+// so QueryCount-WriteCount would miscount it as a read. A locking read
+// (SELECT ... FOR UPDATE) and a data-modifying CTE have Kind StmtSelect yet count
+// as writes (WriteCount uses the promoted IsWrite), so they are excluded here too
+// — otherwise the same statement would count as both a read and a write and
+// reads()+writes() would exceed QueryCount.
 func (a *Assertion) reads() int {
 	n := 0
 	for _, ev := range a.stmts {
-		if ev.Query != nil && ev.Query.Kind.IsRead() {
+		if ev.Query != nil && ev.Query.Kind.IsRead() && !ev.Query.IsWrite() {
 			n++
 		}
 	}

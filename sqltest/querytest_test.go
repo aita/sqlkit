@@ -9,10 +9,34 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aita/sqlkit/analysis"
 	querytrace "github.com/aita/sqlkit/querytrace"
 	sqlpkg "github.com/aita/sqlkit/sql"
 	"github.com/aita/sqlkit/sqltest"
 )
+
+// A locking read (SELECT ... FOR UPDATE) has Kind StmtSelect but counts as a write
+// (WriteCount uses the promoted IsWrite). It must therefore count as a write and
+// NOT as a read, in both the Reads/Writes assertions and the Read()/Write()
+// matchers — otherwise the same statement double-counts and reads+writes exceeds
+// QueryCount.
+func TestLockingReadCountsAsWriteNotRead(t *testing.T) {
+	trace := querytrace.New("op", querytrace.WithConfig(querytrace.NewConfig()))
+	rec := func(kind querytrace.EventKind, a analysis.Analysis) {
+		trace.RecordStatement(context.Background(), querytrace.Event{Kind: kind, Query: &querytrace.QueryInfo{Analysis: a}})
+	}
+	rec(querytrace.EventQuery, analysis.Analysis{Kind: querytrace.StmtSelect})                    // plain read
+	rec(querytrace.EventQuery, analysis.Analysis{Kind: querytrace.StmtSelect, LockingRead: true}) // locking read = write
+	rec(querytrace.EventExec, analysis.Analysis{Kind: querytrace.StmtInsert})                     // write
+
+	sqltest.Expect(t, trace).Queries(3).Reads(1).Writes(2)
+	if r := sqltest.Count(trace, sqltest.Read()); r != 1 {
+		t.Errorf("Count(Read) = %d, want 1 (locking read must not match Read)", r)
+	}
+	if w := sqltest.Count(trace, sqltest.Write()); w != 2 {
+		t.Errorf("Count(Write) = %d, want 2 (locking read must match Write)", w)
+	}
+}
 
 // debugConfig is a verbose NewConfig with a small parser wired in, so the
 // structural matchers (Table, Fingerprint, HasTopLevelWhere) and raw-SQL matchers work

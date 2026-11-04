@@ -17,6 +17,7 @@ package sqlite
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/aita/sqlkit/sql"
@@ -40,16 +41,20 @@ func (Parser) Parse(text string) ([]sql.Query, error) {
 		return nil, err
 	}
 	queries := make([]sql.Query, 0, len(stmts))
-	for _, stmt := range stmts {
+	for i, stmt := range stmts {
 		query, err := convertStmt(stmt)
 		if err != nil {
 			// A construct the converters recognize but cannot model as typed nodes
-			// still round-trips: deparse just this statement back to SQL and keep it
-			// as a RawQuery. Genuine parse failures already surfaced from
-			// ParseStatements above, so only UnsupportedError reaches this fallback.
+			// still round-trips as a RawQuery. Genuine parse failures already
+			// surfaced from ParseStatements above, so only UnsupportedError reaches
+			// this fallback.
 			var unsupported *sqlparse.UnsupportedError
 			if errors.As(err, &unsupported) {
-				queries = append(queries, sql.RawSQL(stmt.String()))
+				raw, err := rawStatement(text, stmts, i)
+				if err != nil {
+					return nil, err
+				}
+				queries = append(queries, sql.RawSQL(raw))
 				continue
 			}
 			return nil, err
@@ -58,6 +63,40 @@ func (Parser) Parse(text string) ([]sql.Query, error) {
 		queries = append(queries, sql.SetPos(query, offsetOf(stmtPos(stmt))))
 	}
 	return queries, nil
+}
+
+// rawStatement returns the source text of stmts[i] for a RawQuery. It slices
+// the original text between statement start offsets rather than deparsing the
+// parse tree: rqlite's deparser is lossy (it renders "- -b" as the comment
+// "--b") and panics on some nodes (LIKE ... ESCAPE). When a statement's start
+// isn't known, a lone statement is the whole text; otherwise it falls back to
+// the deparser, turning a panic into an error.
+func rawStatement(text string, stmts []rsql.Statement, i int) (raw string, err error) {
+	clean := func(s string) string {
+		return strings.TrimRight(strings.TrimSpace(s), "; \t\r\n")
+	}
+	if len(stmts) == 1 {
+		return clean(text), nil
+	}
+	start := stmtPos(stmts[i])
+	end := len(text)
+	if i+1 < len(stmts) {
+		next := stmtPos(stmts[i+1])
+		if next.IsValid() {
+			end = next.Offset
+		} else {
+			start = rsql.Pos{}
+		}
+	}
+	if start.IsValid() && start.Offset <= end && end <= len(text) {
+		return clean(text[start.Offset:end]), nil
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			raw, err = "", fmt.Errorf("sqlite: cannot reproduce unsupported statement %d as raw SQL: %v", i+1, r)
+		}
+	}()
+	return stmts[i].String(), nil
 }
 
 // Parse parses one or more SQLite statements using a default Parser.

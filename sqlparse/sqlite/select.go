@@ -131,15 +131,21 @@ func applySelectTail(b sql.SelectBuilder, s *rsql.SelectStatement) (sql.Query, e
 		}
 		b = b.OrderBy(terms...)
 	}
-	if s.LimitExpr != nil {
-		n, err := intLiteral(s.LimitExpr, "LIMIT")
+	limitExpr, offsetExpr := s.LimitExpr, s.OffsetExpr
+	if s.OffsetComma.IsValid() {
+		// "LIMIT a, b" is SQLite's (MySQL-style) OFFSET a LIMIT b; rqlite keeps
+		// the two expressions in source order.
+		limitExpr, offsetExpr = s.OffsetExpr, s.LimitExpr
+	}
+	if limitExpr != nil {
+		n, err := intLiteral(limitExpr, "LIMIT")
 		if err != nil {
 			return nil, err
 		}
 		b = b.Limit(n)
 	}
-	if s.OffsetExpr != nil {
-		n, err := intLiteral(s.OffsetExpr, "OFFSET")
+	if offsetExpr != nil {
+		n, err := intLiteral(offsetExpr, "OFFSET")
 		if err != nil {
 			return nil, err
 		}
@@ -223,15 +229,21 @@ func applyCompoundTail(b sql.CompoundBuilder, s *rsql.SelectStatement) (sql.Comp
 		}
 		b = b.OrderBy(terms...)
 	}
-	if s.LimitExpr != nil {
-		n, err := intLiteral(s.LimitExpr, "LIMIT")
+	limitExpr, offsetExpr := s.LimitExpr, s.OffsetExpr
+	if s.OffsetComma.IsValid() {
+		// "LIMIT a, b" is SQLite's (MySQL-style) OFFSET a LIMIT b; rqlite keeps
+		// the two expressions in source order.
+		limitExpr, offsetExpr = s.OffsetExpr, s.LimitExpr
+	}
+	if limitExpr != nil {
+		n, err := intLiteral(limitExpr, "LIMIT")
 		if err != nil {
 			return b, err
 		}
 		b = b.Limit(n)
 	}
-	if s.OffsetExpr != nil {
-		n, err := intLiteral(s.OffsetExpr, "OFFSET")
+	if offsetExpr != nil {
+		n, err := intLiteral(offsetExpr, "OFFSET")
 		if err != nil {
 			return b, err
 		}
