@@ -62,8 +62,8 @@ func Read() Match {
 	return query("read", func(qi *querytrace.QueryInfo) bool { return qi.Kind.IsRead() && !qi.IsWrite() })
 }
 
-// Write matches any write statement: a definite write (INSERT/UPDATE/DELETE/MERGE
-// or DDL-via-exec), a locking read (SELECT ... FOR UPDATE/SHARE), or a
+// Write matches any write statement: a definite write (INSERT/UPDATE/DELETE/MERGE,
+// or a CALL whose effects are unknown), a locking read (SELECT ... FOR UPDATE/SHARE), or a
 // data-modifying CTE — the promoted IsWrite, the same predicate WriteCount uses.
 func Write() Match {
 	return query("write", func(qi *querytrace.QueryInfo) bool { return qi.IsWrite() })
