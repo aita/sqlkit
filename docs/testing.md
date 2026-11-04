@@ -253,6 +253,45 @@ often choose a `Seq Scan` even when a usable index exists, so `AssertNoSeqScan` 
 and `ANALYZE` the table first, or run `SET enable_seqscan = off` in the test's
 session, when you want to assert that an index *can* serve the query.
 
+## Golden files
+
+For results too wide to spell out as literals — a report query, a denormalized
+view — pin the output to a golden file instead and let the test regenerate it on
+a deliberate change:
+
+```go
+rows, _ := db.QueryContext(ctx, "SELECT id, email, status FROM users ORDER BY id")
+sqltest.AssertGoldenRows(t, "testdata/users.golden", rows)
+```
+
+[`AssertGoldenRows`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#AssertGoldenRows)
+renders the rows as a stable tab-separated table (a `NULL` is literal, columns
+are text, so the form is driver-independent; tabs, newlines, and backslashes in
+values are escaped) and compares it to the file; add an `ORDER BY` so the row
+order is stable.
+[`AssertGoldenTrace`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#AssertGoldenTrace)
+does the same for a [`querytrace.Trace`](observability.md), pinning the *query
+log* so an accidental change in the SQL an operation issues (a new statement, an
+N+1) shows up as a diff that a count-based budget would miss. It renders a
+timing-free form of the report — counts plus the ordered statement fingerprints,
+transaction control points, and marks, without durations or warnings — so the
+file stays stable across runs against a real database. Both
+build on [`Golden`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#Golden),
+the text primitive, and
+[`RenderRows`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#RenderRows) is
+exported for custom comparisons. On a `DB` handle, `db.AssertGoldenQuery(t,
+path, query, args...)` runs the query and golden-compares its rows in one call.
+
+Regenerate the files by setting `SQLKIT_UPDATE_GOLDEN` and re-running, then
+commit the result:
+
+```sh
+SQLKIT_UPDATE_GOLDEN=1 go test ./...
+```
+
+(An environment variable rather than a `-update` flag, so importing `sqltest`
+never adds a flag to an unrelated binary.)
+
 ## Mock database
 
 [`sqltest.NewDB`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#NewDB) is a programmable mock `*sql.DB` for unit tests that should not
