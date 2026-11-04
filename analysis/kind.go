@@ -107,7 +107,12 @@ func KindOf(q sql.Query) (StmtKind, bool) {
 // returns StmtUnknown when the leading token is unrecognized.
 func DetectKind(sqlText string) StmtKind {
 	switch leadingKeyword(sqlText) {
-	case "SELECT", "WITH", "VALUES", "TABLE":
+	case "WITH":
+		// The statement a WITH prefixes decides its kind: WITH ... INSERT /
+		// UPDATE / DELETE / MERGE is a write, not a read.
+		kind, _, _ := scanWith(sqlText)
+		return kind
+	case "SELECT", "VALUES", "TABLE":
 		return StmtSelect
 	case "INSERT", "REPLACE":
 		// REPLACE INTO is MySQL's insert-or-replace; the parsed-AST path
@@ -167,4 +172,125 @@ func leadingKeyword(sqlText string) string {
 		i = len(s)
 	}
 	return strings.ToUpper(s[:i])
+}
+
+// scanWith reads a WITH-prefixed statement's text token by token (skipping
+// string literals, quoted identifiers and comments) and reports the kind of the
+// statement the CTE list prefixes — the first statement keyword at parenthesis
+// depth 0 — plus whether a CTE body (depth > 0) modifies data (INSERT / UPDATE /
+// DELETE / MERGE) or takes row locks (FOR UPDATE / FOR SHARE). It is the
+// keyword fallback's view of a WITH statement when no AST is available, and
+// errs toward reporting a write: an UPDATE inside a CTE body that is not part
+// of a locking clause counts as a data-modifying CTE.
+//
+// Whether a backslash escapes a quote depends on the dialect (MySQL: yes;
+// PostgreSQL standard strings: no), so the text is scanned both ways and the
+// results merged toward the write-like side.
+func scanWith(sqlText string) (kind StmtKind, writesViaCTE, locking bool) {
+	k1, w1, l1 := scanWithMode(sqlText, false)
+	k2, w2, l2 := scanWithMode(sqlText, true)
+	kind = k1
+	if k1 == StmtSelect {
+		kind = k2
+	}
+	return kind, w1 || w2, l1 || l2
+}
+
+func scanWithMode(sqlText string, backslashEscapes bool) (kind StmtKind, writesViaCTE, locking bool) {
+	kind = StmtSelect
+	depth := 0
+	prev := ""
+	found := false
+	s := sqlText
+	for i := 0; i < len(s); {
+		c := s[i]
+		switch {
+		case c == '\'' || c == '"' || c == '`':
+			j := i + 1
+			for j < len(s) {
+				if s[j] == c {
+					if j+1 < len(s) && s[j+1] == c { // doubled quote escape
+						j += 2
+						continue
+					}
+					break
+				}
+				if backslashEscapes && s[j] == '\\' && c != '"' {
+					j++
+				}
+				j++
+			}
+			i = j + 1
+			prev = ""
+		case c == '-' && i+1 < len(s) && s[i+1] == '-':
+			for i < len(s) && s[i] != '\n' {
+				i++
+			}
+		case c == '/' && i+1 < len(s) && s[i+1] == '*':
+			if j := strings.Index(s[i+2:], "*/"); j >= 0 {
+				i += j + 4
+			} else {
+				i = len(s)
+			}
+		case c == '(':
+			depth++
+			i++
+			prev = ""
+		case c == ')':
+			depth--
+			i++
+			prev = ""
+		case isWordByte(c):
+			j := i
+			for j < len(s) && isWordByte(s[j]) {
+				j++
+			}
+			word := strings.ToUpper(s[i:j])
+			i = j
+			if depth > 0 {
+				switch word {
+				case "INSERT", "DELETE", "MERGE":
+					writesViaCTE = true
+				case "UPDATE":
+					if prev == "FOR" || prev == "KEY" {
+						locking = true
+					} else {
+						writesViaCTE = true
+					}
+				case "SHARE":
+					if prev == "FOR" || prev == "KEY" {
+						locking = true
+					}
+				}
+			} else if !found {
+				switch word {
+				case "SELECT", "VALUES", "TABLE":
+					kind, found = StmtSelect, true
+				case "INSERT", "REPLACE":
+					kind, found = StmtInsert, true
+				case "UPDATE":
+					kind, found = StmtUpdate, true
+				case "DELETE":
+					kind, found = StmtDelete, true
+				case "MERGE":
+					kind, found = StmtMerge, true
+				}
+			} else if word == "UPDATE" || word == "SHARE" {
+				if prev == "FOR" || prev == "KEY" {
+					locking = true
+				}
+			}
+			prev = word
+		default:
+			i++
+			if c != ' ' && c != '\t' && c != '\n' && c != '\r' {
+				prev = ""
+			}
+		}
+	}
+	return kind, writesViaCTE, locking
+}
+
+func isWordByte(c byte) bool {
+	return c == '_' || c == '$' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= 0x80
 }
