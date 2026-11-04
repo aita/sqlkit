@@ -467,3 +467,10 @@ func TestCheckEnforcedStillModeled(t *testing.T) {
 			"    CONSTRAINT `` CHECK ((`age` >= 0))\n"+
 			");")
 }
+
+// MySQL has no CREATE INDEX ... IF NOT EXISTS and the MySQL dialect rejects it
+// at compile time, so the parser must fall back to a raw passthrough instead of
+// producing a typed statement whose ToSQL fails.
+func TestCreateIndexIfNotExistsIsRaw(t *testing.T) {
+	assertRaw(t, "CREATE INDEX IF NOT EXISTS i ON t (a)")
+}

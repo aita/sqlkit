@@ -471,7 +471,11 @@ func convertCreateIndex(s *ast.CreateIndexStmt) (sql.Query, error) {
 		stmt = stmt.Unique()
 	}
 	if s.IfNotExists {
-		stmt = stmt.IfNotExists()
+		// MySQL has no CREATE INDEX ... IF NOT EXISTS (TiDB's grammar accepts
+		// it), and the MySQL dialect rejects the flag at compile time, so keep
+		// it as a raw passthrough rather than a typed statement that can't
+		// render back.
+		return nil, sqlparse.Unsupported("CREATE INDEX ... IF NOT EXISTS")
 	}
 	return stmt, nil
 }

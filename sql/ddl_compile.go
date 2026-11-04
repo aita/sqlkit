@@ -359,6 +359,11 @@ func (c *Compiler) CompileCreateIndex(s CreateIndexStmt) (string, error) {
 	var sb strings.Builder
 	sb.WriteString("CREATE " + kind + " ")
 	if s.IfNotExists {
+		// MySQL has no IF NOT EXISTS for CREATE INDEX (any version); emitting it
+		// produces SQL the engine rejects. PostgreSQL supports it.
+		if c.Dialect.Name() == "mysql" {
+			return "", fmt.Errorf("sqlkit/sql: dialect %q does not support CREATE INDEX ... IF NOT EXISTS", c.Dialect.Name())
+		}
 		sb.WriteString("IF NOT EXISTS ")
 	}
 	sb.WriteString(c.Dialect.QuoteName(s.Name.String()) + " ON " + c.qualify(s.Table) +

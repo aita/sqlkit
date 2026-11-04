@@ -276,6 +276,21 @@ func TestCreateIndex(t *testing.T) {
 	}
 }
 
+// MySQL has no IF NOT EXISTS for CREATE INDEX (any version); the compiler must
+// reject it rather than emit SQL MySQL's parser refuses. PostgreSQL supports it.
+func TestCreateIndexIfNotExistsRejectedOnMySQL(t *testing.T) {
+	users := Table{Schema: NewIdent("public"), Name: NewIdent("users")}
+	stmt := CreateIndex("idx_users_name", users, "name").IfNotExists()
+	if _, _, err := stmt.ToSQL(mustDialect(t, "mysql")); err == nil ||
+		!strings.Contains(err.Error(), "CREATE INDEX ... IF NOT EXISTS") {
+		t.Fatalf("ToSQL(mysql) error = %v, want CREATE INDEX IF NOT EXISTS rejection", err)
+	}
+	if got, want := mustDDL(t, stmt, "postgres"),
+		`CREATE INDEX IF NOT EXISTS "idx_users_name" ON "public"."users" ("name");`; got != want {
+		t.Errorf("CreateIndex().IfNotExists(postgres) = %q, want %q", got, want)
+	}
+}
+
 func TestDropIndex(t *testing.T) {
 	users := Table{Schema: NewIdent("public"), Name: NewIdent("users")}
 	if got, want := mustDDL(t, DropIndex("uq_users_email", users), "postgres"),
