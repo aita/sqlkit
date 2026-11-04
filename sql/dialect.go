@@ -489,8 +489,14 @@ var pgCanonical = map[string]string{
 }
 
 // pgLengthTypes/pgDecimalTypes are keyed by the canonical (rendered) name.
+// pgDecimalTypes lists both spellings PostgreSQL accepts for the same type
+// (DECIMAL is a pure alias for NUMERIC) — like the MySQL and Standard
+// dialects' equivalent maps — so a column declared with the engine name
+// "decimal" (via meta.Of or a hand-built sql.EngineType, not just the
+// decl.Decimal() registry path, which normalizes to "numeric" first) still
+// renders its precision/scale instead of silently dropping them.
 var pgLengthTypes = map[string]bool{"varchar": true, "char": true}
-var pgDecimalTypes = map[string]bool{"numeric": true}
+var pgDecimalTypes = map[string]bool{"numeric": true, "decimal": true}
 
 func (PostgreSQLDialect) ColumnType(name string, length, precision, scale int) string {
 	n := strings.ToLower(name)
