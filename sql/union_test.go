@@ -147,3 +147,33 @@ func TestCompoundCoverage(t *testing.T) {
 		t.Fatal("compound NULLS ordering on MySQL should error")
 	}
 }
+
+// Set operations evaluate left to right and EXCEPT is not associative, so a
+// right-nested EXCEPT chain must keep its grouping: a EXCEPT (b EXCEPT c) is
+// not a EXCEPT b EXCEPT c. Associative operators may still flatten.
+func TestCompoundRightNestedExceptKeepsGrouping(t *testing.T) {
+	v := func(n string) SelectBuilder { return Select(As(Raw(n), "x")) }
+	cases := []struct {
+		name    string
+		q       Query
+		dialect Dialect
+		want    string
+	}{
+		{"pg except", v("1").Except(v("1").Except(v("1"))), PostgreSQLDialect{},
+			`(SELECT 1 AS "x") EXCEPT ((SELECT 1 AS "x") EXCEPT (SELECT 1 AS "x"))`},
+		{"pg except all", v("1").ExceptAll(v("1").ExceptAll(v("1"))), PostgreSQLDialect{},
+			`(SELECT 1 AS "x") EXCEPT ALL ((SELECT 1 AS "x") EXCEPT ALL (SELECT 1 AS "x"))`},
+		{"sqlite except", v("1").Except(v("1").Except(v("1"))), SQLiteDialect{},
+			`SELECT 1 AS "x" EXCEPT SELECT * FROM (SELECT 1 AS "x" EXCEPT SELECT 1 AS "x")`},
+		{"left-nested except stays flat", v("1").Except(v("2")).Except(v("3")), PostgreSQLDialect{},
+			`(SELECT 1 AS "x") EXCEPT (SELECT 2 AS "x") EXCEPT (SELECT 3 AS "x")`},
+		{"right-nested union flattens", v("1").Union(v("2").Union(v("3"))), PostgreSQLDialect{},
+			`(SELECT 1 AS "x") UNION (SELECT 2 AS "x") UNION (SELECT 3 AS "x")`},
+	}
+	for _, c := range cases {
+		got, _, err := c.q.ToSQL(c.dialect)
+		if err != nil || got != c.want {
+			t.Errorf("%s: got %q (err %v)\n want %q", c.name, got, err, c.want)
+		}
+	}
+}
