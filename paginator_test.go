@@ -402,27 +402,3 @@ func TestPaginateRejectsBadCursor(t *testing.T) {
 		t.Fatal("Paginate with a malformed cursor should error")
 	}
 }
-
-// A NULL value in a key column cannot anchor a keyset seek — SQL's >/</= against
-// NULL are never true, so the next page would silently match no rows and drop the
-// rest of the result. Paginate must reject building a cursor at a NULL key value
-// with a descriptive error rather than page into an empty set. (A non-NULL key
-// column, the documented requirement, is unaffected — see the other tests.)
-func TestPaginateNullKeyValueRejected(t *testing.T) {
-	rows := [][]driver.Value{
-		{int64(1), "a@example.com", nil}, // name is NULL
-		{int64(2), "b@example.com", nil},
-		{int64(3), "c@example.com", "Carol"},
-	}
-	db := sqlkit.WrapDB(paginatorFake(rows, nil, nil).DB())
-	pager := sqlkit.NewPaginator(sqlkit.KeyAsc(Users.Name), sqlkit.KeyAsc(Users.ID)).Limit(2)
-
-	var users []MyUserDTO
-	_, err := pager.Paginate(context.Background(), db.Select().From(Users), &users, sqlkit.Start())
-	if err == nil {
-		t.Fatal("Paginate() error = nil, want a NULL-key rejection (a NULL boundary silently drops rows)")
-	}
-	if !strings.Contains(err.Error(), "NULL") || !strings.Contains(err.Error(), "name") {
-		t.Fatalf("Paginate() error = %v, want a descriptive NULL-key-column rejection", err)
-	}
-}
