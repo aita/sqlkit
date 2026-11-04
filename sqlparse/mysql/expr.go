@@ -144,9 +144,13 @@ func convertValue(v ast.ValueExpr) (sql.Expression, error) {
 	case nil:
 		return sql.Val(nil), nil
 	case int64:
+		// int holds every int64 on the 64-bit platforms this targets, and keeps
+		// the common literal ergonomically an int.
 		return sql.Val(int(x)), nil
 	case uint64:
-		return sql.Val(int(x)), nil
+		// The parser only yields uint64 for a literal too large for int64; casting
+		// to int would wrap it to a negative value, so keep the uint64 intact.
+		return sql.Val(x), nil
 	case float64:
 		return sql.Val(x), nil
 	case string:

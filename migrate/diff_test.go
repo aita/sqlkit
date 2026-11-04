@@ -1,6 +1,7 @@
 package migrate_test
 
 import (
+	"sort"
 	"strings"
 	"testing"
 
@@ -138,6 +139,64 @@ func TestDiffChangeDefault(t *testing.T) {
 	}
 }
 
+// TestDiffBareDefaultToggleDetected covers columnAlterations' defaultChanged:
+// a bare decl.Default() (HasDefault true, DefaultExpr nil — PK auto-increment)
+// appearing or disappearing must not be silently dropped from the diff just
+// because both sides render an empty default text. On PostgreSQL, ALTER
+// COLUMN cannot express the auto-increment direction (no ALTER equivalent of
+// bigserial's backing sequence), so Diff must error rather than emit nothing
+// or wrongly DROP DEFAULT.
+func TestDiffBareDefaultToggleDetected(t *testing.T) {
+	plain := col("id", "int8")
+	plain.PrimaryKey = true
+	bareDefault := plain
+	bareDefault.HasDefault = true
+
+	old := md(tbl("t", plain))
+	next := md(tbl("t", bareDefault))
+
+	if _, err := migrate.Diff(old, next, pg(t)); err == nil {
+		t.Fatal("Diff turning on a bare default succeeded on postgres, want error")
+	} else if !strings.Contains(err.Error(), "auto-increment") {
+		t.Fatalf("Diff error = %v, want mentioning auto-increment", err)
+	}
+
+	// The reverse direction (losing a bare default) has a real ALTER COLUMN
+	// DROP DEFAULT equivalent and must not error.
+	if got, want := diff(t, next, old), []string{`ALTER TABLE "public"."t" ALTER COLUMN "id" DROP DEFAULT;`}; !equalStrings(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// TestDiffBareDefaultToggleMySQL covers the same bare-default toggle on MySQL,
+// where MODIFY COLUMN natively supports AUTO_INCREMENT and the change must
+// actually be emitted (not silently dropped as it was before HasDefault was
+// folded into defaultChanged).
+func TestDiffBareDefaultToggleMySQL(t *testing.T) {
+	d, err := sql.DialectByName("mysql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := meta.Column{Name: "id", Type: meta.Of("mysql", "bigint", 0, 0, 0), PrimaryKey: true}
+	bareDefault := plain
+	bareDefault.HasDefault = true
+	old := meta.Metadata{Tables: []meta.Table{{Schema: meta.Schema{Name: "app"}, Name: "users", Columns: []meta.Column{plain}}}}
+	next := meta.Metadata{Tables: []meta.Table{{Schema: meta.Schema{Name: "app"}, Name: "users", Columns: []meta.Column{bareDefault}}}}
+
+	stmts, err := migrate.Diff(old, next, d)
+	if err != nil {
+		t.Fatalf("Diff error = %v", err)
+	}
+	if len(stmts) != 1 {
+		t.Fatalf("want 1 statement (the toggle must not be silently dropped), got %d", len(stmts))
+	}
+	text, _, _ := stmts[0].ToSQL(d)
+	want := "ALTER TABLE `app`.`users` MODIFY COLUMN `id` bigint NOT NULL AUTO_INCREMENT;"
+	if text != want {
+		t.Errorf("MySQL bare-default toggle =\n%s\nwant\n%s", text, want)
+	}
+}
+
 func TestDiffIndexAddDrop(t *testing.T) {
 	base := tbl("users", col("id", "int8"), col("email", "text"))
 	withIndex := base
@@ -260,5 +319,126 @@ func TestDiffPrimaryKeyChange(t *testing.T) {
 	joined := strings.Join(diff(t, old, next), "\n")
 	if !strings.Contains(joined, `DROP CONSTRAINT "t_pkey"`) || !strings.Contains(joined, `ADD PRIMARY KEY ("b")`) {
 		t.Errorf("expected PK drop+add, got:\n%s", joined)
+	}
+}
+
+// TestDiffDeterministicDropOrder pins that dropping several indexes and foreign
+// keys in one diff emits them in a stable, name-sorted order. Before the fix
+// diffTable ranged the by-name index and FK maps directly, so Go's randomized
+// map iteration produced a different statement order on different runs.
+func TestDiffDeterministicDropOrder(t *testing.T) {
+	users := tbl("users", col("id", "int8"))
+	ref := meta.Schema{Name: "public"}
+
+	posts := func(withObjects bool) meta.Table {
+		p := tbl("posts", col("id", "int8"), col("user_id", "int8"), col("email", "text"))
+		if withObjects {
+			p.Indexes = []meta.Index{
+				{Name: "idx_e", Columns: []string{"id"}},
+				{Name: "idx_d", Columns: []string{"id"}},
+				{Name: "idx_c", Columns: []string{"id"}},
+				{Name: "idx_b", Columns: []string{"id"}},
+				{Name: "idx_a", Columns: []string{"email"}},
+			}
+			p.ForeignKeys = []meta.ForeignKey{
+				{Name: "fk_d", Columns: []string{"user_id"}, RefSchema: ref, RefTable: "users", RefColumns: []string{"id"}},
+				{Name: "fk_c", Columns: []string{"user_id"}, RefSchema: ref, RefTable: "users", RefColumns: []string{"id"}},
+				{Name: "fk_b", Columns: []string{"user_id"}, RefSchema: ref, RefTable: "users", RefColumns: []string{"id"}},
+				{Name: "fk_a", Columns: []string{"user_id"}, RefSchema: ref, RefTable: "users", RefColumns: []string{"id"}},
+			}
+		}
+		return p
+	}
+
+	old := md(users, posts(true))
+	next := md(users, posts(false))
+
+	// The diff must be byte-identical across many runs despite randomized map
+	// iteration; a single run can coincidentally come out ordered.
+	first := diff(t, old, next)
+	for i := 0; i < 200; i++ {
+		if got := diff(t, old, next); !equalStrings(got, first) {
+			t.Fatalf("non-deterministic diff on run %d:\n first=%v\n got  =%v", i, first, got)
+		}
+	}
+
+	// Dropped objects of each kind come out in ascending name order.
+	for _, kind := range []string{"DROP INDEX", "DROP CONSTRAINT"} {
+		var lines []string
+		for _, stmt := range first {
+			if strings.Contains(stmt, kind) {
+				lines = append(lines, stmt)
+			}
+		}
+		if len(lines) < 2 {
+			t.Fatalf("%s: expected several statements, got %v", kind, lines)
+		}
+		if !sort.StringsAreSorted(lines) {
+			t.Errorf("%s statements not in sorted order: %v", kind, lines)
+		}
+	}
+}
+
+// A migration that introduces (or removes) a managed schema with objects in it
+// must emit CREATE SCHEMA before the objects and DROP SCHEMA after them — without
+// it the apply fails ("schema does not exist") or leaves an orphaned schema. The
+// diff engine omitted schema statements entirely (the #157 fix landed only in
+// meta.CreateSQL/DropSQL).
+func TestDiffManagedSchemaCreateAndDrop(t *testing.T) {
+	withSchema := meta.Metadata{
+		ManagedSchemas: []meta.Schema{{Name: "audit", Create: true}},
+		Tables:         []meta.Table{tbl("log", col("id", "int8"))},
+	}
+	withSchema.Tables[0].Schema = meta.Schema{Name: "audit"}
+
+	indexOf := func(rows []string, prefix string) int {
+		for i, r := range rows {
+			if strings.HasPrefix(r, prefix) {
+				return i
+			}
+		}
+		return -1
+	}
+
+	create := diff(t, md(), withSchema)
+	cs, ct := indexOf(create, `CREATE SCHEMA IF NOT EXISTS "audit"`), indexOf(create, `CREATE TABLE "audit"."log"`)
+	if cs < 0 {
+		t.Fatalf("create diff omitted CREATE SCHEMA: %v", create)
+	}
+	if ct < 0 || cs > ct {
+		t.Fatalf("CREATE SCHEMA must precede CREATE TABLE: %v", create)
+	}
+
+	drop := diff(t, withSchema, md())
+	ds, dt := indexOf(drop, `DROP SCHEMA IF EXISTS "audit"`), indexOf(drop, `DROP TABLE`)
+	if ds < 0 {
+		t.Fatalf("drop diff omitted DROP SCHEMA: %v", drop)
+	}
+	if dt < 0 || ds < dt {
+		t.Fatalf("DROP SCHEMA must follow DROP TABLE: %v", drop)
+	}
+
+	// An unchanged managed schema emits no schema statement.
+	if got := diff(t, withSchema, withSchema); len(got) != 0 {
+		t.Fatalf("no-op diff emitted statements: %v", got)
+	}
+}
+
+func TestDiffFKEqualIgnoresSchemaCreateFlag(t *testing.T) {
+	c := col("user_id", "int8")
+	mkTable := func(create bool) meta.Table {
+		tb := tbl("posts", col("id", "int8"), c)
+		tb.ForeignKeys = []meta.ForeignKey{{
+			Name: "fk_posts_user", Columns: []string{"user_id"},
+			RefSchema: meta.Schema{Name: "public", Create: create}, RefTable: "users", RefColumns: []string{"id"},
+		}}
+		return tb
+	}
+	users := tbl("users", col("id", "int8"))
+	old := md(users, mkTable(false))
+	next := md(users, mkTable(true))
+	got := diff(t, old, next)
+	if len(got) != 0 {
+		t.Fatalf("changing only Schema.Create should not alter FK; got %v", got)
 	}
 }

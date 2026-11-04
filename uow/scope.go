@@ -32,6 +32,7 @@ package uow
 
 import (
 	"context"
+	stddriver "database/sql/driver"
 	"errors"
 	"fmt"
 	"reflect"
@@ -345,11 +346,20 @@ func (s *Scope) Remove(table sqlkit.Table, rows ...any) error {
 	return nil
 }
 
-// Flush emits the staged work. On a nested scope it runs inside a savepoint, so
-// an error rolls back to the savepoint and leaves the parent transaction intact;
-// on a root scope it runs directly on the executor. On success the staged
-// inserts/updates/deletes are cleared and managed entities' snapshots are
-// refreshed, so the scope can be reused for another round.
+// Flush emits the staged work in three phases so foreign keys hold across tables:
+// every INSERT first, then the UPDATEs, then every DELETE. When the scope has a
+// catalog identity map (WithMetadata or WithIdentities), the tables are ordered
+// by their foreign keys — parents are inserted before the tables that reference
+// them, and deleted after — so staging a child before its parent still flushes in
+// a safe order; without metadata the staging order is used as-is. A managed or
+// updated row that is also staged for removal is deleted without a preceding
+// UPDATE.
+//
+// On a nested scope it runs inside a savepoint, so an error rolls back to the
+// savepoint and leaves the parent transaction intact; on a root scope it runs
+// directly on the executor. On success the staged inserts/updates/deletes are
+// cleared and managed entities' snapshots are refreshed, so the scope can be
+// reused for another round.
 func (s *Scope) Flush(ctx context.Context) error {
 	if s.parent == nil {
 		return s.flush(ctx)
@@ -365,8 +375,12 @@ func (s *Scope) Flush(ctx context.Context) error {
 		}
 		s.savepoint = name
 	}
+	guard, err := sp.Savepoint(ctx)
+	if err != nil {
+		return err
+	}
 	if err := s.flush(ctx); err != nil {
-		_ = sp.RollbackTo(ctx, s.savepoint)
+		_ = sp.RollbackTo(ctx, guard)
 		return err
 	}
 	return nil
@@ -395,20 +409,30 @@ func (s *Scope) Rollback(ctx context.Context) error {
 	return nil
 }
 
-// flush runs the staged statements directly on the executor.
+// flush runs the staged statements directly on the executor, in three phases so
+// foreign keys are respected across tables: every INSERT first (parent tables
+// before the tables that reference them), then the UPDATEs, then every DELETE in
+// the reverse order (children before parents). flushOrder supplies the
+// foreign-key-aware table order; within a phase each table's own work runs as a
+// unit.
 func (s *Scope) flush(ctx context.Context) error {
-	for _, name := range s.order {
-		ts := s.tables[name]
-		if err := s.flushInserts(ctx, ts); err != nil {
+	order := s.flushOrder()
+	for _, name := range order {
+		if err := s.flushInserts(ctx, s.tables[name]); err != nil {
 			return err
 		}
+	}
+	for _, name := range order {
+		ts := s.tables[name]
 		if err := s.flushManaged(ctx, ts); err != nil {
 			return err
 		}
 		if err := s.flushUpdates(ctx, ts); err != nil {
 			return err
 		}
-		if err := s.flushRemovals(ctx, ts); err != nil {
+	}
+	for i := len(order) - 1; i >= 0; i-- {
+		if err := s.flushRemovals(ctx, s.tables[order[i]]); err != nil {
 			return err
 		}
 	}
@@ -427,6 +451,91 @@ func (s *Scope) flush(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// flushOrder returns the staged tables ordered so each table follows the tables
+// it references by foreign key (parents before children) — the order the insert
+// and update phases use, and whose reverse the delete phase uses. Ordering needs
+// foreign-key structure, which only the catalog carries, so a scope orders only
+// when it has an identity map (WithMetadata or WithIdentities); without one, or
+// when the references form a cycle, it returns the staging order unchanged.
+func (s *Scope) flushOrder() []string {
+	if s.identities == nil || len(s.order) < 2 {
+		return s.order
+	}
+	staged := make(map[string]bool, len(s.order))
+	for _, n := range s.order {
+		staged[n] = true
+	}
+	// parents[name] holds the staged tables that name references and so must be
+	// inserted before it. A self-reference and references to non-staged tables are
+	// ignored — they impose no ordering on this flush.
+	parents := make(map[string]map[string]bool)
+	for _, name := range s.order {
+		t, ok := s.identities.Lookup(s.tables[name].key)
+		if !ok {
+			continue
+		}
+		for _, fk := range t.ForeignKeys {
+			ref := fkRefName(fk)
+			if ref == name || !staged[ref] {
+				continue
+			}
+			if parents[name] == nil {
+				parents[name] = map[string]bool{}
+			}
+			parents[name][ref] = true
+		}
+	}
+	if len(parents) == 0 {
+		return s.order
+	}
+	ordered, ok := topoStable(s.order, parents)
+	if !ok {
+		return s.order // a cycle: fall back to staging order
+	}
+	return ordered
+}
+
+// topoStable orders names so every name follows all its parents, preserving the
+// original order among nodes that are otherwise unconstrained. It reports ok
+// false when the parent relation has a cycle.
+func topoStable(order []string, parents map[string]map[string]bool) (result []string, ok bool) {
+	emitted := make(map[string]bool, len(order))
+	out := make([]string, 0, len(order))
+	for len(out) < len(order) {
+		progressed := false
+		for _, name := range order {
+			if emitted[name] {
+				continue
+			}
+			ready := true
+			for p := range parents[name] {
+				if !emitted[p] {
+					ready = false
+					break
+				}
+			}
+			if ready {
+				emitted[name] = true
+				out = append(out, name)
+				progressed = true
+			}
+		}
+		if !progressed {
+			return nil, false
+		}
+	}
+	return out, true
+}
+
+// fkRefName is the schema-qualified name of a foreign key's referenced table, in
+// the same form stateFor keys staged tables by (see TableKey.QualifiedName).
+func fkRefName(fk meta.ForeignKey) string {
+	if fk.RefSchema.Name == "" {
+		return fk.RefTable
+	}
+	return fk.RefSchema.Name + "." + fk.RefTable
 }
 
 func (s *Scope) flushInserts(ctx context.Context, ts *tableState) error {
@@ -478,6 +587,11 @@ func (s *Scope) flushManaged(ctx context.Context, ts *tableState) error {
 	bulk := (auto || s.batchSize > 0) && len(ts.table.PrimaryKey()) == 1
 	var pending []pendingUpdate
 	for _, tr := range ts.managed {
+		// A managed entity also staged for removal is about to be deleted; skip its
+		// UPDATE rather than write a row the delete phase will drop.
+		if ts.removedIdx[pkString(ts.key, tr.pk)] {
+			continue
+		}
 		pk, err := sqlkit.PrimaryKeyValues(ts.table, tr.ptr)
 		if err != nil {
 			return err
@@ -512,6 +626,10 @@ func (s *Scope) flushUpdates(ctx context.Context, ts *tableState) error {
 		pk, err := sqlkit.PrimaryKeyValues(ts.table, row)
 		if err != nil {
 			return err
+		}
+		// A row also staged for removal is about to be deleted; skip its UPDATE.
+		if ts.removedIdx[pkString(ts.key, pk)] {
+			continue
 		}
 		assignments, err := updateAssignments(ts.table, row)
 		if err != nil {
@@ -861,16 +979,57 @@ func isPointer(row any) bool {
 	return reflect.ValueOf(row).Kind() == reflect.Pointer
 }
 
-// normalize dereferences a pointer to a copy of its pointee (so a later in-place
-// mutation through that pointer is still detected against the snapshot) and
-// leaves non-pointers as-is. A nil pointer normalizes to nil.
+// normalize prepares a column value for change-detection comparison, so a later
+// in-place mutation of the value the snapshot holds is still detected: a pointer
+// dereferences to an independent copy of its pointee, and a slice/map value is
+// deep-copied — a bare copy of the slice/map header still aliases the same
+// backing array/buckets, so an in-place mutation through the field (e.g.
+// tags[0] = "x", or meta["k"] = "v" on a JSON-tagged column) would otherwise be
+// invisible to reflect.DeepEqual. A value implementing driver.Valuer (notably a
+// JSON-tagged column's internal wrapper, or a custom slice/map type with its own
+// Value method) is normalized through Value() instead: the driver representation
+// it returns is a fresh, immutable value each call (e.g. freshly marshaled JSON
+// bytes) that never aliases the live field, and it is what actually gets
+// written, so it is the more precise snapshot even beneath a pointer receiver.
+// A nil pointer/slice/map normalizes to nil/unchanged.
 func normalize(v any) any {
+	// A nil pointer normalizes to nil before the Valuer check: calling Value on
+	// a nil *T whose Value method has a value receiver (e.g. *sql.NullString)
+	// panics, and database/sql itself treats such a nil pointer as SQL NULL.
+	if rv := reflect.ValueOf(v); rv.Kind() == reflect.Pointer && rv.IsNil() {
+		return nil
+	}
+	if valuer, ok := v.(stddriver.Valuer); ok {
+		if dv, err := valuer.Value(); err == nil {
+			return dv
+		}
+		// Value() erroring on the current value is surprising but not this
+		// function's concern to report; fall through so the snapshot still
+		// reflects something rather than silently pretending nothing changed.
+	}
 	rv := reflect.ValueOf(v)
-	if rv.Kind() == reflect.Pointer {
+	switch rv.Kind() {
+	case reflect.Pointer:
 		if rv.IsNil() {
 			return nil
 		}
-		return rv.Elem().Interface()
+		return normalize(rv.Elem().Interface())
+	case reflect.Slice:
+		if rv.IsNil() {
+			return v
+		}
+		cp := reflect.MakeSlice(rv.Type(), rv.Len(), rv.Len())
+		reflect.Copy(cp, rv)
+		return cp.Interface()
+	case reflect.Map:
+		if rv.IsNil() {
+			return v
+		}
+		cp := reflect.MakeMapWithSize(rv.Type(), rv.Len())
+		for iter := rv.MapRange(); iter.Next(); {
+			cp.SetMapIndex(iter.Key(), iter.Value())
+		}
+		return cp.Interface()
 	}
 	return v
 }

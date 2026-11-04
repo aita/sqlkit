@@ -149,7 +149,9 @@ func (m DefaultTypeMapper) columnOverride(table meta.Table, column meta.Column) 
 }
 
 func applyNullable(gt meta.GoType, column meta.Column) meta.GoType {
-	if column.Nullable && !strings.HasPrefix(gt.Name, "[]") {
+	// A slice is already nilable, and a type an override spells with a leading "*"
+	// is already a pointer; wrapping either again would yield *[]T or **T.
+	if column.Nullable && !strings.HasPrefix(gt.Name, "[]") && !strings.HasPrefix(gt.Name, "*") {
 		gt.Pointer = true
 	}
 	return gt

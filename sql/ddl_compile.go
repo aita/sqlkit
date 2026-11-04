@@ -76,7 +76,11 @@ func (c *Compiler) CompileCreateTable(s CreateTableStmt) (string, error) {
 		defs = append(defs, clause)
 	}
 	for _, fk := range s.ForeignKeys {
-		defs = append(defs, c.foreignKeyDef(fk))
+		def, err := c.foreignKeyDef(fk)
+		if err != nil {
+			return "", err
+		}
+		defs = append(defs, def)
 	}
 	if len(s.Indexes) > 0 {
 		if c.Dialect.Name() != "mysql" {
@@ -92,6 +96,10 @@ func (c *Compiler) CompileCreateTable(s CreateTableStmt) (string, error) {
 			}
 			defs = append(defs, clause+"("+c.quoteAll(idx.Columns)+")")
 		}
+	}
+
+	if len(defs) == 0 {
+		return "", fmt.Errorf("sqlkit/sql: CREATE TABLE requires at least one column or constraint")
 	}
 
 	var sb strings.Builder
@@ -153,6 +161,12 @@ func (c *Compiler) compileColumnDef(col ColumnDef) (string, error) {
 			}
 			storage := "STORED"
 			if !col.Generated.Stored {
+				// PostgreSQL (and the standard target) has no VIRTUAL generated
+				// columns — only STORED — so emitting VIRTUAL produces DDL the engine
+				// rejects. Reject it at compile time rather than render invalid SQL.
+				if c.Dialect.Name() != "mysql" {
+					return "", fmt.Errorf("sqlkit/sql: the %s dialect has no VIRTUAL generated columns; use a STORED generated column", c.Dialect.Name())
+				}
 				storage = "VIRTUAL"
 			}
 			core += " GENERATED ALWAYS AS (" + expr + ") " + storage
@@ -238,6 +252,16 @@ func (c *Compiler) compileRestateColumn(col ColumnDef) (string, error) {
 			return "", err
 		}
 		return "MODIFY COLUMN " + def, nil
+	}
+	if col.AutoIncrement {
+		// Unlike MySQL's inline MODIFY COLUMN ... AUTO_INCREMENT, PostgreSQL has no
+		// ALTER COLUMN form of "make this a serial column" — that sugar only exists
+		// at CREATE TABLE time, expanding to a backing CREATE SEQUENCE plus a
+		// nextval() DEFAULT. Silently falling through to the DROP DEFAULT branch
+		// below would strip the column's default instead, so reject instead of
+		// guessing; the caller can set an explicit DefaultExpr (e.g. a nextval(...)
+		// call against a sequence created separately).
+		return "", fmt.Errorf("sqlkit/sql: ALTER COLUMN cannot express a bare auto-increment default on the %s dialect; set an explicit DEFAULT expression, or create/drop the column instead", c.Dialect.Name())
 	}
 	name := c.Dialect.QuoteName(col.Name.String())
 	typeClause, err := col.Type.RenderType(c.Dialect)
@@ -335,6 +359,11 @@ func (c *Compiler) CompileCreateIndex(s CreateIndexStmt) (string, error) {
 	var sb strings.Builder
 	sb.WriteString("CREATE " + kind + " ")
 	if s.IfNotExists {
+		// MySQL has no IF NOT EXISTS for CREATE INDEX (any version); emitting it
+		// produces SQL the engine rejects. PostgreSQL supports it.
+		if c.Dialect.Name() == "mysql" {
+			return "", fmt.Errorf("sqlkit/sql: dialect %q does not support CREATE INDEX ... IF NOT EXISTS", c.Dialect.Name())
+		}
 		sb.WriteString("IF NOT EXISTS ")
 	}
 	sb.WriteString(c.Dialect.QuoteName(s.Name.String()) + " ON " + c.qualify(s.Table) +
@@ -449,7 +478,7 @@ func (c *Compiler) compileAlteration(table Table, a Alteration) (string, error) 
 		if a.ForeignKey == nil {
 			return "", fmt.Errorf("sqlkit/sql: ADD FOREIGN KEY has no constraint")
 		}
-		return c.foreignKeyClause(*a.ForeignKey), nil
+		return c.foreignKeyClause(*a.ForeignKey)
 	case AlterAddCheck:
 		expr, err := CompileStatic(c.Dialect, a.Expression)
 		if err != nil {
@@ -517,15 +546,43 @@ func (c *Compiler) requireColumnModify(op string) error {
 	return nil
 }
 
+// requirePostgresObject rejects an object kind that exists only in PostgreSQL —
+// sequences, enum types (CREATE TYPE ... AS ENUM), extensions, materialized
+// views, and dollar-quoted/LANGUAGE-clause functions — when compiled for MySQL,
+// which has none of them and whose parser rejects the PostgreSQL DDL this
+// package would otherwise emit. It mirrors requireColumnModify / the
+// single-element-row and FULL JOIN guards.
+func (c *Compiler) requirePostgresObject(feature string) error {
+	if c.Dialect.Name() == "mysql" {
+		return fmt.Errorf("sqlkit/sql: dialect %q does not support %s", c.Dialect.Name(), feature)
+	}
+	return nil
+}
+
 // foreignKeyClause renders an ALTER TABLE "ADD CONSTRAINT ... FOREIGN KEY ..."
 // action; foreignKeyDef renders the same constraint as a CREATE TABLE definition.
-func (c *Compiler) foreignKeyClause(fk ForeignKeyConstraint) string {
-	return "ADD " + c.foreignKeyDef(fk)
+func (c *Compiler) foreignKeyClause(fk ForeignKeyConstraint) (string, error) {
+	def, err := c.foreignKeyDef(fk)
+	if err != nil {
+		return "", err
+	}
+	return "ADD " + def, nil
 }
 
 // foreignKeyDef renders a "CONSTRAINT name FOREIGN KEY (cols) REFERENCES ..."
-// table constraint, shared by CREATE TABLE and ALTER TABLE ADD.
-func (c *Compiler) foreignKeyDef(fk ForeignKeyConstraint) string {
+// table constraint, shared by CREATE TABLE and ALTER TABLE ADD. Both column
+// lists must be non-empty, mirroring the UNIQUE and KEY constraint guards, so a
+// degenerate constraint errors rather than emitting "FOREIGN KEY () REFERENCES".
+// They must also be the same length: a referencing/referenced column-list arity
+// mismatch is rejected here at compile time rather than left to render as SQL
+// every engine rejects at execution time.
+func (c *Compiler) foreignKeyDef(fk ForeignKeyConstraint) (string, error) {
+	if len(fk.Columns) == 0 || len(fk.RefColumns) == 0 {
+		return "", fmt.Errorf("sqlkit/sql: FOREIGN KEY requires at least one referencing and one referenced column")
+	}
+	if len(fk.Columns) != len(fk.RefColumns) {
+		return "", fmt.Errorf("sqlkit/sql: FOREIGN KEY has %d referencing column(s) but %d referenced column(s)", len(fk.Columns), len(fk.RefColumns))
+	}
 	clause := "CONSTRAINT " + c.Dialect.QuoteName(fk.Name.String()) +
 		" FOREIGN KEY (" + c.quoteAll(fk.Columns) + ")" +
 		" REFERENCES " + c.qualifyName(fk.RefSchema, fk.RefTable) +
@@ -536,7 +593,7 @@ func (c *Compiler) foreignKeyDef(fk ForeignKeyConstraint) string {
 	if fk.OnUpdate != "" {
 		clause += " ON UPDATE " + fk.OnUpdate
 	}
-	return clause
+	return clause, nil
 }
 
 // qualify renders a schema-qualified table identifier for DDL, quoting each

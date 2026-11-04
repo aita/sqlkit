@@ -3,6 +3,7 @@ package sqlkit_test
 import (
 	"context"
 	"database/sql/driver"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -47,6 +48,42 @@ func TestPreloadToManyPopulatesSliceField(t *testing.T) {
 	}
 }
 
+// TestPreloadINOrderIsDeterministic guards against the preload follow-up's IN
+// value list following Go's randomized map iteration. The values must appear in
+// first-seen parent order so the statements AutoChunk splits the list into are
+// stable across runs (plan-cache friendly) and reproducible.
+func TestPreloadINOrderIsDeterministic(t *testing.T) {
+	var preloadArgs []any
+	fake := &testutil.Fake{
+		QueryFunc: func(s string, args []any) (testutil.Result, error) {
+			if contains(s, `"public"."posts"`) {
+				preloadArgs = args
+				return testutil.Result{Columns: []string{"id", "user_id", "title"}}, nil
+			}
+			// Parents come back in this order; the IN must follow it.
+			return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{
+				{int64(3)}, {int64(1)}, {int64(2)}, {int64(1)},
+			}}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+	want := []any{int64(3), int64(1), int64(2)} // distinct, first-seen order
+
+	// Map iteration is randomized per range, so a single run can match the wanted
+	// order by chance; repeat enough that an order-following bug is caught with
+	// overwhelming odds in one `go test` invocation.
+	for i := 0; i < 64; i++ {
+		preloadArgs = nil
+		var users []preUser
+		if err := db.Select(Users.ID).From(Users).Preload(Posts).All(context.Background()).Scan(&users); err != nil {
+			t.Fatalf("run %d: Preload chain error = %v", i, err)
+		}
+		if !reflect.DeepEqual(preloadArgs, want) {
+			t.Fatalf("run %d: preload IN args = %#v, want %#v", i, preloadArgs, want)
+		}
+	}
+}
+
 func TestPreloadToOnePopulatesPointerField(t *testing.T) {
 	db := sqlkit.WrapDB(postsAndUsersFake().DB())
 	var posts []prePost2
@@ -61,6 +98,33 @@ func TestPreloadToOnePopulatesPointerField(t *testing.T) {
 	}
 	if posts[2].User == nil || posts[2].User.Name != "Alice" {
 		t.Fatalf("post 12 user = %+v", posts[2].User)
+	}
+}
+
+// TestPreloadToOneDuplicateTargetErrors covers a ToOne relation whose target
+// query returns more than one row for a key: ToOne documents that the target
+// yields at most one row per source row (relation.go's Cardinality doc), so a
+// violation must be reported, not silently resolved by keeping an arbitrary
+// match (which is also not even stable, since the follow-up query has no
+// ORDER BY to break the tie deterministically).
+func TestPreloadToOneDuplicateTargetErrors(t *testing.T) {
+	fake := &testutil.Fake{
+		QueryFunc: func(s string, _ []any) (testutil.Result, error) {
+			if contains(s, `"public"."users"`) {
+				return testutil.Result{Columns: []string{"id", "name"}, Rows: [][]driver.Value{
+					{int64(1), "Alice"}, {int64(1), "Alice-Duplicate"},
+				}}, nil
+			}
+			return testutil.Result{Columns: []string{"id", "user_id", "title"}, Rows: [][]driver.Value{
+				{int64(10), int64(1), "a"},
+			}}, nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+	var posts []prePost2
+	err := db.Select().From(Posts).Preload(Users).All(context.Background()).Scan(&posts)
+	if err == nil {
+		t.Fatal("Preload of a ToOne relation with two rows for the same key: expected an error, got nil")
 	}
 }
 
@@ -121,6 +185,19 @@ func TestPreloadRelExplicit(t *testing.T) {
 	}
 	if len(posts) == 0 || posts[0].User == nil || posts[0].User.Name != "Alice" {
 		t.Fatalf("PreloadRel did not populate: %+v", posts)
+	}
+}
+
+// TestPreloadRelNilErrors covers PreloadRel(nil): it must surface a clear error
+// rather than panicking with a nil-interface dereference when parents exist.
+func TestPreloadRelNilErrors(t *testing.T) {
+	fake := &testutil.Fake{QueryFunc: func(string, []any) (testutil.Result, error) {
+		return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}}}, nil
+	}}
+	db := sqlkit.WrapDB(fake.DB())
+	err := db.Select(Users.ID).From(Users).PreloadRel(nil).All(context.Background()).Scan(&[]preUser{})
+	if err == nil {
+		t.Fatal("PreloadRel(nil) should error, not panic")
 	}
 }
 
@@ -412,6 +489,12 @@ func TestPreloadSkipsNullParentKey(t *testing.T) {
 	}
 	if len(users[1].Posts) != 0 {
 		t.Fatalf("nil-key user should have no posts, got %+v", users[1].Posts)
+	}
+	// A nil-key parent has no children for the exact same reason a
+	// resolved-but-childless parent does (zero matches); both must get the
+	// same representation, a non-nil empty slice, not Go's nil zero value.
+	if users[1].Posts == nil {
+		t.Fatalf("nil-key user's Posts should be a non-nil empty slice, got nil")
 	}
 }
 

@@ -105,6 +105,16 @@ func TestSelectAggregateOrderByFallsBackToRaw(t *testing.T) {
 	assertRaw(t, "SELECT GROUP_CONCAT(name ORDER BY name) FROM t")
 }
 
+// GROUP_CONCAT's separator (the explicit SEPARATOR clause, or the implicit
+// default ",") has no typed home: the parser carries it as a trailing argument,
+// so converting it as a generic call would render it as an ordinary data
+// argument and silently change the separator. Every form round-trips raw.
+func TestSelectGroupConcatFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT GROUP_CONCAT(a SEPARATOR '|') FROM t")
+	assertRaw(t, "SELECT GROUP_CONCAT(a) FROM t")
+	assertRaw(t, "SELECT GROUP_CONCAT(DISTINCT a, b) FROM t")
+}
+
 func TestSelectOrderLimitOffset(t *testing.T) {
 	assertRoundTrip(t,
 		"SELECT id FROM users ORDER BY name DESC, id ASC LIMIT 10 OFFSET 5",
@@ -403,6 +413,15 @@ func TestSelectWindowFrameFallsBackToRaw(t *testing.T) {
 	assertRaw(t, "SELECT SUM(x) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM t")
 }
 
+// IGNORE NULLS/RESPECT NULLS and FROM FIRST/FROM LAST change which row a
+// window function like LAG/NTH_VALUE returns; sql.WindowExpression has no
+// field for either, so they must round-trip raw rather than be silently
+// dropped.
+func TestSelectWindowNullTreatmentFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT LAG(x) IGNORE NULLS OVER (ORDER BY id) FROM t")
+	assertRaw(t, "SELECT NTH_VALUE(x, 2) FROM LAST OVER (ORDER BY id) FROM t")
+}
+
 // GROUP BY ... WITH ROLLUP has no typed home and round-trips raw (companion to the
 // existing rollup test, exercised here with HAVING).
 func TestSelectScalarSubqueryInWhere(t *testing.T) {
@@ -448,4 +467,53 @@ func TestLimitOutOfRangeFallsBackToRaw(t *testing.T) {
 // raw rather than rendering the wrong `a`.`b` (or, for `.`, an empty “ . “).
 func TestTableIdentifierWithDotFallsBackToRaw(t *testing.T) {
 	assertRaw(t, "SELECT a FROM `x.y`")
+}
+
+// A parenthesized set operation carrying its own ORDER BY / LIMIT / OFFSET,
+// wrapped in an outer LIMIT/ORDER BY/set operation, cannot be modeled: sqlkit's
+// CompoundBuilder.Limit/Offset/OrderBy set the clause on the SAME struct rather
+// than adding a nesting level, so applying the outer clause after the inner one
+// silently overwrote it instead of preserving both scopes — a silent WRONG
+// RESULT, not merely an unmodeled construct (fuzz-adjacent: found by code audit,
+// confirmed by direct reproduction). It must fall back to raw.
+func TestNestedSetOperationLimitFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "(SELECT 1 UNION SELECT 2 LIMIT 1) LIMIT 2")
+	assertRaw(t, "(SELECT 1 UNION SELECT 2 ORDER BY 1) LIMIT 2")
+}
+
+// SELECT ... INTO OUTFILE writes the result to a file instead of returning rows;
+// dropping it would silently turn a file-export statement into a plain read.
+func TestSelectIntoOutfileFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT id FROM t INTO OUTFILE '/tmp/x'")
+}
+
+// SQL_CALC_FOUND_ROWS changes what a following SELECT FOUND_ROWS() reports;
+// STRAIGHT_JOIN / HIGH_PRIORITY / SQL_BIG_RESULT are plan directives. None has a
+// sqlkit node, so each must round-trip as raw rather than be silently dropped.
+func TestSelectStmtOptsFallBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT SQL_CALC_FOUND_ROWS id FROM t LIMIT 5")
+	assertRaw(t, "SELECT STRAIGHT_JOIN id FROM t")
+	assertRaw(t, "SELECT HIGH_PRIORITY id FROM t")
+}
+
+// STRAIGHT_JOIN as a join operator forces left-to-right join order; sqlkit has no
+// node for it, so it must round-trip as raw rather than render as a plain JOIN
+// (which lets the optimizer reorder).
+func TestStraightJoinFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT a.id FROM t AS a STRAIGHT_JOIN t AS b ON a.id=b.id")
+}
+
+// USE/FORCE/IGNORE INDEX table hints have no sqlkit node; dropping one changes
+// only index selection normally, but FORCE INDEX can turn a missing-index plan
+// into a hard error the original query would not hit. Falls back to raw.
+func TestTableIndexHintFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT id FROM t USE INDEX (idx) WHERE id>1")
+	assertRaw(t, "SELECT id FROM t FORCE INDEX (idx) WHERE id>1")
+}
+
+// t PARTITION (p0) restricts the scan to named partitions; the builder cannot
+// model it, so it must round-trip as raw rather than drop the PARTITION (which
+// would silently widen the query to the whole table).
+func TestSelectPartitionSelectionFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "SELECT a FROM t PARTITION (p0)")
 }

@@ -12,6 +12,21 @@ func TestCountMultipleArgsFallsBackToRaw(t *testing.T) {
 	assertRaw(t, "SELECT count(a, b) FROM t")
 }
 
+// timestamptz / timetz canonicalize to "timestamp with time zone" /
+// "time with time zone"; a precision must land on the leading type word
+// (timestamp(3) with time zone), not after the whole phrase
+// (timestamp with time zone(3)), which PostgreSQL's own grammar rejects.
+func TestTypeNameTimestamptzWithPrecision(t *testing.T) {
+	assertRoundTrip(t,
+		`SELECT a::timestamptz(3) FROM t`,
+		sql.Select(sql.Cast(sql.Col("a"), "timestamp(3) with time zone")).From(sql.Table{Name: sql.NewIdent("t")}),
+		`SELECT CAST("a" AS timestamp(3) with time zone) FROM "t"`)
+	assertRoundTrip(t,
+		`SELECT a::timetz(3) FROM t`,
+		sql.Select(sql.Cast(sql.Col("a"), "time(3) with time zone")).From(sql.Table{Name: sql.NewIdent("t")}),
+		`SELECT CAST("a" AS time(3) with time zone) FROM "t"`)
+}
+
 // EXTRACT(field FROM x) is reported by libpg_query as pg_catalog.extract tagged
 // COERCE_SQL_SYNTAX; it must rebuild as the dedicated node so it renders with the
 // keyword syntax rather than the call form extract(field, x) the grammar rejects.
@@ -53,4 +68,25 @@ func TestTableShorthand(t *testing.T) {
 		"TABLE t",
 		sql.Select(sql.Star()).From(sql.Table{Name: sql.NewIdent("t")}),
 		`SELECT * FROM "t"`)
+}
+
+// A function call carrying a modifier sqlkit's function nodes cannot model —
+// FILTER (WHERE ...), an in-aggregate ORDER BY, WITHIN GROUP, or VARIADIC —
+// must fall back to a verbatim RawQuery rather than silently drop the modifier
+// (which would change the statement's meaning). assertRaw also checks the raw
+// text is byte-identical to the input, so the modifier survives.
+func TestFuncCallModifiersFallBackToRaw(t *testing.T) {
+	for _, input := range []string{
+		"SELECT sum(a) FILTER (WHERE b > 0) FROM t",
+		"SELECT count(*) FILTER (WHERE b > 0) FROM t",
+		"SELECT array_agg(a ORDER BY b) FROM t",
+		"SELECT string_agg(a, ',' ORDER BY a DESC) FROM t",
+		"SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY x) FROM t",
+		"SELECT concat(VARIADIC a) FROM t",
+	} {
+		raw := assertRaw(t, input)
+		if raw.SQL() != input {
+			t.Errorf("modifier not preserved: raw = %q, want %q", raw.SQL(), input)
+		}
+	}
 }

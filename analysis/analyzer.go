@@ -65,6 +65,18 @@ type Analysis struct {
 	// literal with = or <> (NullEqualityPredicate); false unless Parsed. It backs
 	// the eq_null check.
 	NullEquality bool
+	// LockingRead reports whether a SELECT carries a row-locking clause
+	// (FOR UPDATE / FOR SHARE / ...); false unless Parsed. Such a statement is a
+	// read by Kind but write-like in effect — it takes locks and a read-only
+	// transaction or replica rejects it — so IsWrite folds it in.
+	LockingRead bool
+	// WritesViaCTE reports whether a read-kinded statement (a SELECT or set
+	// operation) carries a data-modifying common table expression
+	// (WITH x AS (INSERT/UPDATE/DELETE/MERGE ...) ...); false unless Parsed. Such a
+	// statement writes even though its top-level kind is a read, so IsWrite folds
+	// it in — it must never be routed to a read replica. The keyword-guess path
+	// (no parser) cannot see into the CTE body and so misses this.
+	WritesViaCTE bool
 	// Fingerprint is the normalized SQL used to group repeats; empty unless the
 	// caller asked for it. See Analyzer.Fingerprint and FingerprintRaw.
 	Fingerprint string
@@ -75,6 +87,13 @@ type Analysis struct {
 	// diagnostics; nil when Parsed. It is never an execution error.
 	Err error
 }
+
+// IsWrite reports whether the statement modifies data or takes row locks: a
+// definite write (INSERT/UPDATE/DELETE/DDL) by Kind, or a locking read
+// (SELECT ... FOR UPDATE/SHARE), which acquires locks and a read-only
+// transaction or replica rejects. It is the write predicate observers should
+// use rather than Kind.IsWrite alone, which misses the locking read.
+func (a Analysis) IsWrite() bool { return a.Kind.IsWrite() || a.LockingRead || a.WritesViaCTE }
 
 // Analyze returns the static structural analysis of a statement, preferring the
 // parsed AST q and falling back to a keyword guess on sqlText when q is nil or of
@@ -101,8 +120,61 @@ func (a *Analyzer) Analyze(sqlText string, q sql.Query) Analysis {
 		FilterColumns:    cols,
 		MaxInList:        maxIn,
 		NullEquality:     NullEqualityPredicate(q),
+		LockingRead:      isLockingRead(q),
+		WritesViaCTE:     writesViaCTE(q),
 		Parsed:           true,
 	}
+}
+
+// IsLockingRead reports whether q is a SELECT carrying a row-locking clause
+// (FOR UPDATE / FOR SHARE / ...). Such a read takes locks and is rejected by a
+// read-only transaction or unsafe on a read replica, so a caller that needs
+// this one fact without a full Analyze (e.g. a Router) can call it directly.
+func IsLockingRead(q sql.Query) bool { return isLockingRead(q) }
+
+func isLockingRead(q sql.Query) bool {
+	sel, ok := sql.Unwrap(q).(sql.SelectStmt)
+	return ok && sel.Lock != nil
+}
+
+// WritesViaCTE reports whether a read-kinded statement carries a data-modifying
+// CTE (PostgreSQL's WITH x AS (INSERT/UPDATE/DELETE/MERGE ... RETURNING ...)).
+// The top-level statement is a SELECT or set operation — a read by Kind — yet it
+// performs the write inside the CTE, so it must be treated as a write. Exposed
+// for callers (e.g. a Router) that need this one fact without a full Analyze.
+func WritesViaCTE(q sql.Query) bool { return writesViaCTE(q) }
+
+// writesViaCTE reports whether a read-kinded statement carries a data-modifying
+// CTE (PostgreSQL's WITH x AS (INSERT/UPDATE/DELETE/MERGE ... RETURNING ...)).
+// The top-level statement is a SELECT or set operation — a read by Kind — yet it
+// performs the write inside the CTE, so it must be treated as a write. Only the
+// read-kinded statements are inspected; a top-level INSERT/UPDATE/DELETE/MERGE is
+// already a write by Kind. It descends through nested CTEs and both arms of a set
+// operation.
+func writesViaCTE(q sql.Query) bool {
+	switch v := sql.Unwrap(q).(type) {
+	case sql.SelectStmt:
+		return ctesWrite(v.With)
+	case sql.CompoundStmt:
+		return writesViaCTE(v.Left) || writesViaCTE(v.Right)
+	default:
+		return false
+	}
+}
+
+// ctesWrite reports whether any CTE in ctes has a data-modifying body, or itself
+// carries a data-modifying CTE.
+func ctesWrite(ctes []sql.CTE) bool {
+	for _, c := range ctes {
+		switch sql.Unwrap(c.Body()).(type) {
+		case sql.InsertStmt, sql.UpdateStmt, sql.DeleteStmt, sql.MergeStmt:
+			return true
+		}
+		if writesViaCTE(c.Body()) {
+			return true
+		}
+	}
+	return false
 }
 
 // Kind reports the statement kind from the AST; see KindOf.

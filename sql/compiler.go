@@ -56,12 +56,21 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		}
 		return c.nextPlaceholder(), []any{e.Value}, nil
 	case GroupingExpression:
+		if !supportsGroupingSets(c.Dialect) {
+			return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support %s grouping", c.Dialect.Name(), e.Kind)
+		}
 		inner, args, err := c.compileExprList(e.Elements)
 		if err != nil {
 			return "", nil, err
 		}
 		return e.Kind + " (" + inner + ")", args, nil
 	case GroupingSetsExpression:
+		if !supportsGroupingSets(c.Dialect) {
+			return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support GROUPING SETS", c.Dialect.Name())
+		}
+		if len(e.Sets) == 0 {
+			return "", nil, fmt.Errorf("sqlkit/sql: GROUPING SETS requires at least one set")
+		}
 		var sb strings.Builder
 		var args []any
 		sb.WriteString("GROUPING SETS (")
@@ -533,6 +542,24 @@ func (c *Compiler) CompileExpression(expr Expression) (string, []any, error) {
 		if e.All || e.Target == nil {
 			return "COUNT(*)", nil, nil
 		}
+		if s, star := e.Target.(StarSelection); star && e.Distinct {
+			// COUNT(DISTINCT *) with an unqualified star is invalid in both
+			// PostgreSQL and MySQL (DISTINCT needs an expression list, not "*");
+			// reject it at compile time rather than emit SQL the engine refuses.
+			// A plain COUNT(*) is the way to count rows.
+			if s.Qualifier.IsZero() {
+				return "", nil, fmt.Errorf("sqlkit/sql: COUNT(DISTINCT *) is not valid SQL; use COUNT(*) or COUNT(DISTINCT column)")
+			}
+			// The qualified form COUNT(DISTINCT t.*) is a whole-row reference —
+			// valid PostgreSQL and the standard idiom for counting distinct rows —
+			// but MySQL's grammar has no whole-row reference inside COUNT, so it
+			// would reject the emitted SQL. Surface it as a descriptive
+			// compile-time error naming the dialect, like the FULL JOIN and
+			// single-element-row guards.
+			if c.Dialect.Name() == "mysql" {
+				return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support COUNT(DISTINCT %s.*); use COUNT(DISTINCT column)", c.Dialect.Name(), s.Qualifier.String())
+			}
+		}
 		target, args, err := c.CompileSelection(e.Target)
 		if err != nil {
 			return "", nil, err
@@ -707,6 +734,36 @@ func (c *Compiler) compileValuesSource(s SourceExpression) (string, []any, error
 		return "", nil, fmt.Errorf("sqlkit/sql: VALUES source needs a column name per value for this dialect")
 	}
 
+	// Per column, find the first row whose value the dialect can type (a NULL
+	// or otherwise unrecognized value in row 0 must not silently leave the
+	// whole column untyped when a later row does carry a typeable value) and
+	// remember which row to attach the CAST to.
+	castRow := make([]int, width)
+	castType := make([]string, width)
+	for i := range castRow {
+		castRow[i] = -1
+	}
+	if !union {
+		if caster, ok := c.Dialect.(ValuesCaster); ok {
+			for ri, row := range v.Rows {
+				if len(row) != width {
+					break // reported below, once, with the row index
+				}
+				for ci, value := range row {
+					if castRow[ci] != -1 {
+						continue
+					}
+					if ve, ok := value.(ValueExpression); ok {
+						if t, ok := caster.ValuesCastType(ve.Value); ok {
+							castRow[ci] = ri
+							castType[ci] = t
+						}
+					}
+				}
+			}
+		}
+	}
+
 	var sb strings.Builder
 	var args []any
 	sb.WriteString("(")
@@ -737,16 +794,11 @@ func (c *Compiler) compileValuesSource(s SourceExpression) (string, []any, error
 			}
 			// PostgreSQL infers an unannotated VALUES parameter as text, which
 			// breaks a join/assignment against a non-text column. Type the first
-			// row's values so the server infers each column's type; other rows
-			// inherit it. (MySQL renders the union form and is not a ValuesCaster.)
-			if !union && ri == 0 {
-				if caster, ok := c.Dialect.(ValuesCaster); ok {
-					if ve, ok := value.(ValueExpression); ok {
-						if castType, ok := caster.ValuesCastType(ve.Value); ok {
-							valueSQL = "CAST(" + valueSQL + " AS " + castType + ")"
-						}
-					}
-				}
+			// typeable row's value in each column so the server infers that
+			// column's type; other rows inherit it. (MySQL renders the union
+			// form and is not a ValuesCaster.)
+			if !union && castRow[ci] == ri {
+				valueSQL = "CAST(" + valueSQL + " AS " + castType[ci] + ")"
 			}
 			sb.WriteString(valueSQL)
 			// Only the first UNION arm names the columns; the rest inherit them.
@@ -795,6 +847,13 @@ func (c *Compiler) CompileJoin(join JoinClause) (string, []any, error) {
 	}
 	if join.On != nil && len(join.Using) > 0 {
 		return "", nil, fmt.Errorf("sqlkit/sql: a join cannot carry both ON and USING")
+	}
+	// MySQL has no FULL [OUTER] JOIN; emitting it verbatim produces SQL the engine
+	// rejects. Surface it as a descriptive compile-time error naming the dialect,
+	// the same stance the compiler takes for other dialect-unsupported constructs
+	// (a single-element row, GROUPING SETS, …).
+	if c.Dialect.Name() == "mysql" && strings.Contains(strings.ToUpper(join.Kind), "FULL") {
+		return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support a FULL JOIN", c.Dialect.Name())
 	}
 	sourceSQL, args, err := c.CompileSource(join.Source)
 	if err != nil {
@@ -1019,8 +1078,12 @@ func (c *Compiler) CompileSelect(q SelectStmt) (string, []any, error) {
 		}
 	}
 	if q.HasLimit {
+		v, err := limitCount("LIMIT", q.Limit)
+		if err != nil {
+			return "", nil, err
+		}
 		sb.WriteString(" LIMIT ")
-		sb.WriteString(strconv.Itoa(q.Limit))
+		sb.WriteString(v)
 	} else if q.HasOffset && c.Dialect.Name() == "mysql" {
 		// MySQL has no bare OFFSET — OFFSET is only valid after a LIMIT. Emit
 		// MySQL's documented "all rows" sentinel count so the OFFSET is accepted;
@@ -1028,8 +1091,12 @@ func (c *Compiler) CompileSelect(q SelectStmt) (string, []any, error) {
 		sb.WriteString(" LIMIT 18446744073709551615")
 	}
 	if q.HasOffset {
+		v, err := limitCount("OFFSET", q.Offset)
+		if err != nil {
+			return "", nil, err
+		}
 		sb.WriteString(" OFFSET ")
-		sb.WriteString(strconv.Itoa(q.Offset))
+		sb.WriteString(v)
 	}
 	if q.Lock != nil {
 		locker, ok := c.Dialect.(RowLocker)
@@ -1321,7 +1388,7 @@ func (c *Compiler) CompileUpdate(q UpdateStmt) (string, []any, error) {
 
 	where := q.Where
 	if !inline {
-		if err := rejectOuterJoins(q.Joins); err != nil {
+		if err := rejectUnfoldableJoins(q.Joins); err != nil {
 			return "", nil, err
 		}
 		if sources := joinSources(q.From, q.Joins); len(sources) > 0 {
@@ -1341,7 +1408,7 @@ func (c *Compiler) CompileUpdate(q UpdateStmt) (string, []any, error) {
 		sb.WriteString(whereSQL)
 		args = append(args, whereArgs...)
 	}
-	if err := c.writeRowLimit(&sb, &args, q.OrderBy, q.HasLimit, q.Limit); err != nil {
+	if err := c.writeRowLimit(&sb, &args, q.OrderBy, q.HasLimit, q.Limit, len(q.From) > 0 || len(q.Joins) > 0); err != nil {
 		return "", nil, err
 	}
 	if err := c.writeReturning(&sb, &args, q.Returning); err != nil {
@@ -1393,7 +1460,7 @@ func (c *Compiler) CompileDelete(q DeleteStmt) (string, []any, error) {
 			args = append(args, joinArgs...)
 		}
 	} else {
-		if err := rejectOuterJoins(q.Joins); err != nil {
+		if err := rejectUnfoldableJoins(q.Joins); err != nil {
 			return "", nil, err
 		}
 		sb.WriteString("DELETE FROM ")
@@ -1419,7 +1486,7 @@ func (c *Compiler) CompileDelete(q DeleteStmt) (string, []any, error) {
 		sb.WriteString(whereSQL)
 		args = append(args, whereArgs...)
 	}
-	if err := c.writeRowLimit(&sb, &args, q.OrderBy, q.HasLimit, q.Limit); err != nil {
+	if err := c.writeRowLimit(&sb, &args, q.OrderBy, q.HasLimit, q.Limit, hasSources); err != nil {
 		return "", nil, err
 	}
 	if err := c.writeReturning(&sb, &args, q.Returning); err != nil {
@@ -1438,16 +1505,27 @@ func joinSources(sources []Source, joins []JoinClause) []Source {
 	return out
 }
 
-// rejectOuterJoins errors on any non-inner join, for the standard FROM/USING
-// form (PostgreSQL) that folds join ON predicates into WHERE. That folding is
-// correct only for inner joins: a LEFT JOIN flattened this way would silently
-// become an inner join (e.g. an "outer row with no match" predicate turns
-// unsatisfiable), so reject it rather than emit wrong-set-of-rows SQL.
-func rejectOuterJoins(joins []JoinClause) error {
+// rejectUnfoldableJoins errors on any join whose condition the standard
+// FROM/USING form (PostgreSQL) cannot fold into WHERE. That fold takes only an
+// inner join's ON predicate, so two cases must be rejected rather than silently
+// mis-rendered:
+//
+//   - a non-inner join (LEFT/RIGHT/FULL): flattening its ON into WHERE would
+//     collapse the outer join to an inner one (an "outer row with no match"
+//     predicate turns unsatisfiable), changing the set of rows;
+//   - a NATURAL or USING join: its condition lives in the Natural/Using fields,
+//     not On, and foldJoinOns folds only On — so the condition would be dropped
+//     entirely, leaving an unconstrained cross product that updates/deletes every
+//     target row.
+func rejectUnfoldableJoins(joins []JoinClause) error {
 	for _, join := range joins {
 		if join.Kind != "JOIN" {
 			return fmt.Errorf("sqlkit/sql: %s in a multi-table UPDATE/DELETE is unsupported for this dialect "+
 				"(its ON would fold into WHERE, collapsing the outer join to an inner one); use an inner Join", join.Kind)
+		}
+		if join.Natural || len(join.Using) > 0 {
+			return fmt.Errorf("sqlkit/sql: a NATURAL or USING join in a multi-table UPDATE/DELETE is unsupported " +
+				"for this dialect (its condition cannot fold into WHERE); use an inner Join with an explicit ON")
 		}
 	}
 	return nil
@@ -1502,6 +1580,14 @@ func (c *Compiler) assignmentLHS(a Assignment) (string, []any, error) {
 }
 
 // compileExprList compiles a comma-separated list of expressions.
+// supportsGroupingSets reports whether the dialect can render the ROLLUP / CUBE /
+// GROUPING SETS grouping elements. MySQL cannot, so the compiler rejects them
+// rather than emit SQL it would reject (its ROLLUP is the trailing WITH ROLLUP).
+func supportsGroupingSets(d Dialect) bool {
+	g, ok := d.(GroupingSetsDialect)
+	return ok && g.SupportsGroupingSets()
+}
+
 func (c *Compiler) compileExprList(exprs []Expression) (string, []any, error) {
 	var sb strings.Builder
 	var args []any
@@ -1682,20 +1768,41 @@ func (c *Compiler) writeOrderBy(sb *strings.Builder, args *[]any, terms []OrderT
 
 // writeRowLimit renders the "ORDER BY ... LIMIT n" tail of an UPDATE or DELETE,
 // which bounds the affected rows. Only MySQL accepts it on data-modifying
-// statements; other dialects reject it rather than emit invalid SQL.
-func (c *Compiler) writeRowLimit(sb *strings.Builder, args *[]any, orderBy []OrderTerm, hasLimit bool, limit int) error {
+// statements, and only on the single-table form: MySQL rejects ORDER BY / LIMIT
+// on a multi-table (joined) UPDATE or DELETE. Other dialects reject it outright.
+// multiTable reports whether the statement carries join/extra sources.
+func (c *Compiler) writeRowLimit(sb *strings.Builder, args *[]any, orderBy []OrderTerm, hasLimit bool, limit int, multiTable bool) error {
 	if len(orderBy) == 0 && !hasLimit {
 		return nil
 	}
 	if c.Dialect.Name() != "mysql" {
 		return fmt.Errorf("sqlkit/sql: ORDER BY / LIMIT on UPDATE/DELETE is supported only on the mysql dialect")
 	}
+	if multiTable {
+		return fmt.Errorf("sqlkit/sql: MySQL does not allow ORDER BY / LIMIT on a multi-table UPDATE/DELETE")
+	}
 	if err := c.writeOrderBy(sb, args, orderBy); err != nil {
 		return err
 	}
 	if hasLimit {
+		v, err := limitCount("LIMIT", limit)
+		if err != nil {
+			return err
+		}
 		sb.WriteString(" LIMIT ")
-		sb.WriteString(strconv.Itoa(limit))
+		sb.WriteString(v)
 	}
 	return nil
+}
+
+// limitCount renders a LIMIT/OFFSET count, rejecting a negative value. Both
+// PostgreSQL ("LIMIT/OFFSET must not be negative") and MySQL (whose grammar
+// accepts only a non-negative integer there) reject one, so emit a descriptive
+// compile-time error rather than SQL the engine refuses. clause names the
+// offending keyword for the message.
+func limitCount(clause string, n int) (string, error) {
+	if n < 0 {
+		return "", fmt.Errorf("sqlkit/sql: %s must not be negative, got %d", clause, n)
+	}
+	return strconv.Itoa(n), nil
 }

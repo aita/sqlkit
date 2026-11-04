@@ -24,6 +24,21 @@ func TestPostgreSQLDialectPlaceholder(t *testing.T) {
 	}
 }
 
+// TestPostgreSQLDialectDecimalAlias covers PostgreSQL's "decimal" spelling
+// (a pure alias for "numeric"), reachable via meta.Of or a hand-built
+// EngineType — not just decl.Decimal(), which normalizes to "numeric" before
+// this dialect ever sees it. pgDecimalTypes previously listed only "numeric",
+// so "decimal" silently rendered without its precision/scale, unlike the
+// MySQL and Standard dialects, which both accept either spelling.
+func TestPostgreSQLDialectDecimalAlias(t *testing.T) {
+	dialect := PostgreSQLDialect{}
+	for _, name := range []string{"decimal", "numeric"} {
+		if got, want := dialect.ColumnType(name, 0, 10, 2), name+"(10, 2)"; got != want {
+			t.Errorf("ColumnType(%q, 0, 10, 2) = %q, want %q", name, got, want)
+		}
+	}
+}
+
 func TestMySQLDialectQuoteIdent(t *testing.T) {
 	dialect := MySQLDialect{}
 	if got, want := dialect.QuoteIdent("blog.user`profiles"), "`blog`.`user``profiles`"; got != want {
@@ -449,5 +464,15 @@ func TestJSONAccessErrorsAndKeyForms(t *testing.T) {
 	}
 	if !strings.Contains(got, `"a b"`) {
 		t.Errorf("expected quoted key in %q", got)
+	}
+
+	// A backslash in a key must be escaped, so it cannot escape the closing quote
+	// of the path member and inject further path syntax.
+	got, err = MySQLDialect{}.JSONAccess("`data`", []any{`a\".b`}, true)
+	if err != nil {
+		t.Fatalf("JSONAccess: %v", err)
+	}
+	if !strings.Contains(got, `"a\\\".b"`) {
+		t.Errorf("backslash/quote not escaped in path member: %q", got)
 	}
 }

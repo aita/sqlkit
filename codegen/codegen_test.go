@@ -445,6 +445,21 @@ func TestColumnOverrideNullablePointer(t *testing.T) {
 	}
 }
 
+func TestColumnOverridePointerNameNoDoublePointer(t *testing.T) {
+	// An override that already spells a pointer ("*uuid.UUID") on a nullable column
+	// must not be wrapped again into "**uuid.UUID".
+	mapper := NewDefaultTypeMapper(TypeMapperConfig{ColumnOverrides: map[string]GoType{
+		"name": {ImportPath: "github.com/google/uuid", Name: "*uuid.UUID"},
+	}})
+	body := string(generateSingle(t, fixtureTables(), Options{PackageName: "blogdb", TypeMapper: mapper}))
+	if strings.Contains(body, "**uuid.UUID") {
+		t.Errorf("override already a pointer should not double-pointer:\n%s", body)
+	}
+	if !strings.Contains(body, `sqlkit.NewColumn[*uuid.UUID](info, "name")`) {
+		t.Errorf("override pointer type should be preserved:\n%s", body)
+	}
+}
+
 // pinnedType is a meta.Type that fixes an engine name and pins a Go type,
 // mirroring what decl's DataType.Go produces, to exercise the GoTyped path of
 // DefaultTypeMapper without importing decl.
@@ -785,6 +800,34 @@ func TestGenerateBacktickColumnStructTag(t *testing.T) {
 // TestGenerateCollidingColumns covers bug B: distinct columns that map to the
 // same Go name (user_id and user__id both -> UserID) must be deduped into
 // distinct struct fields rather than redeclaring one.
+// TestGenerateColumnNamedAs covers a column whose Go name collides with a method
+// generated on the same struct as the column fields (As()). Without reserving it,
+// the binding would declare both a field As and a method As() on the same type —
+// "field and method with the same name As" — which does not compile. The field
+// must be deduped to AsCol.
+func TestGenerateColumnNamedAs(t *testing.T) {
+	if fieldName("as") != "AsCol" {
+		t.Fatalf("fieldName(%q) = %q, want AsCol", "as", fieldName("as"))
+	}
+	columns := []meta.Column{
+		{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true},
+		{Name: "as", Type: meta.Of("postgres", "text", 0, 0, 0)},
+	}
+	tables := []meta.Table{{Schema: meta.Schema{Name: "public"}, Name: "widgets", Columns: columns}}
+	for _, opts := range []Options{
+		{PackageName: "widgetdb"},
+		{PackageName: "widgetdb", EmitRelations: true},
+	} {
+		src := string(generateSingle(t, tables, opts))
+		if !regexp.MustCompile(`\bAsCol\s+sqlkit\.Column`).MatchString(src) {
+			t.Errorf("column \"as\" should generate an AsCol field (relations=%v):\n%s", opts.EmitRelations, src)
+		}
+		if regexp.MustCompile(`\bAs\s+sqlkit\.Column`).MatchString(src) {
+			t.Errorf("column \"as\" must not generate an As field colliding with As() (relations=%v):\n%s", opts.EmitRelations, src)
+		}
+	}
+}
+
 func TestGenerateCollidingColumns(t *testing.T) {
 	if goName("user_id") != goName("user__id") {
 		t.Fatalf("precondition: expected user_id and user__id to collide, got %q and %q",

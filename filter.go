@@ -53,13 +53,16 @@ func Ge(value any) FilterTerm {
 	return columnTerm{func(c AnyColumn) Predicate { return Cond(sql.Ge(c, sql.Val(value))) }}
 }
 
-// In builds a "column IN (values…)" filter term.
+// In builds a "column IN (values…)" filter term. Like Column[T].In (and
+// unlike a plain Cond(sql.In(...))), the resulting predicate carries the
+// metadata AutoChunk needs to split a large value list across statements
+// within the executor's bind-parameter limit.
 func In(values ...any) FilterTerm {
 	items := make([]any, len(values))
 	for i, v := range values {
 		items[i] = sql.Val(v)
 	}
-	return columnTerm{func(c AnyColumn) Predicate { return Cond(sql.In(c, items...)) }}
+	return columnTerm{func(c AnyColumn) Predicate { return InValues(c, items...) }}
 }
 
 // FilterLike builds a "column LIKE pattern" filter term.

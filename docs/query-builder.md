@@ -264,7 +264,7 @@ The function DSL (in `sql`) covers the conditional/NULL helpers ([`Coalesce`](ht
 [`NullIf`](https://pkg.go.dev/github.com/aita/sqlkit/sql#NullIf), [`Greatest`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Greatest), [`Least`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Least)), aggregates ([`Sum`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Sum), [`Avg`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Avg), [`Min`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Min), [`Max`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Max),
 [`StringAgg`](https://pkg.go.dev/github.com/aita/sqlkit/sql#StringAgg), …), ranking/window functions ([`Rank`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Rank), [`Lag`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Lag), [`Lead`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Lead), …), portable
 string and numeric functions, date/time keywords, and JSON access
-([`sql.JSONGet`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGet) / [`sql.JSONGetText`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGetText) with portable path steps; PostgreSQL only).
+([`sql.JSONGet`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGet) / [`sql.JSONGetText`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGetText) with portable path steps; each dialect renders it in its native syntax — PostgreSQL `->`/`->>`, MySQL `JSON_EXTRACT`/`JSON_UNQUOTE`).
 [`sql.Func`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Func)`(name, args...)` is the escape hatch for anything else.
 
 Distinct aggregates are spelled [`sql.CountDistinct`](https://pkg.go.dev/github.com/aita/sqlkit/sql#CountDistinct)`(col)` and
@@ -563,9 +563,11 @@ err = db.Select().From(appdb.Users).Where(appdb.Users.ID.In(ids...)).
 ```
 
 A `Select` is chunked only when its `IN` list is the whole query. Adding
-`ORDER BY`, `GROUP BY`, `DISTINCT`, `HAVING`, or `LIMIT`/`OFFSET` marks it
-unsafe to split, so it runs as a single statement and can still hit the bind
-limit — batch such queries yourself with [`sqlkit.InBatches`](https://pkg.go.dev/github.com/aita/sqlkit#InBatches). `NOT IN` is never
+`ORDER BY`, `GROUP BY`, `DISTINCT` (including `DISTINCT ON`), `HAVING`,
+`LIMIT`/`OFFSET`, or a window function (`Window`, or an inline `OVER(...)` in
+the projection) marks it unsafe to split, so it runs as a single statement and
+can still hit the bind limit — batch such queries yourself with
+[`sqlkit.InBatches`](https://pkg.go.dev/github.com/aita/sqlkit#InBatches). `NOT IN` is never
 split. See [Limitations](limitations.md) for the full rules.
 
 A split `Select` runs its chunks inside one `REPEATABLE READ` transaction by

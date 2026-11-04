@@ -289,7 +289,12 @@ func convertAConst(c *pg.A_Const) (sql.Expression, error) {
 	}
 }
 
-// operatorName joins the String parts of an operator name list, e.g. ["="].
+// operatorName joins the String parts of an operator name list, e.g. ["="]. A
+// schema-qualified operator (e.g. ["pg_catalog", "+"]) is not a bare infix
+// token — written as pg_catalog.+ it is invalid SQL — so it is wrapped in the
+// OPERATOR(schema.op) form, the spelling that is valid in every position the
+// compiler emits an operator (infix, prefix, ANY/ALL). An unqualified operator
+// is returned bare; the parser already collapses OPERATOR(+) to a plain "+".
 func operatorName(nodes []*pg.Node) (string, error) {
 	parts := make([]string, 0, len(nodes))
 	for _, n := range nodes {
@@ -297,6 +302,9 @@ func operatorName(nodes []*pg.Node) (string, error) {
 			return "", sqlparse.Unsupportedf("operator name part %T", n.GetNode())
 		}
 		parts = append(parts, n.GetString_().GetSval())
+	}
+	if len(parts) > 1 {
+		return "OPERATOR(" + strings.Join(parts, ".") + ")", nil
 	}
 	return strings.Join(parts, "."), nil
 }
@@ -857,6 +865,13 @@ func similarPattern(node *pg.Node) (sql.Expression, error) {
 			return nil, err
 		}
 		if name == "similar_to_escape" {
+			// similar_to_escape(pattern) is the default-escape form; an explicit
+			// ESCAPE adds a second argument (similar_to_escape(pattern, escape)).
+			// sqlkit models only the pattern, so a custom ESCAPE would be silently
+			// dropped (changing which characters are metacharacters); fall back to raw.
+			if len(fc.GetArgs()) > 1 {
+				return nil, sqlparse.Unsupported("SIMILAR TO with an explicit ESCAPE")
+			}
 			return convertExpr(fc.GetArgs()[0])
 		}
 	}

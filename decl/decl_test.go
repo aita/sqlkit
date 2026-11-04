@@ -117,6 +117,36 @@ func TestSchemaCreateOption(t *testing.T) {
 	}
 }
 
+// TestSchemaCreateObjectOnly pins that a Create schema hosting only an enum (no
+// table) is still created: the enum's CREATE TYPE is schema-qualified, so a
+// missing CREATE SCHEMA would make the generated SQL reference a schema that does
+// not exist.
+func TestSchemaCreateObjectOnly(t *testing.T) {
+	catalog := decl.NewCatalog()
+	catalog.Schema("audit", decl.Create()).Enum("mood", "happy", "sad")
+	md := buildCatalog(t, catalog)
+
+	pg, err := querysql.DialectByName("postgres")
+	if err != nil {
+		t.Fatalf("DialectByName() error = %v", err)
+	}
+	got, err := md.CreateSQL(pg)
+	if err != nil {
+		t.Fatalf("CreateSQL() error = %v", err)
+	}
+	schemaAt := strings.Index(got, `CREATE SCHEMA IF NOT EXISTS "audit";`)
+	if schemaAt < 0 {
+		t.Fatalf("expected CREATE SCHEMA for the enum-only audit schema:\n%s", got)
+	}
+	typeAt := strings.Index(got, `CREATE TYPE "audit"."mood"`)
+	if typeAt < 0 {
+		t.Fatalf("expected the enum type in the audit schema:\n%s", got)
+	}
+	if schemaAt > typeAt {
+		t.Errorf("CREATE SCHEMA must precede the CREATE TYPE that needs it:\n%s", got)
+	}
+}
+
 func TestBuildPortableTypes(t *testing.T) {
 	catalog := decl.NewCatalog()
 	catalog.Table("items",
@@ -217,6 +247,26 @@ func TestBuildColumnDropsTableLevelConstructs(t *testing.T) {
 	}
 	if col.Name != "user_id" {
 		t.Errorf("column name = %q, want user_id", col.Name)
+	}
+}
+
+// TestBuildTableSkipsEnumValidation covers BuildTable's use for a migration
+// operation that adds one table/column in isolation (migrate/op.go's
+// CreateTable/AddColumn): an EnumType column may legitimately reference an
+// enum a separate, earlier migration already created, not one declared in
+// this standalone build's own (nonexistent) catalog — so BuildTable must not
+// apply Catalog.Build's dangling-enum-reference check, unlike a real,
+// caller-constructed Catalog.
+func TestBuildTableSkipsEnumValidation(t *testing.T) {
+	tbl, err := decl.BuildTable("public", "users",
+		decl.Column("id", decl.BigInt, decl.PrimaryKey()),
+		decl.Column("mood", decl.EnumType("mood")),
+	)
+	if err != nil {
+		t.Fatalf("BuildTable with an EnumType column and no declared Enum: %v", err)
+	}
+	if tbl.Name != "users" {
+		t.Errorf("table name = %q, want users", tbl.Name)
 	}
 }
 
@@ -520,6 +570,15 @@ func TestBuildErrors(t *testing.T) {
 				return c
 			},
 			want: "not declared in this catalog",
+		},
+		{
+			name: "enum type not declared",
+			catalog: func() *decl.Catalog {
+				c := decl.NewCatalog()
+				c.Table("users", decl.Column("id", decl.BigInt, decl.PrimaryKey()), decl.Column("mood", decl.EnumType("mood")))
+				return c
+			},
+			want: `type references enum "mood", which is not declared`,
 		},
 		{
 			name: "unknown referenced column",

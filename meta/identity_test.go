@@ -71,6 +71,11 @@ func TestKeyDiffersOnStructuralChange(t *testing.T) {
 		"different type length": func(tbl *meta.Table) {
 			tbl.Columns[1].Type = meta.Of("postgres", "varchar", 128, 0, 0)
 		},
+		"scalar vs array of same element": func(tbl *meta.Table) {
+			// text and text[] are distinct columns; flipping only the array flag,
+			// with the same element name and modifiers, must change the checksum.
+			tbl.Columns[1].Type = meta.OfArray("postgres", "varchar", 255, 0, 0)
+		},
 		"nullability": func(tbl *meta.Table) {
 			tbl.Columns[1].Nullable = true
 		},
@@ -88,6 +93,12 @@ func TestKeyDiffersOnStructuralChange(t *testing.T) {
 		},
 		"foreign key target": func(tbl *meta.Table) {
 			tbl.ForeignKeys[0].RefTable = "tenants"
+		},
+		"foreign key on delete": func(tbl *meta.Table) {
+			tbl.ForeignKeys[0].OnDelete = meta.Cascade
+		},
+		"foreign key on update": func(tbl *meta.Table) {
+			tbl.ForeignKeys[0].OnUpdate = meta.Restrict
 		},
 		"check expression": func(tbl *meta.Table) {
 			tbl.Checks[0].Expression = sql.Raw("email <> 'x'")

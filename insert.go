@@ -55,6 +55,11 @@ func Insert(table Table) InsertQuery {
 // in every row and fields tagged read-only (`sqlkit:",readonly"`). A field
 // tagged `sqlkit:",json"` is written as its JSON encoding.
 func (q InsertQuery) Values(rows ...any) InsertQuery {
+	// Copy before the first append: a bare append(q.rows, ...) can grow into
+	// spare capacity left by an earlier append and silently overwrite what a
+	// sibling branch (built from the same base query) already appended there,
+	// breaking the value-receiver immutability every builder method promises.
+	q.rows = append([]any(nil), q.rows...)
 	for _, row := range rows {
 		rv := reflect.ValueOf(row)
 		if rv.Kind() == reflect.Slice {

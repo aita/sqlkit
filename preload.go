@@ -113,6 +113,9 @@ func applyPreloads(ctx context.Context, ex executorBinding, dest any, specs []pr
 // pointer to a slice of parents (every row) or to a single parent (First/One).
 func preloadRelation(ctx context.Context, ex executorBinding, dest any, spec preloadSpec) error {
 	rel := spec.rel
+	if rel == nil {
+		return fmt.Errorf("sqlkit: Preload requires a non-nil relation")
+	}
 	rv := reflect.ValueOf(dest)
 	if rv.Kind() != reflect.Pointer || rv.IsNil() {
 		return fmt.Errorf("sqlkit: Preload requires a pointer destination, got %T", dest)
@@ -169,8 +172,18 @@ func preloadRelation(ctx context.Context, ex executorBinding, dest any, spec pre
 			rel.Name(), childBase, targetKeys[0])
 	}
 
-	// Collect distinct parent keys and the parents each maps to.
+	// Collect distinct parent keys and the parents each maps to. keyOrder records
+	// the keys in first-seen (parent) order so the IN value list — and the
+	// statements AutoChunk splits it into — is deterministic rather than following
+	// Go's randomized map iteration, keeping the split plan-cache friendly.
+	// noKey collects parents whose own key field is nil (a nullable base/join
+	// column): they can never have a match, but for a to-many relation they
+	// still get an explicit empty slice below, not Go's zero value (nil) — the
+	// same "no children" outcome a resolved-but-childless parent gets via
+	// reflect.MakeSlice in the assignment loop.
 	groups := map[any][]int{}
+	var keyOrder []any
+	var noKey []int
 	for i, p := range parents {
 		ps := elemStruct(p, parentPtr)
 		if !ps.IsValid() {
@@ -178,9 +191,18 @@ func preloadRelation(ctx context.Context, ex executorBinding, dest any, spec pre
 		}
 		key, ok := scalarValue(ps.FieldByIndex(basePath))
 		if !ok {
+			noKey = append(noKey, i)
 			continue
 		}
+		if _, seen := groups[key]; !seen {
+			keyOrder = append(keyOrder, key)
+		}
 		groups[key] = append(groups[key], i)
+	}
+	if toMany {
+		for _, i := range noKey {
+			elemStruct(parents[i], parentPtr).FieldByIndex(destIndex).Set(reflect.MakeSlice(destType, 0, 0))
+		}
 	}
 	if len(groups) == 0 {
 		return nil
@@ -192,8 +214,8 @@ func preloadRelation(ctx context.Context, ex executorBinding, dest any, spec pre
 		return fmt.Errorf("sqlkit: Preload of %q: target %s has no column %q",
 			rel.Name(), target.Info().QualifiedName(), targetKeys[0])
 	}
-	vals := make([]any, 0, len(groups))
-	for key := range groups {
+	vals := make([]any, 0, len(keyOrder))
+	for _, key := range keyOrder {
 		vals = append(vals, sql.Val(key))
 	}
 
@@ -235,9 +257,20 @@ func preloadRelation(ctx context.Context, ex executorBinding, dest any, spec pre
 		childByKey[key] = append(childByKey[key], ce)
 	}
 
-	// Assign matched children into each parent's relation field.
+	// Assign matched children into each parent's relation field. A ToOne
+	// relation documents that the target yields at most one row per source
+	// row (relation.go's Cardinality doc); more than one match means that
+	// promise doesn't hold for this data (a hand-declared Relation with the
+	// wrong cardinality, or a target that isn't actually unique on the join
+	// column), so silently keeping an arbitrary match — whichever happened to
+	// scan first, not even stable across runs since the follow-up query has
+	// no ORDER BY — would hide a real data problem instead of surfacing it.
 	for key, indices := range groups {
 		matches := childByKey[key]
+		if !toMany && len(matches) > 1 {
+			return fmt.Errorf("sqlkit: Preload of %q: target %s has %d rows for key %v, want at most one (ToOne)",
+				rel.Name(), target.Info().QualifiedName(), len(matches), key)
+		}
 		for _, i := range indices {
 			field := elemStruct(parents[i], parentPtr).FieldByIndex(destIndex)
 			if toMany {

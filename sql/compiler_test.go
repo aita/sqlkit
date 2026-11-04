@@ -266,6 +266,30 @@ func TestUpdateFromMultipleJoinsFoldPostgres(t *testing.T) {
 		[]any{1, true})
 }
 
+// A NATURAL or USING join on the PostgreSQL multi-table UPDATE/DELETE fold path
+// carries its condition in the Natural/Using fields, not On. foldJoinOns folds
+// only On, so the condition would be dropped, leaving an unconstrained cross
+// product that updates/deletes every target row. The compiler must reject it
+// instead. (No builder sets Using/Natural here, so the AST is built directly.)
+func TestUpdateDeleteUsingNaturalJoinRejectedOnFold(t *testing.T) {
+	cases := map[string]Query{
+		"update using": UpdateStmt{Table: Table{Name: NewIdent("t")}, Sets: []Assignment{Set("x", 1)},
+			Joins: []JoinClause{{Kind: "JOIN", Source: Table{Name: NewIdent("j")}, Using: []Ident{NewIdent("id")}}}},
+		"update natural": UpdateStmt{Table: Table{Name: NewIdent("t")}, Sets: []Assignment{Set("x", 1)},
+			Joins: []JoinClause{{Kind: "JOIN", Source: Table{Name: NewIdent("j")}, Natural: true}}},
+		"delete using": DeleteStmt{Table: Table{Name: NewIdent("t")},
+			Joins: []JoinClause{{Kind: "JOIN", Source: Table{Name: NewIdent("j")}, Using: []Ident{NewIdent("id")}}}},
+	}
+	for name, q := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := q.ToSQL(PostgreSQLDialect{}); err == nil ||
+				!strings.Contains(err.Error(), "NATURAL or USING") {
+				t.Fatalf("ToSQL = err %v, want a NATURAL/USING rejection (condition must not be dropped)", err)
+			}
+		})
+	}
+}
+
 func TestUpdateWithCTEAndReturning(t *testing.T) {
 	cte := Select(Col("id")).From(Table{Name: NewIdent("orgs")}).CTE("recent")
 	q := Update(users).WithCTE(cte).Set(Set("name", Val("x"))).
@@ -1066,5 +1090,44 @@ func TestOffsetWithoutLimitDialect(t *testing.T) {
 	}
 	if pg != `SELECT "id" FROM "t" OFFSET 5` {
 		t.Errorf("postgres offset-only = %q", pg)
+	}
+}
+
+// A negative LIMIT/OFFSET is rejected by both engines (PostgreSQL: "must not be
+// negative"; MySQL's grammar accepts only a non-negative integer there), so the
+// compiler must reject it at compile time rather than emit "LIMIT -1", which the
+// engine refuses.
+func TestNegativeLimitOffsetRejected(t *testing.T) {
+	tbl := Table{Name: NewIdent("t")}
+	wantNeg := func(t *testing.T, _ string, _ []any, err error) {
+		t.Helper()
+		if err == nil || !strings.Contains(err.Error(), "must not be negative") {
+			t.Fatalf("error = %v, want a must-not-be-negative rejection", err)
+		}
+	}
+	for _, d := range []Dialect{PostgreSQLDialect{}, MySQLDialect{}} {
+		s, a, err := Select(Col("id")).From(tbl).Limit(-1).ToSQL(d)
+		wantNeg(t, s, a, err)
+		s, a, err = Select(Col("id")).From(tbl).Offset(-5).ToSQL(d)
+		wantNeg(t, s, a, err)
+	}
+
+	// The UPDATE/DELETE row-limit path (MySQL only) is guarded too.
+	s, a, err := Update(tbl).Set(Set("a", 1)).Limit(-1).ToSQL(MySQLDialect{})
+	wantNeg(t, s, a, err)
+	s, a, err = DeleteFrom(tbl).OrderBy(Asc(Col("x"))).Limit(-1).ToSQL(MySQLDialect{})
+	wantNeg(t, s, a, err)
+
+	// The compound (set-operation) path renders LIMIT/OFFSET the same way.
+	u := Select(Col("id")).From(tbl).Union(Select(Col("id")).From(Table{Name: NewIdent("u")}))
+	s, a, err = u.Limit(-1).ToSQL(PostgreSQLDialect{})
+	wantNeg(t, s, a, err)
+	s, a, err = Select(Col("id")).From(tbl).
+		Union(Select(Col("id")).From(Table{Name: NewIdent("u")})).Offset(-1).ToSQL(PostgreSQLDialect{})
+	wantNeg(t, s, a, err)
+
+	// A zero limit is valid and still compiles.
+	if _, _, err := Select(Col("id")).From(tbl).Limit(0).ToSQL(PostgreSQLDialect{}); err != nil {
+		t.Fatalf("LIMIT 0 unexpectedly rejected: %v", err)
 	}
 }

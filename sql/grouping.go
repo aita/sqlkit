@@ -21,7 +21,8 @@ func Cube(elements ...Expression) GroupingExpression {
 }
 
 // GroupingSetsExpression is a GROUPING SETS (...) grouping element. Each set is a
-// list of expressions; an empty (nil) set renders as ().
+// list of expressions; an empty (nil) set renders as (), the grand total. At least
+// one set is required: zero sets would render the invalid GROUPING SETS ().
 type GroupingSetsExpression struct {
 	posField
 	Sets [][]Expression

@@ -59,7 +59,7 @@ func (t *Trace) Report() Report {
 			r.QueryCount++
 			r.TotalQueryDuration += ev.Duration
 			if ev.Query != nil {
-				if ev.Query.Kind.IsWrite() {
+				if ev.Query.IsWrite() {
 					r.WriteCount++
 				}
 				if ev.Query.Fingerprint != "" {

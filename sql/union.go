@@ -1,7 +1,6 @@
 package sql
 
 import (
-	"strconv"
 	"strings"
 )
 
@@ -169,12 +168,25 @@ func (c *Compiler) CompileCompound(q CompoundStmt) (string, []any, error) {
 		}
 	}
 	if q.HasLimit {
+		v, err := limitCount("LIMIT", q.Limit)
+		if err != nil {
+			return "", nil, err
+		}
 		sb.WriteString(" LIMIT ")
-		sb.WriteString(strconv.Itoa(q.Limit))
+		sb.WriteString(v)
+	} else if q.HasOffset && c.Dialect.Name() == "mysql" {
+		// MySQL has no bare OFFSET — OFFSET is only valid after a LIMIT. Emit
+		// MySQL's documented "all rows" sentinel count so the OFFSET is accepted,
+		// matching the SELECT compiler's handling.
+		sb.WriteString(" LIMIT 18446744073709551615")
 	}
 	if q.HasOffset {
+		v, err := limitCount("OFFSET", q.Offset)
+		if err != nil {
+			return "", nil, err
+		}
 		sb.WriteString(" OFFSET ")
-		sb.WriteString(strconv.Itoa(q.Offset))
+		sb.WriteString(v)
 	}
 	return sb.String(), args, nil
 }

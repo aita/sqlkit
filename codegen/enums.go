@@ -15,40 +15,39 @@ func columnGoType(table meta.Table, column meta.Column, dialect string, mapper T
 	if len(enumGo) > 0 && column.Type != nil {
 		if engine, ok := column.Type.Engine(dialect); ok {
 			if gt, ok := enumGo[engine.Name]; ok {
-				return applyNullable(gt, column), nil
+				// Wrap the element type in a slice for an array-of-enum column (mood[])
+				// before applying nullability, exactly as the non-enum mapper path
+				// (resolvedType) does — otherwise an array column resolves to the bare
+				// element type (Mood instead of []Mood), a silent shape mismatch that
+				// only surfaces as a scan/bind failure at runtime against a real database.
+				return resolvedType(gt, engine, column), nil
 			}
 		}
 	}
 	return mapper.GoTypeFor(table, column, dialect)
 }
 
-// enumGoTypes maps the SQL type names an enum column can carry (the enum's bare
-// name and its schema-qualified name) to the generated Go enum type, so a column
-// declared with decl.EnumType resolves to that type without a manual override.
-func enumGoTypes(enums []meta.Enum) map[string]meta.GoType {
-	if len(enums) == 0 {
-		return nil
-	}
-	m := make(map[string]meta.GoType, len(enums)*2)
-	for _, e := range enums {
-		gt := meta.GoType{Name: goName(e.Name)}
-		m[e.Name] = gt
-		m[e.QualifiedName()] = gt
-	}
-	return m
+// enumModel is one enum with its final, collision-free Go identifiers: the type
+// name and the per-label const names, all deduped in Generate against the shared
+// package-wide reserved set (binding vars, DTOs, other enums and their labels).
+type enumModel struct {
+	Enum     meta.Enum
+	TypeName string
+	Labels   []string // one Go const name per Enum.Values entry
 }
 
 // renderEnum generates a Go string type and a const block of its labels for one
-// enum: type Mood string; const ( MoodHappy Mood = "happy"; ... ).
-func renderEnum(e meta.Enum) string {
-	typeName := goName(e.Name)
+// enum: type Mood string; const ( MoodHappy Mood = "happy"; ... ). The
+// identifiers are precomputed (and deduped) in em.
+func renderEnum(em enumModel) string {
+	typeName := em.TypeName
 	var b strings.Builder
-	fmt.Fprintf(&b, "// %s is the %q enum type.\n", typeName, e.QualifiedName())
+	fmt.Fprintf(&b, "// %s is the %q enum type.\n", typeName, em.Enum.QualifiedName())
 	fmt.Fprintf(&b, "type %s string\n\n", typeName)
 	fmt.Fprintf(&b, "// Values of the %s enum type.\n", typeName)
 	b.WriteString("const (\n")
-	for _, v := range e.Values {
-		fmt.Fprintf(&b, "\t%s%s %s = %q\n", typeName, goName(v), typeName, v)
+	for i, v := range em.Enum.Values {
+		fmt.Fprintf(&b, "\t%s %s = %q\n", em.Labels[i], typeName, v)
 	}
 	b.WriteString(")\n")
 	return b.String()
@@ -56,13 +55,13 @@ func renderEnum(e meta.Enum) string {
 
 // enumFile assembles the generated enums into a single "enums.go" file, or
 // reports ok=false when there are no enums.
-func enumFile(enums []meta.Enum, opts Options) (File, bool, error) {
-	if len(enums) == 0 {
+func enumFile(models []enumModel, opts Options) (File, bool, error) {
+	if len(models) == 0 {
 		return File{}, false, nil
 	}
 	fb := newFileBuf()
-	for _, e := range enums {
-		fb.write(renderEnum(e))
+	for _, em := range models {
+		fb.write(renderEnum(em))
 	}
 	file, err := fb.file(opts.PackageName, "enums.go")
 	if err != nil {

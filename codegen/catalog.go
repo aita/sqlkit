@@ -56,6 +56,15 @@ func GenerateCatalog(md meta.Metadata, opts CatalogOptions) (File, error) {
 		return File{}, fmt.Errorf("codegen: no tables to generate")
 	}
 
+	// Enums are rendered unfiltered by opts.Tables (like Generate's binding
+	// generator), so a Catalog.EnumType column always resolves against a
+	// declared enum even when the table filter narrows which tables render.
+	enumNames := map[string]bool{}
+	for _, e := range md.Enums {
+		enumNames[e.Name] = true
+		enumNames[e.QualifiedName()] = true
+	}
+
 	// Distinct schema names in declaration order; each named schema gets a
 	// Catalog.Schema handle variable, the unnamed default hangs off the
 	// catalog directly.
@@ -67,6 +76,12 @@ func GenerateCatalog(md meta.Metadata, opts CatalogOptions) (File, error) {
 		if !schemaSeen[name] {
 			schemaSeen[name] = true
 			schemaOrder = append(schemaOrder, name)
+		}
+	}
+	for _, e := range md.Enums {
+		if !schemaSeen[e.Schema] {
+			schemaSeen[e.Schema] = true
+			schemaOrder = append(schemaOrder, e.Schema)
 		}
 	}
 	schemaVars := map[string]string{}
@@ -107,10 +122,25 @@ func GenerateCatalog(md meta.Metadata, opts CatalogOptions) (File, error) {
 		}
 		fmt.Fprintf(&sb, "\n// %s is schema %q of the catalog.\nvar %s = Catalog.Schema(%q)\n", schemaVars[name], name, schemaVars[name], name)
 	}
+	if len(md.Enums) > 0 {
+		// Enum/Sequence/Extension declarations are statements (they return
+		// nothing to bind to a var), so they can't sit at package scope like the
+		// Table/Schema declarations above — a bare call there isn't valid Go.
+		// init() is the idiomatic place to run declarative setup like this.
+		sb.WriteString("\nfunc init() {\n")
+		for _, e := range md.Enums {
+			owner := schemaVars[e.Schema]
+			if owner == "" {
+				owner = "Catalog"
+			}
+			fmt.Fprintf(&sb, "\t%s.Enum(%q, %s)\n", owner, e.Name, quotedList(e.Values))
+		}
+		sb.WriteString("}\n")
+	}
 	var usedSQL bool
 	for _, table := range tables {
 		sb.WriteString("\n")
-		if err := renderCatalogTable(&sb, table, schemaVars[table.Schema.Name], tableVars, dialect, sqlDialect, &usedSQL); err != nil {
+		if err := renderCatalogTable(&sb, table, schemaVars[table.Schema.Name], tableVars, dialect, sqlDialect, enumNames, &usedSQL); err != nil {
 			return File{}, err
 		}
 	}
@@ -124,7 +154,7 @@ func GenerateCatalog(md meta.Metadata, opts CatalogOptions) (File, error) {
 	return fb.fileWithHeader(opts.PackageName, fileName, "// Bootstrapped by sqlkit; maintained by hand.\n\n")
 }
 
-func renderCatalogTable(sb *strings.Builder, table meta.Table, owner string, tableVars map[string]string, dialect string, sqlDialect sql.Dialect, usedSQL *bool) error {
+func renderCatalogTable(sb *strings.Builder, table meta.Table, owner string, tableVars map[string]string, dialect string, sqlDialect sql.Dialect, enumNames map[string]bool, usedSQL *bool) error {
 	varName := tableVars[tableVarKey(table.Schema.Name, table.Name)]
 
 	// Single-column foreign keys to another generated table become a
@@ -168,7 +198,10 @@ func renderCatalogTable(sb *strings.Builder, table meta.Table, owner string, tab
 		fmt.Fprintf(sb, "\tdecl.TableComment(%q),\n", table.Comment)
 	}
 	for _, column := range table.Columns {
-		fmt.Fprintf(sb, "\tdecl.Column(%q, %s", column.Name, DeclTypeExpr(column, dialect))
+		if column.Type == nil {
+			return fmt.Errorf("codegen: table %q column %q has no type", table.Name, column.Name)
+		}
+		fmt.Fprintf(sb, "\tdecl.Column(%q, %s", column.Name, declTypeExprForCatalog(column, dialect, enumNames))
 		if column.PrimaryKey {
 			sb.WriteString(", decl.PrimaryKey()")
 		}
@@ -289,6 +322,27 @@ func fkActionArgs(fk meta.ForeignKey) string {
 		s += ", decl.OnUpdate(" + expr + ")"
 	}
 	return s
+}
+
+// declTypeExprForCatalog is DeclTypeExpr, but a column whose engine type names
+// a declared enum renders as decl.EnumType(name) instead of the generic
+// decl.Type(name) fallback DeclTypeExpr would otherwise use — matching what a
+// hand-written catalog declaration for that column would use, and what the
+// binding generator's enum-column resolution (columnGoType) requires to map
+// the column to the generated Go enum type rather than treating it as an
+// opaque type.
+func declTypeExprForCatalog(column meta.Column, dialect string, enumNames map[string]bool) string {
+	engine, _ := column.Type.Engine(dialect)
+	var expr string
+	if enumNames[engine.Name] {
+		expr = fmt.Sprintf("decl.EnumType(%q)", engine.Name)
+	} else {
+		expr = declElementTypeExpr(engine, dialect)
+	}
+	if engine.Array {
+		return "decl.Array(" + expr + ")"
+	}
+	return expr
 }
 
 // DeclTypeExpr maps an engine type name back to the decl package expression

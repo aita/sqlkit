@@ -469,6 +469,21 @@ func TestFingerprintRaw(t *testing.T) {
 			in:   "SELECT   *\n  FROM users\t WHERE id = 1",
 			want: "SELECT * FROM users WHERE id = ?",
 		},
+		{
+			// A doubled quote escapes a quote within the literal; it must collapse
+			// to a single "?" so it groups with any other value for the column.
+			name: "escaped doubled quote in string literal",
+			in:   "SELECT * FROM users WHERE name = 'O''Brien'",
+			want: "SELECT * FROM users WHERE name = ?",
+		},
+		{
+			// Padding inside the parentheses must not defeat the IN arity collapse:
+			// the list still reduces to a single "?" so it groups with the unpadded
+			// form and with lists of other lengths.
+			name: "in list with parenthesis padding",
+			in:   "SELECT * FROM users WHERE id IN ( 1, 2, 3 )",
+			want: "SELECT * FROM users WHERE id IN (?)",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -499,5 +514,29 @@ func TestDetectKind(t *testing.T) {
 		if got := analysis.DetectKind(tt.in); got != tt.want {
 			t.Errorf("DetectKind(%q) = %v, want %v", tt.in, got, tt.want)
 		}
+	}
+}
+
+// TestFingerprintPreservesDialectCapabilities checks that a query using an
+// optional dialect capability (here a PostgreSQL array) still fingerprints. The
+// compiler discovers capabilities by type-asserting the dialect, so Fingerprint
+// must compile with the concrete dialect — a wrapper embedding sql.Dialect would
+// hide ArrayDialect and the query would fail to compile (ok=false), silently
+// degrading to the raw-text fallback.
+func TestFingerprintPreservesDialectCapabilities(t *testing.T) {
+	users := sql.Table{Name: sql.NewIdent("users")}
+	q1 := sql.Select(sql.Col("id")).From(users).Where(sql.Eq(sql.Col("tags"), sql.Array(sql.Val("a"), sql.Val("b"))))
+	q2 := sql.Select(sql.Col("id")).From(users).Where(sql.Eq(sql.Col("tags"), sql.Array(sql.Val("x"), sql.Val("y"))))
+
+	f1, ok1 := analysis.Fingerprint(q1, sql.PostgreSQLDialect{})
+	f2, ok2 := analysis.Fingerprint(q2, sql.PostgreSQLDialect{})
+	if !ok1 || !ok2 {
+		t.Fatalf("Fingerprint ok = %v, %v, want both true (capability query must compile)", ok1, ok2)
+	}
+	if f1 != f2 {
+		t.Errorf("array fingerprints differ for value-only difference:\n %q\n %q", f1, f2)
+	}
+	if strings.ContainsAny(f1, "$") {
+		t.Errorf("fingerprint kept a numbered placeholder: %q", f1)
 	}
 }

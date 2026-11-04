@@ -65,9 +65,19 @@ func wrapNameRef(g *fuzzBytes, base string) sql.Expression {
 // optionally negated, so the secret is always compared to the sensitive column.
 func predicate(g *fuzzBytes, ref sql.Expression) sql.Expression {
 	var p sql.Expression
-	switch g.choice(7) {
+	switch g.choice(15) {
 	case 0:
 		p = sql.Eq(ref, sql.Val(piiSecret))
+	case 12:
+		// Value built with a binary "||" operator, the shape the parser produces
+		// for string concatenation: ref = (secret || x).
+		p = sql.Eq(ref, sql.BinaryExpression{Left: sql.Val(piiSecret), Operator: "||", Right: sql.Val("x")})
+	case 13:
+		// Full-text search: MATCH(ref) AGAINST(secret).
+		p = sql.Match(ref).Against(sql.Val(piiSecret))
+	case 11:
+		// Raw fragment as the compared value, masked by the parser-free heuristic.
+		p = sql.Eq(ref, sql.Raw("'"+piiSecret+"'"))
 	case 1:
 		p = sql.Eq(sql.Val(piiSecret), ref)
 	case 2:
@@ -78,6 +88,21 @@ func predicate(g *fuzzBytes, ref sql.Expression) sql.Expression {
 		p = sql.Between(ref, sql.Val(piiSecret), sql.Val("z"))
 	case 5:
 		p = sql.IsDistinctFrom(ref, sql.Val(piiSecret))
+	case 6:
+		// Row-wise membership: (ref, id) IN ((secret, 1), (other, 2)).
+		p = sql.In(sql.Row(ref, sql.Col("id")), sql.Row(sql.Val(piiSecret), sql.Val(1)), sql.Row(sql.Val("other"), sql.Val(2)))
+	case 7:
+		// Row-wise IS DISTINCT FROM: (ref, id) IS DISTINCT FROM (secret, 1).
+		p = sql.IsDistinctFrom(sql.Row(ref, sql.Col("id")), sql.Row(sql.Val(piiSecret), sql.Val(1)))
+	case 8:
+		// Quantified array, ARRAY[...] constructor: ref = ANY(ARRAY[secret, x]).
+		p = sql.AnyArray(ref, "=", sql.Array(sql.Val(piiSecret), sql.Val("x")))
+	case 9:
+		// Quantified array, cast of an array literal: ref = ANY('{secret}'::text[]).
+		p = sql.AnyArray(ref, "=", sql.Cast(sql.Val("{"+piiSecret+"}"), "text[]"))
+	case 10:
+		// Simple CASE: CASE ref WHEN secret THEN 1 END compared for equality.
+		p = sql.Eq(sql.CaseOf(ref).When(sql.Val(piiSecret), 1).Else(0), sql.Val(1))
 	default:
 		p = sql.ILike(ref, sql.Val(piiSecret))
 	}
@@ -92,9 +117,12 @@ func predicate(g *fuzzBytes, ref sql.Expression) sql.Expression {
 
 // buildQuery assembles a query that compares users.name to the secret through one
 // of several scope shapes: a direct WHERE, a derived-table re-projection, a CTE
-// (plain or UNION-bodied), or a correlated subquery.
+// (plain, UNION-bodied, or with a renamed output column), or a correlated
+// subquery. The predicate itself spans the comparison forms in predicate, so the
+// secret reaches the sensitive column through row-wise, quantified-array, and
+// simple-CASE shapes as well as the scalar ones.
 func buildQuery(g *fuzzBytes) sql.Query {
-	switch g.choice(6) {
+	switch g.choice(7) {
 	case 0:
 		// SELECT * FROM users WHERE <pred on name>
 		return sql.Select(sql.Star()).From(fuzzUsers).Where(predicate(g, wrapNameRef(g, "name")))
@@ -115,6 +143,11 @@ func buildQuery(g *fuzzBytes) sql.Query {
 		cte := sql.Select(sql.Col("name")).From(fuzzUsers).
 			Union(sql.Select(sql.Col("name")).From(fuzzUsers)).CTE("c")
 		return sql.Select(sql.Star()).From(cte).Where(predicate(g, wrapNameRef(g, "c.name"))).WithCTE(cte)
+	case 5:
+		// WITH c(alias) AS (SELECT name FROM users)  -- renamed output column
+		// SELECT * FROM c WHERE <pred on c.alias>
+		cte := sql.Select(sql.Col("name")).From(fuzzUsers).CTE("c", sql.Columns("alias"))
+		return sql.Select(sql.Star()).From(cte).Where(predicate(g, wrapNameRef(g, "c.alias"))).WithCTE(cte)
 	default:
 		// SELECT * FROM users u WHERE EXISTS (
 		//   SELECT id FROM orders o WHERE <pred on u.name>)   -- correlated

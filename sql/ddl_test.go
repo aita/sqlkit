@@ -51,6 +51,46 @@ func TestCreateTableTableLevelUniqueAndForeignKey(t *testing.T) {
 	}
 }
 
+func TestCreateTableEmptyErrors(t *testing.T) {
+	// A table with no columns or constraints would emit "CREATE TABLE t ();", which
+	// is invalid SQL; the compiler must error instead.
+	stmt := CreateTable(Table{Name: NewIdent("t")})
+	if _, _, err := stmt.ToSQL(mustDialect(t, "postgres")); err == nil || !strings.Contains(err.Error(), "at least one column") {
+		t.Fatalf("ToSQL() error = %v, want empty-table rejection", err)
+	}
+}
+
+func TestForeignKeyEmptyColumnsErrors(t *testing.T) {
+	// An empty referencing or referenced column list would emit "FOREIGN KEY ()
+	// REFERENCES t ()", which is invalid; the compiler must error, like UNIQUE/KEY.
+	stmt := CreateTable(Table{Name: NewIdent("t")}).
+		Column(ColumnDef{Name: NewIdent("a"), Type: EngineType{Name: "int8"}}).
+		ForeignKey(ForeignKeyConstraint{
+			Name: NewIdent("fk"), Columns: nil,
+			RefTable: NewIdent("users"), RefColumns: Idents("id"),
+		})
+	if _, _, err := stmt.ToSQL(mustDialect(t, "postgres")); err == nil || !strings.Contains(err.Error(), "FOREIGN KEY requires") {
+		t.Fatalf("ToSQL() error = %v, want empty-FK rejection", err)
+	}
+}
+
+// TestForeignKeyColumnArityMismatchErrors covers a referencing column list of a
+// different length than the referenced column list: every engine rejects the
+// resulting "FOREIGN KEY (a, b) REFERENCES t (id)" at execution time, so the
+// compiler must reject it too rather than rendering it as if it were valid.
+func TestForeignKeyColumnArityMismatchErrors(t *testing.T) {
+	stmt := AlterTable(Table{Name: NewIdent("posts")}).
+		AddForeignKey(ForeignKeyConstraint{
+			Name:       NewIdent("fk_x"),
+			Columns:    Idents("user_id", "other_id"),
+			RefTable:   NewIdent("users"),
+			RefColumns: Idents("id"),
+		})
+	if _, _, err := stmt.ToSQL(mustDialect(t, "postgres")); err == nil || !strings.Contains(err.Error(), "referencing column") {
+		t.Fatalf("ToSQL() error = %v, want column-arity-mismatch rejection", err)
+	}
+}
+
 func TestCreateTableUnnamedUnique(t *testing.T) {
 	stmt := CreateTable(Table{Name: NewIdent("t")}).
 		Column(ColumnDef{Name: NewIdent("a"), Type: EngineType{Name: "int8"}}).
@@ -85,6 +125,27 @@ func TestGeneratedColumnMySQL(t *testing.T) {
 	got := mustDDL(t, stmt, "mysql")
 	if !strings.Contains(got, "`b` int GENERATED ALWAYS AS (a * 2) VIRTUAL") {
 		t.Errorf("expected a VIRTUAL generated column, got:\n%s", got)
+	}
+}
+
+// TestGeneratedColumnVirtualRejectedOnPostgreSQL covers PostgreSQL's lack of
+// VIRTUAL generated columns: a Stored:false generated column must be rejected at
+// compile time rather than emit "GENERATED ALWAYS AS (...) VIRTUAL", which the
+// PostgreSQL grammar rejects. STORED still compiles.
+func TestGeneratedColumnVirtualRejectedOnPostgreSQL(t *testing.T) {
+	virtual := CreateTable(Table{Name: NewIdent("t")}).
+		Column(ColumnDef{Name: NewIdent("a"), Type: EngineType{Name: "int"}}).
+		Column(ColumnDef{Name: NewIdent("b"), Type: EngineType{Name: "int"},
+			Generated: &GeneratedColumn{Expression: Raw("a + 1")}})
+	if _, _, err := virtual.ToSQL(mustDialect(t, "postgres")); err == nil || !strings.Contains(err.Error(), "VIRTUAL") {
+		t.Fatalf("ToSQL(postgres) err = %v, want a VIRTUAL rejection", err)
+	}
+
+	stored := CreateTable(Table{Name: NewIdent("t")}).
+		Column(ColumnDef{Name: NewIdent("b"), Type: EngineType{Name: "int"},
+			Generated: &GeneratedColumn{Expression: Raw("a + 1"), Stored: true}})
+	if got := mustDDL(t, stored, "postgres"); !strings.Contains(got, "STORED") {
+		t.Errorf("STORED generated column should compile on postgres, got:\n%s", got)
 	}
 }
 
@@ -229,6 +290,21 @@ func TestCreateIndex(t *testing.T) {
 	got = mustDDL(t, CreateIndex("idx_users_name", users, "name"), "postgres")
 	if want := `CREATE INDEX "idx_users_name" ON "public"."users" ("name");`; got != want {
 		t.Errorf("CreateIndex() = %q, want %q", got, want)
+	}
+}
+
+// MySQL has no IF NOT EXISTS for CREATE INDEX (any version); the compiler must
+// reject it rather than emit SQL MySQL's parser refuses. PostgreSQL supports it.
+func TestCreateIndexIfNotExistsRejectedOnMySQL(t *testing.T) {
+	users := Table{Schema: NewIdent("public"), Name: NewIdent("users")}
+	stmt := CreateIndex("idx_users_name", users, "name").IfNotExists()
+	if _, _, err := stmt.ToSQL(mustDialect(t, "mysql")); err == nil ||
+		!strings.Contains(err.Error(), "CREATE INDEX ... IF NOT EXISTS") {
+		t.Fatalf("ToSQL(mysql) error = %v, want CREATE INDEX IF NOT EXISTS rejection", err)
+	}
+	if got, want := mustDDL(t, stmt, "postgres"),
+		`CREATE INDEX IF NOT EXISTS "idx_users_name" ON "public"."users" ("name");`; got != want {
+		t.Errorf("CreateIndex().IfNotExists(postgres) = %q, want %q", got, want)
 	}
 }
 
@@ -380,6 +456,33 @@ func TestRestateColumn(t *testing.T) {
 	want := `ALTER TABLE "users" ALTER COLUMN "name" TYPE text, ALTER COLUMN "name" DROP NOT NULL, ALTER COLUMN "name" SET DEFAULT '';`
 	if got != want {
 		t.Errorf("RestateColumn(postgres) =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestRestateColumnAutoIncrementRejectedOnNonMySQL covers compileRestateColumn:
+// unlike MySQL's inline MODIFY COLUMN ... AUTO_INCREMENT, PostgreSQL (and the
+// standard target) has no ALTER COLUMN form of "make this a serial column" —
+// CREATE TABLE's bigserial sugar expands to a backing sequence plus a
+// nextval() DEFAULT that ALTER can't express in one step. Restating an
+// AutoIncrement column on those dialects used to silently fall through to
+// "ALTER COLUMN ... DROP DEFAULT" (col.Default is nil for a bare
+// auto-increment column) instead of erroring, which would strip an existing
+// serial default via what looked like an unrelated column change.
+func TestRestateColumnAutoIncrementRejectedOnNonMySQL(t *testing.T) {
+	col := ColumnDef{Name: NewIdent("id"), Type: EngineType{Name: "bigint"}, NotNull: true, AutoIncrement: true}
+	stmt := AlterTable(Table{Name: NewIdent("users")}).RestateColumn(col)
+
+	if _, _, err := stmt.ToSQL(PostgreSQLDialect{}); err == nil {
+		t.Fatal("RestateColumn with AutoIncrement on postgres succeeded, want error")
+	} else if !strings.Contains(err.Error(), "auto-increment") {
+		t.Fatalf("error = %v, want mentioning auto-increment", err)
+	}
+
+	// MySQL's MODIFY COLUMN handles AutoIncrement natively; unaffected.
+	got := mustDDL(t, stmt, "mysql")
+	want := "ALTER TABLE `users` MODIFY COLUMN `id` bigint NOT NULL AUTO_INCREMENT;"
+	if got != want {
+		t.Errorf("RestateColumn(mysql) =\n%s\nwant\n%s", got, want)
 	}
 }
 
@@ -881,4 +984,41 @@ func TestDDLCompileRemainingBranches(t *testing.T) {
 
 	// CREATE VIEW whose body fails to compile.
 	errOn("view bad body", pg, CreateView(tbl, Select(bad).From(orgs)))
+}
+
+// PostgreSQL-only object kinds — sequences, enum types (CREATE TYPE ... AS ENUM),
+// extensions, and materialized views — have no MySQL equivalent, so compiling
+// their DDL for MySQL must fail with a descriptive error naming the dialect rather
+// than emit SQL the engine rejects. PostgreSQL still renders each.
+func TestPostgresOnlyObjectsRejectedOnMySQL(t *testing.T) {
+	mv := Table{Name: NewIdent("mv")}
+	body := Select(Col("id")).From(Table{Name: NewIdent("t")})
+	cases := []struct {
+		name    string
+		stmt    Statement
+		feature string
+	}{
+		{"create sequence", CreateSequence(Table{Name: NewIdent("s")}), "sequences"},
+		{"drop sequence", DropSequence("s"), "sequences"},
+		{"create enum", CreateEnum("mood", "happy", "sad"), "enum types"},
+		{"drop type", DropType("mood"), "enum types"},
+		{"alter type add value", AlterTypeAddValue("mood", "meh"), "enum types"},
+		{"alter type rename value", AlterTypeRenameValue("mood", "sad", "down"), "enum types"},
+		{"create extension", CreateExtension("hstore"), "extensions"},
+		{"drop extension", DropExtension("hstore"), "extensions"},
+		{"create materialized view", CreateMaterializedView(mv, body), "materialized views"},
+		{"drop materialized view", DropMaterializedView(mv), "materialized views"},
+		{"refresh materialized view", RefreshMaterializedView(mv), "materialized views"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, _, err := tc.stmt.ToSQL(MySQLDialect{}); err == nil ||
+				!strings.Contains(err.Error(), tc.feature) {
+				t.Errorf("ToSQL(mysql) error = %v, want a rejection mentioning %q", err, tc.feature)
+			}
+			if _, _, err := tc.stmt.ToSQL(PostgreSQLDialect{}); err != nil {
+				t.Errorf("ToSQL(postgres) error = %v, want success", err)
+			}
+		})
+	}
 }

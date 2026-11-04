@@ -96,10 +96,14 @@ func Diff(old, next meta.Metadata, dialect sql.Dialect) ([]sql.Statement, error)
 	// the reverse of the create order below, mirroring meta.DropSQL.
 	out = append(out, objs.dropSequences...)
 	out = append(out, objs.dropEnums...)
+	// Managed schemas drop after their contained objects and before extensions,
+	// mirroring meta.DropSQL.
+	out = append(out, objs.dropSchemas...)
 	out = append(out, objs.dropExtensions...)
-	// Extensions, enums, and sequences create before the tables that use them,
-	// mirroring meta.CreateSQL.
+	// Extensions, then managed schemas, then enums and sequences create before the
+	// tables that use them, mirroring meta.CreateSQL.
 	out = append(out, objs.createExtensions...)
+	out = append(out, objs.createSchemas...)
 	out = append(out, objs.createEnums...)
 	out = append(out, objs.createSequences...)
 	out = append(out, createTables...)
@@ -130,32 +134,38 @@ type tableChanges struct {
 func diffTable(oldT, newT meta.Table, d sql.Dialect) (tableChanges, error) {
 	var tc tableChanges
 
-	// Foreign keys: by name. Changed = drop + add.
+	// Foreign keys: by name. Changed = drop + add. Names are sorted for
+	// deterministic output, matching the checks below.
 	oldFKs := fkMap(oldT)
 	newFKs := fkMap(newT)
-	for name, fk := range oldFKs {
+	for _, name := range sortedKeys(oldFKs) {
+		fk := oldFKs[name]
 		nf, ok := newFKs[name]
 		if !ok || !fkEqual(fk, nf) {
 			tc.dropFKs = append(tc.dropFKs, fk.DropStatement(oldT))
 		}
 	}
-	for name, fk := range newFKs {
+	for _, name := range sortedKeys(newFKs) {
+		fk := newFKs[name]
 		of, ok := oldFKs[name]
 		if !ok || !fkEqual(of, fk) {
 			tc.addFKs = append(tc.addFKs, fk.AddStatement(newT))
 		}
 	}
 
-	// Indexes: by name. Changed = drop + create.
+	// Indexes: by name. Changed = drop + create. Names are sorted for
+	// deterministic output.
 	oldIdx := indexMap(oldT)
 	newIdx := indexMap(newT)
-	for name, ix := range oldIdx {
+	for _, name := range sortedKeys(oldIdx) {
+		ix := oldIdx[name]
 		ni, ok := newIdx[name]
 		if !ok || !indexEqual(ix, ni) {
 			tc.dropIndexes = append(tc.dropIndexes, ix.DropStatement(oldT))
 		}
 	}
-	for name, ix := range newIdx {
+	for _, name := range sortedKeys(newIdx) {
+		ix := newIdx[name]
 		oi, ok := oldIdx[name]
 		if !ok || !indexEqual(oi, ix) {
 			tc.createIndexes = append(tc.createIndexes, ix.CreateStatement(newT))
@@ -280,14 +290,18 @@ func columnAlterations(alter *sql.AlterTableBuilder, oc, nc meta.Column, d sql.D
 	if err != nil {
 		return false, err
 	}
-	defaultChanged := oldDefault != newDefault
+	// oldDefault/newDefault alone can't see a bare (auto-increment) default: a
+	// nil DefaultExpr renders "" whether or not HasDefault is set, so a column
+	// gaining or losing a bare decl.Default() would otherwise compare equal and
+	// the change would be silently dropped from the diff.
+	defaultChanged := oldDefault != newDefault || oc.HasDefault != nc.HasDefault
 	if !typeChanged && !nullChanged && !defaultChanged {
 		return false, nil
 	}
 
 	if d.Name() == "mysql" {
 		// MySQL restates the column in one MODIFY COLUMN; nc.ColumnDef carries the
-		// new type, nullability, and default.
+		// new type, nullability, and default (including AutoIncrement).
 		*alter = alter.RestateColumn(nc.ColumnDef())
 		return true, nil
 	}
@@ -305,9 +319,17 @@ func columnAlterations(alter *sql.AlterTableBuilder, oc, nc meta.Column, d sql.D
 		}
 	}
 	if defaultChanged {
-		if nc.DefaultExpr != nil {
+		switch {
+		case nc.DefaultExpr != nil:
 			*alter = alter.SetDefault(nc.Name, nc.DefaultExpr)
-		} else {
+		case nc.HasDefault:
+			// A bare default (HasDefault, no DefaultExpr) means "auto-increment" —
+			// PostgreSQL has no ALTER COLUMN form of that; it only exists as
+			// CREATE TABLE's bigserial sugar over a backing sequence. Reject
+			// rather than fall through to DROP DEFAULT below, which would emit
+			// valid SQL that silently does the opposite of what was asked.
+			return false, fmt.Errorf("migrate: column %q: cannot ALTER a bare (auto-increment) default onto an existing column on the %s dialect; set an explicit DefaultExpr, or recreate the column", nc.Name, d.Name())
+		default:
 			*alter = alter.DropDefault(nc.Name)
 		}
 	}
@@ -365,6 +387,12 @@ func checkMap(t meta.Table) map[string]meta.Check {
 }
 
 func sortedCheckNames(m map[string]meta.Check) []string {
+	return sortedKeys(m)
+}
+
+// sortedKeys returns the keys of m in ascending order, so a diff built by
+// ranging over a by-name map emits its statements deterministically.
+func sortedKeys[V any](m map[string]V) []string {
 	names := make([]string, 0, len(m))
 	for name := range m {
 		names = append(names, name)
@@ -390,7 +418,7 @@ func indexEqual(a, b meta.Index) bool {
 }
 
 func fkEqual(a, b meta.ForeignKey) bool {
-	return a.RefSchema == b.RefSchema && a.RefTable == b.RefTable &&
+	return a.RefSchema.Name == b.RefSchema.Name && a.RefTable == b.RefTable &&
 		stringsEqual(a.Columns, b.Columns) && stringsEqual(a.RefColumns, b.RefColumns) &&
 		a.OnDelete == b.OnDelete && a.OnUpdate == b.OnUpdate
 }

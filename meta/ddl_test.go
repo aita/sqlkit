@@ -238,9 +238,96 @@ func TestDDLSchemaCreateGating(t *testing.T) {
 	}
 }
 
+// TestDDLManagedSchemaCreatedAndDropped pins that a ManagedSchema with no table
+// of its own (one hosting only an enum or sequence) is still folded into
+// Schemas() and so created by CreateSQL and dropped by DropSQL.
+func TestDDLManagedSchemaCreatedAndDropped(t *testing.T) {
+	pg := mustDialect(t, "postgres")
+	md := meta.Metadata{
+		Enums:          []meta.Enum{{Schema: "audit", Name: "mood", Values: []string{"happy", "sad"}}},
+		ManagedSchemas: []meta.Schema{{Name: "audit", Create: true}},
+	}
+	if schemas := md.Schemas(); len(schemas) != 1 || schemas[0].Name != "audit" || !schemas[0].Create {
+		t.Fatalf("Schemas() = %+v, want one managed audit schema", md.Schemas())
+	}
+	got, err := md.CreateSQL(pg)
+	if err != nil {
+		t.Fatalf("CreateSQL() error = %v", err)
+	}
+	if !strings.Contains(got, `CREATE SCHEMA IF NOT EXISTS "audit";`) {
+		t.Errorf("expected CREATE SCHEMA for the enum-only managed schema:\n%s", got)
+	}
+	if !strings.Contains(md.DropSQL(pg), `DROP SCHEMA IF EXISTS "audit"`) {
+		t.Errorf("expected DROP SCHEMA for the managed schema:\n%s", md.DropSQL(pg))
+	}
+}
+
+// TestDDLExtensionSchemaOrder covers an extension installed into a schema
+// this same Metadata also manages (Extension.Schema + a matching
+// ManagedSchemas/Create entry): CREATE SCHEMA must precede CREATE EXTENSION
+// ... WITH SCHEMA, or a real engine rejects the extension (the schema doesn't
+// exist yet), and DROP EXTENSION must precede DROP SCHEMA, or dropping the
+// still-non-empty schema fails.
+func TestDDLExtensionSchemaOrder(t *testing.T) {
+	pg := mustDialect(t, "postgres")
+	md := meta.Metadata{
+		Extensions:     []meta.Extension{{Name: "pgcrypto", Schema: "extensions"}},
+		ManagedSchemas: []meta.Schema{{Name: "extensions", Create: true}},
+	}
+	got, err := md.CreateSQL(pg)
+	if err != nil {
+		t.Fatalf("CreateSQL() error = %v", err)
+	}
+	schemaIdx := strings.Index(got, `CREATE SCHEMA IF NOT EXISTS "extensions"`)
+	extIdx := strings.Index(got, `CREATE EXTENSION IF NOT EXISTS "pgcrypto"`)
+	if schemaIdx < 0 || extIdx < 0 {
+		t.Fatalf("missing CREATE SCHEMA or CREATE EXTENSION:\n%s", got)
+	}
+	if schemaIdx > extIdx {
+		t.Errorf("CREATE SCHEMA must precede CREATE EXTENSION ... WITH SCHEMA:\n%s", got)
+	}
+
+	drop := md.DropSQL(pg)
+	dropSchemaIdx := strings.Index(drop, `DROP SCHEMA IF EXISTS "extensions"`)
+	dropExtIdx := strings.Index(drop, `DROP EXTENSION IF EXISTS "pgcrypto"`)
+	if dropSchemaIdx < 0 || dropExtIdx < 0 {
+		t.Fatalf("missing DROP SCHEMA or DROP EXTENSION:\n%s", drop)
+	}
+	if dropExtIdx > dropSchemaIdx {
+		t.Errorf("DROP EXTENSION must precede DROP SCHEMA:\n%s", drop)
+	}
+}
+
 func TestDDLUnsupportedDialect(t *testing.T) {
 	if _, err := sql.DialectByName("oracle"); err == nil {
 		t.Error("DialectByName(oracle): expected error")
+	}
+}
+
+// TestDDLForeignKeyNoColumnsErrors covers addConstraintSQL: a foreign key with
+// no Columns/RefColumns cannot compile (the compiler rejects an empty column
+// list), and CreateSQL must surface that as an error rather than silently
+// omitting the ADD CONSTRAINT statement for that key.
+func TestDDLForeignKeyNoColumnsErrors(t *testing.T) {
+	public := meta.Schema{Name: "public"}
+	md := meta.Metadata{
+		Tables: []meta.Table{
+			{
+				Schema:  public,
+				Name:    "posts",
+				Columns: []meta.Column{{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true}},
+				ForeignKeys: []meta.ForeignKey{
+					{Name: "fk_broken", RefSchema: public, RefTable: "users"}, // no Columns, no RefColumns
+				},
+			},
+		},
+	}
+	_, err := md.CreateSQL(mustDialect(t, "postgres"))
+	if err == nil {
+		t.Fatal("expected CreateSQL to error on a columnless foreign key, got nil")
+	}
+	if !strings.Contains(err.Error(), "fk_broken") {
+		t.Fatalf("error should name the offending constraint: %v", err)
 	}
 }
 

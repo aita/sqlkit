@@ -73,6 +73,13 @@ func (r Result) Empty() bool {
 // Render diffs source against target and returns the Operator-DSL bodies for a
 // migration's Up (source -> target) and Down (target -> source, a best-effort
 // reverse). Statements are ordered for safety, mirroring migrate.Diff.
+//
+// The rendered op.* calls carry no schema qualification: a Migrator/Operator
+// is configured with one fixed schema, so a table in a catalog's OTHER managed
+// schema (Catalog.Schema(name, decl.Create())) renders as if it belonged to
+// the Operator's schema instead of its own. Review generated output before
+// applying it against a catalog with tables in more than one managed schema
+// (see docs/limitations.md).
 func Render(source, target meta.Metadata, opts Options) (Result, error) {
 	if opts.Dialect == nil {
 		return Result{}, fmt.Errorf("autogen: Render needs a dialect")
@@ -191,7 +198,10 @@ func (r *renderer) plan(from, to meta.Metadata) (string, error) {
 		}
 	}
 
-	objs := r.objectOps(from, to)
+	objs, err := r.objectOps(from, to)
+	if err != nil {
+		return "", err
+	}
 
 	// Renames run first: a renamed table must exist under its new name before
 	// the drops, alters, and re-adds that diffTable emitted against that name.
@@ -224,7 +234,7 @@ func (r *renderer) plan(from, to meta.Metadata) (string, error) {
 // objectOps renders the op.* calls that reconcile the non-table objects
 // (extensions, enums, sequences) between from and to. Names are rendered bare,
 // since the Operator qualifies them with the migration's schema.
-func (r *renderer) objectOps(from, to meta.Metadata) renderedObjects {
+func (r *renderer) objectOps(from, to meta.Metadata) (renderedObjects, error) {
 	var o renderedObjects
 
 	oldExt := map[string]meta.Extension{}
@@ -323,7 +333,11 @@ func (r *renderer) objectOps(from, to meta.Metadata) renderedObjects {
 	}
 	for _, v := range to.MaterializedViews {
 		if old, ok := oldMV[v.QualifiedName()]; !ok || !r.matviewEqual(old, v) {
-			o.createMatviews = append(o.createMatviews, r.matviewCreate(v))
+			create, err := r.matviewCreate(v)
+			if err != nil {
+				return renderedObjects{}, err
+			}
+			o.createMatviews = append(o.createMatviews, create)
 		}
 	}
 
@@ -345,7 +359,7 @@ func (r *renderer) objectOps(from, to meta.Metadata) renderedObjects {
 			o.createGrants = append(o.createGrants, r.grantCreate(g))
 		}
 	}
-	return o
+	return o, nil
 }
 
 // renderedObjects holds the rendered op.* calls for each object kind.
@@ -365,10 +379,13 @@ type renderedObjects struct {
 	alterEnums []string
 }
 
-// grantKey identifies a grant by its target (object type and objects), so a
-// change to the privileges or grantees of the same target is one modification.
+// grantKey identifies a grant by its full (privileges, type, objects, grantees)
+// tuple. Keying on the target alone (object type + objects) would collide two
+// distinct grants on the same object for different grantees or privilege sets
+// into one map slot, silently dropping one of them from the diff.
 func grantKey(g meta.Grant) string {
-	return g.ObjectType + "\x00" + strings.Join(g.Objects, ",")
+	return strings.Join(g.Privileges, ",") + "\x00" + g.ObjectType + "\x00" +
+		strings.Join(g.Objects, ",") + "\x00" + strings.Join(g.Grantees, ",")
 }
 
 // appendedEnumValues reports whether next is old with only labels appended (old
@@ -407,16 +424,19 @@ func (r *renderer) matviewEqual(a, b meta.MaterializedView) bool {
 	return at == bt
 }
 
-func (r *renderer) matviewCreate(v meta.MaterializedView) string {
+func (r *renderer) matviewCreate(v meta.MaterializedView) (string, error) {
 	r.usesSQL = true
-	body, _, _ := v.Query.ToSQL(r.dialect)
+	body, _, err := v.Query.ToSQL(r.dialect)
+	if err != nil {
+		return "", fmt.Errorf("autogen: materialized view %q: %w", v.Name, err)
+	}
 	var opts strings.Builder
 	if len(v.Columns) > 0 {
 		fmt.Fprintf(&opts, ", func(s sql.CreateMaterializedViewBuilder) sql.CreateMaterializedViewBuilder {\nreturn s.Columns(%s)\n}", quotedList(v.Columns))
 	} else if v.WithNoData {
 		opts.WriteString(", func(s sql.CreateMaterializedViewBuilder) sql.CreateMaterializedViewBuilder {\nreturn s.WithNoData()\n}")
 	}
-	return fmt.Sprintf("op.CreateMaterializedView(%q, sql.RawSQL(%q)%s)", v.Name, body, opts.String())
+	return fmt.Sprintf("op.CreateMaterializedView(%q, sql.RawSQL(%q)%s)", v.Name, body, opts.String()), nil
 }
 
 func (r *renderer) grantCreate(g meta.Grant) string {
@@ -496,8 +516,11 @@ func (r *renderer) sequenceCreate(s meta.Sequence) string {
 func (r *renderer) diffTable(oldT, newT meta.Table, renameColumns, alters, createIndexes, dropIndexes, addFKs, dropFKs, comments *[]string) error {
 	name := newT.Name
 
-	// Column renames for this table (keyed by the destination table name).
-	colFromTo := map[string]string{}
+	// Column renames for this table, kept in rename-declaration order so the
+	// post-rename column-change statements below are emitted deterministically
+	// (ranging a map would order them by Go's randomized iteration).
+	type colRename struct{ from, to string }
+	var colRenames []colRename
 	renamedFromCol := map[string]bool{}
 	renamedToCol := map[string]bool{}
 	oldCols := columnsByName(oldT)
@@ -513,7 +536,7 @@ func (r *renderer) diffTable(oldT, newT meta.Table, renameColumns, alters, creat
 			continue
 		}
 		*renameColumns = append(*renameColumns, fmt.Sprintf("op.RenameColumn(%q, %q, %q)", name, cr.From, cr.To))
-		colFromTo[cr.From] = cr.To
+		colRenames = append(colRenames, colRename{from: cr.From, to: cr.To})
 		renamedFromCol[cr.From] = true
 		renamedToCol[cr.To] = true
 	}
@@ -557,8 +580,8 @@ func (r *renderer) diffTable(oldT, newT meta.Table, renameColumns, alters, creat
 		}
 	}
 	// Renamed columns may also have changed type/nullability/default/comment.
-	for from, to := range colFromTo {
-		if err := r.columnChange(name, oldCols[from], newCols[to], alters, comments); err != nil {
+	for _, cr := range colRenames {
+		if err := r.columnChange(name, oldCols[cr.from], newCols[cr.to], alters, comments); err != nil {
 			return err
 		}
 	}
@@ -727,6 +750,9 @@ func (r *renderer) createTable(t meta.Table) (string, error) {
 
 // columnElement renders a decl.Column element with its intrinsic options.
 func (r *renderer) columnElement(c meta.Column) (string, error) {
+	if c.Type == nil {
+		return "", fmt.Errorf("autogen: column %q has no type", c.Name)
+	}
 	r.usesDecl = true
 	var b strings.Builder
 	fmt.Fprintf(&b, "decl.Column(%q, %s", c.Name, codegen.DeclTypeExpr(c, r.dialect.Name()))
@@ -800,7 +826,11 @@ func (r *renderer) columnPropsChanged(oc, nc meta.Column) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return od != nd, nil
+	// od/nd alone can't see a bare (auto-increment) default: a nil DefaultExpr
+	// renders "" whether or not HasDefault is set, so a column gaining or
+	// losing a bare decl.Default() would otherwise compare equal and the
+	// change would be silently dropped from the rendered migration.
+	return od != nd || oc.HasDefault != nc.HasDefault, nil
 }
 
 func (r *renderer) sameType(a, b meta.Column) bool {

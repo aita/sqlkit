@@ -221,12 +221,18 @@ func (pg *Paginator) Paginate(ctx context.Context, q SelectQuery, dst any, cur C
 	page := Page{}
 	if backward {
 		// Scanning backward: the probe row signals an earlier page, and we only
-		// got here from a later one, so a next page always exists.
+		// got here from a later one, so a next page exists — as long as this page
+		// has rows. An empty backward page means the cursor was already at the
+		// start (Prev past the first page); report no neighbours rather than a
+		// HasNext with a zero, Start-equivalent cursor that would loop to page one.
 		page.HasPrev = extra
-		page.HasNext = true
+		page.HasNext = result.Len() > 0
 	} else {
 		page.HasNext = extra
-		page.HasPrev = !start
+		// As in the backward branch above: an empty forward page (the cursor
+		// landed past the last row) must not report a HasPrev that only leads
+		// back to a zero, Start-equivalent cursor looping to page one.
+		page.HasPrev = !start && result.Len() > 0
 	}
 	if result.Len() > 0 {
 		// Next continues forward from the last row; Prev backward from the first.

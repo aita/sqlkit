@@ -167,6 +167,15 @@ func convertAggregate(e *ast.AggregateFuncExpr) (sql.Expression, error) {
 	if e.Order != nil {
 		return nil, sqlparse.Unsupportedf("%s(... ORDER BY ...)", name)
 	}
+	// GROUP_CONCAT carries its separator as a trailing pseudo-argument (the
+	// default "," when none is written) and its SEPARATOR clause has no typed
+	// home. Converting it as a generic call would render that separator as an
+	// ordinary data argument — GROUP_CONCAT(a SEPARATOR '|') becomes
+	// GROUP_CONCAT(a, '|'), a different aggregate with the wrong separator — so
+	// round-trip the whole construct raw instead.
+	if name == ast.AggFuncGroupConcat {
+		return nil, sqlparse.Unsupported("GROUP_CONCAT")
+	}
 	if name == "count" {
 		return convertCount(e)
 	}
@@ -206,6 +215,15 @@ func convertCount(e *ast.AggregateFuncExpr) (sql.Expression, error) {
 func convertWindowFunc(e *ast.WindowFuncExpr) (sql.Expression, error) {
 	if e.Distinct {
 		return nil, sqlparse.Unsupportedf("DISTINCT in window function %s", e.Name)
+	}
+	// IGNORE NULLS / FROM LAST change which row's value the function returns;
+	// sql.WindowExpression has no field for either, so dropping them would
+	// silently change the result. Fall back to raw, mirroring the Distinct guard.
+	if e.IgnoreNull {
+		return nil, sqlparse.Unsupportedf("IGNORE NULLS in window function %s", e.Name)
+	}
+	if e.FromLast {
+		return nil, sqlparse.Unsupportedf("FROM LAST in window function %s", e.Name)
 	}
 	args, err := convertExprAnys(e.Args)
 	if err != nil {
