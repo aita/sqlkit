@@ -419,3 +419,64 @@ func TestColumnCharsetFallsBackToRaw(t *testing.T) {
 func TestColumnZerofillFallsBackToRaw(t *testing.T) {
 	assertRaw(t, "CREATE TABLE t (a INT UNSIGNED ZEROFILL)")
 }
+
+// ADD COLUMN/MODIFY COLUMN/CHANGE COLUMN FIRST/AFTER places the column at a
+// specific physical position; sqlkit's AddColumn/RestateColumn have no such
+// concept and always append/restate in place, so silently dropping the
+// position would leave the column in the wrong spot. Falls back to raw.
+func TestAlterTableColumnPositionFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "ALTER TABLE t ADD COLUMN c INT FIRST")
+	assertRaw(t, "ALTER TABLE t ADD COLUMN c INT AFTER b")
+	assertRaw(t, "ALTER TABLE t MODIFY COLUMN c INT FIRST")
+	assertRaw(t, "ALTER TABLE t CHANGE COLUMN c c INT AFTER b")
+}
+
+// An index option (USING BTREE/HASH, KEY_BLOCK_SIZE, COMMENT, INVISIBLE, ...)
+// on a KEY/UNIQUE/PRIMARY KEY constraint or a standalone CREATE INDEX has no
+// typed home, so dropping it would either lose a storage/optimizer hint or —
+// for INVISIBLE — silently turn an index the DBA deliberately hid from the
+// optimizer back on. Falls back to raw.
+func TestIndexOptionFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "CREATE TABLE t (a INT, KEY idx1 (a) USING BTREE)")
+	assertRaw(t, "CREATE TABLE t (a INT, UNIQUE KEY idx1 (a) INVISIBLE)")
+	assertRaw(t, "CREATE TABLE t (a INT, PRIMARY KEY (a) COMMENT 'pk')")
+	assertRaw(t, "ALTER TABLE t ADD UNIQUE INDEX idx1 (a) INVISIBLE")
+	assertRaw(t, "CREATE INDEX idx1 ON t (a) USING BTREE")
+	assertRaw(t, "CREATE INDEX idx1 ON t (a) INVISIBLE")
+}
+
+// A CHECK constraint declared NOT ENFORCED is informational only — MySQL does
+// not validate it on write. sqlkit's Check always renders a plain (implicitly
+// enforced) CHECK, so silently dropping NOT ENFORCED would turn a
+// deliberately non-validating constraint into one that actively rejects
+// writes. Falls back to raw; a bare or explicitly ENFORCED CHECK still models.
+func TestCheckNotEnforcedFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "CREATE TABLE t (a INT, CONSTRAINT c1 CHECK (a > 0) NOT ENFORCED)")
+	assertRaw(t, "ALTER TABLE t ADD CONSTRAINT c1 CHECK (a > 0) NOT ENFORCED")
+}
+
+// A bare or explicitly ENFORCED CHECK is unaffected by the NOT ENFORCED guard.
+func TestCheckEnforcedStillModeled(t *testing.T) {
+	assertRoundTrip(t,
+		"CREATE TABLE t (age INT, CHECK (age >= 0) ENFORCED)",
+		sql.CreateTable(sql.Table{Name: sql.NewIdent("t")}).
+			Column(sql.ColumnDef{Name: sql.NewIdent("age"), Type: sql.RawType("int(11)")}).
+			Check("", sql.BinaryExpression{Left: sql.Col("age"), Operator: ">=", Right: sql.Raw("0")}),
+		"CREATE TABLE `t` (\n"+
+			"    `age` int(11),\n"+
+			"    CONSTRAINT `` CHECK ((`age` >= 0))\n"+
+			");")
+}
+
+// MySQL has no CREATE INDEX ... IF NOT EXISTS and the MySQL dialect rejects it
+// at compile time, so the parser must fall back to a raw passthrough instead of
+// producing a typed statement whose ToSQL fails.
+func TestCreateIndexIfNotExistsIsRaw(t *testing.T) {
+	assertRaw(t, "CREATE INDEX IF NOT EXISTS i ON t (a)")
+}
+
+// A FOREIGN KEY whose referencing and referenced column lists differ in length
+// has no typed form the compiler accepts, so it stays a raw passthrough.
+func TestForeignKeyArityMismatchIsRaw(t *testing.T) {
+	assertRaw(t, "ALTER TABLE p ADD CONSTRAINT f FOREIGN KEY (a, b) REFERENCES t (id)")
+}

@@ -61,6 +61,35 @@ func TestExternalCallInTransactionWarns(t *testing.T) {
 	sqltest.Expect(t, trace).Warns(querytrace.WarnExternalCallInTransaction)
 }
 
+// TestExternalCallInTransactionDeterministicTxID pins that when a Mark falls
+// inside more than one still-open (never-committed) transaction, the warning is
+// attributed to the same transaction on every derivation. The still-open spans
+// were appended from a map, so under randomized iteration the reported tx_id
+// flipped run to run; it must be the first-begun open transaction every time.
+// Run enough identical traces that an accidental single-value result is
+// negligible under the old map-order bug (which split ~85/15).
+func TestExternalCallInTransactionDeterministicTxID(t *testing.T) {
+	seen := map[string]int{}
+	for i := 0; i < 200; i++ {
+		trace := querytrace.New("op", querytrace.WithConfig(querytrace.NewConfig()))
+		ctx := querytrace.WithTrace(context.Background(), trace)
+		trace.RecordTxBegin() // tx_1, never committed (outer)
+		trace.RecordTxBegin() // tx_2, never committed (inner)
+		querytrace.Mark(ctx, "external")
+		for _, w := range trace.Warnings() {
+			if w.Code == querytrace.WarnExternalCallInTransaction {
+				seen[w.Details["tx_id"].(string)]++
+			}
+		}
+	}
+	if len(seen) != 1 {
+		t.Fatalf("tx_id attribution is nondeterministic across identical traces: %v", seen)
+	}
+	if _, ok := seen["tx_1"]; !ok {
+		t.Errorf("expected the first-begun open transaction (tx_1) to be attributed, got %v", seen)
+	}
+}
+
 // TestMarkOutsideTransactionIsClean documents that a Mark placed after the
 // transaction commits is not flagged.
 func TestMarkOutsideTransactionIsClean(t *testing.T) {
