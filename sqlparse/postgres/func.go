@@ -39,6 +39,23 @@ func convertFuncCall(fc *pg.FuncCall) (sql.Expression, error) {
 	if err != nil {
 		return nil, err
 	}
+	// sqlkit's function nodes model only AggStar / AggDistinct. The other call
+	// modifiers the grammar allows — FILTER (WHERE ...), an in-aggregate ORDER BY,
+	// WITHIN GROUP, and VARIADIC — have no typed form here, so converting the call
+	// would silently drop them and change the statement's meaning (a filtered
+	// aggregate becomes unfiltered, an ordered-set aggregate loses its order). Fall
+	// back to a raw passthrough, preserving the original text, exactly as for any
+	// other construct the frontend cannot faithfully model.
+	switch {
+	case fc.GetAggFilter() != nil:
+		return nil, sqlparse.Unsupportedf("%s(...) FILTER (WHERE ...)", name)
+	case len(fc.GetAggOrder()) > 0:
+		return nil, sqlparse.Unsupportedf("%s(... ORDER BY ...)", name)
+	case fc.GetAggWithinGroup():
+		return nil, sqlparse.Unsupportedf("%s(...) WITHIN GROUP (...)", name)
+	case fc.GetFuncVariadic():
+		return nil, sqlparse.Unsupportedf("%s(VARIADIC ...)", name)
+	}
 	var base sql.Expression
 	switch {
 	case fc.GetFuncformat() == pg.CoercionForm_COERCE_SQL_SYNTAX && isSQLSyntaxFunc(name):
@@ -340,6 +357,13 @@ func convertWindow(fn sql.Expression, w *pg.WindowDef) (sql.Expression, error) {
 
 // convertNamedWindow converts a SELECT-level WINDOW clause definition.
 func convertNamedWindow(w *pg.WindowDef) (sql.NamedWindow, error) {
+	// A WINDOW entry can extend another named window ("w AS (base_win PARTITION
+	// BY ...)"), inheriting its ORDER BY/frame. sql.NamedWindow has no field for
+	// that base-window reference, so silently ignoring Refname would drop the
+	// inherited clauses rather than erroring — fall back to raw instead.
+	if w.GetRefname() != "" {
+		return sql.NamedWindow{}, sqlparse.Unsupported("WINDOW definition extending another named window")
+	}
 	def := sql.WindowDef(w.GetName())
 	if parts := w.GetPartitionClause(); len(parts) > 0 {
 		exprs := make([]sql.Expression, 0, len(parts))

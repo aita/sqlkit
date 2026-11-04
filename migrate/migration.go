@@ -107,13 +107,14 @@ func (mig Migration) parents() []string {
 // than maintaining a single growing slice. Declare a package-level registry and
 // have each file add to it with a package-level var (Add returns the registry,
 // so the blank identifier discards it). Migrator order does not depend on
-// registration order — New sorts by Version:
+// registration order — it is resolved from each migration's Revision/
+// DownRevision DAG links:
 //
 //	// migrations/migrations.go
 //	var Registry = migrate.NewRegistry()
 //
 //	// migrations/0001_create_users.go
-//	var _ = Registry.Add(migrate.Migration{Version: 1, Name: "create_users", Up: ...})
+//	var _ = Registry.Add(migrate.Migration{Revision: "0001", Name: "create_users", Up: ...})
 //
 //	// main.go
 //	m := migrations.Registry.NewMigrator(db)

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit/sql"
+	"github.com/aita/sqlkit/sqlparse/postgres"
 )
 
 func TestCreateTable(t *testing.T) {
@@ -374,4 +375,110 @@ func TestCreateTableExcludeConstraintFallsBackToRaw(t *testing.T) {
 // A generated-identity column is not modeled and round-trips raw.
 func TestCreateTableGeneratedIdentityFallsBackToRaw(t *testing.T) {
 	assertRaw(t, "CREATE TABLE t (a int GENERATED ALWAYS AS IDENTITY)")
+}
+
+// CREATE TEMP/TEMPORARY TABLE now models through Temporary() rather than raw
+// falling back or (the bug) silently dropping to a permanent table.
+func TestCreateTemporaryTable(t *testing.T) {
+	assertRoundTrip(t,
+		"CREATE TEMP TABLE t (id int)",
+		sql.CreateTable(sql.Table{Name: sql.NewIdent("t")}).Temporary().
+			Column(sql.ColumnDef{Name: sql.NewIdent("id"), Type: sql.RawType("integer")}),
+		`CREATE TEMPORARY TABLE "t" (
+    "id" integer
+);`)
+}
+
+// CREATE TABLE physical/structural attributes sqlkit's CreateTableBuilder cannot
+// represent — INHERITS, PARTITION BY, UNLOGGED, TABLESPACE, WITH (storage
+// params), ON COMMIT, USING <access method>, OF <type>, and PARTITION OF — must
+// fall back to raw rather than silently drop the attribute (INHERITS/PARTITION
+// BY/UNLOGGED/ON COMMIT are structural: dropping them changes what kind of table
+// is created or how its data persists across a transaction; OF/PARTITION OF
+// built a zero-column CreateTableStmt whose ToSQL used to hard-error instead of
+// falling back at parse time).
+func TestCreateTableStructuralAttributesFallBackToRaw(t *testing.T) {
+	for _, input := range []string{
+		"CREATE TABLE t (id int) INHERITS (parent)",
+		"CREATE TABLE t (id int) PARTITION BY RANGE (id)",
+		"CREATE UNLOGGED TABLE t (id int)",
+		"CREATE TABLE t (id int) TABLESPACE fast",
+		"CREATE TABLE t (id int) WITH (fillfactor=70)",
+		"CREATE TEMP TABLE t (id int) ON COMMIT DROP",
+		"CREATE TABLE t (id int) USING heap",
+		"CREATE TABLE t PARTITION OF parent FOR VALUES IN (1)",
+	} {
+		assertRaw(t, input)
+	}
+}
+
+// ALTER TABLE ... ALTER COLUMN ... TYPE ... USING <expr> supplies the explicit
+// data conversion; dropping it lets Postgres run its own default cast instead,
+// which can convert differently than intended or fail where USING would have
+// succeeded. COLLATE changes the column's sort/comparison collation. Neither has
+// a home on AlterColumnType, so both must fall back to raw.
+func TestAlterColumnTypeUsingAndCollateFallBackToRaw(t *testing.T) {
+	assertRaw(t, "ALTER TABLE foo ALTER COLUMN bar TYPE text USING bar::text")
+	assertRaw(t, `ALTER TABLE foo ALTER COLUMN bar TYPE text COLLATE "C"`)
+}
+
+// ALTER TABLE ONLY / IF EXISTS (statement- and command-level) / DROP COLUMN
+// CASCADE / ADD CONSTRAINT ... NOT VALID have no builder concept and must round-
+// trip as raw rather than silently drop the qualifier: ONLY excludes inheritance
+// children (dropping it widens the alteration), IF EXISTS/IF NOT EXISTS change
+// whether the statement errors on a missing/existing table or column, CASCADE
+// changes whether dependent objects also drop, and NOT VALID skips validating
+// existing rows (dropping it makes Postgres validate — and potentially fail or
+// lock — data NOT VALID was used to avoid checking).
+func TestAlterTableQualifiersFallBackToRaw(t *testing.T) {
+	for _, input := range []string{
+		"ALTER TABLE ONLY foo ADD COLUMN bar int",
+		"ALTER TABLE IF EXISTS foo ADD COLUMN bar int",
+		"ALTER TABLE foo ADD COLUMN IF NOT EXISTS bar int",
+		"ALTER TABLE foo DROP COLUMN bar CASCADE",
+		"ALTER TABLE foo ADD CONSTRAINT ck CHECK (bar > 0) NOT VALID",
+	} {
+		assertRaw(t, input)
+	}
+}
+
+// TRUNCATE ONLY excludes inheritance/partition children; dropping it silently
+// widens the truncate to every descendant table (the same class as the
+// already-fixed FROM ONLY on SELECT).
+func TestTruncateOnlyFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "TRUNCATE TABLE ONLY foo")
+}
+
+// A foreign key with MATCH FULL (changes NULL-handling: a partially-NULL
+// referencing row is rejected under FULL but allowed under the default MATCH
+// SIMPLE) or DEFERRABLE (changes when the constraint is checked — immediately vs.
+// at transaction end, which can change whether a transaction that temporarily
+// violates it succeeds) has no builder concept; a plain UNIQUE constraint can
+// also be DEFERRABLE. All must fall back to raw.
+func TestConstraintMatchAndDeferrableFallBackToRaw(t *testing.T) {
+	for _, input := range []string{
+		"ALTER TABLE foo ADD CONSTRAINT fk FOREIGN KEY (a) REFERENCES p(id) MATCH FULL",
+		"ALTER TABLE foo ADD CONSTRAINT fk FOREIGN KEY (a) REFERENCES p(id) DEFERRABLE INITIALLY DEFERRED",
+		"ALTER TABLE foo ADD CONSTRAINT uq UNIQUE (a) DEFERRABLE INITIALLY DEFERRED",
+	} {
+		assertRaw(t, input)
+	}
+}
+
+// The default MATCH SIMPLE (explicit or implicit) and a non-deferrable
+// constraint still model as before — only MATCH FULL / DEFERRABLE regressed to
+// raw.
+func TestConstraintDefaultMatchStillModeled(t *testing.T) {
+	for _, input := range []string{
+		"ALTER TABLE foo ADD CONSTRAINT fk FOREIGN KEY (a) REFERENCES p(id)",
+		"ALTER TABLE foo ADD CONSTRAINT fk FOREIGN KEY (a) REFERENCES p(id) MATCH SIMPLE",
+	} {
+		q, err := postgres.ParseOne(input)
+		if err != nil {
+			t.Fatalf("ParseOne(%q) error = %v", input, err)
+		}
+		if _, ok := q.(sql.RawQuery); ok {
+			t.Errorf("%q regressed to a RawQuery; want a modeled query", input)
+		}
+	}
 }

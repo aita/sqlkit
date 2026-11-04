@@ -442,6 +442,33 @@ func TestRestateColumn(t *testing.T) {
 	}
 }
 
+// TestRestateColumnAutoIncrementRejectedOnNonMySQL covers compileRestateColumn:
+// unlike MySQL's inline MODIFY COLUMN ... AUTO_INCREMENT, PostgreSQL (and the
+// standard target) has no ALTER COLUMN form of "make this a serial column" —
+// CREATE TABLE's bigserial sugar expands to a backing sequence plus a
+// nextval() DEFAULT that ALTER can't express in one step. Restating an
+// AutoIncrement column on those dialects used to silently fall through to
+// "ALTER COLUMN ... DROP DEFAULT" (col.Default is nil for a bare
+// auto-increment column) instead of erroring, which would strip an existing
+// serial default via what looked like an unrelated column change.
+func TestRestateColumnAutoIncrementRejectedOnNonMySQL(t *testing.T) {
+	col := ColumnDef{Name: NewIdent("id"), Type: EngineType{Name: "bigint"}, NotNull: true, AutoIncrement: true}
+	stmt := AlterTable(Table{Name: NewIdent("users")}).RestateColumn(col)
+
+	if _, _, err := stmt.ToSQL(PostgreSQLDialect{}); err == nil {
+		t.Fatal("RestateColumn with AutoIncrement on postgres succeeded, want error")
+	} else if !strings.Contains(err.Error(), "auto-increment") {
+		t.Fatalf("error = %v, want mentioning auto-increment", err)
+	}
+
+	// MySQL's MODIFY COLUMN handles AutoIncrement natively; unaffected.
+	got := mustDDL(t, stmt, "mysql")
+	want := "ALTER TABLE `users` MODIFY COLUMN `id` bigint NOT NULL AUTO_INCREMENT;"
+	if got != want {
+		t.Errorf("RestateColumn(mysql) =\n%s\nwant\n%s", got, want)
+	}
+}
+
 func TestCreateTableTemporary(t *testing.T) {
 	stmt := CreateTable(Table{Name: NewIdent("scratch")}).
 		Column(ColumnDef{Name: NewIdent("id"), Type: RawType("bigint")}).
@@ -940,4 +967,41 @@ func TestDDLCompileRemainingBranches(t *testing.T) {
 
 	// CREATE VIEW whose body fails to compile.
 	errOn("view bad body", pg, CreateView(tbl, Select(bad).From(orgs)))
+}
+
+// PostgreSQL-only object kinds — sequences, enum types (CREATE TYPE ... AS ENUM),
+// extensions, and materialized views — have no MySQL equivalent, so compiling
+// their DDL for MySQL must fail with a descriptive error naming the dialect rather
+// than emit SQL the engine rejects. PostgreSQL still renders each.
+func TestPostgresOnlyObjectsRejectedOnMySQL(t *testing.T) {
+	mv := Table{Name: NewIdent("mv")}
+	body := Select(Col("id")).From(Table{Name: NewIdent("t")})
+	cases := []struct {
+		name    string
+		stmt    Statement
+		feature string
+	}{
+		{"create sequence", CreateSequence(Table{Name: NewIdent("s")}), "sequences"},
+		{"drop sequence", DropSequence("s"), "sequences"},
+		{"create enum", CreateEnum("mood", "happy", "sad"), "enum types"},
+		{"drop type", DropType("mood"), "enum types"},
+		{"alter type add value", AlterTypeAddValue("mood", "meh"), "enum types"},
+		{"alter type rename value", AlterTypeRenameValue("mood", "sad", "down"), "enum types"},
+		{"create extension", CreateExtension("hstore"), "extensions"},
+		{"drop extension", DropExtension("hstore"), "extensions"},
+		{"create materialized view", CreateMaterializedView(mv, body), "materialized views"},
+		{"drop materialized view", DropMaterializedView(mv), "materialized views"},
+		{"refresh materialized view", RefreshMaterializedView(mv), "materialized views"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, _, err := tc.stmt.ToSQL(MySQLDialect{}); err == nil ||
+				!strings.Contains(err.Error(), tc.feature) {
+				t.Errorf("ToSQL(mysql) error = %v, want a rejection mentioning %q", err, tc.feature)
+			}
+			if _, _, err := tc.stmt.ToSQL(PostgreSQLDialect{}); err != nil {
+				t.Errorf("ToSQL(postgres) error = %v, want success", err)
+			}
+		})
+	}
 }
