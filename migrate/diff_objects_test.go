@@ -122,6 +122,35 @@ func TestDiffNonAppendEnumRecreates(t *testing.T) {
 	}
 }
 
+// TestDiffGrantsDistinctGranteesOnSameObject covers two distinct grants on the
+// same object (different grantees, different privileges): adding one must not
+// revoke the other. grantKey used to be keyed on (object type, objects) alone,
+// so alice's unrelated, unchanged SELECT grant collided in the lookup map with
+// bob's new INSERT grant and was silently revoked with no replacement GRANT.
+func TestDiffGrantsDistinctGranteesOnSameObject(t *testing.T) {
+	aliceSelect := meta.Grant{
+		Privileges: []string{"SELECT"}, ObjectType: "TABLE",
+		Objects: []string{"public.posts"}, Grantees: []string{"alice"},
+	}
+	old := meta.Metadata{Grants: []meta.Grant{aliceSelect}}
+	next := meta.Metadata{Grants: []meta.Grant{
+		aliceSelect, // unchanged
+		{
+			Privileges: []string{"INSERT"}, ObjectType: "TABLE",
+			Objects: []string{"public.posts"}, Grantees: []string{"bob"},
+		},
+	}}
+	stmts := renderAll(t, mustDiff(t, old, next))
+	joined := strings.Join(stmts, "\n")
+
+	if strings.Contains(joined, `REVOKE`) {
+		t.Fatalf("alice's unchanged grant must not be revoked:\n%s", joined)
+	}
+	if !strings.Contains(joined, `GRANT INSERT ON TABLE "public"."posts" TO "bob";`) {
+		t.Fatalf("missing bob's new grant:\n%s", joined)
+	}
+}
+
 func mustDiff(t *testing.T, old, next meta.Metadata) []sql.Statement {
 	t.Helper()
 	stmts, err := migrate.Diff(old, next, pg(t))

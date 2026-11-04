@@ -26,11 +26,13 @@ const (
 	StmtDelete
 	// StmtDDL is a schema statement (CREATE/ALTER/DROP/TRUNCATE/COMMENT).
 	StmtDDL
+	// StmtMerge is a MERGE, a data-modifying statement that conditionally
+	// inserts, updates, or deletes target rows from a source.
+	StmtMerge
 	// StmtCall is a stored procedure call (CALL). Its effects are not
 	// statically knowable — the procedure body may read, write, or do
-	// nothing — so IsWrite reports true to stay on the safe side, the same
-	// fail-safe stance StmtKind takes nowhere else but that Statement.Access's
-	// AccessUnknown documents for an equivalent case.
+	// nothing — so IsWrite reports true to stay on the safe side, mirroring
+	// how Statement.Access treats an undetermined statement as AccessUnknown.
 	StmtCall
 )
 
@@ -47,6 +49,8 @@ func (k StmtKind) String() string {
 		return "delete"
 	case StmtDDL:
 		return "ddl"
+	case StmtMerge:
+		return "merge"
 	case StmtCall:
 		return "call"
 	default:
@@ -57,10 +61,11 @@ func (k StmtKind) String() string {
 // IsRead reports whether the statement only reads rows.
 func (k StmtKind) IsRead() bool { return k == StmtSelect }
 
-// IsWrite reports whether the statement modifies data (INSERT/UPDATE/DELETE),
-// or might (CALL, whose procedure body is not statically knowable).
+// IsWrite reports whether the statement modifies data
+// (INSERT/UPDATE/DELETE/MERGE), or might (CALL, whose procedure body is not
+// statically knowable).
 func (k StmtKind) IsWrite() bool {
-	return k == StmtInsert || k == StmtUpdate || k == StmtDelete || k == StmtCall
+	return k == StmtInsert || k == StmtUpdate || k == StmtDelete || k == StmtMerge || k == StmtCall
 }
 
 // FiltersRows reports whether the statement selects the rows it acts on through
@@ -87,6 +92,8 @@ func KindOf(q sql.Query) (StmtKind, bool) {
 		return StmtUpdate, true
 	case sql.DeleteStmt:
 		return StmtDelete, true
+	case sql.MergeStmt:
+		return StmtMerge, true
 	default:
 		if _, isDDL := ddlTables(v); isDDL {
 			return StmtDDL, true
@@ -102,12 +109,20 @@ func DetectKind(sqlText string) StmtKind {
 	switch leadingKeyword(sqlText) {
 	case "SELECT", "WITH", "VALUES", "TABLE":
 		return StmtSelect
-	case "INSERT":
+	case "INSERT", "REPLACE":
+		// REPLACE INTO is MySQL's insert-or-replace; the parsed-AST path
+		// (KindOf) already classifies it as StmtInsert via sql.InsertStmt's
+		// Replace flag, so the raw-text fallback must agree — otherwise a
+		// REPLACE INTO analyzed without a parser (or after a parse failure)
+		// falls through to StmtUnknown, whose IsWrite() is false: a write that
+		// silently bypasses ForbidWrites/ReadOnly enforcement.
 		return StmtInsert
 	case "UPDATE":
 		return StmtUpdate
 	case "DELETE":
 		return StmtDelete
+	case "MERGE":
+		return StmtMerge
 	case "CALL":
 		// A stored procedure call: sqlparse frontends have no AST for it and
 		// fall back to a raw passthrough, so KindOf never classifies one —
