@@ -49,7 +49,10 @@ func (d *Catalog) Extension(name string, opts ...ExtensionOption) {
 type ExtensionOption func(*meta.Extension)
 
 // ExtensionSchema installs the extension's objects into the named schema
-// (CREATE EXTENSION ... WITH SCHEMA name).
+// (CREATE EXTENSION ... WITH SCHEMA name). Like a table declared through
+// Catalog.Schema(name), the schema is assumed to already exist unless it is
+// also put under migration management with Catalog.Schema(name, decl.Create())
+// — CreateSQL never emits a CREATE SCHEMA for a name it only sees here.
 func ExtensionSchema(schema string) ExtensionOption {
 	return func(e *meta.Extension) { e.Schema = schema }
 }
