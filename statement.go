@@ -138,7 +138,8 @@ func (k StatementKind) String() string {
 
 // Kind classifies the statement from its AST, independent of Op, so a write
 // carried over the row-returning path (a RETURNING statement) is still reported
-// as a write. A raw-string statement (no AST) is classified from its leading
+// as a write — whether the AST is a typed builder or a bare parsed statement.
+// A raw-string statement (no AST, or a sql.RawQuery) is classified from its leading
 // keyword: a SELECT is KindRawRead, anything else KindRawUnknown.
 func (s Statement) Kind() StatementKind {
 	switch s.Query.(type) {
@@ -172,6 +173,25 @@ func (s Statement) Kind() StatementKind {
 		// RawSQL(...).Scan(...) as KindSelect (a read).
 		if isDDLQuery(s.Query) {
 			return KindDDL
+		}
+		// A bare statement AST — what a parser, or a hand-built sql.Query, hands
+		// back — classifies by its shape too: a parsed INSERT ... RETURNING runs
+		// with Op: OpQuery, and falling back to Op would report the write as a
+		// read. A sql.RawQuery (a construct the parser could not model) carries
+		// only text, so it is classified like a raw string.
+		switch q := sql.Unwrap(s.Query).(type) {
+		case sql.SelectStmt, sql.CompoundStmt, sql.ValuesQuery:
+			return KindSelect
+		case sql.InsertStmt:
+			return KindInsert
+		case sql.UpdateStmt:
+			return KindUpdate
+		case sql.DeleteStmt:
+			return KindDelete
+		case sql.MergeStmt:
+			return KindMerge
+		case sql.RawQuery:
+			return classifyRawSQL(q.SQL())
 		}
 		// An AST we do not recognize by shape at all. Fall back to Op: a writing
 		// Exec is DDL, a reading Query is a select.
@@ -294,6 +314,9 @@ func (s Statement) locksRows() bool {
 	}
 	if s.Query == nil {
 		return hasLockingClause(s.SQL)
+	}
+	if raw, ok := sql.Unwrap(s.Query).(sql.RawQuery); ok {
+		return hasLockingClause(raw.SQL())
 	}
 	return false
 }
