@@ -1,6 +1,8 @@
 package sqlite
 
 import (
+	"reflect"
+
 	"github.com/aita/sqlkit/sql"
 	rsql "github.com/rqlite/sql"
 )
@@ -135,6 +137,32 @@ func stmtPos(stmt rsql.Statement) rsql.Pos {
 	case *rsql.DropTableStatement:
 		return s.Drop
 	default:
+		return firstKeywordPos(stmt)
+	}
+}
+
+// firstKeywordPos returns the earliest valid position among a statement node's
+// own Pos fields — its leading keyword — for the statement kinds stmtPos has no
+// explicit case for, so their source text can be sliced rather than deparsed.
+func firstKeywordPos(stmt rsql.Statement) rsql.Pos {
+	rv := reflect.ValueOf(stmt)
+	if rv.Kind() == reflect.Pointer {
+		rv = rv.Elem()
+	}
+	if rv.Kind() != reflect.Struct {
 		return rsql.Pos{}
 	}
+	posType := reflect.TypeOf(rsql.Pos{})
+	best := rsql.Pos{}
+	for i := 0; i < rv.NumField(); i++ {
+		f := rv.Field(i)
+		if f.Type() != posType {
+			continue
+		}
+		p := f.Interface().(rsql.Pos)
+		if p.IsValid() && (!best.IsValid() || p.Offset < best.Offset) {
+			best = p
+		}
+	}
+	return best
 }

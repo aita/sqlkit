@@ -38,6 +38,13 @@ func convertInsert(s *rsql.InsertStatement) (sql.Query, error) {
 	if s.DefaultValues.IsValid() {
 		return nil, sqlparse.Unsupported("INSERT ... DEFAULT VALUES")
 	}
+	// The typed INSERT has no WITH clause, and needs an explicit column list.
+	if s.WithClause != nil {
+		return nil, sqlparse.Unsupported("WITH on INSERT")
+	}
+	if len(s.Columns) == 0 {
+		return nil, sqlparse.Unsupported("INSERT without a column list")
+	}
 
 	q := sql.InsertInto(tableName(s.Schema, s.Table))
 
@@ -176,6 +183,11 @@ func convertUpdate(s *rsql.UpdateStatement) (sql.Query, error) {
 			q = q.From(base)
 		}
 		for _, j := range joins {
+			// UPDATE ... FROM keeps only an ON predicate; a USING or NATURAL join
+			// would turn into a cross join.
+			if len(j.Using) > 0 || j.Natural {
+				return nil, sqlparse.Unsupported("USING / NATURAL join in UPDATE ... FROM")
+			}
 			switch j.Kind {
 			case "JOIN", "CROSS JOIN":
 				q = q.Join(j.Source, j.On)

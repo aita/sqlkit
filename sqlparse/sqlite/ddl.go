@@ -1,6 +1,8 @@
 package sqlite
 
 import (
+	"strings"
+
 	"github.com/aita/sqlkit/sql"
 	"github.com/aita/sqlkit/sqlparse"
 	rsql "github.com/rqlite/sql"
@@ -10,6 +12,11 @@ func convertCreateTable(s *rsql.CreateTableStatement) (sql.Query, error) {
 	// CREATE TABLE ... AS SELECT is a distinct shape not modeled by the builder.
 	if s.Select != nil {
 		return nil, sqlparse.Unsupported("CREATE TABLE ... AS SELECT")
+	}
+	// STRICT and WITHOUT ROWID change the table's semantics (type enforcement,
+	// rowid and NULL primary keys); the builder has no form for them.
+	if s.Strict.IsValid() || s.Without.IsValid() {
+		return nil, sqlparse.Unsupported("STRICT / WITHOUT ROWID table")
 	}
 
 	b := sql.CreateTable(tableName(s.Schema, s.Name))
@@ -73,9 +80,15 @@ func convertColumnDef(cd *rsql.ColumnDefinition) (sql.ColumnDef, bool, error) {
 		case *rsql.UniqueConstraint:
 			col.Unique = true
 		case *rsql.DefaultConstraint:
-			// A DEFAULT must be static SQL (no bind values), so render the literal
-			// or expression verbatim.
-			col.Default = sql.Raw(con.Expr.String())
+			// A DEFAULT must be static SQL (no bind values). A literal renders
+			// verbatim; an expression is kept raw (rqlite's deparser drops the
+			// parentheses SQLite requires around it, and can garble or panic on
+			// some expressions).
+			lit, ok := staticDefault(con.Expr)
+			if !ok {
+				return sql.ColumnDef{}, false, sqlparse.Unsupported("DEFAULT expression")
+			}
+			col.Default = sql.Raw(lit)
 		default:
 			return sql.ColumnDef{}, false, sqlparse.Unsupportedf("column constraint %T", c)
 		}
@@ -101,7 +114,10 @@ func applyTableConstraint(b sql.CreateTableBuilder, primaryKey []string, c rsql.
 		}
 		return b.Unique(constraintName(con.Name), names...), primaryKey, nil
 	case *rsql.CheckConstraint:
-		return b.Check(constraintName(con.Name), sql.Raw(con.Expr.String())), primaryKey, nil
+		// The CHECK expression would go through rqlite's lossy deparser (which
+		// can turn "- -1" into a comment, or panic on LIKE ... ESCAPE); keep the
+		// statement raw instead.
+		return b, primaryKey, sqlparse.Unsupported("CHECK constraint")
 	default:
 		return b, primaryKey, sqlparse.Unsupportedf("table constraint %T", c)
 	}
@@ -118,6 +134,11 @@ func convertCreateIndex(s *rsql.CreateIndexStatement) (sql.Query, error) {
 	// A partial index (WHERE) is not modeled.
 	if s.WhereExpr != nil {
 		return nil, sqlparse.Unsupported("partial index (CREATE INDEX ... WHERE)")
+	}
+	// SQLite qualifies the index name (CREATE INDEX s.i ON t), not the table;
+	// the builder qualifies the table, which SQLite rejects.
+	if s.Schema != nil {
+		return nil, sqlparse.Unsupported("schema-qualified CREATE INDEX")
 	}
 	columns := make([]string, 0, len(s.Columns))
 	for _, col := range s.Columns {
@@ -144,4 +165,26 @@ func convertDropTable(s *rsql.DropTableStatement) (sql.Query, error) {
 		b = b.IfExists()
 	}
 	return b, nil
+}
+
+// staticDefault returns the SQL text of a literal DEFAULT value (a number,
+// optionally signed, a string, NULL, TRUE/FALSE, or CURRENT_TIME/DATE/
+// TIMESTAMP), reporting false for anything else.
+func staticDefault(e rsql.Expr) (string, bool) {
+	switch x := e.(type) {
+	case *rsql.NumberLit, *rsql.StringLit, *rsql.NullLit, *rsql.BoolLit, *rsql.TimestampLit:
+		return x.String(), true
+	case *rsql.UnaryExpr:
+		if n, ok := x.X.(*rsql.NumberLit); ok && (x.Op == rsql.MINUS || x.Op == rsql.PLUS) {
+			return x.Op.String() + n.String(), true
+		}
+	case *rsql.Ident:
+		switch up := strings.ToUpper(x.Name); up {
+		case "CURRENT_TIME", "CURRENT_DATE", "CURRENT_TIMESTAMP":
+			if !x.Quoted {
+				return up, true
+			}
+		}
+	}
+	return "", false
 }

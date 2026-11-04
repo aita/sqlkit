@@ -93,3 +93,56 @@ func TestNotBindsBelowNullTest(t *testing.T) {
 	assertSQL(t, "SELECT id FROM t WHERE NOT a IS NULL", `SELECT "id" FROM "t" WHERE (NOT ("a" IS NULL))`)
 	assertSQL(t, "SELECT id FROM t WHERE NOT a IS NOT NULL", `SELECT "id" FROM "t" WHERE (NOT ("a" IS NOT NULL))`)
 }
+
+// Constructs the typed converters would render with a different meaning (or
+// not at all) stay raw: their source text is kept verbatim.
+func TestMisModeledConstructsStayRaw(t *testing.T) {
+	for _, q := range []string{
+		"SELECT id FROM t WHERE a IS TRUE",                            // truthiness, not = 1
+		"SELECT id FROM t WHERE a IS NOT FALSE",                       // ditto
+		"SELECT t.id, e.x FROM t LEFT JOIN e",                         // not a CROSS JOIN
+		`SELECT count(*) FROM "main.t"`,                               // one table named main.t
+		`SELECT s."a.b" FROM s`,                                       // one column named a.b
+		`SELECT "count(*) FROM t --"(1)`,                              // quoted function name
+		"UPDATE t SET b = u.v FROM u JOIN w USING (id)",               // USING kept
+		"WITH c AS (SELECT 1 AS v) INSERT INTO k (v) SELECT v FROM c", // WITH kept
+		"INSERT INTO e VALUES (1, 'a')",                               // no column list
+		"CREATE TABLE n (a INT, b TEXT) STRICT",                       // STRICT kept
+		"CREATE TABLE w (a INT PRIMARY KEY, b TEXT) WITHOUT ROWID",    // WITHOUT ROWID kept
+		"CREATE TABLE d (a INT DEFAULT (1 + 2))",                      // parenthesized DEFAULT kept
+		"CREATE TABLE c (a INT, CHECK (a > - -1))",                    // CHECK not deparsed
+		"CREATE INDEX main.i8 ON t (a)",                               // schema on the index name
+	} {
+		assertRaw(t, q)
+	}
+	// A literal DEFAULT still converts.
+	assertSQL(t, "CREATE TABLE d (a INT DEFAULT -1, b TEXT DEFAULT 'x', c TEXT DEFAULT CURRENT_TIMESTAMP)",
+		"CREATE TABLE \"d\" (\n    \"a\" INT DEFAULT -1,\n    \"b\" TEXT DEFAULT 'x',\n    \"c\" TEXT DEFAULT CURRENT_TIMESTAMP\n);")
+}
+
+// Inputs that crashed the parser return an error or a raw statement instead.
+func TestParseDoesNotPanic(t *testing.T) {
+	for _, q := range []string{
+		"CREATE TABLE a (x INT, CHECK (x > 0), y INT)",
+		"CREATE TABLE A(CONSTRAINT A",
+		"CREATE TABLE z (a TEXT, CHECK (a LIKE 'x%' ESCAPE '!'))",
+		"SELECT 1; CREATE VIEW v AS SELECT * FROM t WHERE b LIKE 'a' ESCAPE '!'",
+	} {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("Parse(%q) panicked: %v", q, r)
+				}
+			}()
+			_, _ = sqlite.Parse(q)
+		}()
+	}
+	// A multi-statement input keeps each raw statement's own source text.
+	qs, err := sqlite.Parse("CREATE VIEW v AS SELECT - -a AS x FROM t; DROP VIEW v")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw, ok := qs[0].(sql.RawQuery); !ok || raw.SQL() != "CREATE VIEW v AS SELECT - -a AS x FROM t" {
+		t.Fatalf("first statement = %#v", qs[0])
+	}
+}

@@ -132,6 +132,11 @@ func convertIs(left sql.Expression, rightNode rsql.Expr, negate bool) (sql.Expre
 		}
 		return sql.IsNull(left), nil
 	}
+	// x IS TRUE / IS FALSE test truthiness (any nonzero number is TRUE), which
+	// IS [NOT] DISTINCT FROM a bound boolean does not express.
+	if _, ok := rightNode.(*rsql.BoolLit); ok {
+		return nil, sqlparse.Unsupported("IS [NOT] TRUE/FALSE")
+	}
 	right, err := convertExpr(rightNode)
 	if err != nil {
 		return nil, err
