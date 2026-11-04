@@ -104,6 +104,19 @@ type Scope struct {
 	// nesting
 	parent    *Scope
 	savepoint string
+
+	// versionWrites are the bumped version values of rows whose guarded UPDATE
+	// succeeded during the current flush. They are written back into the rows
+	// only once the whole flush succeeds (a failed flush leaves the staged
+	// state, and the rows, as they were so a retry guards on the same version).
+	versionWrites []versionWrite
+}
+
+// versionWrite records a version field to set to next after a successful flush.
+type versionWrite struct {
+	row    any // pointer to the row struct
+	column string
+	next   any
 }
 
 // Option configures a Scope.
@@ -416,6 +429,7 @@ func (s *Scope) Rollback(ctx context.Context) error {
 // foreign-key-aware table order; within a phase each table's own work runs as a
 // unit.
 func (s *Scope) flush(ctx context.Context) error {
+	s.versionWrites = nil
 	order := s.flushOrder()
 	for _, name := range order {
 		if err := s.flushInserts(ctx, s.tables[name]); err != nil {
@@ -436,8 +450,16 @@ func (s *Scope) flush(ctx context.Context) error {
 			return err
 		}
 	}
-	// Success: clear staged work and refresh managed snapshots so the scope can
-	// be reused for another mutate/flush cycle.
+	// Success: write the bumped version values back into their rows (so the
+	// struct, and the refreshed snapshot below, match the database), clear
+	// staged work, and refresh managed snapshots so the scope can be reused for
+	// another mutate/flush cycle.
+	for _, w := range s.versionWrites {
+		if err := sqlkit.SetColumns(w.row, []string{w.column}, []any{w.next}); err != nil {
+			return fmt.Errorf("uow: write back version %s: %w", w.column, err)
+		}
+	}
+	s.versionWrites = nil
 	for _, name := range s.order {
 		ts := s.tables[name]
 		ts.inserts = nil
@@ -615,6 +637,7 @@ func (s *Scope) flushManaged(ctx context.Context, ts *tableState) error {
 			if err := s.execRowUpdate(ctx, ts, tr.pk, assignments, guard); err != nil {
 				return err
 			}
+			s.recordVersionWrite(tr.ptr, guard)
 			continue
 		}
 		pending = append(pending, pendingUpdate{pk: tr.pk, assignments: assignments})
@@ -646,6 +669,7 @@ func (s *Scope) flushUpdates(ctx context.Context, ts *tableState) error {
 			if err := s.execRowUpdate(ctx, ts, pk, assignments, guard); err != nil {
 				return err
 			}
+			s.recordVersionWrite(row, guard)
 			continue
 		}
 		pending = append(pending, pendingUpdate{pk: pk, assignments: assignments})
@@ -846,6 +870,38 @@ func (s *Scope) stateFor(table sqlkit.Table) (*tableState, error) {
 	return ts, nil
 }
 
+// recordVersionWrite queues the bumped version of a row whose guarded UPDATE
+// succeeded, to be written back when the flush completes. A row passed by value
+// (a detached Update with a non-pointer struct) can't be written back; its
+// caller keeps the stale version and must reload before updating it again.
+func (s *Scope) recordVersionWrite(row any, guard *versionGuard) {
+	if guard == nil {
+		return
+	}
+	rv := reflect.ValueOf(row)
+	if rv.Kind() != reflect.Pointer || rv.IsNil() || rv.Elem().Kind() != reflect.Struct {
+		return
+	}
+	next, ok := nextVersion(guard.current)
+	if !ok {
+		return
+	}
+	s.versionWrites = append(s.versionWrites, versionWrite{row: row, column: guard.column, next: next})
+}
+
+// nextVersion returns v+1 in v's own integer type, mirroring the database's
+// "col = col + 1". It reports false for a non-integer version value.
+func nextVersion(v any) (any, bool) {
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return reflect.ValueOf(rv.Int() + 1).Convert(rv.Type()).Interface(), true
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return reflect.ValueOf(rv.Uint() + 1).Convert(rv.Type()).Interface(), true
+	}
+	return nil, false
+}
+
 // versionGuard is an optimistic-lock predicate to AND onto an UPDATE's WHERE:
 // the version column matches current, so a row another writer already
 // advanced past current matches nothing and execRowUpdate reports
@@ -858,8 +914,8 @@ type versionGuard struct {
 // diffAssignments builds SET assignments for the managed entity's changed,
 // non-primary-key columns by comparing current values to the snapshot. A
 // version-tagged column is never diffed (app code does not mutate it itself):
-// it is bumped (col = col + 1) and its current snapshot value becomes the
-// returned guard, mirroring update.go's SetStruct so optimistic locking works
+// it is bumped (col = col + 1) and its snapshot value becomes the returned
+// guard (and is bumped in the struct too once the flush succeeds), mirroring update.go's SetStruct so optimistic locking works
 // the same through uow as through the direct builder path. A touch-tagged
 // column is set to CURRENT_TIMESTAMP regardless of whether it changed, since
 // app code does not maintain it either.
@@ -886,7 +942,14 @@ func diffAssignments(table sqlkit.Table, tr *tracked, names []string, vals []any
 		switch {
 		case m.Version:
 			out = append(out, sql.Set(name, sql.Add(sql.Col(name), sql.Val(1))))
-			guard = &versionGuard{column: name, current: vals[i]}
+			// Guard on the version the entity was loaded (or last flushed)
+			// with — the snapshot — not on whatever the struct holds now, so a
+			// hand-edited version field can't defeat or spoil the lock.
+			current, ok := snap[name]
+			if !ok {
+				current = normalize(vals[i])
+			}
+			guard = &versionGuard{column: name, current: current}
 		case m.Touch:
 			out = append(out, sql.Set(name, sql.CurrentTimestamp()))
 		default:
@@ -921,8 +984,9 @@ func hasRealChange(pk map[string]bool, snap map[string]any, names []string, vals
 
 // updateAssignments builds SET assignments for every mapped non-primary-key
 // column of a detached row. As in diffAssignments, a version-tagged column is
-// bumped with its current value returned as the guard rather than copied, and
-// a touch-tagged column is unconditionally set to CURRENT_TIMESTAMP.
+// bumped with its current value returned as the guard rather than copied (and,
+// for a row passed by pointer, bumped in the struct once the flush succeeds),
+// and a touch-tagged column is unconditionally set to CURRENT_TIMESTAMP.
 func updateAssignments(table sqlkit.Table, row any) ([]sql.Assignment, *versionGuard, error) {
 	names, values, err := sqlkit.ColumnValues(table, row)
 	if err != nil {

@@ -250,3 +250,108 @@ func TestDetachedUpdateTouchAlwaysSetsCurrentTimestamp(t *testing.T) {
 		}
 	}
 }
+
+// guardArg returns the last argument of an UPDATE, which is the version guard
+// value (the WHERE predicates come after the SET values: id, then version).
+func guardArg(t *testing.T, args []any) any {
+	t.Helper()
+	if len(args) == 0 {
+		t.Fatal("UPDATE has no args")
+	}
+	return args[len(args)-1]
+}
+
+// After a successful guarded flush the database row is at version v+1; the
+// struct (and its refreshed snapshot) must follow, so a second mutate+Flush on
+// the same scope guards on v+1 instead of reporting a spurious conflict.
+func TestManagedVersionSecondFlushGuardsOnBumpedVersion(t *testing.T) {
+	fake := &testutil.Fake{QueryFunc: accountResult(1, 100, 7)}
+	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()))
+	var a accountRow
+	if found, err := scope.Get(ctx(), newAccounts(), &a, int64(1)); err != nil || !found {
+		t.Fatalf("Get = %v, %v", found, err)
+	}
+	a.Balance = 150
+	if err := scope.Flush(ctx()); err != nil {
+		t.Fatalf("first flush: %v", err)
+	}
+	if a.Version != 8 {
+		t.Fatalf("after first flush a.Version = %d, want 8 (bumped like the database row)", a.Version)
+	}
+	a.Balance = 200
+	if err := scope.Flush(ctx()); err != nil {
+		t.Fatalf("second flush: %v", err)
+	}
+	execs := fake.Execs()
+	if len(execs) != 2 {
+		t.Fatalf("got %d execs, want 2 UPDATEs: %v", len(execs), fake.Statements())
+	}
+	if g := guardArg(t, execs[0].Args); g != int64(7) {
+		t.Fatalf("first UPDATE guard = %v, want 7", g)
+	}
+	if g := guardArg(t, execs[1].Args); g != int64(8) {
+		t.Fatalf("second UPDATE guard = %v, want 8 (the bumped version)", g)
+	}
+	if a.Version != 9 {
+		t.Fatalf("after second flush a.Version = %d, want 9", a.Version)
+	}
+}
+
+// The managed guard is the version the entity was loaded with, not whatever
+// the struct holds: code that still bumps Version by hand (the only option
+// while uow ignored the tag) must not turn every flush into a conflict.
+func TestManagedVersionGuardUsesSnapshotNotStruct(t *testing.T) {
+	fake := &testutil.Fake{QueryFunc: accountResult(1, 100, 7)}
+	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()))
+	var a accountRow
+	if found, err := scope.Get(ctx(), newAccounts(), &a, int64(1)); err != nil || !found {
+		t.Fatalf("Get = %v, %v", found, err)
+	}
+	a.Balance = 150
+	a.Version++ // legacy hand bump
+	if err := scope.Flush(ctx()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if g := guardArg(t, fake.Execs()[0].Args); g != int64(7) {
+		t.Fatalf("UPDATE guard = %v, want the loaded version 7", g)
+	}
+	if a.Version != 8 {
+		t.Fatalf("a.Version = %d, want 8 (database value after the bump)", a.Version)
+	}
+}
+
+// A failed flush leaves the struct's version untouched, so a retry guards on
+// the same version the database still holds.
+func TestManagedVersionConflictLeavesVersionUnchanged(t *testing.T) {
+	zero := int64(0)
+	fake := &testutil.Fake{QueryFunc: accountResult(1, 100, 7), RowsAffected: &zero}
+	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()))
+	var a accountRow
+	if found, err := scope.Get(ctx(), newAccounts(), &a, int64(1)); err != nil || !found {
+		t.Fatalf("Get = %v, %v", found, err)
+	}
+	a.Balance = 150
+	if err := scope.Flush(ctx()); !errors.Is(err, sqlkit.ErrVersionConflict) {
+		t.Fatalf("Flush() error = %v, want ErrVersionConflict", err)
+	}
+	if a.Version != 7 {
+		t.Fatalf("a.Version = %d after a failed flush, want 7 (unchanged)", a.Version)
+	}
+}
+
+// A detached Update of a row passed by pointer gets its version bumped too, so
+// updating the same struct again guards on the new version.
+func TestDetachedUpdateVersionWrittenBack(t *testing.T) {
+	fake := &testutil.Fake{}
+	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()))
+	a := &accountRow{ID: 1, Balance: 150, Version: 7}
+	if err := scope.Update(newAccounts(), a); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if err := scope.Flush(ctx()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if a.Version != 8 {
+		t.Fatalf("a.Version = %d, want 8", a.Version)
+	}
+}
