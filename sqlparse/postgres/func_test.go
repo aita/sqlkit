@@ -69,3 +69,24 @@ func TestTableShorthand(t *testing.T) {
 		sql.Select(sql.Star()).From(sql.Table{Name: sql.NewIdent("t")}),
 		`SELECT * FROM "t"`)
 }
+
+// A function call carrying a modifier sqlkit's function nodes cannot model —
+// FILTER (WHERE ...), an in-aggregate ORDER BY, WITHIN GROUP, or VARIADIC —
+// must fall back to a verbatim RawQuery rather than silently drop the modifier
+// (which would change the statement's meaning). assertRaw also checks the raw
+// text is byte-identical to the input, so the modifier survives.
+func TestFuncCallModifiersFallBackToRaw(t *testing.T) {
+	for _, input := range []string{
+		"SELECT sum(a) FILTER (WHERE b > 0) FROM t",
+		"SELECT count(*) FILTER (WHERE b > 0) FROM t",
+		"SELECT array_agg(a ORDER BY b) FROM t",
+		"SELECT string_agg(a, ',' ORDER BY a DESC) FROM t",
+		"SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY x) FROM t",
+		"SELECT concat(VARIADIC a) FROM t",
+	} {
+		raw := assertRaw(t, input)
+		if raw.SQL() != input {
+			t.Errorf("modifier not preserved: raw = %q, want %q", raw.SQL(), input)
+		}
+	}
+}

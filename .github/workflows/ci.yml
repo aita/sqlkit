@@ -149,7 +149,7 @@ jobs:
           # .golangci.yml while examples/ (and examples/querytrace) use the
           # stricter examples/.golangci.yml. Keep going on failure so every
           # module's findings surface in one run.
-          for dir in . cmd/sqlkit examples examples/querytrace internal/tests/integration internal/tests/roundtrip querytrace/otelquery sqlparse/postgres sqlparse/mysql; do
+          for dir in . cmd/sqlkit examples examples/querytrace internal/tests/integration internal/tests/roundtrip querytrace/otelquery sqlparse/postgres sqlparse/mysql sqlparse/sqlite; do
             echo "::group::golangci-lint $dir"
             (cd "$dir" && golangci-lint run ./...) || status=1
             echo "::endgroup::"

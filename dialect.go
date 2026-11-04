@@ -1,6 +1,10 @@
 package sqlkit
 
-import querysql "github.com/aita/sqlkit/sql"
+import (
+	"sync"
+
+	querysql "github.com/aita/sqlkit/sql"
+)
 
 // Dialect captures SQL syntax details that vary by database engine.
 type Dialect = querysql.Dialect
@@ -27,6 +31,12 @@ type LibSQLDialect = querysql.LibSQLDialect
 // WithDialect (or DialectForDriver after RegisterDriverDialect).
 type StandardSQLDialect = querysql.StandardSQLDialect
 
+// driverDialectsMu guards driverDialects: RegisterDriverDialect and
+// DialectForDriver are exported package-level functions with no other
+// synchronization, and both are ordinary to call concurrently (e.g. opening
+// several DB handles at startup).
+var driverDialectsMu sync.RWMutex
+
 // driverDialects maps database/sql driver names to dialects. It seeds the names
 // of the drivers sqlkit knows: PostgreSQL (pgx), MySQL, the common SQLite drivers
 // — modernc.org/sqlite registers "sqlite" and mattn/go-sqlite3 registers
@@ -47,6 +57,8 @@ var driverDialects = map[string]Dialect{
 // (e.g. RegisterDriverDialect("mysql-custom", MySQLDialect{})). It overwrites
 // any existing mapping for the name.
 func RegisterDriverDialect(driverName string, d Dialect) {
+	driverDialectsMu.Lock()
+	defer driverDialectsMu.Unlock()
 	driverDialects[driverName] = d
 }
 
@@ -55,6 +67,8 @@ func RegisterDriverDialect(driverName string, d Dialect) {
 // any other name defaults to PostgreSQL. Open uses it to infer the dialect;
 // override with WithDialect.
 func DialectForDriver(driverName string) Dialect {
+	driverDialectsMu.RLock()
+	defer driverDialectsMu.RUnlock()
 	if d, ok := driverDialects[driverName]; ok {
 		return d
 	}

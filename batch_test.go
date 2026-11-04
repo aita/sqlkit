@@ -174,6 +174,33 @@ func TestRoutedInsertReturningSplitStaysAtomic(t *testing.T) {
 	}
 }
 
+// TestRoutedInsertExecSplitStaysAtomic guards a routed (per-statement WithRoute)
+// bulk INSERT (non-RETURNING) against losing its atomic transaction when split:
+// execStatements must unwrap the routedBinding to reach the *Database so the
+// chunks run inside one transaction on the primary.
+func TestRoutedInsertExecSplitStaysAtomic(t *testing.T) {
+	primary := &testutil.Fake{}
+	replica := &testutil.Fake{}
+	router := sqlkit.NewRouter(map[string]sqlkit.Backend{
+		"default": sqlkit.DB(primary.DB()),
+		"replica": sqlkit.DB(replica.DB()),
+	}, rwSplit)
+	db := sqlkit.WrapExecutor(router)
+
+	rows := []User{{Email: "a"}, {Email: "b"}, {Email: "c"}, {Email: "d"}, {Email: "e"}}
+	_, err := db.Insert(Users).Values(rows).AutoChunk(sqlkit.ChunkSize(2)).
+		Exec(context.Background(), sqlkit.WithRoute("default"))
+	if err != nil {
+		t.Fatalf("routed insert exec error = %v", err)
+	}
+	if n := len(primary.Execs()); n != 3 {
+		t.Fatalf("primary execs = %d, want 3 (2+2+1 rows)", n)
+	}
+	if opts := primary.BeginOptions(); len(opts) != 1 {
+		t.Fatalf("primary begins = %d, want 1 (chunks must share one tx)", len(opts))
+	}
+}
+
 func TestUpdateReturningSplitsByInList(t *testing.T) {
 	// SET name = $1 consumes one param; ChunkSize 2 leaves two ids per statement.
 	fake := returningFake(func(args []any) int { return len(args) - 1 })
@@ -202,6 +229,65 @@ func TestDeleteReturningSplitsByInList(t *testing.T) {
 	ids := []int64{1, 2, 3, 4, 5}
 	var out []User
 	if err := db.Delete(Users).Where(Users.ID.In(ids...)).AutoChunk(sqlkit.ChunkSize(2)).Returning().All(context.Background()).Scan(&out); err != nil {
+		t.Fatalf("delete returning error = %v", err)
+	}
+	if n := len(fake.Queries()); n != 3 {
+		t.Fatalf("queries = %d, want 3 (2+2+1 ids)", n)
+	}
+	if len(out) != 5 {
+		t.Fatalf("returned rows = %d, want 5 (concatenated)", len(out))
+	}
+}
+
+// TestBatchedReturningWriteReportsIsWriteTrue covers the single summary
+// AfterQuery hook call scanBatched makes after a RETURNING write split by
+// AutoChunk: the per-chunk statements correctly carry SQL text, but the
+// summary call passed a bare Statement{Op: OpQuery} with no SQL/AST, which
+// falls through Kind's no-AST fallback to Op alone -- OpQuery reads as
+// KindSelect regardless of the underlying statement being a write, so a hook
+// consulting stmt.IsWrite()/Kind()/Access() (an audit log, a read/write
+// metrics collector) sees a write reported as a read.
+func TestBatchedReturningWriteReportsIsWriteTrue(t *testing.T) {
+	fake := returningFake(func(args []any) int { return len(args) })
+	obs := &captureResults{}
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true), sqlkit.WithHooks(obs.hooks()))
+
+	ids := []int64{1, 2, 3, 4, 5}
+	var out []User
+	if err := db.Delete(Users).Where(Users.ID.In(ids...)).AutoChunk(sqlkit.ChunkSize(2)).
+		Returning().All(context.Background()).Scan(&out); err != nil {
+		t.Fatalf("delete returning error = %v", err)
+	}
+	if len(obs.stmts) != 1 {
+		t.Fatalf("AfterQuery calls = %d, want 1", len(obs.stmts))
+	}
+	if !obs.stmts[0].IsWrite() {
+		t.Errorf("batched RETURNING write's summary Statement.IsWrite() = false, want true (Kind = %s)", obs.stmts[0].Kind())
+	}
+	if got := obs.stmts[0].Kind(); got != sqlkit.KindDelete {
+		t.Errorf("summary Statement.Kind() = %s, want %s", got, sqlkit.KindDelete)
+	}
+	if got := obs.stmts[0].Op; got != sqlkit.OpQuery {
+		t.Errorf("summary Statement.Op = %v, want OpQuery (RETURNING rides the row-returning path)", got)
+	}
+}
+
+// TestDeleteReturningSplitsByFilterInList covers Filter's In(...) term rather
+// than Column[T].In directly: the two must behave identically for AutoChunk
+// splitting. Filter's In previously built its predicate via a plain
+// Cond(sql.In(...)), which carries none of the chunk metadata Column[T].In
+// attaches, so a Filter-driven IN silently never split regardless of
+// AutoChunk/ChunkSize -- a large ID list would produce one oversized
+// statement instead of several within the bind-parameter limit.
+func TestDeleteReturningSplitsByFilterInList(t *testing.T) {
+	fake := returningFake(func(args []any) int { return len(args) })
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true))
+
+	ids := []any{int64(1), int64(2), int64(3), int64(4), int64(5)}
+	var out []User
+	err := db.Delete(Users).Filter(filterTerms{ID: sqlkit.In(ids...)}).
+		AutoChunk(sqlkit.ChunkSize(2)).Returning().All(context.Background()).Scan(&out)
+	if err != nil {
 		t.Fatalf("delete returning error = %v", err)
 	}
 	if n := len(fake.Queries()); n != 3 {
@@ -506,6 +592,84 @@ func TestInsertWithinLimitIsSingleStatement(t *testing.T) {
 	}
 	if fake.Begins() != 0 {
 		t.Fatalf("begins = %d, want 0", fake.Begins())
+	}
+}
+
+// --- INSERT byte-size–aware splitting (MySQL max_allowed_packet).
+
+func TestInsertAutoSplitsByStatementByteLimit(t *testing.T) {
+	fake := &testutil.Fake{}
+	// A budget that fits two ~110-byte rows per statement but not three, with no
+	// per-row chunk size in force — only the byte cap drives the split.
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true), sqlkit.WithMaxStatementBytes(300))
+
+	big := strings.Repeat("x", 100)
+	rows := []User{{Email: big}, {Email: big}, {Email: big}, {Email: big}, {Email: big}}
+	res, err := db.Insert(Users).Values(rows).Exec(context.Background())
+	if err != nil {
+		t.Fatalf("Exec() error = %v", err)
+	}
+
+	execs := fake.Execs()
+	if len(execs) != 3 {
+		t.Fatalf("execs = %d, want 3 (2+2+1 rows by byte budget)", len(execs))
+	}
+	if got := []int{len(execs[0].Args), len(execs[1].Args), len(execs[2].Args)}; got[0] != 4 || got[1] != 4 || got[2] != 2 {
+		t.Fatalf("per-batch arg counts = %v, want [4 4 2]", got)
+	}
+	// The split runs atomically in one auto-committed transaction, like any other.
+	if fake.Begins() != 1 || fake.Commits() != 1 {
+		t.Fatalf("begins=%d commits=%d, want 1/1 (auto-tx)", fake.Begins(), fake.Commits())
+	}
+	// The fake reports one affected row per statement, so the summed result counts
+	// the three batches.
+	if n, _ := res.RowsAffected(); n != 3 {
+		t.Fatalf("RowsAffected = %d, want 3 (summed batches)", n)
+	}
+}
+
+func TestInsertByteLimitSmallRowsStaySingleStatement(t *testing.T) {
+	fake := &testutil.Fake{}
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true), sqlkit.WithMaxStatementBytes(1<<20)) // 1 MiB
+
+	rows := []User{{Email: "a"}, {Email: "b"}, {Email: "c"}}
+	if _, err := db.Insert(Users).Values(rows).Exec(context.Background()); err != nil {
+		t.Fatalf("Exec() error = %v", err)
+	}
+	if n := len(fake.Execs()); n != 1 {
+		t.Fatalf("execs = %d, want 1 (rows fit the byte budget)", n)
+	}
+	if fake.Begins() != 0 {
+		t.Fatalf("begins = %d, want 0 (single statement)", fake.Begins())
+	}
+}
+
+func TestInsertByteLimitInertWhenAutoChunkOff(t *testing.T) {
+	fake := &testutil.Fake{}
+	// A byte limit is set, but auto-chunk is off (the default), so nothing splits.
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithMaxStatementBytes(300))
+
+	big := strings.Repeat("x", 100)
+	rows := []User{{Email: big}, {Email: big}, {Email: big}, {Email: big}, {Email: big}}
+	if _, err := db.Insert(Users).Values(rows).Exec(context.Background()); err != nil {
+		t.Fatalf("Exec() error = %v", err)
+	}
+	if n := len(fake.Execs()); n != 1 {
+		t.Fatalf("execs = %d, want 1 (byte split disabled with auto-chunk off)", n)
+	}
+}
+
+// Both bounds apply at once: whichever splits smaller wins per statement.
+func TestInsertByteLimitCombinesWithChunkSize(t *testing.T) {
+	fake := &testutil.Fake{}
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true), sqlkit.WithMaxStatementBytes(1<<20)) // byte cap never bites here
+
+	rows := []User{{Email: "a"}, {Email: "b"}, {Email: "c"}, {Email: "d"}, {Email: "e"}}
+	if _, err := db.Insert(Users).Values(rows).AutoChunk(sqlkit.ChunkSize(2)).Exec(context.Background()); err != nil {
+		t.Fatalf("Exec() error = %v", err)
+	}
+	if n := len(fake.Execs()); n != 3 {
+		t.Fatalf("execs = %d, want 3 (row cap of 2 drives the split)", n)
 	}
 }
 

@@ -40,6 +40,12 @@ func convertExpr(node rsql.Expr) (sql.Expression, error) {
 		}
 		return positioned(expr, e.OpPos), nil
 	case *rsql.BinaryExpr:
+		// rqlite binds a prefix NOT tighter than comparison operators, parsing
+		// "NOT a = 1" as "(NOT a) = 1"; SQLite binds NOT below them (above
+		// AND/OR). Restore SQLite's grouping before converting.
+		if fixed := hoistNot(e); fixed != rsql.Expr(e) {
+			return convertExpr(fixed)
+		}
 		expr, err := convertBinary(e)
 		if err != nil {
 			return nil, err
@@ -232,4 +238,34 @@ func convertCount(c *rsql.Call) (sql.Expression, error) {
 		return sql.CountDistinct(target), nil
 	}
 	return sql.Count(target), nil
+}
+
+// hoistNot rewrites a binary expression whose leftmost operand is a prefix
+// NOT — "(NOT x) op y" as rqlite parses it — into SQLite's "NOT (x op y)", for
+// every operator that binds tighter than NOT (everything but AND/OR). It
+// returns e unchanged when no NOT needs moving.
+func hoistNot(e *rsql.BinaryExpr) rsql.Expr {
+	if e.Op == rsql.AND || e.Op == rsql.OR {
+		return e
+	}
+	left := e.X
+	if lb, ok := left.(*rsql.BinaryExpr); ok {
+		left = hoistNot(lb)
+	}
+	u, ok := left.(*rsql.UnaryExpr)
+	if !ok || u.Op != rsql.NOT {
+		if left == e.X {
+			return e
+		}
+		cp := *e
+		cp.X = left
+		return &cp
+	}
+	inner := *e
+	inner.X = u.X
+	var x rsql.Expr = &inner
+	if fixed := hoistNot(&inner); fixed != rsql.Expr(&inner) {
+		x = fixed
+	}
+	return &rsql.UnaryExpr{OpPos: u.OpPos, Op: rsql.NOT, X: x}
 }
