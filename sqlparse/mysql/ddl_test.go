@@ -171,7 +171,7 @@ func TestCreateTableCheckConstraint(t *testing.T) {
 			Check("", sql.BinaryExpression{Left: sql.Col("age"), Operator: ">=", Right: sql.Raw("0")}),
 		"CREATE TABLE `t` (\n"+
 			"    `age` int(11),\n"+
-			"    CONSTRAINT `` CHECK ((`age` >= 0))\n"+
+			"    CHECK ((`age` >= 0))\n"+
 			");")
 }
 
@@ -464,7 +464,7 @@ func TestCheckEnforcedStillModeled(t *testing.T) {
 			Check("", sql.BinaryExpression{Left: sql.Col("age"), Operator: ">=", Right: sql.Raw("0")}),
 		"CREATE TABLE `t` (\n"+
 			"    `age` int(11),\n"+
-			"    CONSTRAINT `` CHECK ((`age` >= 0))\n"+
+			"    CHECK ((`age` >= 0))\n"+
 			");")
 }
 

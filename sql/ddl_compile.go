@@ -71,7 +71,7 @@ func (c *Compiler) CompileCreateTable(s CreateTableStmt) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		defs = append(defs, "CONSTRAINT "+c.Dialect.QuoteName(check.Name.String())+" CHECK ("+expr+")")
+		defs = append(defs, c.constraintName(check.Name)+"CHECK ("+expr+")")
 	}
 	for _, u := range s.Uniques {
 		if len(u.Columns) == 0 {
@@ -566,7 +566,7 @@ func (c *Compiler) compileAlteration(table Table, a Alteration) (string, error) 
 		if err != nil {
 			return "", err
 		}
-		return "ADD CONSTRAINT " + c.Dialect.QuoteName(a.Name.String()) + " CHECK (" + expr + ")", nil
+		return "ADD " + c.constraintName(a.Name) + "CHECK (" + expr + ")", nil
 	case AlterAddUnique:
 		if len(a.Columns) == 0 {
 			return "", fmt.Errorf("sqlkit/sql: ADD UNIQUE requires at least one column")
@@ -665,8 +665,8 @@ func (c *Compiler) foreignKeyDef(fk ForeignKeyConstraint) (string, error) {
 	if len(fk.Columns) != len(fk.RefColumns) {
 		return "", fmt.Errorf("sqlkit/sql: FOREIGN KEY has %d referencing column(s) but %d referenced column(s)", len(fk.Columns), len(fk.RefColumns))
 	}
-	clause := "CONSTRAINT " + c.Dialect.QuoteName(fk.Name.String()) +
-		" FOREIGN KEY (" + c.quoteAll(fk.Columns) + ")" +
+	clause := c.constraintName(fk.Name) +
+		"FOREIGN KEY (" + c.quoteAll(fk.Columns) + ")" +
 		" REFERENCES " + c.qualifyName(fk.RefSchema, fk.RefTable) +
 		" (" + c.quoteAll(fk.RefColumns) + ")"
 	if fk.OnDelete != "" {
@@ -676,6 +676,17 @@ func (c *Compiler) foreignKeyDef(fk ForeignKeyConstraint) (string, error) {
 		clause += " ON UPDATE " + fk.OnUpdate
 	}
 	return clause, nil
+}
+
+// constraintName renders the "CONSTRAINT name " prefix of a table constraint,
+// or nothing for an unnamed one — the engine then generates the name. An empty
+// name must not render as CONSTRAINT "": PostgreSQL rejects a zero-length
+// delimited identifier and MySQL an empty constraint name.
+func (c *Compiler) constraintName(name Ident) string {
+	if name.IsZero() {
+		return ""
+	}
+	return "CONSTRAINT " + c.Dialect.QuoteName(name.String()) + " "
 }
 
 // qualify renders a schema-qualified table identifier for DDL, quoting each
