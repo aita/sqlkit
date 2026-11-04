@@ -480,3 +480,10 @@ func TestCreateIndexIfNotExistsIsRaw(t *testing.T) {
 func TestForeignKeyArityMismatchIsRaw(t *testing.T) {
 	assertRaw(t, "ALTER TABLE p ADD CONSTRAINT f FOREIGN KEY (a, b) REFERENCES t (id)")
 }
+
+// A bare ALTER TABLE with no alterations is valid MySQL (a no-op rebuild) but
+// has no typed AlterTable form, so it stays a raw passthrough rather than a
+// typed statement whose ToSQL errors.
+func TestAlterTableNoSpecsIsRaw(t *testing.T) {
+	assertRaw(t, "ALTER TABLE a")
+}

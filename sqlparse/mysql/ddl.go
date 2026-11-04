@@ -316,6 +316,11 @@ func updateAction(o *ast.OnUpdateOpt) string {
 }
 
 func convertAlterTable(s *ast.AlterTableStmt) (sql.Query, error) {
+	// MySQL accepts a bare "ALTER TABLE t" with no alterations (a no-op table
+	// rebuild); sqlkit's AlterTable requires at least one, so keep it raw.
+	if len(s.Specs) == 0 {
+		return nil, sqlparse.Unsupported("ALTER TABLE with no alterations")
+	}
 	// DROP FOREIGN KEY / DROP INDEX are their own statement types in sqlkit, not
 	// AlterTable alterations, so map them only when they stand alone. Combined
 	// with other actions they fall through to AlterTable and round-trip raw.
