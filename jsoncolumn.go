@@ -37,15 +37,15 @@ func (j jsonValue) Value() (driver.Value, error) {
 }
 
 // jsonScanner wraps the address of a field so a JSON/JSONB column value (text or
-// bytes) decodes into it; a SQL NULL leaves the field at its zero value.
+// bytes) decodes into it; a SQL NULL or empty value resets the field to its
+// zero value.
 type jsonScanner struct{ dst any } // dst is a pointer to the destination field
 
 func (j jsonScanner) Scan(src any) error {
 	var data []byte
 	switch s := src.(type) {
 	case nil:
-		reflect.ValueOf(j.dst).Elem().SetZero()
-		return nil
+		return j.reset()
 	case []byte:
 		data = s
 	case string:
@@ -54,10 +54,28 @@ func (j jsonScanner) Scan(src any) error {
 		return fmt.Errorf("sqlkit: cannot scan %T into a JSON column field", src)
 	}
 	if len(data) == 0 {
-		return nil
+		return j.reset()
+	}
+	// Reset before unmarshaling: json.Unmarshal merges into an already-populated
+	// map or struct rather than replacing it, so scanning into a destination
+	// reused across rows (a common Scan/Get pattern) would otherwise leak the
+	// previous row's keys/fields into the new value.
+	if err := j.reset(); err != nil {
+		return err
 	}
 	if err := json.Unmarshal(data, j.dst); err != nil {
 		return fmt.Errorf("sqlkit: unmarshal JSON column value: %w", err)
 	}
+	return nil
+}
+
+// reset zeroes the destination field, so a NULL/empty column value or a fresh
+// unmarshal never observes a stale value from a previously scanned row.
+func (j jsonScanner) reset() error {
+	rv := reflect.ValueOf(j.dst)
+	if rv.Kind() != reflect.Pointer || rv.IsNil() {
+		return fmt.Errorf("sqlkit: JSON column scan destination is not a non-nil pointer")
+	}
+	rv.Elem().Set(reflect.Zero(rv.Elem().Type()))
 	return nil
 }
