@@ -55,14 +55,18 @@ func Delete() Match { return Op(querytrace.StmtDelete) }
 // Ddl matches a schema statement.
 func Ddl() Match { return Op(querytrace.StmtDDL) }
 
-// Read matches any read statement.
+// Read matches any pure read statement. A locking read (SELECT ... FOR UPDATE) or
+// a data-modifying CTE is a write (see Write), so it is not matched here — Read
+// and Write partition consistently with the Reads/Writes assertions and WriteCount.
 func Read() Match {
-	return query("read", func(qi *querytrace.QueryInfo) bool { return qi.Kind.IsRead() })
+	return query("read", func(qi *querytrace.QueryInfo) bool { return qi.Kind.IsRead() && !qi.IsWrite() })
 }
 
-// Write matches any write statement (INSERT/UPDATE/DELETE).
+// Write matches any write statement: a definite write (INSERT/UPDATE/DELETE/MERGE,
+// or a CALL whose effects are unknown), a locking read (SELECT ... FOR UPDATE/SHARE), or a
+// data-modifying CTE — the promoted IsWrite, the same predicate WriteCount uses.
 func Write() Match {
-	return query("write", func(qi *querytrace.QueryInfo) bool { return qi.Kind.IsWrite() })
+	return query("write", func(qi *querytrace.QueryInfo) bool { return qi.IsWrite() })
 }
 
 // Table matches a statement that references table, by name and case-insensitively.

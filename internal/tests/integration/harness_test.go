@@ -82,6 +82,7 @@ var engines = []engine{
 type backend struct {
 	once sync.Once
 	db   *sqlkit.Database
+	dsn  string // the resolved DSN (container or env), reused by connectSecond
 	skip string
 	err  error
 }
@@ -150,6 +151,23 @@ func (b *backend) init(eng engine) {
 		return
 	}
 	b.db = db
+	b.dsn = dsn
+}
+
+// connectSecond opens a second, independent *sqlkit.Database against the same
+// backend the engine's shared connect(t, eng) uses — a distinct connection
+// pool over the same DSN, standing in for a second process (e.g. a second pod
+// mid-rollout) rather than a second caller sharing one pool.
+func connectSecond(t *testing.T, eng engine) *sqlkit.Database {
+	t.Helper()
+	connect(t, eng) // ensures the backend is initialized (or the test skips) before reading its dsn
+	b := backends[eng.name]
+	db, err := sqlkit.Open(eng.driver, b.dsn)
+	if err != nil {
+		t.Fatalf("connectSecond %s: %v", eng.name, err)
+	}
+	t.Cleanup(func() { _ = db.SQL().Close() })
+	return db
 }
 
 // waitReady blocks until the pool can serve a query or the deadline passes,

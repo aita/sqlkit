@@ -345,6 +345,12 @@ func downRevisionField(heads []string, parent string, merge bool) (string, error
 
 // writeScaffold writes a migration file with a fresh revision and the given
 // rendered DownRevision/DownRevisions field, returning the path and revision.
+// The filename is second-resolution, so it errors rather than silently
+// overwrite an existing file: a second scaffold with the same name generated
+// within the same second (a plausible scripted/CI re-run) would otherwise
+// truncate the first migration's content with no error, and any
+// already-generated migration whose DownRevision points at the destroyed
+// file's revision would only fail much later, when the DAG is next built.
 func writeScaffold(dir, pkg, name, downField string) (path, revision string, err error) {
 	revision = NewRevision()
 	content := fmt.Sprintf(scaffoldTemplate, pkg, revision, downField, name)
@@ -353,7 +359,18 @@ func writeScaffold(dir, pkg, name, downField string) (path, revision string, err
 	}
 	filename := time.Now().UTC().Format("20060102150405") + "_" + slug(name) + ".go"
 	path = filepath.Join(dir, filename)
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		if os.IsExist(err) {
+			return "", "", fmt.Errorf("migrate: %s already exists (two migrations generated within the same second); wait a moment and retry", path)
+		}
+		return "", "", err
+	}
+	if _, err := f.Write([]byte(content)); err != nil {
+		_ = f.Close()
+		return "", "", err
+	}
+	if err := f.Close(); err != nil {
 		return "", "", err
 	}
 	return path, revision, nil

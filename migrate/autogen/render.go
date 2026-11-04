@@ -2,6 +2,7 @@ package autogen
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -73,6 +74,13 @@ func (r Result) Empty() bool {
 // Render diffs source against target and returns the Operator-DSL bodies for a
 // migration's Up (source -> target) and Down (target -> source, a best-effort
 // reverse). Statements are ordered for safety, mirroring migrate.Diff.
+//
+// The rendered op.* calls carry no schema qualification: a Migrator/Operator
+// is configured with one fixed schema, so a table in a catalog's OTHER managed
+// schema (Catalog.Schema(name, decl.Create())) renders as if it belonged to
+// the Operator's schema instead of its own. Review generated output before
+// applying it against a catalog with tables in more than one managed schema
+// (see docs/limitations.md).
 func Render(source, target meta.Metadata, opts Options) (Result, error) {
 	if opts.Dialect == nil {
 		return Result{}, fmt.Errorf("autogen: Render needs a dialect")
@@ -191,7 +199,10 @@ func (r *renderer) plan(from, to meta.Metadata) (string, error) {
 		}
 	}
 
-	objs := r.objectOps(from, to)
+	objs, err := r.objectOps(from, to)
+	if err != nil {
+		return "", err
+	}
 
 	// Renames run first: a renamed table must exist under its new name before
 	// the drops, alters, and re-adds that diffTable emitted against that name.
@@ -221,10 +232,28 @@ func (r *renderer) plan(from, to meta.Metadata) (string, error) {
 	return strings.Join(out, "\n"), nil
 }
 
+// columnTypeNames returns the lower-cased engine type names of every column in
+// md on the renderer's dialect, so an object diff can tell which named types
+// the target schema still depends on.
+func (r *renderer) columnTypeNames(md meta.Metadata) map[string]bool {
+	out := map[string]bool{}
+	for _, t := range md.Tables {
+		for _, c := range t.Columns {
+			if c.Type == nil {
+				continue
+			}
+			if eng, ok := c.Type.Engine(r.dialect.Name()); ok {
+				out[strings.ToLower(strings.ReplaceAll(eng.Name, `"`, ""))] = true
+			}
+		}
+	}
+	return out
+}
+
 // objectOps renders the op.* calls that reconcile the non-table objects
 // (extensions, enums, sequences) between from and to. Names are rendered bare,
 // since the Operator qualifies them with the migration's schema.
-func (r *renderer) objectOps(from, to meta.Metadata) renderedObjects {
+func (r *renderer) objectOps(from, to meta.Metadata) (renderedObjects, error) {
 	var o renderedObjects
 
 	oldExt := map[string]meta.Extension{}
@@ -257,9 +286,17 @@ func (r *renderer) objectOps(from, to meta.Metadata) renderedObjects {
 	// A pure append (old labels are a prefix of the new ones) becomes one
 	// op.AddEnumValue per added label, which keeps any column using the type
 	// usable. Any other change still drops and recreates the type.
+	usedTypes := r.columnTypeNames(to)
 	for _, e := range from.Enums {
 		n, ok := newEnum[e.QualifiedName()]
 		if !ok {
+			// An enum the target doesn't declare is dropped only when no target
+			// column still uses it. DropEnum cascades, so dropping a type a
+			// column references by name (decl.Type("mood") for a type managed
+			// outside the catalog) would silently drop that column and its data.
+			if usedTypes[strings.ToLower(e.Name)] || usedTypes[strings.ToLower(e.QualifiedName())] {
+				continue
+			}
 			o.dropEnums = append(o.dropEnums, fmt.Sprintf("op.DropEnum(%q)", e.Name))
 			continue
 		}
@@ -323,7 +360,11 @@ func (r *renderer) objectOps(from, to meta.Metadata) renderedObjects {
 	}
 	for _, v := range to.MaterializedViews {
 		if old, ok := oldMV[v.QualifiedName()]; !ok || !r.matviewEqual(old, v) {
-			o.createMatviews = append(o.createMatviews, r.matviewCreate(v))
+			create, err := r.matviewCreate(v)
+			if err != nil {
+				return renderedObjects{}, err
+			}
+			o.createMatviews = append(o.createMatviews, create)
 		}
 	}
 
@@ -345,7 +386,7 @@ func (r *renderer) objectOps(from, to meta.Metadata) renderedObjects {
 			o.createGrants = append(o.createGrants, r.grantCreate(g))
 		}
 	}
-	return o
+	return o, nil
 }
 
 // renderedObjects holds the rendered op.* calls for each object kind.
@@ -365,10 +406,13 @@ type renderedObjects struct {
 	alterEnums []string
 }
 
-// grantKey identifies a grant by its target (object type and objects), so a
-// change to the privileges or grantees of the same target is one modification.
+// grantKey identifies a grant by its full (privileges, type, objects, grantees)
+// tuple. Keying on the target alone (object type + objects) would collide two
+// distinct grants on the same object for different grantees or privilege sets
+// into one map slot, silently dropping one of them from the diff.
 func grantKey(g meta.Grant) string {
-	return g.ObjectType + "\x00" + strings.Join(g.Objects, ",")
+	return strings.Join(g.Privileges, ",") + "\x00" + g.ObjectType + "\x00" +
+		strings.Join(g.Objects, ",") + "\x00" + strings.Join(g.Grantees, ",")
 }
 
 // appendedEnumValues reports whether next is old with only labels appended (old
@@ -407,16 +451,19 @@ func (r *renderer) matviewEqual(a, b meta.MaterializedView) bool {
 	return at == bt
 }
 
-func (r *renderer) matviewCreate(v meta.MaterializedView) string {
+func (r *renderer) matviewCreate(v meta.MaterializedView) (string, error) {
 	r.usesSQL = true
-	body, _, _ := v.Query.ToSQL(r.dialect)
+	body, _, err := v.Query.ToSQL(r.dialect)
+	if err != nil {
+		return "", fmt.Errorf("autogen: materialized view %q: %w", v.Name, err)
+	}
 	var opts strings.Builder
 	if len(v.Columns) > 0 {
 		fmt.Fprintf(&opts, ", func(s sql.CreateMaterializedViewBuilder) sql.CreateMaterializedViewBuilder {\nreturn s.Columns(%s)\n}", quotedList(v.Columns))
 	} else if v.WithNoData {
 		opts.WriteString(", func(s sql.CreateMaterializedViewBuilder) sql.CreateMaterializedViewBuilder {\nreturn s.WithNoData()\n}")
 	}
-	return fmt.Sprintf("op.CreateMaterializedView(%q, sql.RawSQL(%q)%s)", v.Name, body, opts.String())
+	return fmt.Sprintf("op.CreateMaterializedView(%q, sql.RawSQL(%q)%s)", v.Name, body, opts.String()), nil
 }
 
 func (r *renderer) grantCreate(g meta.Grant) string {
@@ -806,7 +853,11 @@ func (r *renderer) columnPropsChanged(oc, nc meta.Column) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return od != nd, nil
+	// od/nd alone can't see a bare (auto-increment) default: a nil DefaultExpr
+	// renders "" whether or not HasDefault is set, so a column gaining or
+	// losing a bare decl.Default() would otherwise compare equal and the
+	// change would be silently dropped from the rendered migration.
+	return r.normalizeExprText(od) != r.normalizeExprText(nd) || oc.HasDefault != nc.HasDefault, nil
 }
 
 func (r *renderer) sameType(a, b meta.Column) bool {
@@ -852,7 +903,127 @@ func (r *renderer) checkEqual(a, b meta.Check) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return ta == tb, nil
+	return r.normalizeExprText(ta) == r.normalizeExprText(tb), nil
+}
+
+// normalizeExprText loosens default/check expression text for comparison only
+// (never for code generation — callers pass the unnormalized text when emitting
+// Go source). On PostgreSQL, pg_get_expr and pg_get_constraintdef attach an
+// explicit cast to a literal — "'active'::character varying", "(0)::numeric" —
+// that a hand-written decl.Default/decl.Check literal ("'active'", "0") omits,
+// so a byte-for-byte comparison would report a spurious diff for nearly every
+// introspected default or check on --from-db. See normalizePGExpr.
+func (r *renderer) normalizeExprText(text string) string {
+	if r.dialect.Name() != "postgres" {
+		return text
+	}
+	return normalizePGExpr(text)
+}
+
+// pgLiteralCast matches a "::type" cast at the start of its input: a bare or
+// double-quoted, optionally schema-qualified type name, including PostgreSQL's
+// multi-word names (character varying, double precision, timestamp with[out]
+// time zone, ...), with an optional modifier list and array brackets.
+var pgLiteralCast = regexp.MustCompile(`^::\s*(?:"?[A-Za-z_][A-Za-z0-9_]*"?\.)?"?[A-Za-z_][A-Za-z0-9_]*"?(?:\s+(?:varying|precision|with(?:out)?\s+time\s+zone))?(?:\s*\([0-9,\s]*\))?(?:\[\])*`)
+
+// pgNumber matches a numeric constant at the start of its input.
+var pgNumber = regexp.MustCompile(`^-?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?`)
+
+// normalizePGExpr removes the casts PostgreSQL attaches to literals — a quoted
+// string, a number, or a parenthesized number, followed by "::type" — unwraps
+// a parenthesized number, strips parentheses enclosing the whole expression, and
+// collapses whitespace. Only literals lose their cast: a cast applied to any
+// other expression (now()::date, col::text) is meaningful and is kept, so a
+// change to or from it is still detected.
+func normalizePGExpr(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		lit, n := pgLiteralAt(s, i)
+		if n == 0 {
+			b.WriteByte(s[i])
+			i++
+			continue
+		}
+		i += n
+		if m := pgLiteralCast.FindString(s[i:]); m != "" {
+			i += len(m)
+		}
+		b.WriteString(lit)
+	}
+	out := strings.Join(strings.Fields(b.String()), " ")
+	for len(out) >= 2 && out[0] == '(' && out[len(out)-1] == ')' && balancedParens(out[1:len(out)-1]) {
+		out = strings.TrimSpace(out[1 : len(out)-1])
+	}
+	return out
+}
+
+// pgLiteralAt reports the literal starting at s[i] — a single-quoted string
+// (with ” escapes), a number not glued to a preceding identifier, or a
+// parenthesized number, returned unwrapped — and how many bytes it spans, or
+// 0 when no literal starts there.
+func pgLiteralAt(s string, i int) (string, int) {
+	switch c := s[i]; {
+	case c == '\'':
+		j := i + 1
+		for j < len(s) {
+			if s[j] == '\'' {
+				if j+1 < len(s) && s[j+1] == '\'' {
+					j += 2
+					continue
+				}
+				return s[i : j+1], j + 1 - i
+			}
+			j++
+		}
+		return "", 0
+	case c == '(':
+		inner := strings.TrimLeft(s[i+1:], " ")
+		if m := pgNumber.FindString(inner); m != "" {
+			rest := strings.TrimLeft(inner[len(m):], " ")
+			if strings.HasPrefix(rest, ")") {
+				return m, len(s) - i - len(rest) + 1
+			}
+		}
+		return "", 0
+	case (c >= '0' && c <= '9') || c == '.':
+		if i > 0 && isIdentChar(s[i-1]) {
+			return "", 0
+		}
+		if m := pgNumber.FindString(s[i:]); m != "" {
+			return m, len(m)
+		}
+	}
+	return "", 0
+}
+
+func isIdentChar(c byte) bool {
+	return c == '_' || c == '"' || (c|0x20 >= 'a' && c|0x20 <= 'z') || (c >= '0' && c <= '9')
+}
+
+// balancedParens reports whether every parenthesis in s is matched, ignoring
+// ones inside single-quoted strings, so "(a) + (b)" is not mistaken for one
+// group enclosing the whole expression.
+func balancedParens(s string) bool {
+	depth := 0
+	inQuote := false
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case inQuote:
+			if c == '\'' {
+				inQuote = false
+			}
+		case c == '\'':
+			inQuote = true
+		case c == '(':
+			depth++
+		case c == ')':
+			depth--
+			if depth < 0 {
+				return false
+			}
+		}
+	}
+	return depth == 0
 }
 
 // --- small rendering and lookup helpers ---

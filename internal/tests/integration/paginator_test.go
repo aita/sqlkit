@@ -97,3 +97,93 @@ func TestCursorPagination(t *testing.T) {
 		}
 	})
 }
+
+// TestCursorPaginationNullableKey pages over a nullable key (users.name) on the
+// real engines. PostgreSQL and MySQL disagree on where NULLs sort by default and
+// a plain "name > ?" never matches NULL, so a naive keyset walk drops or
+// repeats the NULL-named rows; the paginator must visit every row exactly once,
+// forward and backward, in both key directions.
+func TestCursorPaginationNullableKey(t *testing.T) {
+	eachEngine(t, func(t *testing.T, eng engine, db *sqlkit.Database) {
+		ctx := context.Background()
+		names := []*string{ptr("b"), nil, ptr("a"), nil, ptr("c"), nil, ptr("a")}
+		for i, name := range names {
+			insertUser(t, db, eng, userRow{Email: fmt.Sprintf("null%02d@example.com", i), Name: name})
+		}
+
+		for _, tc := range []struct {
+			name string
+			key  sqlkit.PageKey
+		}{
+			{"asc", sqlkit.KeyAsc(blogdb.Users.Name)},
+			{"desc", sqlkit.KeyDesc(blogdb.Users.Name)},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				pager := sqlkit.NewPaginator(tc.key, sqlkit.KeyAsc(blogdb.Users.ID)).Limit(2)
+
+				// Forward walk: every row exactly once.
+				var forward []int64
+				var pagesSeen []sqlkit.Page
+				cur := sqlkit.Start()
+				for i := 0; ; i++ {
+					if i > len(names) {
+						t.Fatal("forward pagination did not terminate")
+					}
+					var batch []userRow
+					page, err := pager.Paginate(ctx, db.Select().From(blogdb.Users), &batch, cur)
+					if err != nil {
+						t.Fatalf("paginate forward: %v", err)
+					}
+					for _, u := range batch {
+						forward = append(forward, u.ID)
+					}
+					pagesSeen = append(pagesSeen, page)
+					if !page.HasNext {
+						break
+					}
+					cur = page.Next()
+				}
+				seen := map[int64]int{}
+				for _, id := range forward {
+					seen[id]++
+				}
+				if len(forward) != len(names) || len(seen) != len(names) {
+					t.Fatalf("forward visited %v, want each of the %d rows exactly once", forward, len(names))
+				}
+
+				// Backward walk from the last page reproduces the same order.
+				var backward []int64
+				cur = pagesSeen[len(pagesSeen)-1].Prev()
+				var lastPage []userRow
+				if _, err := pager.Paginate(ctx, db.Select().From(blogdb.Users), &lastPage, pagesSeen[len(pagesSeen)-2].Next()); err != nil {
+					t.Fatalf("paginate last: %v", err)
+				}
+				for _, u := range lastPage {
+					backward = append(backward, u.ID)
+				}
+				for i := 0; ; i++ {
+					if i > len(names) {
+						t.Fatal("backward pagination did not terminate")
+					}
+					var batch []userRow
+					page, err := pager.Paginate(ctx, db.Select().From(blogdb.Users), &batch, cur)
+					if err != nil {
+						t.Fatalf("paginate backward: %v", err)
+					}
+					ids := make([]int64, 0, len(batch))
+					for _, u := range batch {
+						ids = append(ids, u.ID)
+					}
+					backward = append(ids, backward...)
+					if !page.HasPrev {
+						break
+					}
+					cur = page.Prev()
+				}
+				if fmt.Sprint(backward) != fmt.Sprint(forward) {
+					t.Fatalf("backward order %v != forward order %v", backward, forward)
+				}
+			})
+		}
+	})
+}

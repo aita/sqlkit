@@ -281,13 +281,13 @@ func TestCompoundUnion(t *testing.T) {
 		"SELECT a FROM t UNION SELECT a FROM s",
 		sql.Select(sql.Col("a")).From(tbl("t")).
 			Union(sql.Select(sql.Col("a")).From(tbl("s"))),
-		`(SELECT "a" FROM "t") UNION (SELECT "a" FROM "s")`)
+		`SELECT "a" FROM "t" UNION SELECT "a" FROM "s"`)
 }
 
 func TestCompoundChainWithOrderLimit(t *testing.T) {
 	assertSQL(t,
 		"SELECT a FROM t UNION ALL SELECT a FROM s INTERSECT SELECT a FROM r ORDER BY a LIMIT 5",
-		`((SELECT "a" FROM "t") UNION ALL (SELECT "a" FROM "s")) INTERSECT (SELECT "a" FROM "r") ORDER BY "a" LIMIT 5`)
+		`SELECT * FROM (SELECT "a" FROM "t" UNION ALL SELECT "a" FROM "s") INTERSECT SELECT "a" FROM "r" ORDER BY "a" LIMIT 5`)
 }
 
 func TestCTE(t *testing.T) {
@@ -299,7 +299,7 @@ func TestCTE(t *testing.T) {
 func TestRecursiveCTE(t *testing.T) {
 	assertSQL(t,
 		"WITH RECURSIVE nums(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM nums WHERE n < 10) SELECT n FROM nums",
-		`WITH RECURSIVE "nums" ("n") AS ((SELECT 1) UNION ALL (SELECT ("n" + ?) FROM "nums" WHERE ("n" < ?))) SELECT "n" FROM "nums"`,
+		`WITH RECURSIVE "nums" ("n") AS (SELECT 1 UNION ALL SELECT ("n" + ?) FROM "nums" WHERE ("n" < ?)) SELECT "n" FROM "nums"`,
 		1, 10)
 }
 

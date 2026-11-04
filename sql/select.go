@@ -91,6 +91,14 @@ func Select(columns ...Selection) SelectBuilder {
 // Stmt returns the built SELECT statement — the pure AST value.
 func (b SelectBuilder) Stmt() SelectStmt { return b.s }
 
+// AddColumns appends items to the SELECT list, keeping the existing projection.
+// It is used to extend a projection after From has expanded it (e.g. adding a
+// joined table's columns), without rebuilding the query.
+func (b SelectBuilder) AddColumns(columns ...Selection) SelectBuilder {
+	b.s.Columns = append(append([]Selection(nil), b.s.Columns...), columns...)
+	return b
+}
+
 // Distinct marks the query as SELECT DISTINCT.
 func (b SelectBuilder) Distinct() SelectBuilder {
 	b.s.Distinct = true
