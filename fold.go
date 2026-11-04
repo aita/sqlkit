@@ -614,7 +614,20 @@ func materializeFold(node *foldNode, inst *foldInst) {
 // identity reads node's key columns from the row holders, returning a comparable
 // key and whether the level is present (false when a key column is NULL, i.e. a
 // LEFT JOIN produced no matching row).
+//
+// A key-less node (a to-one target with no primary key) has no key column to
+// read that NULL from, so it is present when any of its mapped columns is
+// non-NULL; otherwise an unmatched join would yield a zero row that never
+// existed.
 func (node *foldNode) identity(flat []flatCol, holders []reflect.Value) (any, bool) {
+	if len(node.pkCols) == 0 {
+		for _, c := range node.cols {
+			if _, ok := holderValue(holders[c.rowIdx], flat[c.rowIdx]); ok {
+				return identityKey(nil), true
+			}
+		}
+		return nil, false
+	}
 	keys := make([]any, len(node.pkCols))
 	for i, c := range node.pkCols {
 		v, ok := holderValue(holders[c.rowIdx], flat[c.rowIdx])
