@@ -106,13 +106,19 @@ WHERE n.nspname = $1 AND c.relkind = 'r' AND d.classoid = 'pg_class'::regclass`
 // already round-trips through columnType/meta.Of; without this the enum
 // type itself — the CREATE TYPE statement a column of that name depends on —
 // is never read back, so a catalog rebuilt from the introspected metadata
-// would emit a column referencing a type that was never created.
+// would emit a column referencing a type that was never created. Types owned
+// by an extension (pg_depend deptype 'e') are left out: the extension, not the
+// schema, manages them, so a diff must never drop or recreate them.
 const pgEnumsQuery = `
 SELECT t.typname, e.enumlabel
 FROM pg_type t
 JOIN pg_enum e ON e.enumtypid = t.oid
 JOIN pg_namespace n ON n.oid = t.typnamespace
 WHERE n.nspname = $1
+  AND NOT EXISTS (
+    SELECT 1 FROM pg_depend d
+    WHERE d.classid = 'pg_type'::regclass AND d.objid = t.oid AND d.deptype = 'e'
+  )
 ORDER BY t.typname, e.enumsortorder`
 
 // inspectPostgres reads the schema from PostgreSQL's information_schema.

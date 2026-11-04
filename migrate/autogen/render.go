@@ -231,6 +231,24 @@ func (r *renderer) plan(from, to meta.Metadata) (string, error) {
 	return strings.Join(out, "\n"), nil
 }
 
+// columnTypeNames returns the lower-cased engine type names of every column in
+// md on the renderer's dialect, so an object diff can tell which named types
+// the target schema still depends on.
+func (r *renderer) columnTypeNames(md meta.Metadata) map[string]bool {
+	out := map[string]bool{}
+	for _, t := range md.Tables {
+		for _, c := range t.Columns {
+			if c.Type == nil {
+				continue
+			}
+			if eng, ok := c.Type.Engine(r.dialect.Name()); ok {
+				out[strings.ToLower(strings.ReplaceAll(eng.Name, `"`, ""))] = true
+			}
+		}
+	}
+	return out
+}
+
 // objectOps renders the op.* calls that reconcile the non-table objects
 // (extensions, enums, sequences) between from and to. Names are rendered bare,
 // since the Operator qualifies them with the migration's schema.
@@ -267,9 +285,17 @@ func (r *renderer) objectOps(from, to meta.Metadata) (renderedObjects, error) {
 	// A pure append (old labels are a prefix of the new ones) becomes one
 	// op.AddEnumValue per added label, which keeps any column using the type
 	// usable. Any other change still drops and recreates the type.
+	usedTypes := r.columnTypeNames(to)
 	for _, e := range from.Enums {
 		n, ok := newEnum[e.QualifiedName()]
 		if !ok {
+			// An enum the target doesn't declare is dropped only when no target
+			// column still uses it. DropEnum cascades, so dropping a type a
+			// column references by name (decl.Type("mood") for a type managed
+			// outside the catalog) would silently drop that column and its data.
+			if usedTypes[strings.ToLower(e.Name)] || usedTypes[strings.ToLower(e.QualifiedName())] {
+				continue
+			}
 			o.dropEnums = append(o.dropEnums, fmt.Sprintf("op.DropEnum(%q)", e.Name))
 			continue
 		}
