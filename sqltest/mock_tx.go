@@ -13,6 +13,11 @@ import (
 // Stub, a CallStub is not required by default: a transaction the code under test
 // opens and commits without any expectation still succeeds, so a CallStub serves
 // only to inject an error or to assert the call happened.
+//
+// Like a statement Stub, a CallStub answers every matching call by default (it
+// has no call limit): ExpectCommit().ReturnError(err) makes every Commit fail.
+// Limit it with Times or MaxTimes to have it answer only the next call(s) and
+// let a later stub, or the default success, answer the rest.
 type CallStub struct {
 	action   string
 	err      error
@@ -21,16 +26,19 @@ type CallStub struct {
 	matched  int
 }
 
-// ExpectBegin programs the next transaction begin. Use ReturnError to make
-// BeginTx fail, or Required to assert the code starts a transaction.
+// ExpectBegin programs transaction begins (every one, unless limited by
+// Times/MaxTimes). Use ReturnError to make BeginTx fail, or Required to assert
+// the code starts a transaction.
 func (m *Mock) ExpectBegin() *CallStub { return m.addCall(&m.beginStubs, "begin") }
 
-// ExpectCommit programs the next transaction commit (e.g. ReturnError to
-// simulate a commit failure, or Required to assert the code commits).
+// ExpectCommit programs transaction commits (every one, unless limited by
+// Times/MaxTimes): ReturnError simulates a commit failure, Required asserts the
+// code commits.
 func (m *Mock) ExpectCommit() *CallStub { return m.addCall(&m.commitStubs, "commit") }
 
-// ExpectRollback programs the next transaction rollback, the natural way to
-// assert that a failing unit of work rolled back rather than committed.
+// ExpectRollback programs transaction rollbacks (every one, unless limited by
+// Times/MaxTimes), the natural way to assert that a failing unit of work rolled
+// back rather than committed.
 func (m *Mock) ExpectRollback() *CallStub { return m.addCall(&m.rollbackStubs, "rollback") }
 
 // ExpectPing programs a database Ping (db.Ping / db.PingContext), so a health
@@ -45,7 +53,7 @@ func (m *Mock) addCall(into *[]*CallStub, action string) *CallStub {
 	return s
 }
 
-// onCall consumes the next applicable stub of a lifecycle action and returns its
+// onCall consumes the first applicable stub of a lifecycle action and returns its
 // error, or nil when none is programmed (the call still succeeds).
 func (m *Mock) onCall(stubs []*CallStub) error {
 	m.mu.Lock()
@@ -93,8 +101,9 @@ func (s *CallStub) MaxTimes(n int) *CallStub { s.maxTimes = n; return s }
 // FromCSVString appends rows parsed from CSV text, one record per row, matching
 // the columns NewRows was given (the CSV has no header). Each field becomes a
 // string value; it is a convenient way to spell out a wide canned result inline,
-// mirroring go-sqlmock's RowSet.FromCSVString. It panics on malformed CSV — a
-// test-setup error.
+// mirroring go-sqlmock's RowSet.FromCSVString. It panics on malformed CSV or a
+// record whose field count differs from the RowSet's columns — a test-setup
+// error.
 //
 //	sqltest.NewRows("id", "name").FromCSVString("1,alice\n2,bob")
 func (r *RowSet) FromCSVString(csvText string) *RowSet {
@@ -105,7 +114,10 @@ func (r *RowSet) FromCSVString(csvText string) *RowSet {
 	if err != nil {
 		panic(fmt.Sprintf("sqltest: parse CSV rows: %v", err))
 	}
-	for _, rec := range records {
+	for n, rec := range records {
+		if len(rec) != len(r.cols) {
+			panic(fmt.Sprintf("sqltest: CSV record %d has %d field(s), want %d (one per column)", n+1, len(rec), len(r.cols)))
+		}
 		values := make([]any, len(rec))
 		for i, f := range rec {
 			values[i] = f

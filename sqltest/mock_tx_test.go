@@ -116,3 +116,14 @@ func TestRowSetFromCSVString(t *testing.T) {
 		}
 	}
 }
+
+// A CSV record whose field count differs from the RowSet's columns is a test
+// setup error, not a row padded with NULLs.
+func TestRowSetFromCSVStringRejectsShortRecord(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("FromCSVString with a short record did not panic")
+		}
+	}()
+	sqltest.NewRows("id", "name").FromCSVString("1,alice\n2")
+}

@@ -284,8 +284,11 @@ mock.ExpectBegin().Required()
 mock.ExpectCommit().ReturnError(errors.New("conflict")) // commit fails
 ```
 
-A transaction the code opens without a programmed expectation still works, so
-these stubs are needed only to inject an error or assert a call. (Statement order
+Like a statement stub, a `CallStub` answers every matching call unless limited:
+the `ReturnError` above fails *every* commit. Add `.Times(1)` (or `MaxTimes`) to
+fail only the next one and let later commits fall through to a later stub or to
+success. A transaction the code opens without a programmed expectation still
+works, so these stubs are needed only to inject an error or assert a call. (Statement order
 is asserted on the spy side with `Expect(t, trace).InOrder(...)`, not by the
 mock.)
 
