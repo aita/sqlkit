@@ -993,6 +993,12 @@ func isPointer(row any) bool {
 // written, so it is the more precise snapshot even beneath a pointer receiver.
 // A nil pointer/slice/map normalizes to nil/unchanged.
 func normalize(v any) any {
+	// A nil pointer normalizes to nil before the Valuer check: calling Value on
+	// a nil *T whose Value method has a value receiver (e.g. *sql.NullString)
+	// panics, and database/sql itself treats such a nil pointer as SQL NULL.
+	if rv := reflect.ValueOf(v); rv.Kind() == reflect.Pointer && rv.IsNil() {
+		return nil
+	}
 	if valuer, ok := v.(stddriver.Valuer); ok {
 		if dv, err := valuer.Value(); err == nil {
 			return dv
