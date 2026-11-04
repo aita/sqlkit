@@ -81,6 +81,52 @@ func TestGenerateCatalogArray(t *testing.T) {
 	}
 }
 
+// TestGenerateCatalogEnum covers a schema with a declared enum: the catalog
+// must declare it (Catalog.Enum / Schema.Enum) so decl.NewCatalog().Build
+// resolves it, and a column of that engine type must render as
+// decl.EnumType(name) rather than the generic decl.Type(name) fallback, or
+// the enum's identity is lost and the binding generator can no longer map the
+// column to the generated Go enum type.
+func TestGenerateCatalogEnum(t *testing.T) {
+	md := meta.Metadata{
+		Enums: []meta.Enum{
+			{Schema: "public", Name: "mood", Values: []string{"happy", "sad"}},
+			{Schema: "audit", Name: "severity", Values: []string{"low", "high"}},
+		},
+		Tables: []meta.Table{{
+			Schema: meta.Schema{Name: "public"},
+			Name:   "users",
+			Columns: []meta.Column{
+				{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true},
+				{Name: "mood", Type: meta.Of("postgres", "mood", 0, 0, 0)},
+			},
+		}},
+	}
+	file, err := GenerateCatalog(md, CatalogOptions{PackageName: "schema"})
+	if err != nil {
+		t.Fatalf("GenerateCatalog() error = %v", err)
+	}
+	got := parseFile(t, file.Name, string(file.Content))
+	for _, want := range []string{
+		`Public.Enum("mood", "happy", "sad")`,
+		`decl.Column("mood", decl.EnumType("mood")),`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated catalog missing %q\n%s", want, got)
+		}
+	}
+	// An enum declared in a schema with no rendered table (audit.severity: the
+	// audit schema has no table here) must still get a schema var and Enum call.
+	for _, want := range []string{
+		`var Audit = Catalog.Schema("audit")`,
+		`Audit.Enum("severity", "low", "high")`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("generated catalog missing %q\n%s", want, got)
+		}
+	}
+}
+
 func TestGenerateCatalogForeignKeys(t *testing.T) {
 	tables := []meta.Table{
 		{

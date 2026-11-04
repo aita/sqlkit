@@ -13,7 +13,10 @@ func SnakeCase(name string) string {
 	for i, r := range runes {
 		if unicode.IsUpper(r) {
 			prevLower := i > 0 && !unicode.IsUpper(runes[i-1])
-			nextLower := i+1 < len(runes) && !unicode.IsUpper(runes[i+1]) && runes[i+1] != '_'
+			// A digit continues the current acronym/word rather than starting a new
+			// one (UserID2 -> user_id2, not user_i_d2), so only an actual lowercase
+			// letter after this uppercase run counts as "the next word started".
+			nextLower := i+1 < len(runes) && unicode.IsLower(runes[i+1])
 			if i > 0 && (prevLower || nextLower) && runes[i-1] != '_' {
 				sb.WriteByte('_')
 			}
