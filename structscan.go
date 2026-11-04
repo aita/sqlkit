@@ -95,6 +95,38 @@ func ColumnValues(table Table, row any) (names []string, values []any, err error
 	return names, values, nil
 }
 
+// ColumnMeta reports a column's write-time kind, for callers that need to
+// special-case a version or touch column the way SetStruct does (see
+// ColumnMetadata).
+type ColumnMeta struct {
+	// Version marks the optimistic-locking version column (`sqlkit:",version"`).
+	Version bool
+	// Touch marks an app-maintained timestamp column (`sqlkit:",touch"`).
+	Touch bool
+}
+
+// ColumnMetadata reports, for each name in names (as returned by ColumnValues
+// for the same table/row), whether that column is version- or touch-tagged. It
+// lets a caller outside this package (the uow package's snapshot-diff UPDATE
+// path) special-case those columns the same way SetStruct's implicit update
+// does, without reaching into the internal reflectmap field representation.
+func ColumnMetadata(row any, names []string) (map[string]ColumnMeta, error) {
+	rv, err := rowStruct(row)
+	if err != nil {
+		return nil, err
+	}
+	fields := reflectmap.Fields(rv.Type())
+	out := make(map[string]ColumnMeta, len(names))
+	for _, name := range names {
+		f, ok := fields[strings.ToLower(name)]
+		if !ok || (!f.Version && !f.Touch) {
+			continue
+		}
+		out[name] = ColumnMeta{Version: f.Version, Touch: f.Touch}
+	}
+	return out, nil
+}
+
 // SetColumns assigns values to the fields of *rowPtr that map to the named
 // columns, using the same column-to-field mapping as Scan and Insert. rowPtr
 // must be a non-nil pointer to a struct so the fields are settable; columns the

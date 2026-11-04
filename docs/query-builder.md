@@ -142,6 +142,16 @@ type Account struct {
   Naming the column explicitly in `SetStruct(row, T.Col)` writes the struct's
   value instead.
 
+The [`uow`](https://pkg.go.dev/github.com/aita/sqlkit/uow) package honours
+`version` and `touch` the same way when it flushes an UPDATE. For a managed
+entity (loaded with `Get`/`Find` or `Attach`ed) they ride along only with a real
+change to another column; the guard is the version the entity was loaded with,
+and after a successful `Flush` the struct's version field is bumped to match the
+database, so the scope can be reused. A detached `Update` guards on the row's
+current version and writes the bump back when the row is passed by pointer. A
+stale version makes `Flush` return `ErrVersionConflict`; a versioned row is
+always updated on its own (never merged into a batched UPDATE).
+
 ## Predicates and filters
 
 Typed columns carry the predicate vocabulary directly: `Eq`/`Ne`/`Lt`/`Le`/
