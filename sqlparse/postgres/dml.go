@@ -28,6 +28,11 @@ func tableFromRangeVar(rv *pg.RangeVar) (sql.Table, error) {
 }
 
 func convertInsert(s *pg.InsertStmt) (sql.Query, error) {
+	// sqlkit's INSERT has no WITH clause; dropping it would leave the source
+	// referencing CTEs that no longer exist.
+	if s.GetWithClause() != nil {
+		return nil, sqlparse.Unsupported("WITH on INSERT")
+	}
 	table, err := tableFromRangeVar(s.GetRelation())
 	if err != nil {
 		return nil, err

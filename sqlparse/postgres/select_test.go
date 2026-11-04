@@ -440,3 +440,20 @@ func TestGroupByMixedRollupCube(t *testing.T) {
 			GroupBy(sql.Col("a"), sql.Rollup(sql.Col("b")), sql.Cube(sql.Col("c"))),
 		`SELECT "a", "b", "c" FROM "t" GROUP BY "a", ROLLUP ("b"), CUBE ("c")`)
 }
+
+// Clauses the typed form has no place for must not be dropped silently: a WITH
+// on a set operation or an INSERT (the arms/source would reference CTEs that no
+// longer exist), SELECT ... INTO (a write turned into a read), and a bare
+// VALUES list's own ORDER BY / LIMIT / OFFSET / WITH all stay raw.
+func TestDroppedClausesFallBackToRaw(t *testing.T) {
+	for _, q := range []string{
+		"WITH d AS (SELECT 1 AS a) SELECT a FROM d UNION SELECT a FROM d",
+		"WITH d AS (SELECT 1) INSERT INTO users SELECT * FROM d",
+		"SELECT * INTO newt FROM users",
+		"VALUES (2), (1) ORDER BY 1 LIMIT 1",
+		"VALUES (1) OFFSET 1",
+		"WITH v AS (SELECT 1) VALUES (1)",
+	} {
+		assertRaw(t, q)
+	}
+}
