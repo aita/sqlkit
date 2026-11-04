@@ -32,14 +32,25 @@ func buildRelations(tables []meta.Table, bindingName func(meta.Table) string) ma
 
 	// Reserved identifier sets per table, seeded with column fields + methods,
 	// so relation names never collide with columns, methods, or each other.
+	// Column fields are deduped the same way buildTable dedupes them (uniqueName
+	// over a used set seeded with reservedFieldNames): two columns whose raw
+	// fieldName collides (e.g. "author" and "author_", both "Author") are
+	// buildTable's actual field names, "Author" and "Author2" — reserving only
+	// the raw, undeduped name would leave "Author2" unreserved, so a relation
+	// derived to that same name would collide with the renamed column field in
+	// the generated <Var>Filter struct (columns and relations share one struct).
 	reserved := make(map[string]map[string]bool, len(tables))
 	for _, t := range tables {
 		set := map[string]bool{}
 		for _, name := range relationMethodNames {
 			set[name] = true
 		}
+		used := make(map[string]bool, len(reservedFieldNames))
+		for name := range reservedFieldNames {
+			used[name] = true
+		}
 		for _, c := range t.Columns {
-			set[fieldName(c.Name)] = true
+			set[uniqueName(used, fieldName(c.Name))] = true
 		}
 		reserved[qualified(t.Schema.Name, t.Name)] = set
 	}

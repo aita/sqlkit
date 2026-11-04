@@ -4,8 +4,9 @@ The [`sqltest`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest) package is
 sqlkit's toolkit for testing SQL code. It cuts the
 boilerplate of seeding fixtures and managing the schema, leaving the connection
 (and any test container) to the caller, and it spies on the queries your code
-issues. Every helper takes `*testing.T` and fails the test with `t.Fatalf` on
-error, so setup code stays linear. It pulls in no database driver or
+issues. Every helper takes a `testing.TB` and fails the test with `t.Fatalf` on
+error, so setup code stays linear and the helpers work from tests, benchmarks,
+and shared `testing.TB` setup alike. It pulls in no database driver or
 test-container dependencies.
 
 ## Seeding and schema
@@ -85,6 +86,41 @@ func TestBlog(t *testing.T) {
 Foreign-key ordering of inserted *rows* is still the caller's responsibility:
 insert parent rows before the children that reference them.
 
+### Without a sqlkit catalog
+
+`New` needs a `meta.Metadata` (a built schema catalog) to render the schema and
+to know which tables to drop and truncate. Code that does not use the catalog —
+a project on plain `database/sql`, `sqlx`, or `pgx` — reaches for
+[`sqltest.NewRaw`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#NewRaw)
+instead, which wraps a standard `*sql.DB` and manages the schema from raw DDL:
+
+```go
+func TestUsers(t *testing.T) {
+    tdb := sqltest.NewRaw(openTestDB(t), sqlkit.PostgreSQLDialect{})
+    tdb.SetupSchemaSQL(t, `
+        CREATE TABLE users (id BIGSERIAL PRIMARY KEY, email TEXT NOT NULL);
+        CREATE TABLE posts (id BIGSERIAL PRIMARY KEY, user_id BIGINT REFERENCES users(id));
+    `) // applied now, the created tables dropped on t.Cleanup
+
+    // ... exercise the code under test against the seeded data.
+}
+```
+
+`SetupSchemaSQL` (apply now, drop on `t.Cleanup`) and `ApplySchemaSQL` (apply,
+no teardown) take one or more DDL strings — pass an embedded `.sql` file as
+easily as an inline literal. The teardown is the same foreign-key-safe drop the
+catalog path uses (`CASCADE` on PostgreSQL, foreign-key checks toggled on
+MySQL), driven by the `CREATE TABLE` names parsed from the DDL; `TruncateTables`
+resets the data between cases. The `Tx`, `Snapshot`, and seeding helpers all
+work on a `NewRaw` handle unchanged.
+
+The DDL is split on top-level semicolons only: a `;` inside a string literal, a
+quoted identifier, a comment, or a PostgreSQL dollar-quoted body (`$$ ... $$`)
+does not end a statement. On PostgreSQL an unquoted table name is folded to
+lower case for teardown, as the server does. The catalog-driven `SetupSchema`,
+`ApplySchema`, and `Truncate` fail the test on a `NewRaw` handle; use their
+`...SQL`/`TruncateTables` counterparts.
+
 ### Seeding by column name
 
 `InsertRows` and `Fixture` address rows through a generated `sqlkit.Table`
@@ -110,6 +146,31 @@ reads a generated key back the same cross-dialect way `InsertID` does
 (`RETURNING` on PostgreSQL, `Result.LastInsertId` on MySQL). On a `NewRaw`
 handle the `db.InsertMap` / `db.InsertMapID` methods supply the dialect and
 connection for you.
+
+### Fixtures from files
+
+[`LoadFixtures`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#LoadFixtures)
+seeds a directory of per-table `.json` / `.csv` files — the file-based,
+language-agnostic counterpart of `Fixture` (which declares rows as Go structs),
+in the style of Rails and go-testfixtures:
+
+```go
+sqltest.LoadFixtures(t, db, sqlkit.PostgreSQLDialect{}, "testdata/blog")
+// testdata/blog/01_users.json, testdata/blog/02_posts.csv → tables users, posts
+```
+
+Each file seeds the table named after it. Files load in lexical filename order,
+so a numeric prefix controls foreign-key order (parents before children) and is
+stripped from the table name, so `01_users.json` loads into `users` (any leading
+digits are a prefix: `2024_sales.csv` loads into `sales`). JSON files
+are an array of `{column: value}` objects (numbers stay integers when whole,
+`null` is `NULL`, a nested array/object seeds a JSON column as text); CSV files
+have a header row of column names with a field of exactly `\N` (quoted or not)
+meaning `NULL`. Each row
+keeps its own column set, so a row that omits a column gets that column's
+database default.
+[`LoadFixtureFile`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#LoadFixtureFile)
+loads a single file when the table name is decoupled from the filename.
 
 ## Query spy
 
@@ -149,13 +210,16 @@ sqltest.AssertTableContents(t, db, sqlkit.PostgreSQLDialect{}, "users", []map[st
 
 [`AssertCount`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#AssertCount) /
 `AssertCountWhere` / `AssertEmpty` / `AssertExists` / `AssertNotExists` count
-rows (optionally matching a `column → value` map, where a `nil` value becomes
-`IS NULL`).
+rows (optionally matching a `column → value` map, where a `nil` value — including
+a nil pointer or an invalid `sql.Null*` — becomes `IS NULL`).
 [`AssertTableContents`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#AssertTableContents)
 compares the whole table against the wanted rows **ignoring row order** and
 comparing **only the columns you name** — so autogenerated keys or timestamps you
 leave out are simply ignored. Values compare by their textual form, so `1`
-matches whether the driver returns `int64(1)`, `"1"`, or `[]byte("1")`. On a
+matches whether the driver returns `int64(1)`, `"1"`, or `[]byte("1")`. The flip
+side is that values whose text differs by engine — a MySQL boolean (`1` vs
+`true`), a PostgreSQL `numeric` (`1.50` vs `1.5`), timestamps — must be written
+the way the driver renders them. On a
 `DB` handle the `db.AssertCount` / `db.AssertEmpty` / `db.AssertExists` /
 `db.AssertTableContents` methods supply the dialect and connection.
 

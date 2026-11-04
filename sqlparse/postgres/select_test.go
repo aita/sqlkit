@@ -247,6 +247,15 @@ func TestSelectStandaloneValues(t *testing.T) {
 		1, "a", 2, "b")
 }
 
+// A standalone VALUES whose rows differ in width (which sqlkit's ValuesQuery
+// cannot model — ToSQL requires a uniform width) must round-trip as raw rather
+// than build a typed query that fails to render. pg_query accepts the parse, so
+// the round-trip oracle requires a usable Query. (Fuzz-found: VALUES(0,0),(”).)
+func TestStandaloneValuesUnevenWidthFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "VALUES (0, 0), ('')")
+	assertRaw(t, "VALUES (1, 2), (3)")
+}
+
 func TestSelectWindowFrame(t *testing.T) {
 	assertRoundTrip(t,
 		"SELECT SUM(x) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM t",

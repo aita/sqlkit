@@ -1,5 +1,5 @@
 ---
-name: bug-hunt
+name: hunt-bug
 description: >-
   Systematically hunt for correctness bugs in the sqlkit codebase — both the
   text-in/AST/text-out surfaces (compiler, parser frontends, redaction,
@@ -178,6 +178,70 @@ as the oracle, backed by the integration suite or the fake driver:
   driver interfaces (`SessionResetter`, `Validator`, `NamedValueChecker`,
   `ColumnConverter`, …) the underlying one implements — no dropping, no
   over-advertising (the `querytrace/driver` `conn_test.go`/`stmt_test.go` pattern).
+
+Techniques 10–15 are additional **candidate-generation angles**, orthogonal to
+the layer split above — each feeds the same triage → reproducer → fix →
+regression-test → PR pipeline as 1–9. Reach for them once 1–9 stop turning up
+new candidates on a surface, or when the surface itself isn't a "text in → AST
+→ text out" or checksum/parity contract (diff content, concurrency, docs).
+
+### 10. Migration/diff content correctness (beyond determinism)
+The DDL round-trip oracle (Technique 9) only checks that re-introspecting the
+applied DDL is checksum-equal to the source catalog — it never checks that the
+generated diff is the *intended* one. A diff that satisfies round-trip equality
+by dropping and recreating a table instead of altering it, or that misses a
+rename and emits a destructive drop+add, passes that oracle silently. Write
+before/after schema pairs for realistic multi-step changes (rename a column,
+change a type, add/drop a constraint) and assert the diff plan against the
+*specific expected statements*, not just post-apply equality.
+
+### 11. Mutation testing — surviving-mutant sweep
+Coverage (Technique 4) only tells you a line *ran*; it says nothing about
+whether the test that ran it actually checked the result. Inject small
+mutations into production code one package at a time — invert a conditional,
+change a comparison operator, drop an error check, shift a boundary by one —
+and confirm the existing suite fails. A mutant that **survives** (tests still
+pass) marks logic that is exercised but unverified, exactly where a live bug
+can hide at 100% coverage. Use a mutation-testing tool if one is available in
+the environment; otherwise hand-inject a scoped patch, run the package's
+tests, and revert. Triage survivors like any other candidate — most mark
+intentionally-tolerant code, not bugs.
+
+### 12. Extended static-analysis sweep
+`.golangci.yml` pins `default: standard` (errcheck, govet, ineffassign,
+staticcheck, unused) as the CI gate. Periodically run a broader set locally,
+without changing the committed config: `gosec` (unsafe string-built SQL
+patterns), `sqlclosecheck` (unclosed `*sql.Rows`/`*sql.Stmt`), `nilerr`
+(returning `nil` after observing a non-nil error), `contextcheck` (context not
+propagated), `exhaustive` (an unhandled dialect/enum switch case). Most
+findings are noise the standard set already filters for good reason — triage
+each like any candidate; the point is to catch the false negatives the
+standard set misses, not to adopt the broader set permanently.
+
+### 13. Concurrency / stress testing beyond `-race`
+`-race` only flags a data race on a code path a test actually exercises
+concurrently — it is silent about paths no test drives that way. Run `uow`,
+`routing`, and connection-pool/session code from many goroutines sharing one
+instance (concurrent flush/commit, concurrent read/write routing) under
+`-race` with repeats, and check for goroutine leaks (`goleak`, or
+`runtime.NumGoroutine` before/after) in addition to races.
+
+### 14. Property-based builder call-sequence generation
+Technique 5 (builder-first) is hand-written by design, so it only reaches
+combinations someone thought to write. Complement it with a generator that
+composes builder calls structurally — recursing over `SelectQuery`/
+`InsertQuery`/... methods and their valid argument types — so option
+combinations no one hand-wrote get exercised. Feed the generated queries
+through `ToSQL` and the Technique 1 oracles; this reaches builder-side
+combinatorics no parser-driven fuzz corpus can produce.
+
+### 15. Docs-vs-implementation audit
+No oracle reads `docs/*.md` — a documented contract and the code path it
+describes can drift apart with both sides internally consistent, and every
+text/AST oracle stays green. Walk each documented guarantee or limitation
+(`docs/limitations.md` and the topic docs) against the code path it describes:
+a limitation that was fixed but left documented, or a documented guarantee the
+code quietly dropped, is invisible to 1–9 by construction.
 
 ## Triage: confirm before you fix
 

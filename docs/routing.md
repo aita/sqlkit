@@ -76,12 +76,22 @@ db.Select().From(Users).Preload(Posts).All(ctx, sqlkit.WithRoute("replica", sqlk
 **Sessions** pin to one backend. A transaction cannot span backends, so the
 `Router` is consulted once, at `Begin`, from the session's `WithRoute` hint and
 read-only intent; every statement in the session then runs on that backend. A
-read-only session routes to a read replica without a hint:
+read-only session routes to a read replica without a hint. `WithRoute` alone,
+without `ReadOnly`, is a no-op under the built-in `ReadWriteRouter`: a session
+that might later write must never pin to a replica, so the router only honors a
+session-level route hint when it is also marked read-only — pass both together
+to pin a read-only session to a specific replica:
 
 ```go
-db.NewSession(sqlkit.WithRoute("replica"))
+db.NewSession(sqlkit.WithRoute("replica")) // ReadWriteRouter ignores this; runs on the primary
 db.NewSession(sqlkit.WithTxOptions(sqlkit.TxOptions{ReadOnly: true})) // -> replica via the router
+db.NewSession(sqlkit.WithRoute("replica"), sqlkit.WithTxOptions(sqlkit.TxOptions{ReadOnly: true})) // -> replica, pinned
 ```
+
+A hand-written `Router` can honor a plain `WithRoute` hint regardless of
+read-only intent by checking `stmt.RouteHint` before `stmt.IsWrite()` — see
+`rwSplit` in the package tests for the pattern — but the built-in
+`ReadWriteRouter` deliberately does not, to stay safe by default.
 
 A per-statement `WithRoute` inside a pinned session that names a *different*
 backend is [`ErrRouteConflict`](https://pkg.go.dev/github.com/aita/sqlkit#ErrRouteConflict) (a distributed transaction the router will not
