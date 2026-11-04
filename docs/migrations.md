@@ -139,7 +139,11 @@ safety. A drop+add that is really a rename keeps its data when you say so
 (`--rename users.name:full_name`, `--rename-table old:new`); unhinted drop/add
 pairs get a `// possible rename` suggestion. As with any autogenerator, **review
 the result before applying** — data backfills and risky renames still need a
-human. The same diff is available as a library via [`migrate.Diff`](https://pkg.go.dev/github.com/aita/sqlkit/migrate#Diff)`(old, new,
+human. With `--from-db` on PostgreSQL the source also includes the schema's
+enum types (`CREATE TYPE ... AS ENUM`), except those owned by an extension. An
+enum the catalog doesn't declare is dropped only when no catalog column still
+uses it by type name — `op.DropEnum` cascades, so dropping a type a column
+depends on would drop the column too. The same diff is available as a library via [`migrate.Diff`](https://pkg.go.dev/github.com/aita/sqlkit/migrate#Diff)`(old, new,
 dialect)`.
 
 ## Migrations across backends

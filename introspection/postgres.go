@@ -101,8 +101,28 @@ JOIN pg_namespace n ON n.oid = c.relnamespace
 LEFT JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = d.objsubid AND d.objsubid > 0
 WHERE n.nspname = $1 AND c.relkind = 'r' AND d.classoid = 'pg_class'::regclass`
 
+// pgEnumsQuery reads enum types (CREATE TYPE ... AS ENUM) with their labels in
+// declaration order (enumsortorder). A column typed with the enum's name
+// already round-trips through columnType/meta.Of; without this the enum
+// type itself — the CREATE TYPE statement a column of that name depends on —
+// is never read back, so a catalog rebuilt from the introspected metadata
+// would emit a column referencing a type that was never created. Types owned
+// by an extension (pg_depend deptype 'e') are left out: the extension, not the
+// schema, manages them, so a diff must never drop or recreate them.
+const pgEnumsQuery = `
+SELECT t.typname, e.enumlabel
+FROM pg_type t
+JOIN pg_enum e ON e.enumtypid = t.oid
+JOIN pg_namespace n ON n.oid = t.typnamespace
+WHERE n.nspname = $1
+  AND NOT EXISTS (
+    SELECT 1 FROM pg_depend d
+    WHERE d.classid = 'pg_type'::regclass AND d.objid = t.oid AND d.deptype = 'e'
+  )
+ORDER BY t.typname, e.enumsortorder`
+
 // inspectPostgres reads the schema from PostgreSQL's information_schema.
-func inspectPostgres(ctx context.Context, db Querier, schemaName string) ([]meta.Table, error) {
+func inspectPostgres(ctx context.Context, db Querier, schemaName string) ([]meta.Table, []meta.Enum, error) {
 	if schemaName == "" {
 		schemaName = "public"
 	}
@@ -110,7 +130,7 @@ func inspectPostgres(ctx context.Context, db Querier, schemaName string) ([]meta
 
 	rows, err := db.QueryContext(ctx, pgColumnsQuery, schemaName)
 	if err != nil {
-		return nil, fmt.Errorf("introspection: read columns: %w", err)
+		return nil, nil, fmt.Errorf("introspection: read columns: %w", err)
 	}
 	defer rows.Close()
 	tableIndex := map[string]int{}
@@ -121,7 +141,7 @@ func inspectPostgres(ctx context.Context, db Querier, schemaName string) ([]meta
 		var length, precision, scale int
 		var column meta.Column
 		if err := rows.Scan(&tableName, &column.Name, &udt, &column.Nullable, &colDefault, &isIdentity, &length, &precision, &scale); err != nil {
-			return nil, fmt.Errorf("introspection: scan column: %w", err)
+			return nil, nil, fmt.Errorf("introspection: scan column: %w", err)
 		}
 		column.Type = columnType("postgres", udt, length, precision, scale)
 		column.HasDefault, column.DefaultExpr = columnDefault(colDefault, isIdentity)
@@ -134,18 +154,18 @@ func inspectPostgres(ctx context.Context, db Querier, schemaName string) ([]meta
 		tables[index].Columns = append(tables[index].Columns, column)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("introspection: read columns: %w", err)
+		return nil, nil, fmt.Errorf("introspection: read columns: %w", err)
 	}
 
 	pkRows, err := db.QueryContext(ctx, pgPrimaryKeysQuery, schemaName)
 	if err != nil {
-		return nil, fmt.Errorf("introspection: read primary keys: %w", err)
+		return nil, nil, fmt.Errorf("introspection: read primary keys: %w", err)
 	}
 	defer pkRows.Close()
 	for pkRows.Next() {
 		var tableName, columnName string
 		if err := pkRows.Scan(&tableName, &columnName); err != nil {
-			return nil, fmt.Errorf("introspection: scan primary key: %w", err)
+			return nil, nil, fmt.Errorf("introspection: scan primary key: %w", err)
 		}
 		index, ok := tableIndex[tableName]
 		if !ok {
@@ -159,70 +179,70 @@ func inspectPostgres(ctx context.Context, db Querier, schemaName string) ([]meta
 		}
 	}
 	if err := pkRows.Err(); err != nil {
-		return nil, fmt.Errorf("introspection: read primary keys: %w", err)
+		return nil, nil, fmt.Errorf("introspection: read primary keys: %w", err)
 	}
 
 	fkRows, err := db.QueryContext(ctx, pgForeignKeysQuery, schemaName)
 	if err != nil {
-		return nil, fmt.Errorf("introspection: read foreign keys: %w", err)
+		return nil, nil, fmt.Errorf("introspection: read foreign keys: %w", err)
 	}
 	defer fkRows.Close()
 	var fks []fkRow
 	for fkRows.Next() {
 		var row fkRow
 		if err := fkRows.Scan(&row.constraint, &row.table, &row.column, &row.refSchema, &row.refTable, &row.refColumn, &row.onDelete, &row.onUpdate); err != nil {
-			return nil, fmt.Errorf("introspection: scan foreign key: %w", err)
+			return nil, nil, fmt.Errorf("introspection: scan foreign key: %w", err)
 		}
 		fks = append(fks, row)
 	}
 	if err := fkRows.Err(); err != nil {
-		return nil, fmt.Errorf("introspection: read foreign keys: %w", err)
+		return nil, nil, fmt.Errorf("introspection: read foreign keys: %w", err)
 	}
 	attachForeignKeys(tables, fks)
 
 	ixRows, err := db.QueryContext(ctx, pgIndexesQuery, schemaName)
 	if err != nil {
-		return nil, fmt.Errorf("introspection: read indexes: %w", err)
+		return nil, nil, fmt.Errorf("introspection: read indexes: %w", err)
 	}
 	defer ixRows.Close()
 	var indexes []indexRow
 	for ixRows.Next() {
 		var row indexRow
 		if err := ixRows.Scan(&row.table, &row.index, &row.unique, &row.column); err != nil {
-			return nil, fmt.Errorf("introspection: scan index: %w", err)
+			return nil, nil, fmt.Errorf("introspection: scan index: %w", err)
 		}
 		indexes = append(indexes, row)
 	}
 	if err := ixRows.Err(); err != nil {
-		return nil, fmt.Errorf("introspection: read indexes: %w", err)
+		return nil, nil, fmt.Errorf("introspection: read indexes: %w", err)
 	}
 	attachIndexes(tables, indexes)
 
 	ckRows, err := db.QueryContext(ctx, pgChecksQuery, schemaName)
 	if err != nil {
-		return nil, fmt.Errorf("introspection: read check constraints: %w", err)
+		return nil, nil, fmt.Errorf("introspection: read check constraints: %w", err)
 	}
 	defer ckRows.Close()
 	for ckRows.Next() {
 		var tableName, constraint, clause string
 		if err := ckRows.Scan(&tableName, &constraint, &clause); err != nil {
-			return nil, fmt.Errorf("introspection: scan check constraint: %w", err)
+			return nil, nil, fmt.Errorf("introspection: scan check constraint: %w", err)
 		}
 		attachCheck(tables, tableName, constraint, clause)
 	}
 	if err := ckRows.Err(); err != nil {
-		return nil, fmt.Errorf("introspection: read check constraints: %w", err)
+		return nil, nil, fmt.Errorf("introspection: read check constraints: %w", err)
 	}
 
 	cRows, err := db.QueryContext(ctx, pgCommentsQuery, schemaName)
 	if err != nil {
-		return nil, fmt.Errorf("introspection: read comments: %w", err)
+		return nil, nil, fmt.Errorf("introspection: read comments: %w", err)
 	}
 	defer cRows.Close()
 	for cRows.Next() {
 		var tableName, columnName, comment string
 		if err := cRows.Scan(&tableName, &columnName, &comment); err != nil {
-			return nil, fmt.Errorf("introspection: scan comment: %w", err)
+			return nil, nil, fmt.Errorf("introspection: scan comment: %w", err)
 		}
 		index, ok := tableIndex[tableName]
 		if !ok {
@@ -240,8 +260,32 @@ func inspectPostgres(ctx context.Context, db Querier, schemaName string) ([]meta
 		}
 	}
 	if err := cRows.Err(); err != nil {
-		return nil, fmt.Errorf("introspection: read comments: %w", err)
+		return nil, nil, fmt.Errorf("introspection: read comments: %w", err)
 	}
 
-	return tables, nil
+	enRows, err := db.QueryContext(ctx, pgEnumsQuery, schemaName)
+	if err != nil {
+		return nil, nil, fmt.Errorf("introspection: read enums: %w", err)
+	}
+	defer enRows.Close()
+	var enums []meta.Enum
+	enumIndex := map[string]int{}
+	for enRows.Next() {
+		var typeName, label string
+		if err := enRows.Scan(&typeName, &label); err != nil {
+			return nil, nil, fmt.Errorf("introspection: scan enum: %w", err)
+		}
+		index, ok := enumIndex[typeName]
+		if !ok {
+			index = len(enums)
+			enumIndex[typeName] = index
+			enums = append(enums, meta.Enum{Schema: schemaName, Name: typeName})
+		}
+		enums[index].Values = append(enums[index].Values, label)
+	}
+	if err := enRows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("introspection: read enums: %w", err)
+	}
+
+	return tables, enums, nil
 }
