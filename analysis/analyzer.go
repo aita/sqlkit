@@ -137,9 +137,33 @@ func (a *Analyzer) Analyze(sqlText string, q sql.Query) Analysis {
 // this one fact without a full Analyze (e.g. a Router) can call it directly.
 func IsLockingRead(q sql.Query) bool { return isLockingRead(q) }
 
+// isLockingRead implements IsLockingRead. The lock may sit anywhere in the
+// read — a derived table, a CTE body, a set operation arm, a subquery — and
+// still takes row locks when the statement runs (PostgreSQL locks the rows a
+// FOR UPDATE subquery or CTE returns), so the whole tree is searched, not just
+// the top-level SELECT.
 func isLockingRead(q sql.Query) bool {
-	sel, ok := sql.Unwrap(q).(sql.SelectStmt)
-	return ok && sel.Lock != nil
+	root := sql.Unwrap(q)
+	switch root.(type) {
+	case sql.SelectStmt, sql.CompoundStmt:
+	default:
+		return false
+	}
+	n, ok := root.(sql.Node)
+	if !ok {
+		return false
+	}
+	locked := false
+	sql.Inspect(n, func(node sql.Node) bool {
+		if locked {
+			return false
+		}
+		if sel, ok := node.(sql.SelectStmt); ok && sel.Lock != nil {
+			locked = true
+		}
+		return !locked
+	})
+	return locked
 }
 
 // WritesViaCTE reports whether a read-kinded statement carries a data-modifying

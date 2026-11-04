@@ -47,7 +47,8 @@ func (ShardByTenant) Route(ctx context.Context, stmt sqlkit.Statement) string {
 
 Route on **`Kind`/`IsWrite`, not `Op`**: an `INSERT/UPDATE/DELETE ... RETURNING`
 runs through the row-returning path with `Op == `[`OpQuery`](https://pkg.go.dev/github.com/aita/sqlkit#OpQuery) yet is a write, and a
-locking read (`SELECT ... FOR UPDATE`) takes row locks — `stmt.IsWrite()` reports
+locking read (`SELECT ... FOR UPDATE`, including one nested in a derived table,
+CTE, subquery or set-operation arm) takes row locks — `stmt.IsWrite()` reports
 both correctly so they never land on a read replica. A data-modifying CTE
 (`WITH x AS (INSERT/UPDATE/DELETE ... RETURNING ...) SELECT ...`) is likewise a
 write even though its top-level statement is a `SELECT`; `IsWrite()` detects it
