@@ -1,6 +1,8 @@
 package sql
 
 import (
+	stdsql "database/sql"
+	"database/sql/driver"
 	"strings"
 	"testing"
 )
@@ -484,5 +486,26 @@ func TestSplitRowsBySizeOversizedRowGoesAlone(t *testing.T) {
 func TestSplitRowsBySizeSmallRowsFitOneStatement(t *testing.T) {
 	if parts := bulkInsert(4, "a").SplitRowsBySize(0, 1<<20); len(parts) != 1 {
 		t.Fatalf("parts = %d, want 1 (rows fit the budget)", len(parts))
+	}
+}
+
+// bigValuer stands in for a JSON column's encoder: a struct wrapper whose
+// driver value is a large byte slice.
+type bigValuer struct{ n int }
+
+func (v bigValuer) Value() (driver.Value, error) { return []byte(strings.Repeat("x", v.n)), nil }
+
+// A driver.Valuer is sized by the driver value it produces, not charged a flat
+// cost for its Go wrapper, so a large JSON document still trips the byte cap.
+func TestValueByteSizeUsesValuerOutput(t *testing.T) {
+	if got := valueByteSize(bigValuer{n: 5000}); got != 5000 {
+		t.Fatalf("valueByteSize(Valuer of 5000 bytes) = %d, want 5000", got)
+	}
+	if got := valueByteSize(stdsql.NullString{String: "abcdef", Valid: true}); got != 6 {
+		t.Fatalf("valueByteSize(NullString) = %d, want 6", got)
+	}
+	var np *stdsql.NullString
+	if got := valueByteSize(np); got != 4 {
+		t.Fatalf("valueByteSize(nil *NullString) = %d, want 4 (NULL)", got)
 	}
 }

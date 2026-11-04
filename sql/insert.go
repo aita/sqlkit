@@ -1,6 +1,9 @@
 package sql
 
-import "reflect"
+import (
+	"database/sql/driver"
+	"reflect"
+)
 
 // InsertStmt is the immutable AST for an INSERT statement (INSERT ... VALUES or
 // INSERT ... SELECT). Exactly one of Rows or Select carries the inserted data;
@@ -252,8 +255,23 @@ func estimateRowBytes(row []Expression) int {
 
 // valueByteSize estimates the serialized byte size of a single bind value,
 // charging strings and byte slices their length (the values that make a row
-// large) and other scalars a small fixed cost.
+// large) and other scalars a small fixed cost. A driver.Valuer (a JSON column's
+// encoder, sql.NullString, a custom type) is sized by the driver value it
+// produces, since that — not the Go wrapper — is what goes over the wire.
 func valueByteSize(v any) int {
+	if valuer, ok := v.(driver.Valuer); ok {
+		if rv := reflect.ValueOf(v); rv.Kind() == reflect.Pointer && rv.IsNil() {
+			return 4 // a nil pointer Valuer binds as NULL
+		}
+		dv, err := valuer.Value()
+		if err != nil {
+			return 16
+		}
+		if _, nested := dv.(driver.Valuer); nested {
+			return 16 // a driver.Value is never itself a Valuer; don't recurse
+		}
+		return valueByteSize(dv)
+	}
 	switch x := v.(type) {
 	case nil:
 		return 4 // NULL
@@ -279,7 +297,7 @@ func valueByteSize(v any) int {
 		}
 		return valueByteSize(rv.Elem().Interface())
 	}
-	return 16 // numbers, time.Time, driver.Valuer, and other scalars
+	return 16 // numbers, time.Time, and other scalars
 }
 
 // ToSQL compiles the building INSERT statement.
