@@ -264,3 +264,21 @@ func TestSQLiteSchemaQualifiedDDL(t *testing.T) {
 		}
 	}
 }
+
+// JSON access must address the literal key a "$"-prefixed step names and count
+// a negative index from the end, as it does on PostgreSQL.
+func TestSQLiteJSONDollarKeyAndNegativeIndex(t *testing.T) {
+	db := openSQLite(t)
+	doc := sql.Raw(`'{"$x": 3, "$.a": 7, "a": {"b": 9}, "arr": [1, 2, 5]}'`)
+	cases := map[int64]sql.Expression{
+		3: sql.JSONGetText(doc, "$x"),
+		7: sql.JSONGetText(doc, "$.a"),
+		5: sql.JSONGetText(doc, "arr", -1),
+	}
+	for want, e := range cases {
+		q := sql.Select(sql.As(sql.Cast(e, "INTEGER"), "v"))
+		if got := queryInts(t, db, q); len(got) != 1 || got[0] != want {
+			t.Errorf("got %v, want [%d]", got, want)
+		}
+	}
+}

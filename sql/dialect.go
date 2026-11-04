@@ -991,8 +991,43 @@ func (d SQLiteDialect) Upsert(cl UpsertClause) (string, error) {
 }
 
 // JSONAccess chains the -> / ->> operators like PostgreSQL (SQLite >= 3.38).
+//
+// SQLite reads a right operand that begins with "$" as a JSON path rather than
+// an object label, so such a key is spelled as the quoted path member
+// '$."key"' (a bare '$x' is a "bad JSON path" error, and '$.a' would silently
+// read a different member). A negative index counts from the end, as on
+// PostgreSQL, which SQLite spells '$[#-N]' (a bare -1 is rejected).
 func (SQLiteDialect) JSONAccess(operand string, path []any, asText bool) (string, error) {
-	return renderArrowJSONAccess(operand, path, asText)
+	if len(path) == 0 {
+		return "", fmt.Errorf("sql: JSON access requires at least one path step")
+	}
+	expr := operand
+	for i, step := range path {
+		isKey, key, idx, err := jsonPathStep(i, step)
+		if err != nil {
+			return "", err
+		}
+		operator := "->"
+		if asText && i == len(path)-1 {
+			operator = "->>"
+		}
+		var rhs string
+		switch {
+		case isKey && strings.HasPrefix(key, "$"):
+			if strings.Contains(key, `"`) {
+				return "", fmt.Errorf("sql: SQLite cannot address JSON key %q (it begins with \"$\" and contains a double quote)", key)
+			}
+			rhs = literal(`$."` + key + `"`)
+		case isKey:
+			rhs = literal(key)
+		case idx < 0:
+			rhs = literal("$[#" + strconv.Itoa(idx) + "]")
+		default:
+			rhs = strconv.Itoa(idx)
+		}
+		expr = "(" + expr + " " + operator + " " + rhs + ")"
+	}
+	return expr, nil
 }
 
 // JSONObject renders SQLite's flat json_object(key, value, ...) form; the
