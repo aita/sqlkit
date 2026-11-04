@@ -59,6 +59,9 @@ func (c *Compiler) CompileCreateTable(s CreateTableStmt) (string, error) {
 	// (SQLite's INTEGER PRIMARY KEY AUTOINCREMENT); for those, a separate
 	// PRIMARY KEY constraint over that single column would be a duplicate, so
 	// skip it. PostgreSQL/MySQL keep the standalone constraint as before.
+	if err := c.checkInlineAutoIncrement(s); err != nil {
+		return "", err
+	}
 	if len(s.PrimaryKey) > 0 && !c.inlinesAutoIncrementPK(s) {
 		defs = append(defs, "PRIMARY KEY ("+c.quoteAll(s.PrimaryKey)+")")
 	}
@@ -151,6 +154,33 @@ func (c *Compiler) inlinesAutoIncrementPK(s CreateTableStmt) bool {
 		return rendered
 	}
 	return false
+}
+
+// checkInlineAutoIncrement rejects auto-increment columns a dialect that
+// declares the primary key inline (SQLite) cannot express: one outside the
+// primary key, which would silently become the primary key, or one inside a
+// composite primary key, which would declare two primary keys.
+func (c *Compiler) checkInlineAutoIncrement(s CreateTableStmt) error {
+	ip, ok := c.Dialect.(InlineAutoIncrementPrimaryKey)
+	if !ok || !ip.InlinesAutoIncrementPrimaryKey() {
+		return nil
+	}
+	for _, col := range s.Columns {
+		if !col.AutoIncrement {
+			continue
+		}
+		ai, ok := col.Type.(AutoIncrementColumnType)
+		if !ok {
+			continue
+		}
+		if _, rendered := ai.RenderAutoIncrement(c.Dialect); !rendered {
+			continue
+		}
+		if len(s.PrimaryKey) != 1 || !s.PrimaryKey[0].Equal(col.Name) {
+			return fmt.Errorf("sqlkit/sql: the %s dialect supports an auto-increment column only as the table's sole primary key (column %q)", c.Dialect.Name(), col.Name.String())
+		}
+	}
+	return nil
 }
 
 // compileColumnDef renders a single column definition, including any inline
@@ -282,6 +312,16 @@ func (c *Compiler) compileRestateColumn(col ColumnDef) (string, error) {
 		}
 		return "MODIFY COLUMN " + def, nil
 	}
+	if col.AutoIncrement {
+		// Unlike MySQL's inline MODIFY COLUMN ... AUTO_INCREMENT, PostgreSQL has no
+		// ALTER COLUMN form of "make this a serial column" — that sugar only exists
+		// at CREATE TABLE time, expanding to a backing CREATE SEQUENCE plus a
+		// nextval() DEFAULT. Silently falling through to the DROP DEFAULT branch
+		// below would strip the column's default instead, so reject instead of
+		// guessing; the caller can set an explicit DefaultExpr (e.g. a nextval(...)
+		// call against a sequence created separately).
+		return "", fmt.Errorf("sqlkit/sql: ALTER COLUMN cannot express a bare auto-increment default on the %s dialect; set an explicit DEFAULT expression, or create/drop the column instead", c.Dialect.Name())
+	}
 	name := c.Dialect.QuoteName(col.Name.String())
 	typeClause, err := col.Type.RenderType(c.Dialect)
 	if err != nil {
@@ -381,6 +421,11 @@ func (c *Compiler) CompileCreateIndex(s CreateIndexStmt) (string, error) {
 	var sb strings.Builder
 	sb.WriteString("CREATE " + kind + " ")
 	if s.IfNotExists {
+		// MySQL has no IF NOT EXISTS for CREATE INDEX (any version); emitting it
+		// produces SQL the engine rejects. PostgreSQL supports it.
+		if c.Dialect.Name() == "mysql" {
+			return "", fmt.Errorf("sqlkit/sql: dialect %q does not support CREATE INDEX ... IF NOT EXISTS", c.Dialect.Name())
+		}
 		sb.WriteString("IF NOT EXISTS ")
 	}
 	sb.WriteString(c.Dialect.QuoteName(s.Name.String()) + " ON " + c.qualify(s.Table) +
@@ -456,6 +501,9 @@ func (c *Compiler) CompileAlterTable(s AlterTableStmt) (string, error) {
 	if len(s.Alterations) == 0 {
 		return "", fmt.Errorf("sqlkit/sql: ALTER TABLE requires at least one alteration")
 	}
+	if len(s.Alterations) > 1 && sqliteFamily(c.Dialect.Name()) {
+		return "", fmt.Errorf("sqlkit/sql: the %s dialect allows one alteration per ALTER TABLE statement; issue them separately", c.Dialect.Name())
+	}
 	clauses := make([]string, len(s.Alterations))
 	for i, a := range s.Alterations {
 		clause, err := c.compileAlteration(s.Table, a)
@@ -468,6 +516,13 @@ func (c *Compiler) CompileAlterTable(s AlterTableStmt) (string, error) {
 }
 
 func (c *Compiler) compileAlteration(table Table, a Alteration) (string, error) {
+	if sqliteFamily(c.Dialect.Name()) {
+		switch a.Kind {
+		case AlterAddColumn, AlterDropColumn, AlterRenameColumn, AlterRenameTable:
+		default:
+			return "", fmt.Errorf("sqlkit/sql: the %s dialect's ALTER TABLE supports only ADD/DROP/RENAME COLUMN and RENAME TO; changing a column type, nullability, default, or constraint requires rebuilding the table", c.Dialect.Name())
+		}
+	}
 	switch a.Kind {
 	case AlterAddColumn:
 		if a.Column == nil {
@@ -566,6 +621,19 @@ func (c *Compiler) requireColumnModify(op string) error {
 	return nil
 }
 
+// requirePostgresObject rejects an object kind that exists only in PostgreSQL —
+// sequences, enum types (CREATE TYPE ... AS ENUM), extensions, materialized
+// views, and dollar-quoted/LANGUAGE-clause functions — when compiled for MySQL,
+// which has none of them and whose parser rejects the PostgreSQL DDL this
+// package would otherwise emit. It mirrors requireColumnModify / the
+// single-element-row and FULL JOIN guards.
+func (c *Compiler) requirePostgresObject(feature string) error {
+	if name := c.Dialect.Name(); name == "mysql" || sqliteFamily(name) {
+		return fmt.Errorf("sqlkit/sql: dialect %q does not support %s", c.Dialect.Name(), feature)
+	}
+	return nil
+}
+
 // foreignKeyClause renders an ALTER TABLE "ADD CONSTRAINT ... FOREIGN KEY ..."
 // action; foreignKeyDef renders the same constraint as a CREATE TABLE definition.
 func (c *Compiler) foreignKeyClause(fk ForeignKeyConstraint) (string, error) {
@@ -580,9 +648,15 @@ func (c *Compiler) foreignKeyClause(fk ForeignKeyConstraint) (string, error) {
 // table constraint, shared by CREATE TABLE and ALTER TABLE ADD. Both column
 // lists must be non-empty, mirroring the UNIQUE and KEY constraint guards, so a
 // degenerate constraint errors rather than emitting "FOREIGN KEY () REFERENCES".
+// They must also be the same length: a referencing/referenced column-list arity
+// mismatch is rejected here at compile time rather than left to render as SQL
+// every engine rejects at execution time.
 func (c *Compiler) foreignKeyDef(fk ForeignKeyConstraint) (string, error) {
 	if len(fk.Columns) == 0 || len(fk.RefColumns) == 0 {
 		return "", fmt.Errorf("sqlkit/sql: FOREIGN KEY requires at least one referencing and one referenced column")
+	}
+	if len(fk.Columns) != len(fk.RefColumns) {
+		return "", fmt.Errorf("sqlkit/sql: FOREIGN KEY has %d referencing column(s) but %d referenced column(s)", len(fk.Columns), len(fk.RefColumns))
 	}
 	clause := "CONSTRAINT " + c.Dialect.QuoteName(fk.Name.String()) +
 		" FOREIGN KEY (" + c.quoteAll(fk.Columns) + ")" +

@@ -104,6 +104,13 @@ treat the string as a token, not a value to parse. The Paginator owns cursor
 encoding; supply `WithCodec` to sign or encrypt the envelope. End the keys with a
 unique column (typically the primary key) so the order is total.
 
+A key on a nullable column (a pointer field type such as `Column[*string]`, or a
+`sql.Null*` type) is paginated NULL-safely: NULL sorts as the greatest value —
+last for `KeyAsc`, first for `KeyDesc`, identically on PostgreSQL and MySQL —
+and the seek predicate steps over NULLs, so no row is dropped or repeated. Such
+a key orders by `col IS NULL` first, which an ordinary index on `col` can't
+serve; keys of non-nullable types keep the plain, index-friendly ORDER BY.
+
 ## Struct field tags
 
 The `sqlkit` tag names the column (`sqlkit:"created_at"`) and `sqlkit:"-"` drops
@@ -141,6 +148,16 @@ type Account struct {
   `updated_at` stays current without a database trigger or a manual assignment.
   Naming the column explicitly in `SetStruct(row, T.Col)` writes the struct's
   value instead.
+
+The [`uow`](https://pkg.go.dev/github.com/aita/sqlkit/uow) package honours
+`version` and `touch` the same way when it flushes an UPDATE. For a managed
+entity (loaded with `Get`/`Find` or `Attach`ed) they ride along only with a real
+change to another column; the guard is the version the entity was loaded with,
+and after a successful `Flush` the struct's version field is bumped to match the
+database, so the scope can be reused. A detached `Update` guards on the row's
+current version and writes the bump back when the row is passed by pointer. A
+stale version makes `Flush` return `ErrVersionConflict`; a versioned row is
+always updated on its own (never merged into a batched UPDATE).
 
 ## Predicates and filters
 
@@ -264,7 +281,7 @@ The function DSL (in `sql`) covers the conditional/NULL helpers ([`Coalesce`](ht
 [`NullIf`](https://pkg.go.dev/github.com/aita/sqlkit/sql#NullIf), [`Greatest`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Greatest), [`Least`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Least)), aggregates ([`Sum`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Sum), [`Avg`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Avg), [`Min`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Min), [`Max`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Max),
 [`StringAgg`](https://pkg.go.dev/github.com/aita/sqlkit/sql#StringAgg), …), ranking/window functions ([`Rank`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Rank), [`Lag`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Lag), [`Lead`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Lead), …), portable
 string and numeric functions, date/time keywords, and JSON access
-([`sql.JSONGet`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGet) / [`sql.JSONGetText`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGetText) with portable path steps; PostgreSQL only).
+([`sql.JSONGet`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGet) / [`sql.JSONGetText`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGetText) with portable path steps; each dialect renders it in its native syntax — PostgreSQL `->`/`->>`, MySQL `JSON_EXTRACT`/`JSON_UNQUOTE`).
 [`sql.Func`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Func)`(name, args...)` is the escape hatch for anything else.
 
 Distinct aggregates are spelled [`sql.CountDistinct`](https://pkg.go.dev/github.com/aita/sqlkit/sql#CountDistinct)`(col)` and
@@ -456,6 +473,71 @@ When more than one relation reaches the same table (e.g. a self-reference's
 of the target table; it takes the same conditions. Preload currently supports
 single-column foreign keys only — see [Limitations](limitations.md).
 
+### Fold: eager-loading in one query
+
+`FoldRel` is the **single-query** counterpart to `Preload`. Instead of a
+follow-up `SELECT`, it adds a `LEFT JOIN` to the relation's target, projects that
+table's columns alongside the base ones, and at `Scan` **folds** the flat joined
+rows back into the nested field — de-duplicating parents by their primary key so
+a parent that joins several children appears once carrying all of them:
+
+```go
+type User struct {
+    ID    int64
+    Name  string
+    Posts []Post // filled by FoldRel(Users.Rels.Posts)
+}
+
+var users []User
+err := db.Select().From(appdb.Users).
+    FoldRel(appdb.Users.Rels.Posts).
+    All(ctx).Scan(&users)
+// SELECT users.…, posts.… FROM users LEFT JOIN posts ON posts.user_id = users.id
+```
+
+The destination field is matched exactly as for `Preload` (a `preload:"…"` tag or
+a field named after the relation); a to-many relation fills a slice, a to-one a
+struct or pointer. A parent with no match keeps an empty slice or a nil/zero
+to-one field (the `LEFT JOIN` yields NULLs). `Fold(target)` resolves the relation
+from the target table the way `Preload(target)` does, and conditions passed to
+either are ANDed into the JOIN's `ON` clause.
+
+**Nested fold** — pass a [`RelPath`](https://pkg.go.dev/github.com/aita/sqlkit#RelPath) of related tables and each hop becomes its
+own `LEFT JOIN`, folded into the nested field at every level (conditions apply to
+the final hop):
+
+```go
+err := db.Select().From(appdb.Users).
+    Fold(sqlkit.RelPath(appdb.Posts, appdb.Comments), appdb.Comments.Approved.Eq(true)).
+    All(ctx).Scan(&users)
+// FROM users LEFT JOIN posts ON … LEFT JOIN comments ON …
+// users[i].Posts[j].Comments folded in one query
+```
+
+Sibling fold paths that share a prefix (`Fold(RelPath(Posts, Comments))` and
+`Fold(RelPath(Posts, Tags))`) reuse the single `Posts` join. A path that folds the
+same table more than once — a self-reference like `Users → Posts → author(Users)`,
+or two paths reaching one table — is **joined under an automatic alias** derived
+from the relation name, so each occurrence is referenced unambiguously:
+
+```go
+// Users → their Posts → each post's author (back to users, aliased "User").
+err := db.Select().From(appdb.Users).
+    Fold(sqlkit.RelPath(appdb.Posts, appdb.Users)).
+    All(ctx).Scan(&users)
+// FROM users LEFT JOIN posts ON … LEFT JOIN users AS "User" ON "User".id = posts.user_id
+```
+
+Conditions passed to a fold reference the relation's own (unaliased) binding, so
+narrow an **aliased** hop through its own columns is not expressed — apply the
+condition on a non-aliased hop, or use `Preload`.
+
+Fold trades the second round trip for **wider, partly redundant rows** (each
+parent column repeats per child). Two consequences follow: prefer `Preload` when
+children are numerous, and note that **`LIMIT` counts joined rows, not parents**,
+so paginate with `Preload` (or a key sub-query) rather than `FoldRel`. See
+[Limitations](limitations.md).
+
 Relations also drive multi-table writes (`Update(t).JoinRel(rel)`,
 `Delete(t).UsingRel(rel)`) and primary-key lookups (`Get(ctx, pk...)`).
 
@@ -518,7 +600,34 @@ an untouched session's `Commit`/`Close` are free no-ops.
 
 For a higher-level batch-and-flush pattern over a transaction-scoped session, see
 the [`uow`](https://pkg.go.dev/github.com/aita/sqlkit/uow) (Unit of Work)
-package.
+package. [`uow.WithScope`](https://pkg.go.dev/github.com/aita/sqlkit/uow#WithScope)
+opens a session, runs a callback against a Unit of Work bound to it, then flushes
+and commits — the Unit-of-Work counterpart of `WithSession`:
+
+```go
+err := uow.WithScope(ctx, db, func(s *uow.Scope) error {
+    var u appdb.User
+    if _, err := s.Get(ctx, appdb.Users, &u, 1); err != nil {
+        return err
+    }
+    u.Name = "renamed"               // mutate in place
+    s.Add(appdb.Users, &newUser)     // stage an insert
+    return nil                       // WithScope flushes, then commits
+})
+```
+
+Pass [`uow.WithAutoflush`](https://pkg.go.dev/github.com/aita/sqlkit/uow#WithAutoflush)`(true)`
+to flush pending work before each `Get`/`Find` so a read sees the scope's own
+buffered changes, and
+[`uow.WithFlushHook`](https://pkg.go.dev/github.com/aita/sqlkit/uow#WithFlushHook)
+to observe or amend the work at flush time (stamping audit columns, enforcing
+invariants). A `BeforeFlush` hook runs before anything is written and sees the
+live staged work (an error aborts the flush with nothing written); an
+`AfterFlush` hook runs once the flush has succeeded and receives a snapshot of
+the rows it wrote. An `AfterFlush` error is returned from `Flush` but does not
+undo the flush — roll back the session (or the nested scope) to discard the
+work. Autoflush checks for pending work by diffing every managed entity on each
+read, so prefer explicit `Flush` calls on scopes that manage many rows.
 
 ## Auto splitting
 
@@ -535,6 +644,21 @@ db, err := sqlkit.Open("pgx", dsn, sqlkit.WithAutoChunk(true))
 _, err = db.Insert(appdb.Users).Values(users).Exec(ctx)
 ```
 
+The parameter count alone doesn't bound a bulk insert whose rows carry large
+string or BLOB values — a few multi-megabyte rows can overflow MySQL's
+`max_allowed_packet` with only a handful of parameters. [`WithMaxStatementBytes`](https://pkg.go.dev/github.com/aita/sqlkit#WithMaxStatementBytes)`(n)`
+adds an estimated-size cap, in bytes, on each split statement, so a bulk insert is
+chunked to stay under both the parameter limit and the byte budget (whichever
+splits smaller wins), with a single oversized row still sent on its own. The figure
+is an estimate, so set it below the server's configured packet limit; it defaults to
+off and applies only when auto-splitting is on.
+
+```go
+db, _ := sqlkit.Open("mysql", dsn, sqlkit.WithAutoChunk(true), sqlkit.WithMaxStatementBytes(4<<20)) // ~4 MiB
+// Rows with large text/BLOB columns split so no statement nears the packet limit.
+_, err = db.Insert(appdb.Documents).Values(docs).Exec(ctx)
+```
+
 The same limit chunks a large `IN` list. When a column `In` is the sole `Where`
 predicate and its values would overflow the limit, `Select.All` runs one
 statement per chunk and concatenates the rows, while `Update`/`Delete` `Exec` run
@@ -548,9 +672,11 @@ err = db.Select().From(appdb.Users).Where(appdb.Users.ID.In(ids...)).
 ```
 
 A `Select` is chunked only when its `IN` list is the whole query. Adding
-`ORDER BY`, `GROUP BY`, `DISTINCT`, `HAVING`, or `LIMIT`/`OFFSET` marks it
-unsafe to split, so it runs as a single statement and can still hit the bind
-limit — batch such queries yourself with [`sqlkit.InBatches`](https://pkg.go.dev/github.com/aita/sqlkit#InBatches). `NOT IN` is never
+`ORDER BY`, `GROUP BY`, `DISTINCT` (including `DISTINCT ON`), `HAVING`,
+`LIMIT`/`OFFSET`, or a window function (`Window`, or an inline `OVER(...)` in
+the projection) marks it unsafe to split, so it runs as a single statement and
+can still hit the bind limit — batch such queries yourself with
+[`sqlkit.InBatches`](https://pkg.go.dev/github.com/aita/sqlkit#InBatches). `NOT IN` is never
 split. See [Limitations](limitations.md) for the full rules.
 
 A split `Select` runs its chunks inside one `REPEATABLE READ` transaction by

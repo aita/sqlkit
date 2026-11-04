@@ -72,6 +72,13 @@ Other capabilities:
   `Migration.DisableTx` for statements a transaction rejects (e.g. PostgreSQL
   `CREATE INDEX CONCURRENTLY`). MySQL commits DDL implicitly and cannot roll a
   partly-applied migration back — see [Limitations](limitations.md).
+- **Concurrent runners** — on PostgreSQL and MySQL, `Upgrade`, `Downgrade`, and
+  `Stamp` hold a session-level advisory lock (`pg_advisory_lock` / `GET_LOCK`)
+  keyed on the tracking table, so several processes migrating the same database
+  at once (pods in a rolling deploy) apply each migration exactly once; the
+  others wait, then see it applied. The run executes on the locked connection
+  itself, so it needs no extra connection and works with
+  `SetMaxOpenConns(1)`. Other dialects and `WrapExecutor` databases run unlocked.
 
 **Splitting across files.** Register each migration with a shared
 [`migrate.Registry`](https://pkg.go.dev/github.com/aita/sqlkit/migrate#Registry), so adding a migration is dropping in a file rather than
@@ -139,7 +146,11 @@ safety. A drop+add that is really a rename keeps its data when you say so
 (`--rename users.name:full_name`, `--rename-table old:new`); unhinted drop/add
 pairs get a `// possible rename` suggestion. As with any autogenerator, **review
 the result before applying** — data backfills and risky renames still need a
-human. The same diff is available as a library via [`migrate.Diff`](https://pkg.go.dev/github.com/aita/sqlkit/migrate#Diff)`(old, new,
+human. With `--from-db` on PostgreSQL the source also includes the schema's
+enum types (`CREATE TYPE ... AS ENUM`), except those owned by an extension. An
+enum the catalog doesn't declare is dropped only when no catalog column still
+uses it by type name — `op.DropEnum` cascades, so dropping a type a column
+depends on would drop the column too. The same diff is available as a library via [`migrate.Diff`](https://pkg.go.dev/github.com/aita/sqlkit/migrate#Diff)`(old, new,
 dialect)`.
 
 ## Migrations across backends

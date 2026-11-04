@@ -12,6 +12,8 @@ import (
 // object is rendered as a drop plus a create, like the table path treats
 // incompatible changes.
 type objectChanges struct {
+	createSchemas    []sql.Statement
+	dropSchemas      []sql.Statement
 	createExtensions []sql.Statement
 	createEnums      []sql.Statement
 	createSequences  []sql.Statement
@@ -34,6 +36,35 @@ type objectChanges struct {
 // renders materialized-view bodies for equality.
 func diffObjects(old, next meta.Metadata, dialect sql.Dialect) (objectChanges, error) {
 	var c objectChanges
+
+	// Managed schemas (decl.Create()), keyed by name. Only a schema explicitly put
+	// under migration management emits CREATE/DROP SCHEMA; a schema that merely
+	// qualifies a table is assumed to already exist. Without this, a migration that
+	// introduces an object-only managed schema emits CREATE TABLE "audit"."log"
+	// with no preceding CREATE SCHEMA "audit", so the apply fails ("schema does not
+	// exist"). Mirrors meta.CreateSQL/DropSQL, which filter Schemas() the same way.
+	newSchema := map[string]bool{}
+	for _, s := range next.Schemas() {
+		if s.Create && s.Name != "" {
+			newSchema[s.Name] = true
+		}
+	}
+	oldSchema := map[string]bool{}
+	for _, s := range old.Schemas() {
+		if s.Create && s.Name != "" {
+			oldSchema[s.Name] = true
+		}
+	}
+	for _, s := range old.Schemas() {
+		if s.Create && s.Name != "" && !newSchema[s.Name] {
+			c.dropSchemas = append(c.dropSchemas, s.DropStatement())
+		}
+	}
+	for _, s := range next.Schemas() {
+		if s.Create && s.Name != "" && !oldSchema[s.Name] {
+			c.createSchemas = append(c.createSchemas, s.CreateStatement())
+		}
+	}
 
 	// Extensions, keyed by name (they are not schema-scoped objects).
 	oldExt := map[string]meta.Extension{}
@@ -192,11 +223,13 @@ func matviewEqual(a, b meta.MaterializedView, dialect sql.Dialect) (bool, error)
 	return at == bt, nil
 }
 
-// grantKey identifies a grant by its object type and objects, so a change to the
-// privileges or grantees of the same target is detected as a modification rather
-// than an unrelated add and drop.
+// grantKey identifies a grant by its full (privileges, type, objects, grantees)
+// tuple. Keying on the target alone (object type + objects) would collide two
+// distinct grants on the same object for different grantees or privilege sets
+// into one map slot, silently dropping one of them from the diff.
 func grantKey(g meta.Grant) string {
-	return g.ObjectType + "\x00" + strings.Join(g.Objects, ",")
+	return strings.Join(g.Privileges, ",") + "\x00" + g.ObjectType + "\x00" +
+		strings.Join(g.Objects, ",") + "\x00" + strings.Join(g.Grantees, ",")
 }
 
 // appendedEnumValues reports whether next is old with only labels appended (old

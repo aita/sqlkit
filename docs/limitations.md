@@ -46,15 +46,18 @@ libSQL mirrors the SQLite column throughout (it is SQLite-compatible).
 | Row locks `ForUpdate` / `ForShare` | ✅ | ✅ | ❌ | MySQL 8.0+. SQLite serializes writers and has no row-locking clause. Refine PG/MySQL with [`SkipLocked`](https://pkg.go.dev/github.com/aita/sqlkit#SkipLocked)/[`NoWait`](https://pkg.go.dev/github.com/aita/sqlkit#NoWait)/[`LockOf`](https://pkg.go.dev/github.com/aita/sqlkit#LockOf). |
 | `ForKeyShare` / `ForNoKeyUpdate` | ✅ | ❌ | ❌ | Extra PostgreSQL lock strengths. |
 | Arrays — [`sql.Array`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Array), `EqAny`/`NeAll`, [`decl.Array`](https://pkg.go.dev/github.com/aita/sqlkit/decl#Array) | ✅ | ❌ | ❌ | Only PostgreSQL has a first-class array type. |
-| JSON path access — [`sql.JSONGet`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGet) / [`JSONGetText`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGetText) | ✅ | ❌ | ✅ | PG/SQLite share the `->` / `->>` operators (SQLite ≥ 3.38). 🚧 MySQL has JSON path functions; sqlkit just doesn't map to them yet. The `json` struct-tag round-trip works on all. |
+| JSON path access — [`sql.JSONGet`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGet) / [`JSONGetText`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGetText) | ✅ | ✅ | ✅ | PG/SQLite share the `->` / `->>` operators (SQLite ≥ 3.38); MySQL maps to `JSON_EXTRACT` / `JSON_UNQUOTE(JSON_EXTRACT(...))`. The `json`/`jsonb` struct-tag round-trip (whole-value marshal) works on all. |
 | Full-text search — [`sqlkit.Match`](https://pkg.go.dev/github.com/aita/sqlkit#Match) | ✅ | ⚠️ | ❌ | MySQL: the columns need a `FULLTEXT` index. SQLite's full-text is the separate FTS5 extension, not modeled here. |
 | Regex match — `~` / `~*` | ✅ | ❌ | ⚠️ | SQLite renders `REGEXP` but needs a host-registered `regexp()` function (it ships none) and can't express a case-insensitive match inline. MySQL can't either (collation-dependent). |
 | `SIMILAR TO` / `NOT SIMILAR TO` | ✅ | ❌ | ❌ | SQL-standard pattern matching. |
 | `DISTINCT ON (col)` | ✅ | ❌ | ❌ | No MySQL/SQLite equivalent. |
-| Multi-table `UPDATE … FROM` / `DELETE … USING` | ✅ | ⚠️ | ⚠️ | SQLite renders `UPDATE … FROM` (≥ 3.33) but has no `DELETE … USING`. Some MySQL shapes error; MySQL also rejects `ORDER BY` / `LIMIT` on a multi-table UPDATE/DELETE, so sqlkit errors at compile time rather than emit SQL the engine refuses. |
-| Aliased `VALUES` derived-table source | ✅ | ⚠️ | ✅ | PG/SQLite use the standard `(VALUES …) AS alias(cols)` form; MySQL can't alias `VALUES` columns, so sqlkit renders a `UNION ALL` of `SELECT`s (equivalent result, different SQL text). |
+| Multi-table `UPDATE … FROM` / `DELETE … USING` | ✅ | ⚠️ | ⚠️ | SQLite renders `UPDATE … FROM` (≥ 3.33) but has no multi-table `DELETE` (rejected at compile time; use a subquery). Some MySQL shapes error; MySQL also rejects `ORDER BY` / `LIMIT` on a multi-table UPDATE/DELETE, so sqlkit errors at compile time rather than emit SQL the engine refuses. |
+| Aliased `VALUES` derived-table source | ✅ | ⚠️ | ⚠️ | PG uses the standard `(VALUES …) AS alias(cols)` form; MySQL and SQLite can't alias `VALUES` columns, so sqlkit renders a `UNION ALL` of `SELECT`s (equivalent result, different SQL text). |
+| Set operations (`UNION` / `INTERSECT` / `EXCEPT`) | ✅ | ✅ | ⚠️ | SQLite rejects parenthesized arms, so plain arms render bare and an arm with its own `ORDER BY`/`LIMIT` (or a nested chain of a different operator) renders as `SELECT * FROM (…)`. |
+| `ALTER TABLE` beyond add/drop/rename column, rename table | ✅ | ⚠️ | ❌ | SQLite can't change a column's type, nullability, default, or constraints in place (that needs a table rebuild), and takes one alteration per statement; sqlkit rejects the rest at compile time. |
 | Schema introspection — [`introspection.Schema`](https://pkg.go.dev/github.com/aita/sqlkit/introspection#Schema) | ✅ | ✅ | ❌ | 🚧 No SQLite introspector yet. Constructs the [`meta`](https://pkg.go.dev/github.com/aita/sqlkit/meta) model can't represent are skipped on import. |
 | Transactional (atomic) migrations | ✅ | ❌ | ✅ | MySQL commits DDL implicitly and can't roll a partly-applied migration back — see [Migrations](#migrations). PostgreSQL and SQLite have transactional DDL. |
+| Sequences, `CREATE TYPE ... AS ENUM`, extensions, materialized views, `CREATE`/`DROP FUNCTION` | ✅ | ❌ | ❌ | MySQL and SQLite have none of these object kinds. |
 
 The matrix records engine *capabilities*, so a ❌/⚠️ cell is 🔒 inherent (the
 target engine can't express it) unless its Notes say 🚧.
@@ -80,9 +83,10 @@ trade convenience for correctness:
   compiles the full value list into one statement regardless.
 - **`IN` splits only when it is the whole query.** A `Select` whose sole `Where`
   is a column `In(...)` splits and concatenates rows. Adding `ORDER BY`,
-  `GROUP BY`, `DISTINCT`, `HAVING`, or `LIMIT`/`OFFSET` marks it **unsafe to
-  split** (results can't be combined across chunks): it runs as a single
-  statement and can still hit the bind limit. Batch those yourself with
+  `GROUP BY`, `DISTINCT` (including `DISTINCT ON`), `HAVING`, `LIMIT`/`OFFSET`,
+  or a window function marks it **unsafe to split** (results can't be combined
+  across chunks): it runs as a single statement and can still hit the bind
+  limit. Batch those yourself with
   [`sqlkit.InBatches`](https://pkg.go.dev/github.com/aita/sqlkit#InBatches).
 - **`NOT IN` is never split.** A row is excluded only if it appears in *no*
   chunk, which splitting cannot guarantee — a very large `NOT IN` must fit in one
@@ -99,6 +103,27 @@ trade convenience for correctness:
   or pointer. The field is matched by relation name or a `preload:"…"` tag and
   must map to the target key column.
 
+## Fold (single-query eager load)
+
+`FoldRel`/`Fold` join the relation and fold the rows in one query (see
+[Query builder](query-builder.md#fold-eager-loading-in-one-query)).
+
+- 🔒 **Aliased hops can't be narrowed by their own columns.** A table folded more
+  than once in a tree (a self-reference, or two paths reaching it) is joined under
+  an automatic alias; a condition passed to such a hop references the relation's
+  unaliased binding, so it won't match the aliased join. Condition a non-aliased
+  hop instead, or use `Preload`.
+- 🔒 **Controls the projection.** A folded chain must start from `From` with no
+  explicit `Select` columns; the base table needs a primary key to group rows for
+  a to-many fold, and the folded target needs one to de-duplicate children.
+- 🔒 **Row-limiting and counting terminals are rejected.** A folded query
+  returns one joined row per parent–child pair, so `LIMIT`/`OFFSET`, `First`,
+  `One`, `Get`, `Page`, `Count`, and `Paginator.Paginate` would act on the joined
+  rows rather than the parents; they return an error. Use `All` (with a
+  predicate selecting the parents), or `Preload` for paginated loads.
+- 🔒 **No IN splitting.** A folded query runs as one statement even when
+  auto-chunking would split a large `IN` list.
+
 ## Migrations
 
 - 🔒 **MySQL migrations are not atomic.** MySQL commits DDL implicitly and cannot
@@ -112,6 +137,13 @@ trade convenience for correctness:
   human — **review the result before applying.** A column with no resolved type
   on the target dialect, or a default expression that cannot be parsed, makes the
   diff fail rather than guess.
+- 🚧 **Autogenerate targets one schema.** A `Migrator`/`Operator` is configured
+  with a single schema, so `autogen.Render`'s `op.CreateTable`/`op.AddColumn`/…
+  calls carry no schema qualification of their own — a catalog with tables in
+  more than one managed schema (`Catalog.Schema(name, decl.Create())`) renders a
+  migration that silently targets the `Operator`'s configured schema for every
+  table, not each table's own. `migrate.Diff` (the non-generated path) has no
+  such limit. Review generated output for a multi-schema catalog before applying.
 
 ## Code generation
 
@@ -179,7 +211,9 @@ the `meta` model gains types.)
 
 - 🔒 **Keyset pagination needs a unique tail key.** End a [`Paginator`](https://pkg.go.dev/github.com/aita/sqlkit#Paginator)'s sort keys
   with a unique column (typically the primary key) so the order is total and a
-  cursor lands on exactly one row.
+  cursor lands on exactly one row. A nullable key is detected from its Go type
+  (pointer or `sql.Null*`-style); a nullable column bound to a non-nullable Go
+  type can't hold the NULLs it scans anyway.
 - 🔒 **Filter terms** support `Eq`/`Ne`/`Lt`/`Le`/`Gt`/`Ge`/`In`/[`FilterLike`](https://pkg.go.dev/github.com/aita/sqlkit#FilterLike)/
   [`FilterIsNull`](https://pkg.go.dev/github.com/aita/sqlkit#FilterIsNull) or a raw [`Predicate`](https://pkg.go.dev/github.com/aita/sqlkit#Predicate); other [`FilterTerm`](https://pkg.go.dev/github.com/aita/sqlkit#FilterTerm) values error.
 - 🚧 **`decl` targets PostgreSQL, MySQL, SQLite, and libSQL**; other dialects

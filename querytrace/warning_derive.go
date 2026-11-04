@@ -105,8 +105,17 @@ func (t *Trace) deriveExternalCallInTx() []Warning {
 		}
 	}
 	// Transactions still open at trace end stay open for the rest of the timeline.
-	for id, begin := range open {
-		spans = append(spans, span{id, begin, time.Time{}})
+	// Append them in begin (event) order, not Go's randomized map-iteration order,
+	// so when a mark falls inside more than one still-open transaction the same one
+	// wins every time — keeping the derived warning (and its tx_id) deterministic.
+	for _, ev := range t.events {
+		if ev.Kind != EventTx || ev.Tx == nil || ev.Tx.Action != TxBegin {
+			continue
+		}
+		if begin, stillOpen := open[ev.Tx.TxID]; stillOpen {
+			spans = append(spans, span{ev.Tx.TxID, begin, time.Time{}})
+			delete(open, ev.Tx.TxID) // a TxID appears once; guard a duplicate begin
+		}
 	}
 
 	var out []Warning

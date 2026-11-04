@@ -1,6 +1,9 @@
 package sql
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestJSONFunctions(t *testing.T) {
 	assertSQL(t,
@@ -265,6 +268,36 @@ func TestDistinctAggregates(t *testing.T) {
 	// functions, since the remap is for scalars only.
 	assertMySQL(t, Select(CountDistinct(Col("country"))).From(Table{Name: NewIdent("users")}),
 		"SELECT COUNT(DISTINCT `country`) FROM `users`", nil)
+}
+
+// COUNT(DISTINCT *) with an unqualified star is invalid in both dialects; the
+// builder accepts CountDistinct(Star()), so the compiler must reject it rather
+// than emit SQL the engine refuses.
+func TestCountDistinctStarRejected(t *testing.T) {
+	q := Select(CountDistinct(Star())).From(Table{Name: NewIdent("users")})
+	for _, d := range []Dialect{PostgreSQLDialect{}, MySQLDialect{}} {
+		if _, _, err := q.ToSQL(d); err == nil ||
+			!strings.Contains(err.Error(), "COUNT(DISTINCT *)") {
+			t.Fatalf("ToSQL(%s) error = %v, want a COUNT(DISTINCT *) rejection", d.Name(), err)
+		}
+	}
+}
+
+// COUNT(DISTINCT t.*) with a QUALIFIED star is a whole-row reference — valid
+// PostgreSQL and the standard idiom for counting distinct rows — so the
+// unqualified-star rejection must not swallow it. MySQL's grammar has no
+// whole-row reference inside COUNT, so on that dialect it is a descriptive
+// compile-time error instead of silently emitted invalid SQL.
+func TestCountDistinctQualifiedStar(t *testing.T) {
+	q := Select(CountDistinct(StarOf("t"))).From(SourceAlias(Tbl("users"), "t"))
+
+	assertSQL(t, q, `SELECT COUNT(DISTINCT "t".*) FROM "users" AS "t"`, nil)
+
+	if _, _, err := q.ToSQL(MySQLDialect{}); err == nil ||
+		!strings.Contains(err.Error(), `"mysql"`) ||
+		!strings.Contains(err.Error(), "COUNT(DISTINCT") {
+		t.Fatalf("ToSQL(mysql) error = %v, want a dialect-naming COUNT(DISTINCT qualifier.*) rejection", err)
+	}
 }
 
 func TestNamedWindowClause(t *testing.T) {
