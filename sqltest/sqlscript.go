@@ -81,7 +81,7 @@ func splitScript(script string, mysql bool) []scriptStmt {
 			}
 			emit(script[i:end], true)
 			i = end
-		case !mysql && c == '$' && !(i > 0 && isIdentByte(script[i-1])):
+		case !mysql && c == '$' && (i == 0 || !isIdentByte(script[i-1])):
 			if tag, ok := dollarTag(script[i:]); ok {
 				end := n
 				if j := strings.Index(script[i+len(tag):], tag); j >= 0 {
