@@ -272,6 +272,11 @@ func convertForeignKey(con *ast.Constraint) (sql.ForeignKeyConstraint, error) {
 	if err != nil {
 		return sql.ForeignKeyConstraint{}, err
 	}
+	if len(columns) != len(refColumns) {
+		// An arity mismatch (or an omitted referenced-column list) has no typed
+		// form the compiler accepts, so keep the statement as a raw passthrough.
+		return sql.ForeignKeyConstraint{}, sqlparse.Unsupported("foreign key column-list arity mismatch")
+	}
 	return sql.ForeignKeyConstraint{
 		Name:       sql.NewIdent(con.Name),
 		Columns:    sql.Idents(columns...),

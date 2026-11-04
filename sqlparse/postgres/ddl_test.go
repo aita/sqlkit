@@ -482,3 +482,9 @@ func TestConstraintDefaultMatchStillModeled(t *testing.T) {
 		}
 	}
 }
+
+// A FOREIGN KEY whose referencing and referenced column lists differ in length
+// has no typed form the compiler accepts, so it stays a raw passthrough.
+func TestForeignKeyArityMismatchIsRaw(t *testing.T) {
+	assertRaw(t, "ALTER TABLE p ADD CONSTRAINT f FOREIGN KEY (a, b) REFERENCES t (id)")
+}
