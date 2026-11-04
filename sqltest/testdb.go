@@ -89,16 +89,16 @@ func (d *DB) Truncate(t testing.TB, tables ...sqlkit.Table) {
 //
 // Apply the schema once for the group, then hand each case its own transaction:
 //
-//	func TestBlog(t testing.TB) {
+//	func TestBlog(t *testing.T) {
 //		tdb := sqltest.New(database, md)
 //		tdb.SetupSchema(t) // schema created once, dropped after all subtests
-//		t.Run("publish", func(t testing.TB) {
+//		t.Run("publish", func(t *testing.T) {
 //			t.Parallel()
 //			s := tdb.Tx(t)  // isolated transaction, rolled back on return
 //			blog.Load(t, s) // seed inside the transaction
 //			// ... mutate and assert against s ...
 //		})
-//		t.Run("archive", func(t testing.TB) {
+//		t.Run("archive", func(t *testing.T) {
 //			t.Parallel()
 //			s := tdb.Tx(t)  // sees none of "publish"'s writes
 //			// ...

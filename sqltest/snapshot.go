@@ -19,11 +19,11 @@ import (
 //	blog.Load(t, session)            // seed once
 //	restore := sqltest.Snapshot(t, session)
 //
-//	t.Run("case1", func(t testing.TB) {
+//	t.Run("case1", func(t *testing.T) {
 //		defer restore(t)         // undo case1's writes
 //		// ... mutate and assert against session ...
 //	})
-//	t.Run("case2", func(t testing.TB) {
+//	t.Run("case2", func(t *testing.T) {
 //		defer restore(t)         // case2 sees the seeded state again
 //		// ...
 //	})
