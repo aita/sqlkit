@@ -243,3 +243,44 @@ func dropTables(t *testing.T, db *sqlkit.Database, eng engine, names ...string) 
 		}
 	}
 }
+
+// TestAutogenerateRoundTripLiteralDefaultsAndChecks extends the round trip to
+// literal defaults and a CHECK constraint on PostgreSQL, where the engine reads
+// them back with explicit casts ('active'::character varying, (0)::numeric)
+// that the hand-written catalog omits. Diffing the inspected schema against the
+// same catalog must still yield no changes.
+func TestAutogenerateRoundTripLiteralDefaultsAndChecks(t *testing.T) {
+	eachEngine(t, func(t *testing.T, eng engine, db *sqlkit.Database) {
+		if eng.name != "postgres" {
+			t.Skip("PostgreSQL-specific cast rendering")
+		}
+		ctx := context.Background()
+
+		cat := decl.NewCatalog(decl.DefaultSchema(testSchema))
+		cat.Table("priced",
+			decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+			decl.Column("status", decl.VarChar(20), decl.Default(sql.Raw("'active'"))),
+			decl.Column("price", decl.Decimal(10, 2), decl.Default(sql.Raw("0"))),
+			decl.Column("note", decl.Text, decl.Default(sql.Raw("'it''s'"))),
+			decl.Check(sql.Raw("price >= 0")),
+		)
+		applyCatalog(t, db, eng, cat)
+		t.Cleanup(func() { dropTables(t, db, eng, "priced") })
+
+		source, err := introspection.Schema(ctx, db.SQL(), eng.name, testSchema)
+		if err != nil {
+			t.Fatalf("inspect: %v", err)
+		}
+		target, err := cat.Build()
+		if err != nil {
+			t.Fatalf("build catalog: %v", err)
+		}
+		res, err := autogen.Render(source, target, autogen.Options{Dialect: dialectFor(t, eng)})
+		if err != nil {
+			t.Fatalf("Render: %v", err)
+		}
+		if !res.Empty() {
+			t.Fatalf("literal defaults/checks read back with casts should yield no changes, got:\n--- Up ---\n%s", res.Up)
+		}
+	})
+}

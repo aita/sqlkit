@@ -2,6 +2,7 @@ package autogen
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -856,7 +857,7 @@ func (r *renderer) columnPropsChanged(oc, nc meta.Column) (bool, error) {
 	// renders "" whether or not HasDefault is set, so a column gaining or
 	// losing a bare decl.Default() would otherwise compare equal and the
 	// change would be silently dropped from the rendered migration.
-	return od != nd || oc.HasDefault != nc.HasDefault, nil
+	return r.normalizeExprText(od) != r.normalizeExprText(nd) || oc.HasDefault != nc.HasDefault, nil
 }
 
 func (r *renderer) sameType(a, b meta.Column) bool {
@@ -902,7 +903,127 @@ func (r *renderer) checkEqual(a, b meta.Check) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return ta == tb, nil
+	return r.normalizeExprText(ta) == r.normalizeExprText(tb), nil
+}
+
+// normalizeExprText loosens default/check expression text for comparison only
+// (never for code generation — callers pass the unnormalized text when emitting
+// Go source). On PostgreSQL, pg_get_expr and pg_get_constraintdef attach an
+// explicit cast to a literal — "'active'::character varying", "(0)::numeric" —
+// that a hand-written decl.Default/decl.Check literal ("'active'", "0") omits,
+// so a byte-for-byte comparison would report a spurious diff for nearly every
+// introspected default or check on --from-db. See normalizePGExpr.
+func (r *renderer) normalizeExprText(text string) string {
+	if r.dialect.Name() != "postgres" {
+		return text
+	}
+	return normalizePGExpr(text)
+}
+
+// pgLiteralCast matches a "::type" cast at the start of its input: a bare or
+// double-quoted, optionally schema-qualified type name, including PostgreSQL's
+// multi-word names (character varying, double precision, timestamp with[out]
+// time zone, ...), with an optional modifier list and array brackets.
+var pgLiteralCast = regexp.MustCompile(`^::\s*(?:"?[A-Za-z_][A-Za-z0-9_]*"?\.)?"?[A-Za-z_][A-Za-z0-9_]*"?(?:\s+(?:varying|precision|with(?:out)?\s+time\s+zone))?(?:\s*\([0-9,\s]*\))?(?:\[\])*`)
+
+// pgNumber matches a numeric constant at the start of its input.
+var pgNumber = regexp.MustCompile(`^-?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?`)
+
+// normalizePGExpr removes the casts PostgreSQL attaches to literals — a quoted
+// string, a number, or a parenthesized number, followed by "::type" — unwraps
+// a parenthesized number, strips parentheses enclosing the whole expression, and
+// collapses whitespace. Only literals lose their cast: a cast applied to any
+// other expression (now()::date, col::text) is meaningful and is kept, so a
+// change to or from it is still detected.
+func normalizePGExpr(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		lit, n := pgLiteralAt(s, i)
+		if n == 0 {
+			b.WriteByte(s[i])
+			i++
+			continue
+		}
+		i += n
+		if m := pgLiteralCast.FindString(s[i:]); m != "" {
+			i += len(m)
+		}
+		b.WriteString(lit)
+	}
+	out := strings.Join(strings.Fields(b.String()), " ")
+	for len(out) >= 2 && out[0] == '(' && out[len(out)-1] == ')' && balancedParens(out[1:len(out)-1]) {
+		out = strings.TrimSpace(out[1 : len(out)-1])
+	}
+	return out
+}
+
+// pgLiteralAt reports the literal starting at s[i] — a single-quoted string
+// (with ” escapes), a number not glued to a preceding identifier, or a
+// parenthesized number, returned unwrapped — and how many bytes it spans, or
+// 0 when no literal starts there.
+func pgLiteralAt(s string, i int) (string, int) {
+	switch c := s[i]; {
+	case c == '\'':
+		j := i + 1
+		for j < len(s) {
+			if s[j] == '\'' {
+				if j+1 < len(s) && s[j+1] == '\'' {
+					j += 2
+					continue
+				}
+				return s[i : j+1], j + 1 - i
+			}
+			j++
+		}
+		return "", 0
+	case c == '(':
+		inner := strings.TrimLeft(s[i+1:], " ")
+		if m := pgNumber.FindString(inner); m != "" {
+			rest := strings.TrimLeft(inner[len(m):], " ")
+			if strings.HasPrefix(rest, ")") {
+				return m, len(s) - i - len(rest) + 1
+			}
+		}
+		return "", 0
+	case (c >= '0' && c <= '9') || c == '.':
+		if i > 0 && isIdentChar(s[i-1]) {
+			return "", 0
+		}
+		if m := pgNumber.FindString(s[i:]); m != "" {
+			return m, len(m)
+		}
+	}
+	return "", 0
+}
+
+func isIdentChar(c byte) bool {
+	return c == '_' || c == '"' || (c|0x20 >= 'a' && c|0x20 <= 'z') || (c >= '0' && c <= '9')
+}
+
+// balancedParens reports whether every parenthesis in s is matched, ignoring
+// ones inside single-quoted strings, so "(a) + (b)" is not mistaken for one
+// group enclosing the whole expression.
+func balancedParens(s string) bool {
+	depth := 0
+	inQuote := false
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case inQuote:
+			if c == '\'' {
+				inQuote = false
+			}
+		case c == '\'':
+			inQuote = true
+		case c == '(':
+			depth++
+		case c == ')':
+			depth--
+			if depth < 0 {
+				return false
+			}
+		}
+	}
+	return depth == 0
 }
 
 // --- small rendering and lookup helpers ---
