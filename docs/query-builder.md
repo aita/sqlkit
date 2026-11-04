@@ -535,6 +535,21 @@ db, err := sqlkit.Open("pgx", dsn, sqlkit.WithAutoChunk(true))
 _, err = db.Insert(appdb.Users).Values(users).Exec(ctx)
 ```
 
+The parameter count alone doesn't bound a bulk insert whose rows carry large
+string or BLOB values — a few multi-megabyte rows can overflow MySQL's
+`max_allowed_packet` with only a handful of parameters. [`WithMaxStatementBytes`](https://pkg.go.dev/github.com/aita/sqlkit#WithMaxStatementBytes)`(n)`
+adds an estimated-size cap, in bytes, on each split statement, so a bulk insert is
+chunked to stay under both the parameter limit and the byte budget (whichever
+splits smaller wins), with a single oversized row still sent on its own. The figure
+is an estimate, so set it below the server's configured packet limit; it defaults to
+off and applies only when auto-splitting is on.
+
+```go
+db, _ := sqlkit.Open("mysql", dsn, sqlkit.WithAutoChunk(true), sqlkit.WithMaxStatementBytes(4<<20)) // ~4 MiB
+// Rows with large text/BLOB columns split so no statement nears the packet limit.
+_, err = db.Insert(appdb.Documents).Values(docs).Exec(ctx)
+```
+
 The same limit chunks a large `IN` list. When a column `In` is the sole `Where`
 predicate and its values would overflow the limit, `Select.All` runs one
 statement per chunk and concatenates the rows, while `Update`/`Delete` `Exec` run
