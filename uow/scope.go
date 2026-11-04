@@ -1218,7 +1218,9 @@ func assignmentColumns(assignments []sql.Assignment) []string {
 // where an all-unknown VALUES column would have no inferable type.
 func hasNullAssignment(assignments []sql.Assignment) bool {
 	for _, a := range assignments {
-		if v, ok := a.Value.(sql.ValueExpression); ok && v.Value == nil {
+		// normalize maps a typed nil — the nil *T a nullable pointer field
+		// yields — to nil too; it binds as NULL just the same.
+		if v, ok := a.Value.(sql.ValueExpression); ok && (v.Value == nil || normalize(v.Value) == nil) {
 			return true
 		}
 	}
