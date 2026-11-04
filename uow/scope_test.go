@@ -406,6 +406,57 @@ func TestNestedScopeRequiresTransaction(t *testing.T) {
 	}
 }
 
+func TestNestedScopeSecondFlushFailureOnlyRollsBackSecondFlush(t *testing.T) {
+	injectedErr := errors.New("boom")
+	insertCalls := 0
+	fake := &testutil.Fake{
+		ExecFunc: func(query string, _ []any) error {
+			if strings.HasPrefix(query, "INSERT") {
+				insertCalls++
+				if insertCalls == 2 {
+					return injectedErr
+				}
+			}
+			return nil
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+	err := db.WithSession(ctx(), func(s *sqlkit.Session) error {
+		child := uow.NewScope(s).NewScope()
+		if err := child.Add(newUsers(), userRow{Email: "a@x"}); err != nil {
+			return err
+		}
+		if err := child.Flush(ctx()); err != nil {
+			return err
+		}
+		if err := child.Add(newUsers(), userRow{Email: "b@x"}); err != nil {
+			return err
+		}
+		err := child.Flush(ctx())
+		if !errors.Is(err, injectedErr) {
+			t.Fatalf("second flush err = %v, want %v", err, injectedErr)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("with session: %v", err)
+	}
+	stmts := fake.Statements()
+	joined := strings.Join(stmts, "\n")
+	var rollbackSP string
+	for _, s := range stmts {
+		if strings.HasPrefix(s, "ROLLBACK TO SAVEPOINT ") {
+			rollbackSP = strings.TrimPrefix(s, "ROLLBACK TO SAVEPOINT ")
+		}
+	}
+	if rollbackSP == "" {
+		t.Fatalf("expected a ROLLBACK TO SAVEPOINT:\n%s", joined)
+	}
+	if rollbackSP == "sp_1" {
+		t.Fatalf("second flush failure rolled back to the scope's original savepoint sp_1, should only undo the second flush:\n%s", joined)
+	}
+}
+
 // --- identity reconciliation ---
 
 func TestGeneratorMismatchConflicts(t *testing.T) {
@@ -969,6 +1020,89 @@ func TestFlushDeletesChildrenBeforeParents(t *testing.T) {
 	pi, ui := firstIndexContaining(execs, "posts"), firstIndexContaining(execs, "users")
 	if pi < 0 || ui < 0 || pi > ui {
 		t.Fatalf("delete order: posts at %d, users at %d, want posts before users\n%v", pi, ui, verbs(execs))
+	}
+}
+
+// categoriesTable self-references via parent_id -> categories(id), so it can
+// stress flushOrder's self-reference exclusion independent of any other table.
+type categoriesTable struct {
+	info     sqlkit.TableInfo
+	ID       sqlkit.Column[int64]
+	ParentID sqlkit.Column[int64]
+}
+
+func newCategoriesFull(checksum string) categoriesTable {
+	info := sqlkit.TableInfo{Schema: "public", Name: "categories", Checksum: checksum}
+	return categoriesTable{
+		info:     info,
+		ID:       sqlkit.NewColumn[int64](info, "id"),
+		ParentID: sqlkit.NewColumn[int64](info, "parent_id"),
+	}
+}
+
+func (t categoriesTable) Info() sqlkit.TableInfo             { return t.info }
+func (t categoriesTable) SQLSource() sqlkit.SourceExpression { return t.info.SQLSource() }
+func (t categoriesTable) Columns() []sqlkit.AnyColumn        { return []sqlkit.AnyColumn{t.ID, t.ParentID} }
+func (t categoriesTable) PrimaryKey() []sqlkit.AnyColumn     { return []sqlkit.AnyColumn{t.ID} }
+func (t categoriesTable) Defaulted() []sqlkit.AnyColumn      { return []sqlkit.AnyColumn{t.ID} }
+
+type categoryRow struct {
+	ID       int64 `sqlkit:"id"`
+	ParentID int64 `sqlkit:"parent_id"`
+}
+
+func categoriesMeta() meta.Table {
+	return meta.Table{
+		Schema: meta.Schema{Name: "public"},
+		Name:   "categories",
+		Columns: []meta.Column{
+			{Name: "id", Type: meta.Of("postgres", "bigint", 0, 0, 0), PrimaryKey: true, HasDefault: true},
+			{Name: "parent_id", Type: meta.Of("postgres", "bigint", 0, 0, 0)},
+		},
+		ForeignKeys: []meta.ForeignKey{
+			{Name: "fk_categories_parent", Columns: []string{"parent_id"}, RefSchema: meta.Schema{Name: "public"}, RefTable: "categories", RefColumns: []string{"id"}},
+		},
+	}
+}
+
+// TestFlushSelfReferencingFKDoesNotBreakOtherOrdering covers flushOrder's
+// self-reference exclusion (uow/scope.go: "if ref == name ... continue"). A
+// self-referencing table must not turn into a cycle that makes topoStable
+// report failure for the whole flush — that would silently fall back to
+// staging order for every staged table, not just the self-referencing one,
+// and reintroduce the FK-unsafe-ordering class of bug (#156) for any other
+// table staged in the same flush.
+func TestFlushSelfReferencingFKDoesNotBreakOtherOrdering(t *testing.T) {
+	fake := &testutil.Fake{}
+	im, err := meta.Metadata{Tables: []meta.Table{usersMeta(), postsMeta(), categoriesMeta()}}.Identities()
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := uow.NewScope(sqlkit.WrapDB(fake.DB()), uow.WithIdentities(im))
+	users := newUsersFull(usersMeta().Key().Checksum, "")
+	posts := newPostsFull(postsMeta().Key().Checksum)
+	categories := newCategoriesFull(categoriesMeta().Key().Checksum)
+
+	// A self-referencing root category (parent_id points at itself, the common
+	// encoding for "no parent"), plus the child-before-parent case the other
+	// ordering tests cover.
+	if err := scope.Add(categories, categoryRow{ID: 1, ParentID: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := scope.Add(posts, postRow{ID: 1, UserID: 7}); err != nil {
+		t.Fatal(err)
+	}
+	if err := scope.Add(users, userRow{ID: 7, Email: "a@x", Name: "A"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := scope.Flush(ctx()); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	execs := fake.Execs()
+	ui, pi := firstIndexContaining(execs, "users"), firstIndexContaining(execs, "posts")
+	if ui < 0 || pi < 0 || ui > pi {
+		t.Fatalf("a self-referencing table staged in the same flush must not break "+
+			"users-before-posts ordering: users at %d, posts at %d\n%v", ui, pi, verbs(execs))
 	}
 }
 

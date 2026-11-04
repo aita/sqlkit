@@ -25,6 +25,9 @@ func (s CreateEnumStmt) ToSQL(d Dialect) (string, []any, error) {
 	return out, nil, err
 }
 func (s CreateEnumStmt) compileDDL(c *Compiler) (string, error) {
+	if err := c.requirePostgresObject("enum types"); err != nil {
+		return "", err
+	}
 	if s.Name.IsZero() {
 		return "", fmt.Errorf("sqlkit/sql: CREATE TYPE requires a name")
 	}
@@ -59,6 +62,9 @@ func (s DropTypeStmt) ToSQL(d Dialect) (string, []any, error) {
 	return out, nil, err
 }
 func (s DropTypeStmt) compileDDL(c *Compiler) (string, error) {
+	if err := c.requirePostgresObject("enum types"); err != nil {
+		return "", err
+	}
 	if len(s.Names) == 0 {
 		return "", fmt.Errorf("sqlkit/sql: DROP TYPE requires a name")
 	}
@@ -132,6 +138,9 @@ func (s AlterTypeAddValueStmt) ToSQL(d Dialect) (string, []any, error) {
 	return out, nil, err
 }
 func (s AlterTypeAddValueStmt) compileDDL(c *Compiler) (string, error) {
+	if err := c.requirePostgresObject("enum types"); err != nil {
+		return "", err
+	}
 	if s.Name.IsZero() || s.Value == "" {
 		return "", fmt.Errorf("sqlkit/sql: ALTER TYPE ADD VALUE requires a type name and a value")
 	}
@@ -212,6 +221,9 @@ func (s AlterTypeRenameValueStmt) ToSQL(d Dialect) (string, []any, error) {
 	return out, nil, err
 }
 func (s AlterTypeRenameValueStmt) compileDDL(c *Compiler) (string, error) {
+	if err := c.requirePostgresObject("enum types"); err != nil {
+		return "", err
+	}
 	if s.Name.IsZero() || s.OldValue == "" || s.NewValue == "" {
 		return "", fmt.Errorf("sqlkit/sql: ALTER TYPE RENAME VALUE requires a type name and both values")
 	}
