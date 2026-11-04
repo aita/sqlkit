@@ -104,6 +104,13 @@ treat the string as a token, not a value to parse. The Paginator owns cursor
 encoding; supply `WithCodec` to sign or encrypt the envelope. End the keys with a
 unique column (typically the primary key) so the order is total.
 
+A key on a nullable column (a pointer field type such as `Column[*string]`, or a
+`sql.Null*` type) is paginated NULL-safely: NULL sorts as the greatest value —
+last for `KeyAsc`, first for `KeyDesc`, identically on PostgreSQL and MySQL —
+and the seek predicate steps over NULLs, so no row is dropped or repeated. Such
+a key orders by `col IS NULL` first, which an ordinary index on `col` can't
+serve; keys of non-nullable types keep the plain, index-friendly ORDER BY.
+
 ## Struct field tags
 
 The `sqlkit` tag names the column (`sqlkit:"created_at"`) and `sqlkit:"-"` drops
@@ -141,6 +148,16 @@ type Account struct {
   `updated_at` stays current without a database trigger or a manual assignment.
   Naming the column explicitly in `SetStruct(row, T.Col)` writes the struct's
   value instead.
+
+The [`uow`](https://pkg.go.dev/github.com/aita/sqlkit/uow) package honours
+`version` and `touch` the same way when it flushes an UPDATE. For a managed
+entity (loaded with `Get`/`Find` or `Attach`ed) they ride along only with a real
+change to another column; the guard is the version the entity was loaded with,
+and after a successful `Flush` the struct's version field is bumped to match the
+database, so the scope can be reused. A detached `Update` guards on the row's
+current version and writes the bump back when the row is passed by pointer. A
+stale version makes `Flush` return `ErrVersionConflict`; a versioned row is
+always updated on its own (never merged into a batched UPDATE).
 
 ## Predicates and filters
 
@@ -264,7 +281,7 @@ The function DSL (in `sql`) covers the conditional/NULL helpers ([`Coalesce`](ht
 [`NullIf`](https://pkg.go.dev/github.com/aita/sqlkit/sql#NullIf), [`Greatest`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Greatest), [`Least`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Least)), aggregates ([`Sum`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Sum), [`Avg`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Avg), [`Min`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Min), [`Max`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Max),
 [`StringAgg`](https://pkg.go.dev/github.com/aita/sqlkit/sql#StringAgg), …), ranking/window functions ([`Rank`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Rank), [`Lag`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Lag), [`Lead`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Lead), …), portable
 string and numeric functions, date/time keywords, and JSON access
-([`sql.JSONGet`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGet) / [`sql.JSONGetText`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGetText) with portable path steps; PostgreSQL only).
+([`sql.JSONGet`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGet) / [`sql.JSONGetText`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGetText) with portable path steps; each dialect renders it in its native syntax — PostgreSQL `->`/`->>`, MySQL `JSON_EXTRACT`/`JSON_UNQUOTE`).
 [`sql.Func`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Func)`(name, args...)` is the escape hatch for anything else.
 
 Distinct aggregates are spelled [`sql.CountDistinct`](https://pkg.go.dev/github.com/aita/sqlkit/sql#CountDistinct)`(col)` and
@@ -535,6 +552,21 @@ db, err := sqlkit.Open("pgx", dsn, sqlkit.WithAutoChunk(true))
 _, err = db.Insert(appdb.Users).Values(users).Exec(ctx)
 ```
 
+The parameter count alone doesn't bound a bulk insert whose rows carry large
+string or BLOB values — a few multi-megabyte rows can overflow MySQL's
+`max_allowed_packet` with only a handful of parameters. [`WithMaxStatementBytes`](https://pkg.go.dev/github.com/aita/sqlkit#WithMaxStatementBytes)`(n)`
+adds an estimated-size cap, in bytes, on each split statement, so a bulk insert is
+chunked to stay under both the parameter limit and the byte budget (whichever
+splits smaller wins), with a single oversized row still sent on its own. The figure
+is an estimate, so set it below the server's configured packet limit; it defaults to
+off and applies only when auto-splitting is on.
+
+```go
+db, _ := sqlkit.Open("mysql", dsn, sqlkit.WithAutoChunk(true), sqlkit.WithMaxStatementBytes(4<<20)) // ~4 MiB
+// Rows with large text/BLOB columns split so no statement nears the packet limit.
+_, err = db.Insert(appdb.Documents).Values(docs).Exec(ctx)
+```
+
 The same limit chunks a large `IN` list. When a column `In` is the sole `Where`
 predicate and its values would overflow the limit, `Select.All` runs one
 statement per chunk and concatenates the rows, while `Update`/`Delete` `Exec` run
@@ -548,9 +580,11 @@ err = db.Select().From(appdb.Users).Where(appdb.Users.ID.In(ids...)).
 ```
 
 A `Select` is chunked only when its `IN` list is the whole query. Adding
-`ORDER BY`, `GROUP BY`, `DISTINCT`, `HAVING`, or `LIMIT`/`OFFSET` marks it
-unsafe to split, so it runs as a single statement and can still hit the bind
-limit — batch such queries yourself with [`sqlkit.InBatches`](https://pkg.go.dev/github.com/aita/sqlkit#InBatches). `NOT IN` is never
+`ORDER BY`, `GROUP BY`, `DISTINCT` (including `DISTINCT ON`), `HAVING`,
+`LIMIT`/`OFFSET`, or a window function (`Window`, or an inline `OVER(...)` in
+the projection) marks it unsafe to split, so it runs as a single statement and
+can still hit the bind limit — batch such queries yourself with
+[`sqlkit.InBatches`](https://pkg.go.dev/github.com/aita/sqlkit#InBatches). `NOT IN` is never
 split. See [Limitations](limitations.md) for the full rules.
 
 A split `Select` runs its chunks inside one `REPEATABLE READ` transaction by

@@ -83,7 +83,11 @@ func (md Metadata) CreateSQL(d sql.Dialect) (string, error) {
 	}
 	for _, table := range md.Tables {
 		for _, fk := range table.ForeignKeys {
-			stmts = append(stmts, fk.addConstraintSQL(table, d))
+			out, err := fk.addConstraintSQL(table, d)
+			if err != nil {
+				return "", err
+			}
+			stmts = append(stmts, out)
 		}
 	}
 	for _, table := range md.Tables {
@@ -332,9 +336,12 @@ func (fk ForeignKey) DropStatement(table Table) sql.DropForeignKeyStmt {
 	return sql.DropForeignKey(table.SQLTable(), fk.Name)
 }
 
-func (fk ForeignKey) addConstraintSQL(table Table, d sql.Dialect) string {
-	out, _, _ := fk.AddStatement(table).ToSQL(d)
-	return out
+func (fk ForeignKey) addConstraintSQL(table Table, d sql.Dialect) (string, error) {
+	out, _, err := fk.AddStatement(table).ToSQL(d)
+	if err != nil {
+		return "", fmt.Errorf("meta: foreign key %q on table %q: %w", fk.Name, table.Name, err)
+	}
+	return out, nil
 }
 
 func (fk ForeignKey) dropConstraintSQL(table Table, d sql.Dialect) string {

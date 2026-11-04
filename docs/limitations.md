@@ -22,7 +22,7 @@ from a gap that may close:
 | **PostgreSQL** | Primary target; the default and the most exercised dialect. Full feature surface. |
 | **MySQL** | Supported with a subset of features (see below). Backtick quoting, `?` placeholders. |
 | Standard | A minimal reference dialect; many features are rejected on it. |
-| SQLite | **Not currently available.** The earlier SQLite dialect was withdrawn and its implementation is being reworked; target PostgreSQL or MySQL for now. |
+| SQLite | **Not currently available.** No `Dialect` implementation exists for it; target PostgreSQL or MySQL for now. |
 
 `Open` infers the dialect from the driver name (`"mysql"` → MySQL, otherwise
 PostgreSQL); override with `WithDialect`.
@@ -42,7 +42,7 @@ PostgreSQL); override with `WithDialect`.
 | Row locks `ForUpdate` / `ForShare` | ✅ | ✅ | MySQL 8.0+. Refine with [`SkipLocked`](https://pkg.go.dev/github.com/aita/sqlkit#SkipLocked)/[`NoWait`](https://pkg.go.dev/github.com/aita/sqlkit#NoWait)/[`LockOf`](https://pkg.go.dev/github.com/aita/sqlkit#LockOf). |
 | `ForKeyShare` / `ForNoKeyUpdate` | ✅ | ❌ | Extra PostgreSQL lock strengths. |
 | Arrays — [`sql.Array`](https://pkg.go.dev/github.com/aita/sqlkit/sql#Array), `EqAny`/`NeAll`, [`decl.Array`](https://pkg.go.dev/github.com/aita/sqlkit/decl#Array) | ✅ | ❌ | MySQL has no array type. |
-| JSON path access — [`sql.JSONGet`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGet) / [`JSONGetText`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGetText) | ✅ | ❌ | 🚧 MySQL has JSON path functions; sqlkit just doesn't map to them yet. The `json`/`jsonb` struct-tag round-trip (whole-value marshal) works on both. |
+| JSON path access — [`sql.JSONGet`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGet) / [`JSONGetText`](https://pkg.go.dev/github.com/aita/sqlkit/sql#JSONGetText) | ✅ | ✅ | Maps to `JSON_EXTRACT` / `JSON_UNQUOTE(JSON_EXTRACT(...))` on MySQL. The `json`/`jsonb` struct-tag round-trip (whole-value marshal) works on both. |
 | Full-text search — [`sqlkit.Match`](https://pkg.go.dev/github.com/aita/sqlkit#Match) | ✅ | ⚠️ | MySQL: the columns need a `FULLTEXT` index. Boolean mode / a text-search config needs the `sql` package (below). |
 | Regex match — `~` / `~*` | ✅ | ❌ | MySQL can't express a case-insensitive regex inline (collation-dependent). |
 | `SIMILAR TO` / `NOT SIMILAR TO` | ✅ | ❌ | SQL-standard pattern matching. |
@@ -51,6 +51,7 @@ PostgreSQL); override with `WithDialect`.
 | Aliased `VALUES` derived-table source | ✅ | ⚠️ | MySQL can't alias `VALUES` columns, so sqlkit renders it as a `UNION ALL` of `SELECT`s (equivalent result, different SQL text). |
 | Schema introspection — [`introspection.Schema`](https://pkg.go.dev/github.com/aita/sqlkit/introspection#Schema) | ✅ | ✅ | Constructs the [`meta`](https://pkg.go.dev/github.com/aita/sqlkit/meta) model can't represent are skipped on import. |
 | Transactional (atomic) migrations | ✅ | ❌ | MySQL commits DDL implicitly and can't roll a partly-applied migration back — see [Migrations](#migrations). |
+| Sequences, `CREATE TYPE ... AS ENUM`, extensions, materialized views, `CREATE`/`DROP FUNCTION` | ✅ | ❌ | MySQL has none of these object kinds. |
 
 The matrix records engine *capabilities*, so a ❌/⚠️ cell is 🔒 inherent (the
 target engine can't express it) unless its Notes say 🚧.
@@ -77,9 +78,10 @@ trade convenience for correctness:
   compiles the full value list into one statement regardless.
 - **`IN` splits only when it is the whole query.** A `Select` whose sole `Where`
   is a column `In(...)` splits and concatenates rows. Adding `ORDER BY`,
-  `GROUP BY`, `DISTINCT`, `HAVING`, or `LIMIT`/`OFFSET` marks it **unsafe to
-  split** (results can't be combined across chunks): it runs as a single
-  statement and can still hit the bind limit. Batch those yourself with
+  `GROUP BY`, `DISTINCT` (including `DISTINCT ON`), `HAVING`, `LIMIT`/`OFFSET`,
+  or a window function marks it **unsafe to split** (results can't be combined
+  across chunks): it runs as a single statement and can still hit the bind
+  limit. Batch those yourself with
   [`sqlkit.InBatches`](https://pkg.go.dev/github.com/aita/sqlkit#InBatches).
 - **`NOT IN` is never split.** A row is excluded only if it appears in *no*
   chunk, which splitting cannot guarantee — a very large `NOT IN` must fit in one
@@ -109,6 +111,13 @@ trade convenience for correctness:
   human — **review the result before applying.** A column with no resolved type
   on the target dialect, or a default expression that cannot be parsed, makes the
   diff fail rather than guess.
+- 🚧 **Autogenerate targets one schema.** A `Migrator`/`Operator` is configured
+  with a single schema, so `autogen.Render`'s `op.CreateTable`/`op.AddColumn`/…
+  calls carry no schema qualification of their own — a catalog with tables in
+  more than one managed schema (`Catalog.Schema(name, decl.Create())`) renders a
+  migration that silently targets the `Operator`'s configured schema for every
+  table, not each table's own. `migrate.Diff` (the non-generated path) has no
+  such limit. Review generated output for a multi-schema catalog before applying.
 
 ## Code generation
 
@@ -169,7 +178,9 @@ the `meta` model gains types.)
 
 - 🔒 **Keyset pagination needs a unique tail key.** End a [`Paginator`](https://pkg.go.dev/github.com/aita/sqlkit#Paginator)'s sort keys
   with a unique column (typically the primary key) so the order is total and a
-  cursor lands on exactly one row.
+  cursor lands on exactly one row. A nullable key is detected from its Go type
+  (pointer or `sql.Null*`-style); a nullable column bound to a non-nullable Go
+  type can't hold the NULLs it scans anyway.
 - 🔒 **Filter terms** support `Eq`/`Ne`/`Lt`/`Le`/`Gt`/`Ge`/`In`/[`FilterLike`](https://pkg.go.dev/github.com/aita/sqlkit#FilterLike)/
   [`FilterIsNull`](https://pkg.go.dev/github.com/aita/sqlkit#FilterIsNull) or a raw [`Predicate`](https://pkg.go.dev/github.com/aita/sqlkit#Predicate); other [`FilterTerm`](https://pkg.go.dev/github.com/aita/sqlkit#FilterTerm) values error.
 - 🚧 **`decl` targets PostgreSQL and MySQL** only; other dialects ("oracle", …)

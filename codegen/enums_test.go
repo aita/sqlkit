@@ -79,6 +79,65 @@ func TestGenerateNoIdentifierCollisions(t *testing.T) {
 					continue
 				}
 				for _, id := range topLevelNames(t, f.Name, string(f.Content)) {
+					if id == "_" { // blank assignments (interface checks) legitimately repeat
+						continue
+					}
+					if prev, dup := seen[id]; dup {
+						t.Errorf("identifier %q declared in both %s and %s (generated code won't compile)", id, prev, f.Name)
+					}
+					seen[id] = f.Name
+				}
+			}
+		})
+	}
+}
+
+// TestGenerateNoRelationIdentifierCollisions covers the relational layout, which
+// declares extra package-level identifiers per table — <Var>Columns, <Var>Rels,
+// <Var>Filter, and the new<Var>Columns constructor. An enum whose name maps to one
+// of these must be deduped, or the generated package fails to compile
+// ("redeclared in this block"). Enum names come from the database, so they are
+// outside the caller's control. Each case names the table "users" so the
+// relational identifiers are UsersColumns / UsersRels / UsersFilter /
+// newUsersColumns.
+func TestGenerateNoRelationIdentifierCollisions(t *testing.T) {
+	// Two tables joined by a foreign key, so "users" gets relations and the
+	// relational template emits all of UsersColumns / UsersRels / UsersFilter.
+	relTables := []meta.Table{
+		{Schema: meta.Schema{Name: "public"}, Name: "users",
+			Columns: []meta.Column{{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true}}},
+		{Schema: meta.Schema{Name: "public"}, Name: "posts",
+			Columns: []meta.Column{
+				{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true},
+				{Name: "user_id", Type: meta.Of("postgres", "int8", 0, 0, 0)},
+			},
+			ForeignKeys: []meta.ForeignKey{{Name: "posts_user_id_fkey", Columns: []string{"user_id"},
+				RefSchema: meta.Schema{Name: "public"}, RefTable: "users", RefColumns: []string{"id"}}}},
+	}
+	cases := map[string]string{
+		"enum vs <Var>Columns": "users_columns",
+		"enum vs <Var>Rels":    "users_rels",
+		"enum vs <Var>Filter":  "users_filter",
+	}
+	for name, enumName := range cases {
+		t.Run(name, func(t *testing.T) {
+			md := meta.Metadata{
+				Tables: relTables,
+				Enums:  []meta.Enum{{Schema: "public", Name: enumName, Values: []string{"a"}}},
+			}
+			files, err := Generate(md, Options{PackageName: "appdb", EmitRelations: true, EmitDTO: true})
+			if err != nil {
+				t.Fatalf("Generate: %v", err)
+			}
+			seen := map[string]string{}
+			for _, f := range files {
+				if !strings.HasSuffix(f.Name, ".go") {
+					continue
+				}
+				for _, id := range topLevelNames(t, f.Name, string(f.Content)) {
+					if id == "_" { // blank assignments (interface checks) legitimately repeat
+						continue
+					}
 					if prev, dup := seen[id]; dup {
 						t.Errorf("identifier %q declared in both %s and %s (generated code won't compile)", id, prev, f.Name)
 					}
@@ -422,5 +481,32 @@ func TestGenerateEnumsOnly(t *testing.T) {
 	}
 	if len(files) != 1 || files[0].Name != "enums.go" {
 		t.Fatalf("expected only enums.go, got %d files: %+v", len(files), files)
+	}
+}
+
+// <Var>Rels is only declared for a table that has relations, so an enum named
+// after it on a relation-less table must keep its natural Go name rather than
+// being needlessly renamed (which would break code that already compiled).
+func TestGenerateRelsNotReservedWithoutRelations(t *testing.T) {
+	md := meta.Metadata{
+		Tables: []meta.Table{{Schema: meta.Schema{Name: "public"}, Name: "users",
+			Columns: []meta.Column{{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true}}}},
+		Enums: []meta.Enum{{Schema: "public", Name: "users_rels", Values: []string{"a"}}},
+	}
+	files, err := Generate(md, Options{PackageName: "appdb", EmitRelations: true, EmitDTO: true})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	var found bool
+	for _, f := range files {
+		if strings.Contains(string(f.Content), "type UsersRels ") {
+			found = true
+		}
+		if strings.Contains(string(f.Content), "UsersRels2") {
+			t.Errorf("%s: enum renamed to UsersRels2 although users has no relations", f.Name)
+		}
+	}
+	if !found {
+		t.Errorf("enum users_rels not generated as type UsersRels")
 	}
 }

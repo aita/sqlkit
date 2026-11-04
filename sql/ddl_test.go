@@ -74,6 +74,23 @@ func TestForeignKeyEmptyColumnsErrors(t *testing.T) {
 	}
 }
 
+// TestForeignKeyColumnArityMismatchErrors covers a referencing column list of a
+// different length than the referenced column list: every engine rejects the
+// resulting "FOREIGN KEY (a, b) REFERENCES t (id)" at execution time, so the
+// compiler must reject it too rather than rendering it as if it were valid.
+func TestForeignKeyColumnArityMismatchErrors(t *testing.T) {
+	stmt := AlterTable(Table{Name: NewIdent("posts")}).
+		AddForeignKey(ForeignKeyConstraint{
+			Name:       NewIdent("fk_x"),
+			Columns:    Idents("user_id", "other_id"),
+			RefTable:   NewIdent("users"),
+			RefColumns: Idents("id"),
+		})
+	if _, _, err := stmt.ToSQL(mustDialect(t, "postgres")); err == nil || !strings.Contains(err.Error(), "referencing column") {
+		t.Fatalf("ToSQL() error = %v, want column-arity-mismatch rejection", err)
+	}
+}
+
 func TestCreateTableUnnamedUnique(t *testing.T) {
 	stmt := CreateTable(Table{Name: NewIdent("t")}).
 		Column(ColumnDef{Name: NewIdent("a"), Type: EngineType{Name: "int8"}}).
@@ -276,6 +293,21 @@ func TestCreateIndex(t *testing.T) {
 	}
 }
 
+// MySQL has no IF NOT EXISTS for CREATE INDEX (any version); the compiler must
+// reject it rather than emit SQL MySQL's parser refuses. PostgreSQL supports it.
+func TestCreateIndexIfNotExistsRejectedOnMySQL(t *testing.T) {
+	users := Table{Schema: NewIdent("public"), Name: NewIdent("users")}
+	stmt := CreateIndex("idx_users_name", users, "name").IfNotExists()
+	if _, _, err := stmt.ToSQL(mustDialect(t, "mysql")); err == nil ||
+		!strings.Contains(err.Error(), "CREATE INDEX ... IF NOT EXISTS") {
+		t.Fatalf("ToSQL(mysql) error = %v, want CREATE INDEX IF NOT EXISTS rejection", err)
+	}
+	if got, want := mustDDL(t, stmt, "postgres"),
+		`CREATE INDEX IF NOT EXISTS "idx_users_name" ON "public"."users" ("name");`; got != want {
+		t.Errorf("CreateIndex().IfNotExists(postgres) = %q, want %q", got, want)
+	}
+}
+
 func TestDropIndex(t *testing.T) {
 	users := Table{Schema: NewIdent("public"), Name: NewIdent("users")}
 	if got, want := mustDDL(t, DropIndex("uq_users_email", users), "postgres"),
@@ -424,6 +456,33 @@ func TestRestateColumn(t *testing.T) {
 	want := `ALTER TABLE "users" ALTER COLUMN "name" TYPE text, ALTER COLUMN "name" DROP NOT NULL, ALTER COLUMN "name" SET DEFAULT '';`
 	if got != want {
 		t.Errorf("RestateColumn(postgres) =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// TestRestateColumnAutoIncrementRejectedOnNonMySQL covers compileRestateColumn:
+// unlike MySQL's inline MODIFY COLUMN ... AUTO_INCREMENT, PostgreSQL (and the
+// standard target) has no ALTER COLUMN form of "make this a serial column" —
+// CREATE TABLE's bigserial sugar expands to a backing sequence plus a
+// nextval() DEFAULT that ALTER can't express in one step. Restating an
+// AutoIncrement column on those dialects used to silently fall through to
+// "ALTER COLUMN ... DROP DEFAULT" (col.Default is nil for a bare
+// auto-increment column) instead of erroring, which would strip an existing
+// serial default via what looked like an unrelated column change.
+func TestRestateColumnAutoIncrementRejectedOnNonMySQL(t *testing.T) {
+	col := ColumnDef{Name: NewIdent("id"), Type: EngineType{Name: "bigint"}, NotNull: true, AutoIncrement: true}
+	stmt := AlterTable(Table{Name: NewIdent("users")}).RestateColumn(col)
+
+	if _, _, err := stmt.ToSQL(PostgreSQLDialect{}); err == nil {
+		t.Fatal("RestateColumn with AutoIncrement on postgres succeeded, want error")
+	} else if !strings.Contains(err.Error(), "auto-increment") {
+		t.Fatalf("error = %v, want mentioning auto-increment", err)
+	}
+
+	// MySQL's MODIFY COLUMN handles AutoIncrement natively; unaffected.
+	got := mustDDL(t, stmt, "mysql")
+	want := "ALTER TABLE `users` MODIFY COLUMN `id` bigint NOT NULL AUTO_INCREMENT;"
+	if got != want {
+		t.Errorf("RestateColumn(mysql) =\n%s\nwant\n%s", got, want)
 	}
 }
 

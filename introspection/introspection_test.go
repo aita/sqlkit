@@ -60,6 +60,14 @@ func TestInspectPostgres(t *testing.T) {
 						{"users", "email", "Unique login address"},
 					},
 				}, nil
+			case strings.Contains(sql, "pg_enum"):
+				return testutil.Result{
+					Columns: []string{"typname", "enumlabel"},
+					Rows: [][]driver.Value{
+						{"mood", "happy"},
+						{"mood", "sad"},
+					},
+				}, nil
 			default:
 				return testutil.Result{
 					Columns: []string{"table_name", "column_name", "udt_name", "nullable", "column_default", "is_identity", "length", "precision", "scale"},
@@ -80,45 +88,48 @@ func TestInspectPostgres(t *testing.T) {
 		t.Fatalf("Schema() error = %v", err)
 	}
 
-	want := meta.Metadata{Tables: []meta.Table{
-		{
-			Schema:  meta.Schema{Name: "public"},
-			Name:    "users",
-			Comment: "Registered accounts",
-			Columns: []meta.Column{
-				{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), HasDefault: true, PrimaryKey: true},
-				{Name: "email", Type: meta.Of("postgres", "varchar", 255, 0, 0), Comment: "Unique login address"},
-				{Name: "balance", Type: meta.Of("postgres", "numeric", 0, 10, 2), HasDefault: true, DefaultExpr: sql.Raw("0")},
+	want := meta.Metadata{
+		Enums: []meta.Enum{{Schema: "public", Name: "mood", Values: []string{"happy", "sad"}}},
+		Tables: []meta.Table{
+			{
+				Schema:  meta.Schema{Name: "public"},
+				Name:    "users",
+				Comment: "Registered accounts",
+				Columns: []meta.Column{
+					{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), HasDefault: true, PrimaryKey: true},
+					{Name: "email", Type: meta.Of("postgres", "varchar", 255, 0, 0), Comment: "Unique login address"},
+					{Name: "balance", Type: meta.Of("postgres", "numeric", 0, 10, 2), HasDefault: true, DefaultExpr: sql.Raw("0")},
+				},
+				Indexes: []meta.Index{
+					{Name: "users_email_key", Columns: []string{"email"}, Unique: true},
+				},
+				Checks: []meta.Check{
+					{Name: "users_balance_check", Expression: sql.Raw("balance >= (0)::numeric")},
+				},
 			},
-			Indexes: []meta.Index{
-				{Name: "users_email_key", Columns: []string{"email"}, Unique: true},
-			},
-			Checks: []meta.Check{
-				{Name: "users_balance_check", Expression: sql.Raw("balance >= (0)::numeric")},
+			{
+				Schema: meta.Schema{Name: "public"},
+				Name:   "posts",
+				Columns: []meta.Column{
+					{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), HasDefault: true, PrimaryKey: true},
+					{Name: "user_id", Type: meta.Of("postgres", "int8", 0, 0, 0)},
+				},
+				ForeignKeys: []meta.ForeignKey{
+					{Name: "posts_user_id_fkey", Columns: []string{"user_id"}, RefSchema: meta.Schema{Name: "public"}, RefTable: "users", RefColumns: []string{"id"}, OnDelete: meta.Cascade},
+				},
+				Indexes: []meta.Index{
+					{Name: "idx_posts_user_id", Columns: []string{"user_id"}},
+				},
 			},
 		},
-		{
-			Schema: meta.Schema{Name: "public"},
-			Name:   "posts",
-			Columns: []meta.Column{
-				{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), HasDefault: true, PrimaryKey: true},
-				{Name: "user_id", Type: meta.Of("postgres", "int8", 0, 0, 0)},
-			},
-			ForeignKeys: []meta.ForeignKey{
-				{Name: "posts_user_id_fkey", Columns: []string{"user_id"}, RefSchema: meta.Schema{Name: "public"}, RefTable: "users", RefColumns: []string{"id"}, OnDelete: meta.Cascade},
-			},
-			Indexes: []meta.Index{
-				{Name: "idx_posts_user_id", Columns: []string{"user_id"}},
-			},
-		},
-	}}
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Schema() = %#v,\nwant %#v", got, want)
 	}
 
 	queries := fake.Queries()
-	if len(queries) != 6 {
-		t.Fatalf("queries = %d, want 6 (columns, primary keys, foreign keys, indexes, checks, comments)", len(queries))
+	if len(queries) != 7 {
+		t.Fatalf("queries = %d, want 7 (columns, primary keys, foreign keys, indexes, checks, comments, enums)", len(queries))
 	}
 	for _, query := range queries {
 		if !reflect.DeepEqual(query.Args, []any{"public"}) {
@@ -163,6 +174,41 @@ func TestInspectPostgresArray(t *testing.T) {
 	// The resolved engine carries the array flag, so DDL and codegen render slices.
 	if eng, _ := cols[1].Type.Engine("postgres"); !eng.Array || eng.Name != "text" {
 		t.Errorf("tags engine = %+v, want {Name:text, Array:true}", eng)
+	}
+}
+
+// TestInspectPostgresEnumOrderAndDedup covers two enum types with labels
+// grouped and returned in enumsortorder (not alphabetical, not row order
+// across types), and confirms a schema with no enum types at all leaves
+// Metadata.Enums nil rather than an empty non-nil slice.
+func TestInspectPostgresEnumOrderAndDedup(t *testing.T) {
+	fake := &testutil.Fake{
+		QueryFunc: func(sql string, args []any) (testutil.Result, error) {
+			if strings.Contains(sql, "pg_enum") {
+				return testutil.Result{
+					Columns: []string{"typname", "enumlabel"},
+					Rows: [][]driver.Value{
+						{"mood", "sad"},
+						{"status", "on"},
+						{"mood", "happy"},
+						{"status", "off"},
+					},
+				}, nil
+			}
+			return testutil.Result{}, nil
+		},
+	}
+
+	got, err := Schema(context.Background(), fake.DB(), "postgres", "public")
+	if err != nil {
+		t.Fatalf("Schema() error = %v", err)
+	}
+	want := []meta.Enum{
+		{Schema: "public", Name: "mood", Values: []string{"sad", "happy"}},
+		{Schema: "public", Name: "status", Values: []string{"on", "off"}},
+	}
+	if !reflect.DeepEqual(got.Enums, want) {
+		t.Fatalf("Enums = %#v,\nwant %#v", got.Enums, want)
 	}
 }
 

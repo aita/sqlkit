@@ -24,8 +24,11 @@ func TestRenderPostgresDefaultCastNotSpuriousDiff(t *testing.T) {
 		{"numeric literal", "0::numeric", "0"},
 		{"numeric with precision", "0::numeric(10,2)", "0"},
 		{"jsonb literal", "'{}'::jsonb", "'{}'"},
-		{"array literal", "ARRAY[]::text[]", "ARRAY[]"},
+		{"array literal", "'{}'::text[]", "'{}'"},
 		{"enum literal", "'foo'::my_status", "'foo'"},
+		{"negative number", "(-1)::integer", "-1"},
+		{"timestamp literal", "'2020-01-01 00:00:00'::timestamp without time zone", "'2020-01-01 00:00:00'"},
+		{"escaped quote", "'it''s'::text", "'it''s'"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -76,7 +79,9 @@ func TestRenderPostgresCheckCastNotSpuriousDiff(t *testing.T) {
 	source := decl.NewCatalog(decl.DefaultSchema("public"))
 	source.Table("users",
 		decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
-		decl.Check(sql.Raw("price > 0::numeric")),
+		// pg_get_constraintdef's form, after introspection strips CHECK and
+		// the outer parentheses.
+		decl.Check(sql.Raw("price > (0)::numeric")),
 	)
 	target := decl.NewCatalog(decl.DefaultSchema("public"))
 	target.Table("users",
@@ -108,5 +113,49 @@ func TestRenderMySQLDefaultCastStillCompared(t *testing.T) {
 	res := render(t, build(t, source), build(t, target), "mysql", Renames{})
 	if !strings.Contains(res.Up, `op.ModifyColumn`) {
 		t.Errorf("Up should report a default change on mysql (no cast-stripping there):\n%s", res.Up)
+	}
+}
+
+// A cast applied to anything other than a literal is meaningful, so a change to
+// or from it must still be reported rather than normalized away.
+func TestRenderPostgresExpressionCastStillDetected(t *testing.T) {
+	cases := []struct{ from, to string }{
+		{"now()", "now()::date"},
+		{"now()::date", "now()"},
+		{"(price)::text", "price"},
+	}
+	for _, c := range cases {
+		source := decl.NewCatalog(decl.DefaultSchema("public"))
+		source.Table("users",
+			decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+			decl.Column("seen", decl.Text, decl.Default(sql.Raw(c.from))),
+		)
+		target := decl.NewCatalog(decl.DefaultSchema("public"))
+		target.Table("users",
+			decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+			decl.Column("seen", decl.Text, decl.Default(sql.Raw(c.to))),
+		)
+		res := render(t, build(t, source), build(t, target), "postgres", Renames{})
+		if !strings.Contains(res.Up, `op.ModifyColumn`) {
+			t.Errorf("default %q -> %q should be reported as a change:\n%s", c.from, c.to, res.Up)
+		}
+	}
+}
+
+func TestNormalizePGExpr(t *testing.T) {
+	cases := map[string]string{
+		"'active'::character varying":                "'active'",
+		"price > (0)::numeric":                       "price > 0",
+		"((price > (0)::numeric))":                   "price > 0",
+		"(a > 0) AND (b > 0)":                        "(a > 0) AND (b > 0)",
+		"col1::text":                                 "col1::text",
+		"now()::date":                                "now()::date",
+		"status = ANY (ARRAY['a'::text, 'b'::text])": "status = ANY (ARRAY['a', 'b'])",
+		"x >= 1.5::double precision":                 "x >= 1.5",
+	}
+	for in, want := range cases {
+		if got := normalizePGExpr(in); got != want {
+			t.Errorf("normalizePGExpr(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
