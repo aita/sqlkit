@@ -706,8 +706,18 @@ func buildJSONPath(path []any) (string, error) {
 			return "", err
 		}
 		if !isKey {
+			// A negative index counts from the end (as PostgreSQL's -> does);
+			// SQL/JSON and MySQL spell it $[last] / $[last-N] — a bare $[-1]
+			// is an invalid path.
 			p.WriteString("[")
-			p.WriteString(strconv.Itoa(idx))
+			switch {
+			case idx == -1:
+				p.WriteString("last")
+			case idx < -1:
+				p.WriteString("last-" + strconv.Itoa(-idx-1))
+			default:
+				p.WriteString(strconv.Itoa(idx))
+			}
 			p.WriteString("]")
 			continue
 		}
