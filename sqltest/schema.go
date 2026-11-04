@@ -36,7 +36,16 @@ func applySchema(t testing.TB, db *sqlkit.Database, md meta.Metadata) {
 // drives it.
 func truncate(t testing.TB, db *sqlkit.Database, md meta.Metadata, tables []sqlkit.Table) {
 	t.Helper()
-	names := truncateNames(md, tables)
+	truncateTableNames(t, db, truncateNames(md, tables))
+}
+
+// truncateTableNames deletes every row from the named tables foreign-key-safely.
+// It is the name-list core shared by the metadata-driven truncate and the
+// raw-DDL TruncateTables, so both get the same dialect-aware reset (PostgreSQL
+// TRUNCATE ... CASCADE in one statement; MySQL per-table TRUNCATE with
+// foreign-key checks toggled off). An empty list is a no-op.
+func truncateTableNames(t testing.TB, db *sqlkit.Database, names []string) {
+	t.Helper()
 	if len(names) == 0 {
 		return
 	}
@@ -96,6 +105,24 @@ func truncateNames(md meta.Metadata, tables []sqlkit.Table) []string {
 // MySQL disables foreign-key checks for the duration.
 func dropTables(t testing.TB, db *sqlkit.Database, md meta.Metadata) {
 	t.Helper()
+	names := make([]string, len(md.Tables))
+	for i, tbl := range md.Tables {
+		names[i] = qualifiedName(tbl)
+	}
+	dropTableNames(t, db, names)
+}
+
+// dropTableNames removes the named tables foreign-key-safely, dropping them in
+// reverse of the given order. It is the name-list core shared by the
+// metadata-driven dropTables and the raw-DDL ApplySchemaSQL/SetupSchemaSQL path,
+// so both get the same dialect-aware, order-independent teardown (PostgreSQL
+// CASCADE; MySQL foreign-key checks toggled off). Each name is a qualified table
+// name the dialect quotes; an empty list is a no-op.
+func dropTableNames(t testing.TB, db *sqlkit.Database, names []string) {
+	t.Helper()
+	if len(names) == 0 {
+		return
+	}
 	ctx := context.Background()
 	exec := func(stmt string) {
 		if _, err := db.SQL().ExecContext(ctx, stmt); err != nil {
@@ -107,8 +134,8 @@ func dropTables(t testing.TB, db *sqlkit.Database, md meta.Metadata) {
 		exec("SET FOREIGN_KEY_CHECKS = 0")
 		defer exec("SET FOREIGN_KEY_CHECKS = 1")
 	}
-	for i := len(md.Tables) - 1; i >= 0; i-- {
-		stmt := "DROP TABLE IF EXISTS " + db.Dialect().QuoteIdent(qualifiedName(md.Tables[i]))
+	for i := len(names) - 1; i >= 0; i-- {
+		stmt := "DROP TABLE IF EXISTS " + db.Dialect().QuoteIdent(names[i])
 		if !mysql {
 			stmt += " CASCADE"
 		}
