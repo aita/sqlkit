@@ -28,7 +28,34 @@ var simpleBinaryOps = map[rsql.Token]string{
 	rsql.LIKE:   "LIKE",
 }
 
+// negatedOps are the two-word operators rqlite tokenizes as one token with no
+// precedence (NOT LIKE, IS NOT, ...): it parses their right operand at the
+// lowest level, so "b NOT LIKE 'x%' AND a = 2" comes out as
+// "b NOT LIKE ('x%' AND a = 2)". SQLite binds them like LIKE / IS.
+var negatedOps = map[rsql.Token]bool{
+	rsql.NOTLIKE: true, rsql.ISNOT: true, rsql.NOTREGEXP: true,
+	rsql.NOTGLOB: true, rsql.NOTMATCH: true,
+}
+
+// absorbsOuter reports whether e, as the right operand of a comparison-level
+// operator, must have swallowed operators that bind no tighter than the
+// comparison itself — a grouping SQLite would never produce without
+// parentheses (rqlite drops a ParenExpr's grouping into one, so an explicit
+// "(...)" is a ParenExpr and not matched here).
+func absorbsOuter(e rsql.Expr) bool {
+	switch x := e.(type) {
+	case *rsql.BinaryExpr:
+		return x.Op.Precedence() <= rsql.GE.Precedence()
+	case *rsql.Null:
+		return true
+	}
+	return false
+}
+
 func convertBinary(e *rsql.BinaryExpr) (sql.Expression, error) {
+	if negatedOps[e.Op] && absorbsOuter(e.Y) {
+		return nil, sqlparse.Unsupported("negated comparison whose right operand rqlite mis-groups")
+	}
 	// IN / NOT IN take a list (or, unsupported here, a subquery) on the right, so
 	// the right operand is not a plain scalar expression.
 	switch e.Op {
@@ -119,6 +146,16 @@ func convertBetween(left sql.Expression, rightNode rsql.Expr, negate bool) (sql.
 	rng, ok := rightNode.(*rsql.Range)
 	if !ok {
 		return nil, sqlparse.Unsupportedf("BETWEEN range %T", rightNode)
+	}
+	// rqlite parses the range's low bound at the lowest level, so in
+	// "a BETWEEN 1 AND 2 AND b = 'x'" it takes "1 AND 2" as the low bound and
+	// "b = 'x'" as the high one; likewise "BETWEEN 1 AND 2 = 1" puts the
+	// comparison inside the high bound. Keep such statements raw.
+	if lb, ok := rng.X.(*rsql.BinaryExpr); ok && lb.Op.Precedence() <= rsql.GE.Precedence() {
+		return nil, sqlparse.Unsupported("BETWEEN bounds rqlite mis-groups")
+	}
+	if absorbsOuter(rng.Y) {
+		return nil, sqlparse.Unsupported("BETWEEN bounds rqlite mis-groups")
 	}
 	low, err := convertExpr(rng.X)
 	if err != nil {

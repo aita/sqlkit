@@ -67,3 +67,29 @@ func TestPositionalGroupAndOrderStayLiteral(t *testing.T) {
 	assertSQL(t, "SELECT a FROM t UNION SELECT b FROM u ORDER BY 1",
 		`SELECT "a" FROM "t" UNION SELECT "b" FROM "u" ORDER BY 1`)
 }
+
+// rqlite gives the two-word negated operators (NOT LIKE, IS NOT, NOT GLOB, ...)
+// no precedence and parses BETWEEN's low bound at the lowest level, so trailing
+// AND/OR/comparisons end up inside the operand ("b NOT LIKE ('x%' AND a = 2)").
+// Those statements must stay raw (their source text), not be converted with
+// the wrong grouping.
+func TestMisgroupedComparisonsStayRaw(t *testing.T) {
+	for _, q := range []string{
+		"SELECT id FROM t WHERE b NOT LIKE 'x%' AND a = 2",
+		"SELECT id FROM t WHERE a IS NOT 2 AND b = 'x'",
+		"SELECT id FROM t WHERE b NOT GLOB 'x*' OR a = 1",
+		"SELECT id FROM t WHERE a BETWEEN 1 AND 2 AND b = 'x'",
+		"SELECT id FROM t WHERE a NOT BETWEEN 1 AND 1 AND id > 1",
+		"SELECT id FROM t WHERE NOT a = 1 IS NULL",
+	} {
+		assertRaw(t, q)
+	}
+	// Operands that genuinely bind tighter still convert.
+	assertSQL(t, "SELECT id FROM t WHERE b NOT LIKE 'x' || '%'", `SELECT "id" FROM "t" WHERE ("b" NOT LIKE (? || ?))`, "x", "%")
+}
+
+// "NOT a IS NULL" is NOT (a IS NULL) in SQLite; rqlite parses (NOT a) IS NULL.
+func TestNotBindsBelowNullTest(t *testing.T) {
+	assertSQL(t, "SELECT id FROM t WHERE NOT a IS NULL", `SELECT "id" FROM "t" WHERE (NOT ("a" IS NULL))`)
+	assertSQL(t, "SELECT id FROM t WHERE NOT a IS NOT NULL", `SELECT "id" FROM "t" WHERE (NOT ("a" IS NOT NULL))`)
+}

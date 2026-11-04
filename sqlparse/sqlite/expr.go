@@ -52,6 +52,14 @@ func convertExpr(node rsql.Expr) (sql.Expression, error) {
 		}
 		return positioned(expr, e.OpPos), nil
 	case *rsql.Null:
+		// rqlite binds a prefix NOT tighter than the postfix NULL tests, parsing
+		// "NOT a IS NULL" as "(NOT a) IS NULL"; SQLite means NOT (a IS NULL).
+		if u, ok := e.X.(*rsql.UnaryExpr); ok && u.Op == rsql.NOT {
+			return convertExpr(&rsql.UnaryExpr{OpPos: u.OpPos, Op: rsql.NOT, X: &rsql.Null{X: u.X, Op: e.Op, OpPos: e.OpPos}})
+		}
+		if leftSpineHasNot(e.X) {
+			return nil, sqlparse.Unsupported("NOT under a postfix NULL test")
+		}
 		operand, err := convertExpr(e.X)
 		if err != nil {
 			return nil, err
@@ -268,4 +276,20 @@ func hoistNot(e *rsql.BinaryExpr) rsql.Expr {
 		x = fixed
 	}
 	return &rsql.UnaryExpr{OpPos: u.OpPos, Op: rsql.NOT, X: x}
+}
+
+// leftSpineHasNot reports whether a prefix NOT sits on the left spine of a
+// chain of binary operators — the shape rqlite produces for "NOT a = 1 ..."
+// when an outer operator would need it regrouped.
+func leftSpineHasNot(e rsql.Expr) bool {
+	for {
+		switch x := e.(type) {
+		case *rsql.UnaryExpr:
+			return x.Op == rsql.NOT
+		case *rsql.BinaryExpr:
+			e = x.X
+		default:
+			return false
+		}
+	}
 }
