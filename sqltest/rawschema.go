@@ -4,6 +4,7 @@ import (
 	"context"
 	stdsql "database/sql"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -35,7 +36,7 @@ import (
 // arguments) have no schema to act on a raw DB; use SetupSchemaSQL/ApplySchemaSQL
 // and TruncateTables instead.
 func NewRaw(db *stdsql.DB, dialect sqlkit.Dialect) *DB {
-	return &DB{db: sqlkit.WrapDB(db, sqlkit.WithDialect(dialect))}
+	return &DB{db: sqlkit.WrapDB(db, sqlkit.WithDialect(dialect)), raw: true}
 }
 
 // SetupSchemaSQL applies the given DDL now and drops the tables it creates on
@@ -52,8 +53,8 @@ func NewRaw(db *stdsql.DB, dialect sqlkit.Dialect) *DB {
 // teardown with a t.Cleanup of your own when needed.
 func (d *DB) SetupSchemaSQL(t testing.TB, ddl ...string) {
 	t.Helper()
-	d.applySchemaSQL(t, ddl)
-	t.Cleanup(func() { dropTableNames(t, d.db, d.tables) })
+	names := d.applySchemaSQL(t, ddl)
+	t.Cleanup(func() { dropTableNames(t, d.db, names) })
 }
 
 // ApplySchemaSQL applies the given DDL with no teardown registered — the raw-DDL
@@ -68,29 +69,37 @@ func (d *DB) ApplySchemaSQL(t testing.TB, ddl ...string) {
 
 // applySchemaSQL splits the DDL into statements, drops the tables they declare
 // (so re-applying is idempotent and a leftover table never blocks the CREATE),
-// executes them in order, and records the created table names for teardown.
-func (d *DB) applySchemaSQL(t testing.TB, ddl []string) {
+// executes them in order, and records the created table names for teardown. It
+// returns the names this call created so its own cleanup drops exactly those,
+// while d.tables accumulates every table across calls for TruncateTables.
+func (d *DB) applySchemaSQL(t testing.TB, ddl []string) []string {
 	t.Helper()
-	var stmts []string
+	mysql := isMySQL(d.db.Dialect())
+	var stmts []scriptStmt
 	for _, text := range ddl {
-		stmts = append(stmts, splitStatements(text)...)
+		stmts = append(stmts, splitScript(text, mysql)...)
 	}
-	names := createdTableNames(stmts)
+	names := createdTableNames(stmts, mysql)
 	dropTableNames(t, d.db, names)
 	ctx := context.Background()
 	for _, stmt := range stmts {
-		if _, err := d.db.SQL().ExecContext(ctx, stmt); err != nil {
-			t.Fatalf("sqltest: apply schema statement %q: %v", stmt, err)
+		if _, err := d.db.SQL().ExecContext(ctx, stmt.text); err != nil {
+			t.Fatalf("sqltest: apply schema statement %q: %v", stmt.text, err)
 		}
 	}
-	d.tables = names
+	for _, name := range names {
+		if !slices.Contains(d.tables, name) {
+			d.tables = append(d.tables, name)
+		}
+	}
+	return names
 }
 
 // TruncateTables deletes every row from the named tables foreign-key-safely,
 // whatever order they are given in — the raw-DDL counterpart of Truncate, which
 // needs a meta.Metadata to resolve sqlkit.Table bindings. Called with no names
 // it clears every table the raw schema created (the tables ApplySchemaSQL or
-// SetupSchemaSQL last recorded).
+// SetupSchemaSQL recorded).
 func (d *DB) TruncateTables(t testing.TB, names ...string) {
 	t.Helper()
 	if len(names) == 0 {
@@ -107,23 +116,35 @@ func (d *DB) TruncateTables(t testing.TB, names ...string) {
 var createTableRE = regexp.MustCompile(`(?is)\bCREATE\s+(?:(?:GLOBAL|LOCAL)\s+)?(?:TEMP(?:ORARY)?\s+|UNLOGGED\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([^\s(]+)`)
 
 // createdTableNames extracts, in order, the qualified names of the tables the
-// statements create. Quoting characters ("`[]) are stripped from each name so
-// the dialect can re-quote it; statements that are not CREATE TABLE are ignored.
-func createdTableNames(stmts []string) []string {
+// statements create, matching on each statement's comment-free code so a
+// comment mentioning "create table" is never mistaken for the real one.
+// Statements that are not CREATE TABLE are ignored.
+func createdTableNames(stmts []scriptStmt, mysql bool) []string {
 	var names []string
 	for _, stmt := range stmts {
-		m := createTableRE.FindStringSubmatch(stmt)
+		m := createTableRE.FindStringSubmatch(stmt.code)
 		if m == nil {
 			continue
 		}
-		names = append(names, unquoteIdent(m[1]))
+		names = append(names, normalizeIdent(m[1], mysql))
 	}
 	return names
 }
 
-// unquoteIdent removes the identifier quoting a dialect uses ("..." on standard
-// SQL/PostgreSQL, `...` on MySQL, [...] on SQL Server) from a possibly
-// dot-qualified name, leaving the bare schema.table form QuoteIdent expects.
-func unquoteIdent(s string) string {
-	return strings.NewReplacer(`"`, "", "`", "", "[", "", "]", "").Replace(s)
+// normalizeIdent turns a possibly dot-qualified identifier as written in DDL
+// into the bare schema.table form QuoteIdent expects. Quoting characters
+// ("...", `...`, [...]) are removed; on PostgreSQL an unquoted part is folded to
+// lower case, as the server does, so CREATE TABLE Users is dropped as "users"
+// rather than as a "Users" that does not exist.
+func normalizeIdent(s string, mysql bool) string {
+	parts := strings.Split(s, ".")
+	for i, p := range parts {
+		quoted := len(p) >= 2 && strings.ContainsRune("\"`[", rune(p[0]))
+		p = strings.NewReplacer(`"`, "", "`", "", "[", "", "]", "").Replace(p)
+		if !quoted && !mysql {
+			p = strings.ToLower(p)
+		}
+		parts[i] = p
+	}
+	return strings.Join(parts, ".")
 }

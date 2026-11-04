@@ -139,3 +139,59 @@ func TestNewRawMySQLTeardown(t *testing.T) {
 		t.Fatalf("MySQL truncate missing per-table TRUNCATE:\n%s", joined)
 	}
 }
+
+// Each SetupSchemaSQL call tears down the tables it created, even when a later
+// call records a different set.
+func TestSetupSchemaSQLTearsDownEveryCall(t *testing.T) {
+	fake := &testutil.Fake{}
+	tdb := sqltest.NewRaw(fake.DB(), sqlkit.PostgreSQLDialect{})
+
+	var afterApply int
+	t.Run("inner", func(t *testing.T) {
+		tdb.SetupSchemaSQL(t, "CREATE TABLE a (id int)")
+		tdb.SetupSchemaSQL(t, "CREATE TABLE b (id int)")
+		afterApply = len(fake.Statements())
+	})
+	teardown := strings.Join(fake.Statements()[afterApply:], "\n")
+	for _, name := range []string{`"a"`, `"b"`} {
+		if !strings.Contains(teardown, "DROP TABLE IF EXISTS "+name) {
+			t.Errorf("teardown %q does not drop %s", teardown, name)
+		}
+	}
+}
+
+// The metadata-driven methods have nothing to act on for a NewRaw handle and
+// must fail the test instead of silently doing nothing.
+func TestRawHandleRejectsMetadataMethods(t *testing.T) {
+	for name, call := range map[string]func(*sqltest.DB, testing.TB){
+		"SetupSchema": func(d *sqltest.DB, t testing.TB) { d.SetupSchema(t) },
+		"ApplySchema": func(d *sqltest.DB, t testing.TB) { d.ApplySchema(t) },
+		"Truncate":    func(d *sqltest.DB, t testing.TB) { d.Truncate(t) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := &testutil.Fake{}
+			tdb := sqltest.NewRaw(fake.DB(), sqlkit.PostgreSQLDialect{})
+			rec := &fatalRecorder{TB: t}
+			func() {
+				defer func() { _ = recover() }()
+				call(tdb, rec)
+			}()
+			if !rec.failed {
+				t.Fatalf("%s on a NewRaw handle did not fail the test", name)
+			}
+		})
+	}
+}
+
+// fatalRecorder records a Fatalf instead of ending the real test, panicking to
+// stop the helper the way runtime.Goexit would.
+type fatalRecorder struct {
+	testing.TB
+	failed bool
+}
+
+func (r *fatalRecorder) Helper() {}
+func (r *fatalRecorder) Fatalf(string, ...any) {
+	r.failed = true
+	panic("fatal")
+}

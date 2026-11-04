@@ -114,6 +114,13 @@ MySQL), driven by the `CREATE TABLE` names parsed from the DDL; `TruncateTables`
 resets the data between cases. The `Tx`, `Snapshot`, and seeding helpers all
 work on a `NewRaw` handle unchanged.
 
+The DDL is split on top-level semicolons only: a `;` inside a string literal, a
+quoted identifier, a comment, or a PostgreSQL dollar-quoted body (`$$ ... $$`)
+does not end a statement. On PostgreSQL an unquoted table name is folded to
+lower case for teardown, as the server does. The catalog-driven `SetupSchema`,
+`ApplySchema`, and `Truncate` fail the test on a `NewRaw` handle; use their
+`...SQL`/`TruncateTables` counterparts.
+
 ## Query spy
 
 The same package turns a [`querytrace.Trace`](observability.md) into a **query

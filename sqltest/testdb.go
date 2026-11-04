@@ -33,6 +33,9 @@ type DB struct {
 	// foreign-key-safe teardown of a DB built with NewRaw, where there is no
 	// meta.Metadata to enumerate. It stays nil for a metadata-backed DB.
 	tables []string
+	// raw marks a DB built with NewRaw: it has no meta.Metadata, so the
+	// metadata-driven methods fail loudly rather than silently doing nothing.
+	raw bool
 }
 
 // New wraps db as a throwaway test database. It only builds the handle — it
@@ -63,6 +66,7 @@ func (d *DB) Database() *sqlkit.Database { return d.db }
 // at the top of a test, or of a parent test whose subtests share the schema.
 func (d *DB) SetupSchema(t testing.TB) {
 	t.Helper()
+	d.requireMetadata(t, "SetupSchema", "SetupSchemaSQL")
 	applySchema(t, d.db, d.md)
 	t.Cleanup(func() { dropTables(t, d.db, d.md) })
 }
@@ -73,6 +77,7 @@ func (d *DB) SetupSchema(t testing.TB) {
 // within a test, or when something else owns the teardown.
 func (d *DB) ApplySchema(t testing.TB) {
 	t.Helper()
+	d.requireMetadata(t, "ApplySchema", "ApplySchemaSQL")
 	applySchema(t, d.db, d.md)
 }
 
@@ -82,6 +87,7 @@ func (d *DB) ApplySchema(t testing.TB) {
 // when the tables already exist and only their data needs clearing.
 func (d *DB) Truncate(t testing.TB, tables ...sqlkit.Table) {
 	t.Helper()
+	d.requireMetadata(t, "Truncate", "TruncateTables")
 	truncate(t, d.db, d.md, tables)
 }
 
@@ -159,4 +165,14 @@ func (d *DB) InsertID(t testing.TB, table sqlkit.Table, row any) int64 {
 func (d *DB) Load(t testing.TB, f *Fixture) {
 	t.Helper()
 	f.Load(t, d.db)
+}
+
+// requireMetadata fails the test when a metadata-driven method is called on a
+// NewRaw handle, which has no schema for it to act on, naming the raw-DDL
+// counterpart to use instead.
+func (d *DB) requireMetadata(t testing.TB, method, instead string) {
+	t.Helper()
+	if d.raw {
+		t.Fatalf("sqltest: %s needs a catalog-backed DB (New); on a NewRaw handle use %s", method, instead)
+	}
 }
