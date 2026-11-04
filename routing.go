@@ -353,6 +353,7 @@ type routedBinding struct {
 func (r routedBinding) sqlDialect() sql.Dialect { return r.base.sqlDialect() }
 func (r routedBinding) hooks() []Hooks          { return r.base.hooks() }
 func (r routedBinding) maxBindParams() int      { return r.base.maxBindParams() }
+func (r routedBinding) maxStatementBytes() int  { return r.base.maxStatementBytes() }
 func (r routedBinding) executor() Executor      { return r.base.executor() }
 func (r routedBinding) routeHint() string       { return r.hint }
 

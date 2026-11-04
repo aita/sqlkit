@@ -18,6 +18,20 @@ func TestOuterAndCrossJoins(t *testing.T) {
 		`SELECT "u"."id" FROM "users" AS "u" CROSS JOIN "orgs" AS "o"`, nil)
 }
 
+// MySQL has no FULL [OUTER] JOIN. The compiler must reject it with a descriptive
+// compile-time error rather than emit "FULL JOIN", which MySQL's parser rejects.
+func TestFullJoinRejectedOnMySQL(t *testing.T) {
+	q := Select(Col("u.id")).From(SourceAlias(Table{Name: NewIdent("users")}, "u")).
+		FullJoin(SourceAlias(Table{Name: NewIdent("orgs")}, "o"), Eq(Col("u.org_id"), Col("o.id")))
+	if _, _, err := q.ToSQL(MySQLDialect{}); err == nil ||
+		!strings.Contains(err.Error(), "does not support a FULL JOIN") {
+		t.Fatalf("ToSQL(mysql FULL JOIN) error = %v, want FULL JOIN rejection", err)
+	}
+	// PostgreSQL supports it.
+	assertStandard(t, q,
+		`SELECT "u"."id" FROM "users" AS "u" FULL JOIN "orgs" AS "o" ON ("u"."org_id" = "o"."id")`, nil)
+}
+
 func TestSelectDistinct(t *testing.T) {
 	query := Select(Col("email")).Distinct().From(Table{Name: NewIdent("users")})
 

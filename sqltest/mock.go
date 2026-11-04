@@ -43,8 +43,17 @@ type Mock struct {
 	strict     bool
 	queryStubs []*Stub
 	execStubs  []*Stub
-	unmatched  []unmatchedStmt
-	verified   bool
+	// Transaction- and ping-lifecycle expectations, each matched in registration
+	// order. Unlike statement stubs these are not required by default — a
+	// transaction the code opens without a programmed expectation still works —
+	// so they exist only to inject an error (ReturnError) or to assert a call
+	// happened (Required / Times).
+	beginStubs    []*CallStub
+	commitStubs   []*CallStub
+	rollbackStubs []*CallStub
+	pingStubs     []*CallStub
+	unmatched     []unmatchedStmt
+	verified      bool
 }
 
 // unmatchedStmt records a statement no stub answered, for strict Verify.
@@ -396,6 +405,11 @@ func (m *Mock) Verify(t testing.TB) {
 			t.Errorf("sqltest: stub [%s] matched %d statements, want at least %d", s.matcher, s.matched, s.minTimes)
 		}
 	}
+	for _, s := range m.allCallStubs() {
+		if s.matched < s.minTimes {
+			t.Errorf("sqltest: %s expectation matched %d times, want at least %d", s.action, s.matched, s.minTimes)
+		}
+	}
 	if m.strict {
 		for _, u := range m.unmatched {
 			t.Errorf("sqltest: unexpected %s with no matching stub: %s", u.kind, u.sql)
@@ -599,6 +613,7 @@ var (
 	_ stddriver.ExecerContext      = (*mockConn)(nil)
 	_ stddriver.ConnPrepareContext = (*mockConn)(nil)
 	_ stddriver.ConnBeginTx        = (*mockConn)(nil)
+	_ stddriver.Pinger             = (*mockConn)(nil)
 )
 
 func (c *mockConn) QueryContext(ctx context.Context, query string, args []stddriver.NamedValue) (stddriver.Rows, error) {
@@ -624,11 +639,20 @@ func (c *mockConn) PrepareContext(_ context.Context, query string) (stddriver.St
 func (c *mockConn) Prepare(query string) (stddriver.Stmt, error) {
 	return &mockStmt{mock: c.mock, query: query}, nil
 }
-func (c *mockConn) Close() error                 { return nil }
-func (c *mockConn) Begin() (stddriver.Tx, error) { return mockTx{}, nil }
-func (c *mockConn) BeginTx(context.Context, stddriver.TxOptions) (stddriver.Tx, error) {
-	return mockTx{}, nil
+func (c *mockConn) Close() error { return nil }
+func (c *mockConn) Begin() (stddriver.Tx, error) {
+	if err := c.mock.onCall(c.mock.beginStubs); err != nil {
+		return nil, err
+	}
+	return mockTx{mock: c.mock}, nil
 }
+func (c *mockConn) BeginTx(context.Context, stddriver.TxOptions) (stddriver.Tx, error) {
+	return c.Begin()
+}
+
+// Ping answers a database/sql Ping. With an ExpectPing stub it returns that
+// stub's error (if any) and records the call; otherwise it succeeds.
+func (c *mockConn) Ping(context.Context) error { return c.mock.onCall(c.mock.pingStubs) }
 
 // runQuery answers a read from the matching stub, or with empty rows by default.
 func (m *Mock) runQuery(ctx context.Context, query string, args []stddriver.Value) (stddriver.Rows, error) {
@@ -703,10 +727,10 @@ func (s *mockStmt) QueryContext(ctx context.Context, args []stddriver.NamedValue
 	return s.mock.runQuery(ctx, s.query, argValues(args))
 }
 
-type mockTx struct{}
+type mockTx struct{ mock *Mock }
 
-func (mockTx) Commit() error   { return nil }
-func (mockTx) Rollback() error { return nil }
+func (t mockTx) Commit() error   { return t.mock.onCall(t.mock.commitStubs) }
+func (t mockTx) Rollback() error { return t.mock.onCall(t.mock.rollbackStubs) }
 
 type mockResult struct {
 	lastInsertID int64

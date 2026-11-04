@@ -865,6 +865,13 @@ func similarPattern(node *pg.Node) (sql.Expression, error) {
 			return nil, err
 		}
 		if name == "similar_to_escape" {
+			// similar_to_escape(pattern) is the default-escape form; an explicit
+			// ESCAPE adds a second argument (similar_to_escape(pattern, escape)).
+			// sqlkit models only the pattern, so a custom ESCAPE would be silently
+			// dropped (changing which characters are metacharacters); fall back to raw.
+			if len(fc.GetArgs()) > 1 {
+				return nil, sqlparse.Unsupported("SIMILAR TO with an explicit ESCAPE")
+			}
 			return convertExpr(fc.GetArgs()[0])
 		}
 	}

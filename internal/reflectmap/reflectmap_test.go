@@ -76,6 +76,23 @@ func TestFieldsParsesTagOptions(t *testing.T) {
 	}
 }
 
+func TestFieldsByColumnEmbeddedPointerToStruct(t *testing.T) {
+	type Base struct {
+		CreatedAt string
+		UpdatedAt string
+	}
+	type Row struct {
+		*Base
+		ID int64 `sqlkit:"id"`
+	}
+	fields := FieldsByColumn(reflect.TypeOf(Row{}))
+	for _, col := range []string{"created_at", "updated_at", "id"} {
+		if _, ok := fields[col]; !ok {
+			t.Errorf("FieldsByColumn[%q] missing; embedded *Base fields must be flattened", col)
+		}
+	}
+}
+
 func TestMapsAsStruct(t *testing.T) {
 	if MapsAsStruct(reflect.TypeOf(time.Time{})) {
 		t.Error("time.Time should not map as a struct")

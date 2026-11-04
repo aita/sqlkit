@@ -47,12 +47,18 @@ func convertCreateTable(s *ast.CreateTableStmt) (sql.Query, error) {
 	for _, con := range s.Constraints {
 		switch con.Tp {
 		case ast.ConstraintPrimaryKey:
+			if err := rejectIndexOption(con.Option); err != nil {
+				return nil, err
+			}
 			keys, err := constraintKeys(con)
 			if err != nil {
 				return nil, err
 			}
 			primaryKey = keys
 		case ast.ConstraintUniq, ast.ConstraintUniqKey, ast.ConstraintUniqIndex:
+			if err := rejectIndexOption(con.Option); err != nil {
+				return nil, err
+			}
 			keys, err := constraintKeys(con)
 			if err != nil {
 				return nil, err
@@ -65,12 +71,18 @@ func convertCreateTable(s *ast.CreateTableStmt) (sql.Query, error) {
 			}
 			ct = ct.ForeignKey(fk)
 		case ast.ConstraintCheck:
+			if err := rejectUnenforcedCheck(con); err != nil {
+				return nil, err
+			}
 			expr, err := staticExpr(con.Expr)
 			if err != nil {
 				return nil, err
 			}
 			ct = ct.Check(con.Name, expr)
 		case ast.ConstraintKey, ast.ConstraintIndex:
+			if err := rejectIndexOption(con.Option); err != nil {
+				return nil, err
+			}
 			keys, err := constraintKeys(con)
 			if err != nil {
 				return nil, err
@@ -174,6 +186,42 @@ func columnType(ft *types.FieldType, autoInc bool) sql.ColumnType {
 	return sql.RawType(ft.InfoSchemaStr())
 }
 
+// rejectIndexOption reports whether opt carries anything beyond its defaults —
+// USING BTREE/HASH, KEY_BLOCK_SIZE, WITH PARSER, COMMENT, INVISIBLE/VISIBLE,
+// ... — none of which sqlkit's index/constraint builders have a field for, so
+// silently dropping it would either lose a storage/optimizer hint or, for
+// INVISIBLE, silently turn an index the DBA deliberately hid from the
+// optimizer back on. Falls back to raw instead.
+func rejectIndexOption(opt *ast.IndexOption) error {
+	if opt != nil && !opt.IsEmpty() {
+		return sqlparse.Unsupported("index option (USING/KEY_BLOCK_SIZE/COMMENT/INVISIBLE/...)")
+	}
+	return nil
+}
+
+// rejectColumnPosition reports whether pos places a column anywhere but its
+// natural (end) position. sqlkit's AddColumn/RestateColumn have no FIRST/AFTER
+// equivalent, so silently dropping it would leave the column in the wrong
+// physical position instead of falling back to raw.
+func rejectColumnPosition(pos *ast.ColumnPosition) error {
+	if pos != nil && pos.Tp != ast.ColumnPositionNone {
+		return sqlparse.Unsupported("column position (FIRST/AFTER)")
+	}
+	return nil
+}
+
+// rejectUnenforcedCheck reports a CHECK constraint declared NOT ENFORCED.
+// sqlkit's Check has no enforced/not-enforced distinction — it always renders
+// a plain (implicitly enforced) CHECK — so silently dropping NOT ENFORCED
+// would turn a constraint the source deliberately left informational-only
+// into one that actively rejects writes.
+func rejectUnenforcedCheck(con *ast.Constraint) error {
+	if !con.Enforced {
+		return sqlparse.Unsupported("CHECK ... NOT ENFORCED")
+	}
+	return nil
+}
+
 func constraintKeys(con *ast.Constraint) ([]string, error) {
 	keys := make([]string, 0, len(con.Keys))
 	for _, key := range con.Keys {
@@ -223,6 +271,11 @@ func convertForeignKey(con *ast.Constraint) (sql.ForeignKeyConstraint, error) {
 	refColumns, err := referenceColumns(con.Refer)
 	if err != nil {
 		return sql.ForeignKeyConstraint{}, err
+	}
+	if len(columns) != len(refColumns) {
+		// An arity mismatch (or an omitted referenced-column list) has no typed
+		// form the compiler accepts, so keep the statement as a raw passthrough.
+		return sql.ForeignKeyConstraint{}, sqlparse.Unsupported("foreign key column-list arity mismatch")
 	}
 	return sql.ForeignKeyConstraint{
 		Name:       sql.NewIdent(con.Name),
@@ -288,6 +341,9 @@ func convertAlterTable(s *ast.AlterTableStmt) (sql.Query, error) {
 func applyAlterSpec(at sql.AlterTableBuilder, spec *ast.AlterTableSpec) (sql.AlterTableBuilder, error) {
 	switch spec.Tp {
 	case ast.AlterTableAddColumns:
+		if err := rejectColumnPosition(spec.Position); err != nil {
+			return at, err
+		}
 		for _, cd := range spec.NewColumns {
 			col, _, err := convertColumnDef(cd)
 			if err != nil {
@@ -299,6 +355,9 @@ func applyAlterSpec(at sql.AlterTableBuilder, spec *ast.AlterTableSpec) (sql.Alt
 	case ast.AlterTableDropColumn:
 		return at.DropColumn(spec.OldColumnName.Name.O), nil
 	case ast.AlterTableModifyColumn:
+		if err := rejectColumnPosition(spec.Position); err != nil {
+			return at, err
+		}
 		col, _, err := convertColumnDef(spec.NewColumns[0])
 		if err != nil {
 			return at, err
@@ -307,6 +366,9 @@ func applyAlterSpec(at sql.AlterTableBuilder, spec *ast.AlterTableSpec) (sql.Alt
 	case ast.AlterTableChangeColumn:
 		// CHANGE COLUMN renames and restates at once; sqlkit can restate but not
 		// rename in one action, so only a no-rename CHANGE maps cleanly.
+		if err := rejectColumnPosition(spec.Position); err != nil {
+			return at, err
+		}
 		col, _, err := convertColumnDef(spec.NewColumns[0])
 		if err != nil {
 			return at, err
@@ -334,12 +396,18 @@ func applyAddConstraint(at sql.AlterTableBuilder, con *ast.Constraint) (sql.Alte
 	}
 	switch con.Tp {
 	case ast.ConstraintPrimaryKey:
+		if err := rejectIndexOption(con.Option); err != nil {
+			return at, err
+		}
 		keys, err := constraintKeys(con)
 		if err != nil {
 			return at, err
 		}
 		return at.AddPrimaryKey(keys...), nil
 	case ast.ConstraintUniq, ast.ConstraintUniqKey, ast.ConstraintUniqIndex:
+		if err := rejectIndexOption(con.Option); err != nil {
+			return at, err
+		}
 		keys, err := constraintKeys(con)
 		if err != nil {
 			return at, err
@@ -352,6 +420,9 @@ func applyAddConstraint(at sql.AlterTableBuilder, con *ast.Constraint) (sql.Alte
 		}
 		return at.AddForeignKey(fk), nil
 	case ast.ConstraintCheck:
+		if err := rejectUnenforcedCheck(con); err != nil {
+			return at, err
+		}
 		expr, err := staticExpr(con.Expr)
 		if err != nil {
 			return at, err
@@ -393,6 +464,9 @@ func convertCreateIndex(s *ast.CreateIndexStmt) (sql.Query, error) {
 	default:
 		return nil, sqlparse.Unsupportedf("%s index", indexKeyTypeName(s.KeyType))
 	}
+	if err := rejectIndexOption(s.IndexOption); err != nil {
+		return nil, err
+	}
 	columns, err := indexColumns(s.IndexPartSpecifications)
 	if err != nil {
 		return nil, err
@@ -402,7 +476,11 @@ func convertCreateIndex(s *ast.CreateIndexStmt) (sql.Query, error) {
 		stmt = stmt.Unique()
 	}
 	if s.IfNotExists {
-		stmt = stmt.IfNotExists()
+		// MySQL has no CREATE INDEX ... IF NOT EXISTS (TiDB's grammar accepts
+		// it), and the MySQL dialect rejects the flag at compile time, so keep
+		// it as a raw passthrough rather than a typed statement that can't
+		// render back.
+		return nil, sqlparse.Unsupported("CREATE INDEX ... IF NOT EXISTS")
 	}
 	return stmt, nil
 }
