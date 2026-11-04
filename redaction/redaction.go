@@ -525,6 +525,21 @@ func (m *Redactor) rewriteSource(src sql.Source, sc *scope) sql.Source {
 		return nil
 	}
 	e := src.SQLSource()
+	if e.Values != nil {
+		// A VALUES derived table's columns are reachable only through its alias
+		// (v.n), and where they flow — SET name = v.n, a join or comparison
+		// against a sensitive column — is not traced back to the rows. Mask every
+		// string literal in it (fail-safe), as the bulk UPDATE ... FROM (VALUES
+		// ...) a unit of work emits would otherwise leak each row's values.
+		vc := *e.Values
+		rows := make([][]sql.Expression, len(vc.Rows))
+		for i, row := range vc.Rows {
+			rows[i] = m.maskValues(row)
+		}
+		vc.Rows = rows
+		e.Values = &vc
+		return e
+	}
 	if e.Query != nil {
 		parent := sc.parent
 		if e.Lateral {

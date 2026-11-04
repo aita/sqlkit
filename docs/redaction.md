@@ -15,6 +15,12 @@ tables is masked when any candidate marks it PII —
 [`WithMaskUnresolved(false)`](https://pkg.go.dev/github.com/aita/sqlkit/redaction#WithMaskUnresolved)
 turns that off for resolve-only masking.
 
+Two shapes whose values can't be traced to a target column are masked fail-safe:
+the string literals of a `VALUES` derived table (such as the bulk
+`UPDATE ... FROM (VALUES ...)` a unit of work emits, whose rows reach their
+columns only through the table alias), and the projected literals of an
+`INSERT ... SELECT` with no column list.
+
 A [`Policy`](https://pkg.go.dev/github.com/aita/sqlkit/redaction#Policy) names the
 sensitive columns. Build one from an explicit list (no
 schema needed), or from a predicate over the schema's column comments — so a
