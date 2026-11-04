@@ -99,7 +99,8 @@ func (a Analysis) IsWrite() bool { return a.Kind.IsWrite() || a.LockingRead || a
 // parsed AST q and falling back to a keyword guess on sqlText when q is nil or of
 // an unrecognized kind (a parse failure). The structural fields (Tables, the clause
 // facts, the WHERE predicates) are populated only on the parsed path; on the
-// fallback only Kind is set, from DetectKind.
+// fallback only Kind is set, from DetectKind — plus, for a WITH statement,
+// WritesViaCTE and LockingRead from a scan of its CTE bodies.
 //
 // It does not set Fingerprint or Err — the caller fills those: Fingerprint when it
 // wants one (it carries a cost; see Analyzer.Fingerprint), Err with the parse
@@ -108,7 +109,11 @@ func (a Analysis) IsWrite() bool { return a.Kind.IsWrite() || a.LockingRead || a
 func (a *Analyzer) Analyze(sqlText string, q sql.Query) Analysis {
 	kind, ok := KindOf(q)
 	if !ok {
-		return Analysis{Kind: DetectKind(sqlText)}
+		an := Analysis{Kind: DetectKind(sqlText)}
+		if leadingKeyword(sqlText) == "WITH" {
+			_, an.WritesViaCTE, an.LockingRead = scanWith(sqlText)
+		}
+		return an
 	}
 	cols, maxIn := WherePredicates(q)
 	return Analysis{
