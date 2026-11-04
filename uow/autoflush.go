@@ -12,8 +12,11 @@ import (
 // session. Without it a read runs against the database as last flushed and does
 // not see work still buffered on the scope.
 //
-// The flush runs only when there is pending work, so reads on an idle scope cost
-// nothing extra. On a session-backed scope it shares the transaction (and a
+// The flush runs only when there is pending work, so a read on a scope with
+// nothing staged doesn't flush — but checking costs a column diff of every
+// managed entity on each Get/Find (O(managed entities), including marshaling
+// json-tagged columns), so prefer explicit Flush calls on scopes that manage
+// many rows. On a session-backed scope it shares the transaction (and a
 // nested scope flushes within its savepoint); on a Database-backed scope each
 // flushed statement auto-commits, as it would on an explicit Flush. The setting
 // is inherited by nested scopes.
@@ -50,8 +53,7 @@ func (s *Scope) hasPending() bool {
 
 // entityDirty reports whether a managed entity has a column change a Flush would
 // write. A row also staged for removal is not dirty — it will be deleted, not
-// updated. Change detection mirrors flushManaged: the raw values drive the diff
-// while the write-ready values supply what would be emitted.
+// updated. Change detection is the same diff flushManaged runs.
 func (s *Scope) entityDirty(ts *tableState, tr *tracked) bool {
 	if ts.removedIdx[pkString(ts.key, tr.pk)] {
 		return false
@@ -60,9 +62,10 @@ func (s *Scope) entityDirty(ts *tableState, tr *tracked) bool {
 	if err != nil {
 		return false
 	}
-	_, wvals, err := sqlkit.ColumnWriteValues(ts.table, tr.ptr)
+	meta, err := sqlkit.ColumnMetadata(tr.ptr, names)
 	if err != nil {
 		return false
 	}
-	return len(diffAssignments(ts.table, tr, names, vals, wvals)) > 0
+	assignments, _ := diffAssignments(ts.table, tr, names, vals, meta)
+	return len(assignments) > 0
 }

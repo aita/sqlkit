@@ -269,6 +269,9 @@ func walkChildren(v Visitor, node Node) {
 	case QuantifiedArrayExpression:
 		walkExpr(v, n.Left)
 		walkExpr(v, n.Array)
+	case MatchExpression:
+		walkExprs(v, n.Columns)
+		walkExpr(v, n.Query)
 	case GroupingExpression:
 		walkExprs(v, n.Elements)
 	case GroupingSetsExpression:

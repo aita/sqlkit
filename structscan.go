@@ -67,26 +67,13 @@ func PrimaryKeyValues(table Table, row any) ([]any, error) {
 // any field tagged read-only (`sqlkit:",readonly"`), which is never written. It
 // uses the same column-to-field mapping as Scan and Insert. row may be a struct
 // or a pointer to one. It backs the uow package's UPDATE assignment building.
+//
+// A field tagged `sqlkit:",json"` / `,jsonb` is wrapped so it is written as its
+// JSON encoding, exactly as the Insert and Update builders encode it — without
+// the wrapper the uow UPDATE path would hand the raw Go value to the driver,
+// which either errors or stores the wrong value (a write-path asymmetry with
+// INSERT).
 func ColumnValues(table Table, row any) (names []string, values []any, err error) {
-	return columnValues(table, row, false)
-}
-
-// ColumnWriteValues is like ColumnValues but returns each value ready to be
-// written to its column: a field tagged `sqlkit:",json"` (or `,jsonb`) is wrapped
-// so it is stored as its JSON encoding, exactly as the Insert and Update builders
-// do — the raw Go struct/map/slice would otherwise reach the driver unencoded.
-// ColumnValues and ColumnWriteValues share one iteration, so their column order
-// and skipping are identical and the two results align index for index: the uow
-// package detects changes from the raw ColumnValues and emits the write-ready
-// value from this.
-func ColumnWriteValues(table Table, row any) (names []string, values []any, err error) {
-	return columnValues(table, row, true)
-}
-
-// columnValues backs ColumnValues and ColumnWriteValues with a single iteration
-// over the table's columns, so the two stay aligned index for index. With
-// encodeJSON set, a json-tagged field is wrapped for JSON encoding on write.
-func columnValues(table Table, row any, encodeJSON bool) (names []string, values []any, err error) {
 	rv, err := rowStruct(row)
 	if err != nil {
 		return nil, nil, err
@@ -98,14 +85,46 @@ func columnValues(table Table, row any, encodeJSON bool) (names []string, values
 		if !ok || f.ReadOnly {
 			continue
 		}
-		v := rv.FieldByIndex(f.Path).Interface()
-		if encodeJSON && f.JSON {
-			v = jsonValue{v: v}
+		value := rv.FieldByIndex(f.Path).Interface()
+		if f.JSON {
+			value = jsonValue{v: value}
 		}
 		names = append(names, name)
-		values = append(values, v)
+		values = append(values, value)
 	}
 	return names, values, nil
+}
+
+// ColumnMeta reports a column's write-time kind, for callers that need to
+// special-case a version or touch column the way SetStruct does (see
+// ColumnMetadata).
+type ColumnMeta struct {
+	// Version marks the optimistic-locking version column (`sqlkit:",version"`).
+	Version bool
+	// Touch marks an app-maintained timestamp column (`sqlkit:",touch"`).
+	Touch bool
+}
+
+// ColumnMetadata reports, for each name in names (as returned by ColumnValues
+// for the same table/row), whether that column is version- or touch-tagged. It
+// lets a caller outside this package (the uow package's snapshot-diff UPDATE
+// path) special-case those columns the same way SetStruct's implicit update
+// does, without reaching into the internal reflectmap field representation.
+func ColumnMetadata(row any, names []string) (map[string]ColumnMeta, error) {
+	rv, err := rowStruct(row)
+	if err != nil {
+		return nil, err
+	}
+	fields := reflectmap.Fields(rv.Type())
+	out := make(map[string]ColumnMeta, len(names))
+	for _, name := range names {
+		f, ok := fields[strings.ToLower(name)]
+		if !ok || (!f.Version && !f.Touch) {
+			continue
+		}
+		out[name] = ColumnMeta{Version: f.Version, Touch: f.Touch}
+	}
+	return out, nil
 }
 
 // SetColumns assigns values to the fields of *rowPtr that map to the named
@@ -132,7 +151,7 @@ func SetColumns(rowPtr any, names []string, values []any) error {
 		if !ok {
 			continue
 		}
-		field := rv.FieldByIndex(path)
+		field := fieldByIndexAlloc(rv, path)
 		val := reflect.ValueOf(values[i])
 		if !val.IsValid() {
 			continue
@@ -252,7 +271,7 @@ func rowScanner(rows *stdsql.Rows, t reflect.Type) (func(reflect.Value) error, e
 	return func(v reflect.Value) error {
 		dests := make([]any, len(targets))
 		for i, t := range targets {
-			addr := v.FieldByIndex(t.Path).Addr().Interface()
+			addr := fieldByIndexAlloc(v, t.Path).Addr().Interface()
 			if t.JSON {
 				dests[i] = jsonScanner{dst: addr}
 			} else {
@@ -261,4 +280,19 @@ func rowScanner(rows *stdsql.Rows, t reflect.Type) (func(reflect.Value) error, e
 		}
 		return rows.Scan(dests...)
 	}, nil
+}
+
+// fieldByIndexAlloc is like reflect.Value.FieldByIndex but allocates nil
+// pointer intermediates so embedded pointer-to-struct fields can be scanned.
+func fieldByIndexAlloc(v reflect.Value, index []int) reflect.Value {
+	for _, x := range index {
+		if v.Kind() == reflect.Pointer {
+			if v.IsNil() {
+				v.Set(reflect.New(v.Type().Elem()))
+			}
+			v = v.Elem()
+		}
+		v = v.Field(x)
+	}
+	return v
 }

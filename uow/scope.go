@@ -32,7 +32,7 @@ package uow
 
 import (
 	"context"
-	"database/sql/driver"
+	stddriver "database/sql/driver"
 	"errors"
 	"fmt"
 	"reflect"
@@ -112,6 +112,19 @@ type Scope struct {
 	// nesting
 	parent    *Scope
 	savepoint string
+
+	// versionWrites are the bumped version values of rows whose guarded UPDATE
+	// succeeded during the current flush. They are written back into the rows
+	// only once the whole flush succeeds (a failed flush leaves the staged
+	// state, and the rows, as they were so a retry guards on the same version).
+	versionWrites []versionWrite
+}
+
+// versionWrite records a version field to set to next after a successful flush.
+type versionWrite struct {
+	row    any // pointer to the row struct
+	column string
+	next   any
 }
 
 // Option configures a Scope.
@@ -376,26 +389,46 @@ func (s *Scope) Remove(table sqlkit.Table, rows ...any) error {
 // directly on the executor. On success the staged inserts/updates/deletes are
 // cleared and managed entities' snapshots are refreshed, so the scope can be
 // reused for another round.
+//
+// Registered BeforeFlush hooks run first, before anything is written; an error
+// from one aborts the flush with the staged work intact. AfterFlush hooks run
+// once the flush has succeeded, with a ChangeSet of what was written; an error
+// from one is returned but does not undo the flush (see AfterFlushHook).
 func (s *Scope) Flush(ctx context.Context) error {
+	changes, err := s.flushGuarded(ctx)
+	if err != nil {
+		return err
+	}
+	return s.runAfterFlush(ctx, changes)
+}
+
+// flushGuarded runs flush — inside a guard savepoint on a nested scope — and
+// returns the ChangeSet snapshot of the work it wrote, for the AfterFlush hooks.
+func (s *Scope) flushGuarded(ctx context.Context) (*ChangeSet, error) {
 	if s.parent == nil {
 		return s.flush(ctx)
 	}
 	sp, ok := s.ex.(savepointer)
 	if !ok {
-		return ErrNestingRequiresTx
+		return nil, ErrNestingRequiresTx
 	}
 	if s.savepoint == "" {
 		name, err := sp.Savepoint(ctx)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		s.savepoint = name
 	}
-	if err := s.flush(ctx); err != nil {
-		_ = sp.RollbackTo(ctx, s.savepoint)
-		return err
+	guard, err := sp.Savepoint(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	changes, err := s.flush(ctx)
+	if err != nil {
+		_ = sp.RollbackTo(ctx, guard)
+		return nil, err
+	}
+	return changes, nil
 }
 
 // Rollback undoes a nested scope's flushed work by rolling back to its savepoint
@@ -427,32 +460,46 @@ func (s *Scope) Rollback(ctx context.Context) error {
 // the reverse order (children before parents). flushOrder supplies the
 // foreign-key-aware table order; within a phase each table's own work runs as a
 // unit.
-func (s *Scope) flush(ctx context.Context) error {
+//
+// The BeforeFlush hooks run first, against the live staged work (so they can
+// still change it). It returns a snapshot of the work it then wrote, for the
+// AfterFlush hooks, or nil when none is registered.
+func (s *Scope) flush(ctx context.Context) (*ChangeSet, error) {
+	s.versionWrites = nil
 	if err := s.runBeforeFlush(ctx); err != nil {
-		return err
+		return nil, err
 	}
+	changes := s.captureChanges()
 	order := s.flushOrder()
 	for _, name := range order {
 		if err := s.flushInserts(ctx, s.tables[name]); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	for _, name := range order {
 		ts := s.tables[name]
 		if err := s.flushManaged(ctx, ts); err != nil {
-			return err
+			return nil, err
 		}
 		if err := s.flushUpdates(ctx, ts); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	for i := len(order) - 1; i >= 0; i-- {
 		if err := s.flushRemovals(ctx, s.tables[order[i]]); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	// Success: clear staged work and refresh managed snapshots so the scope can
-	// be reused for another mutate/flush cycle.
+	// Success: write the bumped version values back into their rows (so the
+	// struct, and the refreshed snapshot below, match the database), clear
+	// staged work, and refresh managed snapshots so the scope can be reused for
+	// another mutate/flush cycle.
+	for _, w := range s.versionWrites {
+		if err := sqlkit.SetColumns(w.row, []string{w.column}, []any{w.next}); err != nil {
+			return nil, fmt.Errorf("uow: write back version %s: %w", w.column, err)
+		}
+	}
+	s.versionWrites = nil
 	for _, name := range s.order {
 		ts := s.tables[name]
 		ts.inserts = nil
@@ -465,7 +512,7 @@ func (s *Scope) flush(ctx context.Context) error {
 			}
 		}
 	}
-	return s.runAfterFlush(ctx)
+	return changes, nil
 }
 
 // flushOrder returns the staged tables ordered so each table follows the tables
@@ -618,18 +665,19 @@ func (s *Scope) flushManaged(ctx context.Context, ts *tableState) error {
 		if err != nil {
 			return err
 		}
-		_, wvals, err := sqlkit.ColumnWriteValues(ts.table, tr.ptr)
+		meta, err := sqlkit.ColumnMetadata(tr.ptr, names)
 		if err != nil {
 			return err
 		}
-		assignments := diffAssignments(ts.table, tr, names, vals, wvals)
+		assignments, guard := diffAssignments(ts.table, tr, names, vals, meta)
 		if len(assignments) == 0 {
 			continue
 		}
-		if !bulk || hasNullAssignment(assignments) || hasValuerAssignment(assignments) {
-			if err := s.execRowUpdate(ctx, ts, tr.pk, assignments); err != nil {
+		if !bulk || hasNullAssignment(assignments) || hasValuerAssignment(assignments) || guard != nil {
+			if err := s.execRowUpdate(ctx, ts, tr.pk, assignments, guard); err != nil {
 				return err
 			}
+			s.recordVersionWrite(tr.ptr, guard)
 			continue
 		}
 		pending = append(pending, pendingUpdate{pk: tr.pk, assignments: assignments})
@@ -650,17 +698,18 @@ func (s *Scope) flushUpdates(ctx context.Context, ts *tableState) error {
 		if ts.removedIdx[pkString(ts.key, pk)] {
 			continue
 		}
-		assignments, err := updateAssignments(ts.table, row)
+		assignments, guard, err := updateAssignments(ts.table, row)
 		if err != nil {
 			return err
 		}
 		if len(assignments) == 0 {
 			continue
 		}
-		if !bulk || hasNullAssignment(assignments) || hasValuerAssignment(assignments) {
-			if err := s.execRowUpdate(ctx, ts, pk, assignments); err != nil {
+		if !bulk || hasNullAssignment(assignments) || hasValuerAssignment(assignments) || guard != nil {
+			if err := s.execRowUpdate(ctx, ts, pk, assignments, guard); err != nil {
 				return err
 			}
+			s.recordVersionWrite(row, guard)
 			continue
 		}
 		pending = append(pending, pendingUpdate{pk: pk, assignments: assignments})
@@ -704,9 +753,28 @@ type pendingUpdate struct {
 }
 
 // execRowUpdate runs one single-row UPDATE by primary key — the unbatched path.
-func (s *Scope) execRowUpdate(ctx context.Context, ts *tableState, pk []any, assignments []sql.Assignment) error {
-	if _, err := s.ex.Update(ts.table).Set(assignments...).Where(pkPredicates(ts.table, pk)...).Exec(ctx); err != nil {
+// A non-nil guard adds the optimistic-lock predicate (WHERE version = current,
+// ANDed onto the primary-key predicate) and reports sqlkit.ErrVersionConflict
+// when the statement affects no row: either the primary key is gone or another
+// writer already advanced the version column past current.
+func (s *Scope) execRowUpdate(ctx context.Context, ts *tableState, pk []any, assignments []sql.Assignment, guard *versionGuard) error {
+	predicates := pkPredicates(ts.table, pk)
+	if guard != nil {
+		predicates = append(predicates, sqlkit.Cond(sql.Eq(sql.Col(guard.column), sql.Val(guard.current))))
+	}
+	res, err := s.ex.Update(ts.table).Set(assignments...).Where(predicates...).Exec(ctx)
+	if err != nil {
 		return fmt.Errorf("uow: update %s: %w", ts.key, err)
+	}
+	if guard == nil {
+		return nil
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("uow: update %s: %w", ts.key, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("uow: update %s: %w", ts.key, sqlkit.ErrVersionConflict)
 	}
 	return nil
 }
@@ -724,7 +792,9 @@ func (s *Scope) flushBulkUpdates(ctx context.Context, ts *tableState, pending []
 	for _, sig := range order {
 		group := groups[sig]
 		if len(group) == 1 {
-			if err := s.execRowUpdate(ctx, ts, group[0].pk, group[0].assignments); err != nil {
+			// pending never carries a version-guarded row (see flushManaged/
+			// flushUpdates), so no guard applies here.
+			if err := s.execRowUpdate(ctx, ts, group[0].pk, group[0].assignments, nil); err != nil {
 				return err
 			}
 			continue
@@ -840,47 +910,151 @@ func (s *Scope) stateFor(table sqlkit.Table) (*tableState, error) {
 	return ts, nil
 }
 
+// recordVersionWrite queues the bumped version of a row whose guarded UPDATE
+// succeeded, to be written back when the flush completes. A row passed by value
+// (a detached Update with a non-pointer struct) can't be written back; its
+// caller keeps the stale version and must reload before updating it again.
+func (s *Scope) recordVersionWrite(row any, guard *versionGuard) {
+	if guard == nil {
+		return
+	}
+	rv := reflect.ValueOf(row)
+	if rv.Kind() != reflect.Pointer || rv.IsNil() || rv.Elem().Kind() != reflect.Struct {
+		return
+	}
+	next, ok := nextVersion(guard.current)
+	if !ok {
+		return
+	}
+	s.versionWrites = append(s.versionWrites, versionWrite{row: row, column: guard.column, next: next})
+}
+
+// nextVersion returns v+1 in v's own integer type, mirroring the database's
+// "col = col + 1". It reports false for a non-integer version value.
+func nextVersion(v any) (any, bool) {
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return reflect.ValueOf(rv.Int() + 1).Convert(rv.Type()).Interface(), true
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return reflect.ValueOf(rv.Uint() + 1).Convert(rv.Type()).Interface(), true
+	}
+	return nil, false
+}
+
+// versionGuard is an optimistic-lock predicate to AND onto an UPDATE's WHERE:
+// the version column matches current, so a row another writer already
+// advanced past current matches nothing and execRowUpdate reports
+// sqlkit.ErrVersionConflict.
+type versionGuard struct {
+	column  string
+	current any
+}
+
 // diffAssignments builds SET assignments for the managed entity's changed,
-// non-primary-key columns by comparing current values to the snapshot. Change
-// detection runs on the raw values (vals), but the emitted assignment uses the
-// write-ready value (wvals) so a json-tagged column is stored as its JSON
-// encoding; the two slices align index for index (see ColumnWriteValues).
-func diffAssignments(table sqlkit.Table, tr *tracked, names []string, vals, wvals []any) []sql.Assignment {
+// non-primary-key columns by comparing current values to the snapshot. A
+// version-tagged column is never diffed (app code does not mutate it itself):
+// it is bumped (col = col + 1) and its snapshot value becomes the returned
+// guard (and is bumped in the struct too once the flush succeeds), mirroring update.go's SetStruct so optimistic locking works
+// the same through uow as through the direct builder path. A touch-tagged
+// column is set to CURRENT_TIMESTAMP regardless of whether it changed, since
+// app code does not maintain it either.
+//
+// Both ride along with a real change only: when no ordinary column differs
+// from the snapshot the entity is clean, and per uow's dirty-tracking contract
+// a clean entity flushes nothing — no UPDATE, no version bump, no touch.
+func diffAssignments(table sqlkit.Table, tr *tracked, names []string, vals []any, meta map[string]sqlkit.ColumnMeta) ([]sql.Assignment, *versionGuard) {
 	pk := pkNameSet(table)
 	snap := make(map[string]any, len(tr.snapNames))
 	for i, n := range tr.snapNames {
 		snap[n] = tr.snapVals[i]
 	}
+	if !hasRealChange(pk, snap, names, vals, meta) {
+		return nil, nil
+	}
 	var out []sql.Assignment
+	var guard *versionGuard
 	for i, name := range names {
 		if pk[name] {
+			continue
+		}
+		m := meta[name]
+		switch {
+		case m.Version:
+			out = append(out, sql.Set(name, sql.Add(sql.Col(name), sql.Val(1))))
+			// Guard on the version the entity was loaded (or last flushed)
+			// with — the snapshot — not on whatever the struct holds now, so a
+			// hand-edited version field can't defeat or spoil the lock.
+			current, ok := snap[name]
+			if !ok {
+				current = normalize(vals[i])
+			}
+			guard = &versionGuard{column: name, current: current}
+		case m.Touch:
+			out = append(out, sql.Set(name, sql.CurrentTimestamp()))
+		default:
+			if old, ok := snap[name]; ok && valueEqual(old, normalize(vals[i])) {
+				continue
+			}
+			out = append(out, sql.Set(name, sql.Val(vals[i])))
+		}
+	}
+	return out, guard
+}
+
+// hasRealChange reports whether any ordinary (non-primary-key, non-version,
+// non-touch) column differs from its snapshot value. Version and touch columns
+// are excluded because the app never maintains them itself — counting them
+// would turn every clean entity into a perpetual write.
+func hasRealChange(pk map[string]bool, snap map[string]any, names []string, vals []any, meta map[string]sqlkit.ColumnMeta) bool {
+	for i, name := range names {
+		if pk[name] {
+			continue
+		}
+		if m := meta[name]; m.Version || m.Touch {
 			continue
 		}
 		if old, ok := snap[name]; ok && valueEqual(old, normalize(vals[i])) {
 			continue
 		}
-		out = append(out, sql.Set(name, sql.Val(wvals[i])))
+		return true
 	}
-	return out
+	return false
 }
 
 // updateAssignments builds SET assignments for every mapped non-primary-key
-// column of a detached row. It reads write-ready values so a json-tagged column
-// is stored as its JSON encoding, matching the Insert path.
-func updateAssignments(table sqlkit.Table, row any) ([]sql.Assignment, error) {
-	names, values, err := sqlkit.ColumnWriteValues(table, row)
+// column of a detached row. As in diffAssignments, a version-tagged column is
+// bumped with its current value returned as the guard rather than copied (and,
+// for a row passed by pointer, bumped in the struct once the flush succeeds),
+// and a touch-tagged column is unconditionally set to CURRENT_TIMESTAMP.
+func updateAssignments(table sqlkit.Table, row any) ([]sql.Assignment, *versionGuard, error) {
+	names, values, err := sqlkit.ColumnValues(table, row)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	meta, err := sqlkit.ColumnMetadata(row, names)
+	if err != nil {
+		return nil, nil, err
 	}
 	pk := pkNameSet(table)
 	assignments := make([]sql.Assignment, 0, len(names))
+	var guard *versionGuard
 	for i, name := range names {
 		if pk[name] {
 			continue
 		}
-		assignments = append(assignments, sql.Set(name, sql.Val(values[i])))
+		m := meta[name]
+		switch {
+		case m.Version:
+			assignments = append(assignments, sql.Set(name, sql.Add(sql.Col(name), sql.Val(1))))
+			guard = &versionGuard{column: name, current: values[i]}
+		case m.Touch:
+			assignments = append(assignments, sql.Set(name, sql.CurrentTimestamp()))
+		default:
+			assignments = append(assignments, sql.Set(name, sql.Val(values[i])))
+		}
 	}
-	return assignments, nil
+	return assignments, guard, nil
 }
 
 // splitConfig resolves whether the flush should batch its UPDATE/DELETE work and
@@ -972,8 +1146,8 @@ func hasNullAssignment(assignments []sql.Assignment) bool {
 }
 
 // hasValuerAssignment reports whether any assignment binds a value through a
-// driver.Valuer — most notably a json-tagged column, wrapped for JSON encoding
-// by ColumnWriteValues. Such a value reaches the driver as the opaque output of
+// driver.Valuer — most notably a json-tagged column, which ColumnValues wraps
+// for JSON encoding. Such a value reaches the driver as the opaque output of
 // Value() (e.g. JSON bytes), which a VALUES source cannot carry as a typed
 // column: the parameter is untyped there and the target column's type cannot be
 // inferred (PostgreSQL rejects it), whereas a single-row UPDATE assigns straight
@@ -982,7 +1156,7 @@ func hasNullAssignment(assignments []sql.Assignment) bool {
 func hasValuerAssignment(assignments []sql.Assignment) bool {
 	for _, a := range assignments {
 		if v, ok := a.Value.(sql.ValueExpression); ok {
-			if _, ok := v.Value.(driver.Valuer); ok {
+			if _, ok := v.Value.(stddriver.Valuer); ok {
 				return true
 			}
 		}
@@ -1021,16 +1195,57 @@ func isPointer(row any) bool {
 	return reflect.ValueOf(row).Kind() == reflect.Pointer
 }
 
-// normalize dereferences a pointer to a copy of its pointee (so a later in-place
-// mutation through that pointer is still detected against the snapshot) and
-// leaves non-pointers as-is. A nil pointer normalizes to nil.
+// normalize prepares a column value for change-detection comparison, so a later
+// in-place mutation of the value the snapshot holds is still detected: a pointer
+// dereferences to an independent copy of its pointee, and a slice/map value is
+// deep-copied — a bare copy of the slice/map header still aliases the same
+// backing array/buckets, so an in-place mutation through the field (e.g.
+// tags[0] = "x", or meta["k"] = "v" on a JSON-tagged column) would otherwise be
+// invisible to reflect.DeepEqual. A value implementing driver.Valuer (notably a
+// JSON-tagged column's internal wrapper, or a custom slice/map type with its own
+// Value method) is normalized through Value() instead: the driver representation
+// it returns is a fresh, immutable value each call (e.g. freshly marshaled JSON
+// bytes) that never aliases the live field, and it is what actually gets
+// written, so it is the more precise snapshot even beneath a pointer receiver.
+// A nil pointer/slice/map normalizes to nil/unchanged.
 func normalize(v any) any {
+	// A nil pointer normalizes to nil before the Valuer check: calling Value on
+	// a nil *T whose Value method has a value receiver (e.g. *sql.NullString)
+	// panics, and database/sql itself treats such a nil pointer as SQL NULL.
+	if rv := reflect.ValueOf(v); rv.Kind() == reflect.Pointer && rv.IsNil() {
+		return nil
+	}
+	if valuer, ok := v.(stddriver.Valuer); ok {
+		if dv, err := valuer.Value(); err == nil {
+			return dv
+		}
+		// Value() erroring on the current value is surprising but not this
+		// function's concern to report; fall through so the snapshot still
+		// reflects something rather than silently pretending nothing changed.
+	}
 	rv := reflect.ValueOf(v)
-	if rv.Kind() == reflect.Pointer {
+	switch rv.Kind() {
+	case reflect.Pointer:
 		if rv.IsNil() {
 			return nil
 		}
-		return rv.Elem().Interface()
+		return normalize(rv.Elem().Interface())
+	case reflect.Slice:
+		if rv.IsNil() {
+			return v
+		}
+		cp := reflect.MakeSlice(rv.Type(), rv.Len(), rv.Len())
+		reflect.Copy(cp, rv)
+		return cp.Interface()
+	case reflect.Map:
+		if rv.IsNil() {
+			return v
+		}
+		cp := reflect.MakeMapWithSize(rv.Type(), rv.Len())
+		for iter := rv.MapRange(); iter.Next(); {
+			cp.SetMapIndex(iter.Key(), iter.Value())
+		}
+		return cp.Interface()
 	}
 	return v
 }

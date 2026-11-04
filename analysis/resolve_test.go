@@ -128,6 +128,26 @@ func TestResolveColumnAll(t *testing.T) {
 		}
 	})
 
+	t.Run("union arms fan out by position when arms name columns differently", func(t *testing.T) {
+		// WITH u AS (SELECT name FROM users UNION SELECT ssn FROM admins) SELECT * FROM u.
+		// A set operation aligns its arms by position and names the output from the
+		// leftmost arm only, so u.name must resolve to users.name AND admins.ssn (the
+		// positionally-corresponding column of the right arm) — not just the left arm.
+		cte := sql.Select(sql.Col("name")).From(users).
+			Union(sql.Select(sql.Col("ssn")).From(admins)).CTE("u")
+		scope := analysis.SourcesOf(sql.Select(sql.Star()).From(cte).WithCTE(cte))
+		got := analysis.ResolveColumnAll(scope, analysis.ColumnRef{Qualifier: sql.NewIdent("u"), Name: sql.NewIdent("name")})
+		if names := tableNames(got); !reflect.DeepEqual(names, []string{"users", "admins"}) {
+			t.Errorf("candidates = %v, want [users admins] (right arm dropped = a redaction leak)", names)
+		}
+		// The resolved base column of the right-arm candidate must be ssn, not name.
+		for _, r := range got {
+			if r.Table.String() == "admins" && r.Column.Name.String() != "ssn" {
+				t.Errorf("admins candidate column = %q, want ssn", r.Column.Name.String())
+			}
+		}
+	})
+
 	t.Run("self union dedupes", func(t *testing.T) {
 		cte := sql.Select(sql.Col("name")).From(users).
 			Union(sql.Select(sql.Col("name")).From(users)).CTE("u")
@@ -226,6 +246,38 @@ func TestResolveColumnThroughCTE(t *testing.T) {
 	}
 	if got.Table.String() != "users" {
 		t.Errorf("Table = %q, want %q", got.Table, "users")
+	}
+}
+
+// TestResolveColumnThroughCTEColumnList checks that a CTE's explicit output
+// column list (WITH c(alias) AS (SELECT name ...)) renames the body projections
+// positionally: a reference to a declared name resolves to the body projection at
+// that position (the underlying base column), not to a like-named one.
+func TestResolveColumnThroughCTEColumnList(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+
+	// WITH c(uid, alias) AS (SELECT id, name FROM users) SELECT * FROM c
+	// → c.alias resolves positionally to the body's 2nd projection, users.name.
+	cte := sql.Select(sql.Col("id"), sql.Col("name")).From(users).CTE("c", sql.Columns("uid", "alias"))
+	scope := analysis.SourcesOf(sql.Select(sql.Star()).From(cte).WithCTE(cte))
+
+	for _, tc := range []struct {
+		name string
+		col  analysis.ColumnRef
+	}{
+		{"qualified renamed", analysis.ColumnRef{Qualifier: sql.NewIdent("c"), Name: sql.NewIdent("alias")}},
+		{"unqualified renamed", analysis.ColumnRef{Name: sql.NewIdent("alias")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := analysis.ResolveColumn(scope, tc.col)
+			if got.Status != analysis.Resolved || got.Table.String() != "users" || got.Column.Name.String() != "name" {
+				t.Fatalf("ResolveColumn = %+v, want users.name Resolved", got)
+			}
+			all := analysis.ResolveColumnAll(scope, tc.col)
+			if len(all) != 1 || all[0].Table.String() != "users" || all[0].Column.Name.String() != "name" {
+				t.Fatalf("ResolveColumnAll = %+v, want [users.name]", all)
+			}
+		})
 	}
 }
 

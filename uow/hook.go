@@ -18,10 +18,13 @@ type BeforeFlushHook interface {
 	BeforeFlush(ctx context.Context, c *ChangeSet) error
 }
 
-// AfterFlushHook is invoked after a Flush has emitted its statements and
-// refreshed managed snapshots. Returning an error propagates from Flush; note a
-// Database-backed scope auto-commits each statement, so an AfterFlush error
-// cannot undo work already committed — bind the scope to a session for that.
+// AfterFlushHook is invoked after a Flush has succeeded — its statements emitted,
+// staged work cleared, and managed snapshots refreshed — with a ChangeSet of the
+// rows the flush wrote. Returning an error propagates from Flush, but it does
+// not undo the flush: the rows are written (inside the surrounding transaction,
+// if any) and are no longer staged, so a retried Flush emits nothing. To discard
+// the work on an AfterFlush error, roll back the surrounding session or, on a
+// nested scope, call Rollback.
 type AfterFlushHook interface {
 	AfterFlush(ctx context.Context, c *ChangeSet) error
 }
@@ -35,18 +38,37 @@ func WithFlushHook(h any) Option {
 	return func(s *Scope) { s.hooks = append(s.hooks, h) }
 }
 
-// ChangeSet is a read-only view of the work a Flush performs, passed to flush
-// hooks: in BeforeFlush it describes what is about to run, in AfterFlush what
-// just ran (by which point the staged work is cleared). Its accessors report
-// the rows staged for a given table; to stamp a column on the rows about to
-// change, mutate the pointers Dirty returns from within BeforeFlush.
-type ChangeSet struct{ scope *Scope }
+// ChangeSet is a view of the work a Flush performs, passed to flush hooks. In
+// BeforeFlush it is live: it describes the staged work about to run, and to
+// stamp a column on the rows about to change you mutate the pointers Dirty
+// returns. In AfterFlush it is a snapshot of what the flush wrote, taken after
+// the BeforeFlush hooks ran, so it still reports the rows even though the
+// staged work has been cleared by then.
+type ChangeSet struct {
+	scope *Scope
+	// frozen, when non-nil, is the snapshot an AfterFlush ChangeSet reports,
+	// keyed by table qualified name, instead of the live scope.
+	frozen map[string]*tableChanges
+}
+
+// tableChanges is one table's part of a ChangeSet snapshot.
+type tableChanges struct {
+	dirty    []any
+	inserted []any
+	removed  [][]any
+}
 
 // Dirty returns the managed entity pointers of table whose columns changed since
 // they were loaded or attached — the rows the flush will UPDATE. A row also
 // staged for removal is excluded. Mutating a returned pointer in BeforeFlush is
 // reflected in the UPDATE the flush emits.
 func (c *ChangeSet) Dirty(table sqlkit.Table) []any {
+	if c.frozen != nil {
+		if tc := c.frozen[tableKey(table)]; tc != nil {
+			return append([]any(nil), tc.dirty...)
+		}
+		return nil
+	}
 	ts := c.tableState(table)
 	if ts == nil {
 		return nil
@@ -64,6 +86,12 @@ func (c *ChangeSet) Dirty(table sqlkit.Table) []any {
 // staging order). Mutating a pointer row in BeforeFlush is reflected in the
 // INSERT; a value row is a copy and cannot be changed through the result.
 func (c *ChangeSet) Inserted(table sqlkit.Table) []any {
+	if c.frozen != nil {
+		if tc := c.frozen[tableKey(table)]; tc != nil {
+			return append([]any(nil), tc.inserted...)
+		}
+		return nil
+	}
 	ts := c.tableState(table)
 	if ts == nil {
 		return nil
@@ -73,6 +101,12 @@ func (c *ChangeSet) Inserted(table sqlkit.Table) []any {
 
 // Removed returns the primary keys staged for DELETE on table, in staging order.
 func (c *ChangeSet) Removed(table sqlkit.Table) [][]any {
+	if c.frozen != nil {
+		if tc := c.frozen[tableKey(table)]; tc != nil {
+			return append([][]any(nil), tc.removed...)
+		}
+		return nil
+	}
 	ts := c.tableState(table)
 	if ts == nil {
 		return nil
@@ -84,15 +118,60 @@ func (c *ChangeSet) Removed(table sqlkit.Table) [][]any {
 	return out
 }
 
-// Empty reports whether the flush has no work to do.
-func (c *ChangeSet) Empty() bool { return !c.scope.hasPending() }
+// Empty reports whether the flush has (in AfterFlush: had) no work to do.
+func (c *ChangeSet) Empty() bool {
+	if c.frozen != nil {
+		for _, tc := range c.frozen {
+			if len(tc.dirty) > 0 || len(tc.inserted) > 0 || len(tc.removed) > 0 {
+				return false
+			}
+		}
+		return true
+	}
+	return !c.scope.hasPending()
+}
 
 // tableState looks up the staged state for table without creating it, so a hook
 // querying a table with no pending work gets nil rather than registering it.
 func (c *ChangeSet) tableState(table sqlkit.Table) *tableState {
+	return c.scope.tables[tableKey(table)]
+}
+
+// tableKey is the scope's map key for table.
+func tableKey(table sqlkit.Table) string {
 	info := table.Info()
-	key := meta.TableKey{Schema: info.Schema, Name: info.Name, Checksum: info.Checksum}
-	return c.scope.tables[key.QualifiedName()]
+	return meta.TableKey{Schema: info.Schema, Name: info.Name, Checksum: info.Checksum}.QualifiedName()
+}
+
+// captureChanges snapshots the staged work as a frozen ChangeSet for the
+// AfterFlush hooks, or returns nil when no AfterFlush hook is registered (so a
+// flush without one does no extra work). Explicit updates (Update) are reported
+// with the dirty rows, since both are the rows the flush UPDATEs.
+func (s *Scope) captureChanges() *ChangeSet {
+	if !s.hasAfterFlushHook() {
+		return nil
+	}
+	live := &ChangeSet{scope: s}
+	frozen := map[string]*tableChanges{}
+	for _, name := range s.order {
+		ts := s.tables[name]
+		tc := &tableChanges{
+			dirty:    append(live.Dirty(ts.table), ts.updates...),
+			inserted: live.Inserted(ts.table),
+			removed:  live.Removed(ts.table),
+		}
+		frozen[name] = tc
+	}
+	return &ChangeSet{scope: s, frozen: frozen}
+}
+
+func (s *Scope) hasAfterFlushHook() bool {
+	for _, h := range s.hooks {
+		if _, ok := h.(AfterFlushHook); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // runBeforeFlush invokes every registered BeforeFlushHook in order, stopping at
@@ -112,13 +191,13 @@ func (s *Scope) runBeforeFlush(ctx context.Context) error {
 	return nil
 }
 
-// runAfterFlush invokes every registered AfterFlushHook in order, stopping at the
-// first error.
-func (s *Scope) runAfterFlush(ctx context.Context) error {
-	if len(s.hooks) == 0 {
+// runAfterFlush invokes every registered AfterFlushHook in order with the
+// snapshot of the flushed work, stopping at the first error. cs is nil when no
+// AfterFlush hook is registered.
+func (s *Scope) runAfterFlush(ctx context.Context, cs *ChangeSet) error {
+	if cs == nil {
 		return nil
 	}
-	cs := &ChangeSet{scope: s}
 	for _, h := range s.hooks {
 		if ah, ok := h.(AfterFlushHook); ok {
 			if err := ah.AfterFlush(ctx, cs); err != nil {

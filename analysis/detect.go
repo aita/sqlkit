@@ -25,6 +25,11 @@ type SourceRef struct {
 	// Subquery is the inner query of a derived-table source, or nil for a base
 	// table or VALUES source.
 	Subquery sql.Query
+	// Columns is the explicit output column list a CTE declares (WITH c(a, b) AS
+	// ...), in order, or nil when none is declared. It renames the Subquery's
+	// projections positionally, so a reference to one of these names traces to the
+	// body projection at the same position rather than to a like-named one.
+	Columns []sql.Ident
 }
 
 // ColumnRef is a column reference as written in a statement: its qualifier — the
@@ -112,6 +117,13 @@ func enrichWithCTEs(out []SourceRef, ctes []sql.CTE) {
 			for _, c := range ctes {
 				if sql.NewIdent(c.Name()).Equal(r.Table) {
 					out[i].Subquery = c.Body()
+					if names := c.OutputColumns(); len(names) > 0 {
+						idents := make([]sql.Ident, len(names))
+						for j, n := range names {
+							idents[j] = sql.NewIdent(n)
+						}
+						out[i].Columns = idents
+					}
 					break
 				}
 			}

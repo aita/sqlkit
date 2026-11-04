@@ -25,6 +25,7 @@ const (
 // text-search configuration (a regconfig name such as "english") and is ignored
 // by engines that have no equivalent.
 type MatchExpression struct {
+	posField
 	Columns []Expression
 	Query   Expression
 	Mode    FTSMode

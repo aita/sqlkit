@@ -138,7 +138,7 @@ golangci-lint run ./...
 
 Bug fixes (especially from a bug-hunt round) follow a fixed shape. The full
 methodology — how to find bugs, and the Severity / Mergeability rubrics — lives
-in the `bug-hunt` skill (`.claude/skills/bug-hunt/`); the essentials for opening
+in the `hunt-bug` skill (`.claude/skills/hunt-bug/`); the essentials for opening
 a PR:
 
 - **One fix per PR.** Small and self-contained, each with its own regression

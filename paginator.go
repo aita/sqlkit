@@ -2,6 +2,7 @@ package sqlkit
 
 import (
 	"context"
+	"database/sql/driver"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -34,6 +35,13 @@ import (
 //
 // End the keys with a unique column (typically the primary key) so the order is
 // total and no row is skipped or repeated at a page boundary.
+//
+// A key whose Go type can hold NULL (a pointer, or a sql.Null*-style struct with
+// a Valid field) is paginated NULL-safely: NULL sorts as the greatest value
+// (last for KeyAsc, first for KeyDesc, on every dialect) and the seek predicate
+// steps over NULLs explicitly, so rows with a NULL key are neither dropped nor
+// repeated. Keys of non-nullable types keep the plain ORDER BY / comparison, so
+// an index on them can serve the query directly.
 type Paginator struct {
 	keys  []PageKey
 	limit int
@@ -68,19 +76,37 @@ func (pg *Paginator) WithCodec(codec CursorCodec) *Paginator {
 // the right type (an int64 key stays an int64 with no float widening, a
 // time.Time stays a time.Time). Build keys with KeyAsc and KeyDesc.
 type PageKey struct {
-	col    AnyColumn
-	desc   bool
-	decode func([]byte) (any, error)
+	col      AnyColumn
+	desc     bool
+	nullable bool
+	decode   func([]byte) (any, error)
 }
 
-// KeyAsc builds an ascending sort key for col.
+// KeyAsc builds an ascending sort key for col. If col's Go type can hold NULL,
+// NULLs sort after every non-NULL value.
 func KeyAsc[T any](col Column[T]) PageKey {
-	return PageKey{col: col, desc: false, decode: jsonDecoder[T]()}
+	return PageKey{col: col, desc: false, nullable: nullableKeyType(reflect.TypeFor[T]()), decode: jsonDecoder[T]()}
 }
 
-// KeyDesc builds a descending sort key for col.
+// KeyDesc builds a descending sort key for col. If col's Go type can hold NULL,
+// NULLs sort before every non-NULL value (NULL is the greatest value, as for
+// KeyAsc).
 func KeyDesc[T any](col Column[T]) PageKey {
-	return PageKey{col: col, desc: true, decode: jsonDecoder[T]()}
+	return PageKey{col: col, desc: true, nullable: nullableKeyType(reflect.TypeFor[T]()), decode: jsonDecoder[T]()}
+}
+
+// nullableKeyType reports whether a key column's Go type can represent SQL
+// NULL: a pointer, interface, map, or slice (nil), or a sql.Null*-style struct
+// carrying a bool Valid field (sql.NullString, sql.Null[T], and the like).
+func nullableKeyType(t reflect.Type) bool {
+	switch t.Kind() {
+	case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice:
+		return true
+	case reflect.Struct:
+		f, ok := t.FieldByName("Valid")
+		return ok && f.Type.Kind() == reflect.Bool
+	}
+	return false
 }
 
 func jsonDecoder[T any]() func([]byte) (any, error) {
@@ -196,7 +222,8 @@ func (pg *Paginator) Paginate(ctx context.Context, q SelectQuery, dst any, cur C
 		backward = dir
 		seek := make([]seekKey, len(pg.keys))
 		for i, k := range pg.keys {
-			seek[i] = seekKey{col: k.col, value: sql.Val(values[i]), desc: k.desc}
+			seek[i] = seekKey{col: k.col, value: sql.Val(values[i]), desc: k.desc,
+				nullable: k.nullable, isNull: k.nullable && isNullKeyValue(values[i])}
 		}
 		q = q.Where(seekPredicate(seek, backward))
 	}
@@ -229,7 +256,10 @@ func (pg *Paginator) Paginate(ctx context.Context, q SelectQuery, dst any, cur C
 		page.HasNext = result.Len() > 0
 	} else {
 		page.HasNext = extra
-		page.HasPrev = !start
+		// As in the backward branch above: an empty forward page (the cursor
+		// landed past the last row) must not report a HasPrev that only leads
+		// back to a zero, Start-equivalent cursor looping to page one.
+		page.HasPrev = !start && result.Len() > 0
 	}
 	if result.Len() > 0 {
 		// Next continues forward from the last row; Prev backward from the first.
@@ -248,19 +278,25 @@ func (pg *Paginator) Paginate(ctx context.Context, q SelectQuery, dst any, cur C
 }
 
 // orderTerms builds the ORDER BY terms for the keys, flipping every direction
-// when reverse is set (a backward page scans against the ordering).
+// when reverse is set (a backward page scans against the ordering). A nullable
+// key is preceded by a "col IS NULL" term in the same direction, which places
+// NULLs as the greatest value portably (MySQL has no NULLS FIRST/LAST, and the
+// dialects disagree on where NULLs sort by default).
 func (pg *Paginator) orderTerms(reverse bool) []sql.OrderTerm {
-	terms := make([]sql.OrderTerm, len(pg.keys))
-	for i, k := range pg.keys {
+	terms := make([]sql.OrderTerm, 0, len(pg.keys))
+	for _, k := range pg.keys {
 		desc := k.desc
 		if reverse {
 			desc = !desc
 		}
+		order := sql.Asc
 		if desc {
-			terms[i] = sql.Desc(k.col)
-		} else {
-			terms[i] = sql.Asc(k.col)
+			order = sql.Desc
 		}
+		if k.nullable {
+			terms = append(terms, order(sql.IsNull(k.col)))
+		}
+		terms = append(terms, order(k.col))
 	}
 	return terms
 }
@@ -359,6 +395,11 @@ type seekKey struct {
 	col   sql.Expression
 	value sql.Expression
 	desc  bool
+	// nullable marks a key whose column can hold NULL, compared NULL-safely
+	// with NULL as the greatest value; isNull reports that the cursor's
+	// boundary value for it is NULL.
+	nullable bool
+	isNull   bool
 }
 
 // seekPredicate builds the keyset predicate selecting the rows strictly after
@@ -375,28 +416,84 @@ type seekKey struct {
 // again for a backward page). The OR form, rather than a row-value comparison
 // (k0, k1) > (v0, v1), is used because it is portable across PostgreSQL and
 // MySQL and handles mixed key directions.
+//
+// A nullable key compares NULL-safely, with NULL as the greatest value: its
+// equality is "k IS NULL" at a NULL boundary, "greater than NULL" matches
+// nothing (that OR term is dropped), "greater than v" also admits NULLs, and
+// "less than NULL" is "k IS NOT NULL".
 func seekPredicate(keys []seekKey, before bool) Predicate {
-	ors := make([]sql.Expression, len(keys))
+	ors := make([]sql.Expression, 0, len(keys))
 	for i := range keys {
+		cmp, ok := seekCompare(keys[i], before)
+		if !ok {
+			continue // nothing sorts past a NULL boundary in this direction
+		}
 		ands := make([]sql.Expression, 0, i+1)
 		for j := 0; j < i; j++ {
-			ands = append(ands, sql.Eq(keys[j].col, keys[j].value))
+			ands = append(ands, seekEqual(keys[j]))
 		}
-		ands = append(ands, seekCompare(keys[i], before))
-		ors[i] = sql.And(ands...)
+		ands = append(ands, cmp)
+		ors = append(ors, sql.And(ands...))
+	}
+	if len(ors) == 0 {
+		// Every key is at a NULL boundary scanning toward greater values: no row
+		// lies strictly beyond the cursor.
+		return newPredicate(sql.Raw("1 = 0"))
 	}
 	return newPredicate(sql.Or(ors...))
 }
 
-// seekCompare renders the strict comparison for one key: ">" when scanning in
-// the key's own direction (ascending forward, descending backward), "<"
-// otherwise.
-func seekCompare(k seekKey, before bool) sql.Expression {
-	ascending := !k.desc
-	if ascending != before {
-		return sql.Gt(k.col, k.value)
+// seekEqual renders the equality of one key with its boundary value, NULL-safe
+// for a nullable key.
+func seekEqual(k seekKey) sql.Expression {
+	if k.isNull {
+		return sql.IsNull(k.col)
 	}
-	return sql.Lt(k.col, k.value)
+	return sql.Eq(k.col, k.value)
+}
+
+// seekCompare renders the strict comparison for one key: "greater" when
+// scanning in the key's own direction (ascending forward, descending backward),
+// "less" otherwise. For a nullable key NULL is the greatest value, so it
+// reports false when no value can be greater than a NULL boundary.
+func seekCompare(k seekKey, before bool) (sql.Expression, bool) {
+	greater := !k.desc != before
+	switch {
+	case !k.nullable && greater:
+		return sql.Gt(k.col, k.value), true
+	case !k.nullable:
+		return sql.Lt(k.col, k.value), true
+	case greater && k.isNull:
+		return nil, false
+	case greater:
+		return sql.Or(sql.Gt(k.col, k.value), sql.IsNull(k.col)), true
+	case k.isNull:
+		return sql.IsNotNull(k.col), true
+	default:
+		return sql.Lt(k.col, k.value), true
+	}
+}
+
+// isNullKeyValue reports whether a decoded cursor value stands for SQL NULL: a
+// nil, a nil pointer/map/slice/interface, or a driver.Valuer (sql.NullString,
+// ...) whose Value is nil.
+func isNullKeyValue(v any) bool {
+	if v == nil {
+		return true
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Interface:
+		if rv.IsNil() {
+			return true
+		}
+	}
+	if valuer, ok := v.(driver.Valuer); ok {
+		if dv, err := valuer.Value(); err == nil && dv == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // reverseSlice reverses the elements of s (a reflect slice value) in place.

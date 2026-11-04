@@ -99,7 +99,7 @@ func ResolveColumn(scope []SourceRef, col ColumnRef) Resolution {
 			if !s.Table.IsZero() && s.Subquery == nil {
 				res.Schema, res.Table, res.Status = s.Schema, s.Table, Resolved
 			} else if s.Subquery != nil {
-				return resolveInSubquery(s.Subquery, col)
+				return resolveInSubquery(s.Subquery, throughColumnList(s, col))
 			}
 		}
 		return res
@@ -120,7 +120,7 @@ func ResolveColumn(scope []SourceRef, col ColumnRef) Resolution {
 	}
 	if match != nil {
 		if match.Subquery != nil {
-			return resolveInSubquery(match.Subquery, col)
+			return resolveInSubquery(match.Subquery, throughColumnList(*match, col))
 		}
 		res.Schema, res.Table, res.Status = match.Schema, match.Table, Resolved
 	}
@@ -172,7 +172,7 @@ func resolveAll(scope []SourceRef, col ColumnRef, ctes []sql.CTE, depth int) []R
 			return nil
 		}
 		if s.Subquery != nil {
-			return resolveInSubqueryAll(s.Subquery, col, ctes, depth+1)
+			return resolveInSubqueryAll(s.Subquery, throughColumnList(s, col), ctes, depth+1)
 		}
 		if !s.Table.IsZero() {
 			return []Resolution{{Column: col, Schema: s.Schema, Table: s.Table, Status: Resolved}}
@@ -185,7 +185,7 @@ func resolveAll(scope []SourceRef, col ColumnRef, ctes []sql.CTE, depth int) []R
 	for i := range scope {
 		s := &scope[i]
 		if s.Subquery != nil {
-			out = append(out, resolveInSubqueryAll(s.Subquery, col, ctes, depth+1)...)
+			out = append(out, resolveInSubqueryAll(s.Subquery, throughColumnList(*s, col), ctes, depth+1)...)
 			continue
 		}
 		if !s.Table.IsZero() {
@@ -207,8 +207,16 @@ func resolveInSubqueryAll(subq sql.Query, col ColumnRef, ctes []sql.CTE, depth i
 	case sql.SelectStmt:
 		return resolveInSelectAll(v, col, ctes, depth)
 	case sql.CompoundStmt:
-		// A set operation's output column draws from every arm; union their
-		// candidates so a sensitive column on any arm is reported.
+		// A set operation's output column draws from every arm, but the arms align
+		// by POSITION and only the leftmost names the result columns — a non-leftmost
+		// arm may project a differently-named base column at the same position
+		// (SELECT name ... UNION SELECT ssn ...). Map col.Name to its ordinal in the
+		// leftmost arm, then resolve that ordinal in every arm, so a sensitive column
+		// reached only through a non-leftmost arm is still reported. Fall back to the
+		// by-name trace when the ordinal cannot be determined (a wildcard arm).
+		if idx, ok := leftmostColumnIndex(v, col.Name, depth); ok {
+			return resolveCompoundByIndex(v, idx, col.Name, ctes, depth)
+		}
 		var out []Resolution
 		out = append(out, resolveInSubqueryAll(v.Left, col, ctes, depth+1)...)
 		out = append(out, resolveInSubqueryAll(v.Right, col, ctes, depth+1)...)
@@ -216,6 +224,79 @@ func resolveInSubqueryAll(subq sql.Query, col ColumnRef, ctes []sql.CTE, depth i
 	default:
 		return nil
 	}
+}
+
+// leftmostColumnIndex returns the ordinal position of the output column named
+// name in a set operation's leftmost SELECT arm, which alone names the result
+// columns. It reports false when the leftmost arm has no matching named
+// projection or a wildcard makes the ordinal ambiguous.
+func leftmostColumnIndex(subq sql.Query, name sql.Ident, depth int) (int, bool) {
+	if depth > maxResolveDepth {
+		return 0, false
+	}
+	switch v := sql.Unwrap(subq).(type) {
+	case sql.SelectStmt:
+		for i, s := range v.Columns {
+			if _, isStar := s.(sql.StarSelection); isStar {
+				return 0, false // a wildcard makes positions ambiguous
+			}
+			outName, _ := selectionOutput(s)
+			if !outName.IsZero() && outName.Equal(name) {
+				return i, true
+			}
+		}
+		return 0, false
+	case sql.CompoundStmt:
+		return leftmostColumnIndex(v.Left, name, depth+1)
+	}
+	return 0, false
+}
+
+// resolveCompoundByIndex resolves the idx-th output column of a set operation in
+// every arm (recursing into nested set operations), tracing each arm's own
+// positionally-corresponding projection to its base column(s). name is the output
+// name (from the leftmost arm) used only for the wildcard-arm fallback.
+func resolveCompoundByIndex(subq sql.Query, idx int, name sql.Ident, ctes []sql.CTE, depth int) []Resolution {
+	if depth > maxResolveDepth {
+		return nil
+	}
+	switch v := sql.Unwrap(subq).(type) {
+	case sql.SelectStmt:
+		return resolveSelectByIndex(v, idx, name, ctes, depth)
+	case sql.CompoundStmt:
+		var out []Resolution
+		out = append(out, resolveCompoundByIndex(v.Left, idx, name, ctes, depth+1)...)
+		out = append(out, resolveCompoundByIndex(v.Right, idx, name, ctes, depth+1)...)
+		return dedupeResolutions(out)
+	}
+	return nil
+}
+
+// resolveSelectByIndex traces one arm's idx-th projection to its base columns. An
+// arm carrying a wildcard has no reliable positional projection, so it falls back
+// to the by-name trace (the output name still comes from the leftmost arm).
+func resolveSelectByIndex(sel sql.SelectStmt, idx int, name sql.Ident, ctes []sql.CTE, depth int) []Resolution {
+	for _, s := range sel.Columns {
+		if _, isStar := s.(sql.StarSelection); isStar {
+			return resolveInSelectAll(sel, ColumnRef{Name: name}, ctes, depth)
+		}
+	}
+	if idx < 0 || idx >= len(sel.Columns) {
+		return nil
+	}
+	s := sel.Columns[idx]
+	if al, ok := s.(sql.AliasedSelection); ok {
+		s = al.Selection
+	}
+	expr, ok := s.(sql.Expression)
+	if !ok {
+		return nil
+	}
+	innerScope := SourcesOf(sel)
+	if len(ctes) > 0 {
+		enrichWithCTEs(innerScope, ctes)
+	}
+	return resolveExprColumns(innerScope, expr, ctes, depth)
 }
 
 // resolveInSelectAll traces col.Name through one SELECT's projection, returning the
@@ -382,4 +463,51 @@ func matchQualifier(scope []SourceRef, qualifier sql.Ident) (SourceRef, bool) {
 // aliases), so a shared column resolves rather than reporting ambiguity.
 func sameTable(a, b SourceRef) bool {
 	return a.Schema.Equal(b.Schema) && a.Table.Equal(b.Table)
+}
+
+// throughColumnList rewrites col so it can be traced into a source whose CTE
+// declares an explicit output column list (WITH c(a, b) AS ...). Such a list
+// renames the body's projections positionally, so a reference to a declared name
+// must resolve to the body projection at that position, not to a like-named one.
+// When the source declares no list, the name is not in it, or the body projection
+// at that position has no nameable output (a wildcard), col is returned unchanged.
+func throughColumnList(s SourceRef, col ColumnRef) ColumnRef {
+	if len(s.Columns) == 0 {
+		return col
+	}
+	for i, name := range s.Columns {
+		if !name.Equal(col.Name) {
+			continue
+		}
+		if bn, ok := bodyProjectionName(s.Subquery, i); ok {
+			col.Name = bn
+			col.Qualifier = sql.Ident{}
+		}
+		return col
+	}
+	return col
+}
+
+// bodyProjectionName returns the output name of the idx-th projection of a
+// derived source's body — used to map a CTE's declared output column list back to
+// the body's own projection names. It looks through a set operation to its left
+// arm (whose names name the result). It reports ok=false when the position is out
+// of range or its projection has no nameable output (a wildcard or a complex
+// expression), in which case the positional mapping cannot be made.
+func bodyProjectionName(subq sql.Query, idx int) (sql.Ident, bool) {
+	switch v := sql.Unwrap(subq).(type) {
+	case sql.SelectStmt:
+		if idx < 0 || idx >= len(v.Columns) {
+			return sql.Ident{}, false
+		}
+		name, _ := selectionOutput(v.Columns[idx])
+		if name.IsZero() {
+			return sql.Ident{}, false
+		}
+		return name, true
+	case sql.CompoundStmt:
+		return bodyProjectionName(v.Left, idx)
+	default:
+		return sql.Ident{}, false
+	}
 }

@@ -55,6 +55,11 @@ func Insert(table Table) InsertQuery {
 // in every row and fields tagged read-only (`sqlkit:",readonly"`). A field
 // tagged `sqlkit:",json"` is written as its JSON encoding.
 func (q InsertQuery) Values(rows ...any) InsertQuery {
+	// Copy before the first append: a bare append(q.rows, ...) can grow into
+	// spare capacity left by an earlier append and silently overwrite what a
+	// sibling branch (built from the same base query) already appended there,
+	// breaking the value-receiver immutability every builder method promises.
+	q.rows = append([]any(nil), q.rows...)
 	for _, row := range rows {
 		rv := reflect.ValueOf(row)
 		if rv.Kind() == reflect.Slice {
@@ -396,11 +401,14 @@ func (q InsertQuery) effectiveBatchSize(columns int) int {
 
 // splitStatements implements splitter: it splits a bulk Values INSERT into one
 // compiled statement per chunk of rows, each carrying the same columns, conflict,
-// and (when hasReturning) RETURNING clauses, which SplitRows preserves. The
-// statement is built once so the mapped columns and the defaulted-and-zero omission
-// mask derive from all rows (preserving non-batched Values semantics). It reports
-// ok=false — running the statement unchanged — for ChunkOff, FromSelect, no rows, or
-// when the rows already fit one statement. Inserts are always writes.
+// and (when hasReturning) RETURNING clauses, which SplitRowsBySize preserves. Each
+// chunk is bounded by both the row count (the bind-parameter limit and any explicit
+// ChunkSize) and the configured estimated statement size in bytes (MySQL
+// max_allowed_packet for rows with large string/BLOB values). The statement is built
+// once so the mapped columns and the defaulted-and-zero omission mask derive from all
+// rows (preserving non-batched Values semantics). It reports ok=false — running the
+// statement unchanged — for ChunkOff, FromSelect, no rows, or when the rows already
+// fit one statement under both bounds. Inserts are always writes.
 func (q InsertQuery) splitStatements(ex executorBinding) ([]compiledStmt, bool, bool, error) {
 	if q.chunkOff || q.selectSrc != nil || len(q.rows) == 0 {
 		return nil, false, true, nil
@@ -416,11 +424,15 @@ func (q InsertQuery) splitStatements(ex executorBinding) ([]compiledStmt, bool, 
 		insert = insert.Returning(q.returningSelections()...)
 	}
 	batch := q.effectiveBatchSize(insert.ColumnCount())
-	if batch <= 0 || len(q.rows) <= batch {
+	// SplitRowsBySize bounds each statement by the row count (the bind-parameter
+	// limit, plus any explicit ChunkSize) and the configured estimated byte size
+	// (MySQL max_allowed_packet for large string/BLOB rows). It returns a single
+	// part — no split — when neither bound is in force or the rows already fit.
+	parts := insert.SplitRowsBySize(batch, ex.maxStatementBytes())
+	if len(parts) <= 1 {
 		return nil, false, true, nil
 	}
 	dialect := ex.sqlDialect()
-	parts := insert.SplitRows(batch)
 	stmts := make([]compiledStmt, 0, len(parts))
 	for _, part := range parts {
 		sqlText, args, err := part.ToSQL(dialect)
