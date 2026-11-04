@@ -40,6 +40,8 @@
 package redaction
 
 import (
+	"strings"
+
 	"github.com/aita/sqlkit/analysis"
 	"github.com/aita/sqlkit/sql"
 )
@@ -173,13 +175,19 @@ func (m *Redactor) rewriteQuery(q sql.Query, parent *scope, ambient []sql.CTE) s
 		return m.rewriteMerge(v, sc)
 	case sql.RawQuery:
 		// An opaque statement. With a parser configured, re-parse it so its literals
-		// are masked; if it does not parse or comes back raw, leave it untouched.
+		// are masked precisely.
 		if m.rawParser != nil {
 			if parsed, err := m.rawParser(v.SQL()); err == nil && parsed != nil {
 				if _, raw := sql.Unwrap(parsed).(sql.RawQuery); !raw {
 					return m.rewriteQuery(parsed, parent, ambient)
 				}
 			}
+		}
+		// Still opaque (no parser, or the frontend keeps it raw): apply the same
+		// fail-safe as a Raw(...) fragment. When the statement names a sensitive
+		// column, mask every string literal and string bind argument in it.
+		if m.rawStatementSensitive(v.SQL()) {
+			return maskRawQuery(v, m.mask)
 		}
 		return q
 	default:
@@ -572,4 +580,54 @@ func clone[T any](s []T) []T {
 		return s
 	}
 	return append([]T(nil), s...)
+}
+
+// rawStatementSensitive reports whether a raw statement may read or write a
+// sensitive column. With no table scope to resolve against, it pairs every
+// identifier the text mentions as a column with every identifier it mentions as
+// a table (qualified references are checked directly), over-matching rather
+// than missing a sensitive column.
+func (m *Redactor) rawStatementSensitive(text string) bool {
+	refs := rawColumnRefs(text)
+	names := map[string]bool{}
+	tables := map[string]bool{"": true}
+	for _, ref := range refs {
+		col := ref.Name.String()
+		names[col] = true
+		tables[col] = true // a bare identifier may be a table name
+		if q := ref.Qualifier.String(); q != "" {
+			tables[q] = true
+			schema, table := "", q
+			if i := strings.LastIndexByte(q, '.'); i >= 0 {
+				schema, table = q[:i], q[i+1:]
+				tables[table] = true
+			}
+			if m.policy.IsSensitive(schema, table, col) {
+				return true
+			}
+		}
+	}
+	for col := range names {
+		for table := range tables {
+			if m.policy.IsSensitive("", table, col) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// maskRawQuery masks every string literal in a raw statement's text and every
+// string bind argument it carries.
+func maskRawQuery(q sql.RawQuery, mask string) sql.Query {
+	_, args, _ := q.ToSQL(sql.StandardSQLDialect{})
+	masked := make([]any, len(args))
+	for i, a := range args {
+		if _, ok := a.(string); ok {
+			masked[i] = mask
+			continue
+		}
+		masked[i] = a
+	}
+	return sql.RawSQL(maskRawStringLiterals(q.SQL(), mask), masked...)
 }
