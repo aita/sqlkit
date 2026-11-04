@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aita/sqlkit/querytrace"
 )
@@ -78,20 +80,77 @@ func (d *DB) AssertGoldenQuery(t testing.TB, path, query string, args ...any) {
 	AssertGoldenRows(t, path, rows)
 }
 
-// AssertGoldenTrace renders trace's report (the same text TextReport produces)
-// and compares it to the golden file at path. Pinning the query log this way
-// catches an accidental change in the SQL an operation issues — a query that
-// turns into an N+1, a new statement, a dropped index hint — that a count-based
-// budget would miss.
+// AssertGoldenTrace renders trace's query log in a timing-free form and compares
+// it to the golden file at path. Pinning the query log this way catches an
+// accidental change in the SQL an operation issues — a query that turns into an
+// N+1, a new statement, a dropped index hint — that a count-based budget would
+// miss.
+//
+// Unlike TextReport, the rendered form leaves out everything that varies from
+// run to run: durations, the total DB time, and the warnings (some of which are
+// derived from timing). It keeps the operation name, the query/unique/write
+// counts, and the ordered timeline of statements (kind, name, fingerprint),
+// transaction control points, and marks.
 func AssertGoldenTrace(t testing.TB, path string, trace *querytrace.Trace) {
 	t.Helper()
-	Golden(t, path, querytrace.TextReport(trace))
+	Golden(t, path, renderTraceGolden(trace))
+}
+
+// renderTraceGolden renders a trace report without any timing-dependent part, so
+// the same operation produces the same text on every run.
+func renderTraceGolden(trace *querytrace.Trace) string {
+	r := trace.Report()
+	type item struct {
+		at   time.Time
+		text string
+	}
+	items := make([]item, 0, len(r.Events)+len(r.Marks))
+	for _, ev := range r.Events {
+		var text string
+		switch ev.Kind {
+		case querytrace.EventTx:
+			action := ""
+			if ev.Tx != nil {
+				action = string(ev.Tx.Action)
+			}
+			text = "TX    " + strings.ToUpper(action)
+		case querytrace.EventQuery, querytrace.EventExec:
+			label := ""
+			if ev.Query != nil {
+				label = ev.Query.Fingerprint
+			}
+			if ev.Name != "" {
+				label = ev.Name + "  " + label
+			}
+			text = fmt.Sprintf("%-5s %s", strings.ToUpper(string(ev.Kind)), label)
+		default:
+			text = string(ev.Kind)
+		}
+		items = append(items, item{at: ev.StartedAt, text: text})
+	}
+	for _, m := range r.Marks {
+		items = append(items, item{at: m.At, text: "MARK  " + m.Name})
+	}
+	sort.SliceStable(items, func(i, j int) bool { return items[i].at.Before(items[j].at) })
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "SQL trace: %s\n", r.Operation)
+	fmt.Fprintf(&b, "queries=%d unique=%d writes=%d\n", r.QueryCount, r.UniqueFingerprintCount, r.WriteCount)
+	if len(items) > 0 {
+		b.WriteString("\ntimeline:\n")
+		for i, it := range items {
+			fmt.Fprintf(&b, "  %02d  %s\n", i+1, it.text)
+		}
+	}
+	return b.String()
 }
 
 // RenderRows renders a result set as the canonical text the golden helpers
 // compare: a tab-separated header line of column names, then one tab-separated
 // line per row. A NULL renders as the literal NULL and byte/string columns as
-// their text, so the form is stable across drivers. It consumes and closes rows.
+// their text, so the form is stable across drivers. A backslash, tab, newline,
+// or carriage return inside a value is escaped (\\, \t, \n, \r) so distinct
+// results never render to the same text. It consumes and closes rows.
 func RenderRows(rows *stdsql.Rows) (string, error) {
 	defer rows.Close()
 	cols, err := rows.Columns()
@@ -129,8 +188,12 @@ func cellString(v any) string {
 	case nil:
 		return "NULL"
 	case []byte:
-		return string(x)
+		return cellEscaper.Replace(string(x))
 	default:
-		return fmt.Sprintf("%v", v)
+		return cellEscaper.Replace(fmt.Sprintf("%v", v))
 	}
 }
+
+// cellEscaper escapes the characters that would otherwise let a value's text
+// collide with the table's own separators.
+var cellEscaper = strings.NewReplacer(`\`, `\\`, "\t", `\t`, "\n", `\n`, "\r", `\r`)

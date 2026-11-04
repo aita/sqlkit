@@ -92,3 +92,27 @@ func TestDBAssertGoldenQuery(t *testing.T) {
 	t.Setenv("SQLKIT_UPDATE_GOLDEN", "")
 	tdb.AssertGoldenQuery(t, path, "SELECT id FROM users ORDER BY id")
 }
+
+// A tab or newline inside a value is escaped, so a value can never be mistaken
+// for a column or row boundary and distinct results never render alike.
+func TestRenderRowsEscapesSeparators(t *testing.T) {
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			return testutil.Result{
+				Columns: []string{"a", "b"},
+				Rows:    [][]driver.Value{{"x\ty", "line1\nline2\\"}},
+			}, nil
+		},
+	}
+	rows, err := fake.DB().QueryContext(context.Background(), "SELECT a, b FROM t")
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	got, err := sqltest.RenderRows(rows)
+	if err != nil {
+		t.Fatalf("RenderRows: %v", err)
+	}
+	if want := "a\tb\nx\\ty\tline1\\nline2\\\\\n"; got != want {
+		t.Fatalf("RenderRows =\n%q\nwant\n%q", got, want)
+	}
+}
