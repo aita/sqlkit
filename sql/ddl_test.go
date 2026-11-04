@@ -74,6 +74,23 @@ func TestForeignKeyEmptyColumnsErrors(t *testing.T) {
 	}
 }
 
+// TestForeignKeyColumnArityMismatchErrors covers a referencing column list of a
+// different length than the referenced column list: every engine rejects the
+// resulting "FOREIGN KEY (a, b) REFERENCES t (id)" at execution time, so the
+// compiler must reject it too rather than rendering it as if it were valid.
+func TestForeignKeyColumnArityMismatchErrors(t *testing.T) {
+	stmt := AlterTable(Table{Name: NewIdent("posts")}).
+		AddForeignKey(ForeignKeyConstraint{
+			Name:       NewIdent("fk_x"),
+			Columns:    Idents("user_id", "other_id"),
+			RefTable:   NewIdent("users"),
+			RefColumns: Idents("id"),
+		})
+	if _, _, err := stmt.ToSQL(mustDialect(t, "postgres")); err == nil || !strings.Contains(err.Error(), "referencing column") {
+		t.Fatalf("ToSQL() error = %v, want column-arity-mismatch rejection", err)
+	}
+}
+
 func TestCreateTableUnnamedUnique(t *testing.T) {
 	stmt := CreateTable(Table{Name: NewIdent("t")}).
 		Column(ColumnDef{Name: NewIdent("a"), Type: EngineType{Name: "int8"}}).
