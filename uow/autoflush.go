@@ -26,8 +26,13 @@ func WithAutoflush(enabled bool) Option {
 
 // maybeAutoflush flushes pending work ahead of a read when autoflush is on. It is
 // a no-op when autoflush is off or nothing is staged, so an idle read is free.
+//
+// It is also a no-op while the scope is already flushing: a BeforeFlush hook
+// that reads through the scope (Get/Find) would otherwise start a nested Flush
+// of the same still-pending work, and so on until the stack overflows. Such a
+// read sees the database as last flushed.
 func (s *Scope) maybeAutoflush(ctx context.Context) error {
-	if !s.autoflush || !s.hasPending() {
+	if !s.autoflush || s.flushing || !s.hasPending() {
 		return nil
 	}
 	return s.Flush(ctx)
