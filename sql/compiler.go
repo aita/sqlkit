@@ -1673,6 +1673,11 @@ func (c *Compiler) compileExprList(exprs []Expression) (string, []any, error) {
 
 // compileSubscript renders operand[...] for one or more subscript/slice steps.
 func (c *Compiler) compileSubscript(e SubscriptExpression) (string, []any, error) {
+	// Subscripts and slices index arrays; a dialect without arrays (MySQL,
+	// SQLite) has no such syntax and would reject the rendered "x[1]".
+	if _, ok := c.Dialect.(ArrayDialect); !ok {
+		return "", nil, fmt.Errorf("sqlkit/sql: dialect %q does not support array subscripts", c.Dialect.Name())
+	}
 	operandSQL, args, err := c.CompileExpression(e.Operand)
 	if err != nil {
 		return "", nil, err
