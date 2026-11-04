@@ -200,6 +200,9 @@ func (pg *Paginator) Paginate(ctx context.Context, q SelectQuery, dst any, cur C
 	if q.err != nil {
 		return Page{}, q.err
 	}
+	if len(q.folds) > 0 {
+		return Page{}, errFoldUnsupported("Paginate")
+	}
 	if len(pg.keys) == 0 {
 		return Page{}, fmt.Errorf("sqlkit: Paginator requires at least one key")
 	}

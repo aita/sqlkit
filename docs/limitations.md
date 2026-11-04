@@ -111,8 +111,13 @@ trade convenience for correctness:
 - 🔒 **Controls the projection.** A folded chain must start from `From` with no
   explicit `Select` columns; the base table needs a primary key to group rows for
   a to-many fold, and the folded target needs one to de-duplicate children.
-- 🔒 **`LIMIT` counts joined rows, not parents.** A parent column repeats per
-  child, so paginate with `Preload` (or a key sub-query) rather than `FoldRel`.
+- 🔒 **Row-limiting and counting terminals are rejected.** A folded query
+  returns one joined row per parent–child pair, so `LIMIT`/`OFFSET`, `First`,
+  `One`, `Get`, `Page`, `Count`, and `Paginator.Paginate` would act on the joined
+  rows rather than the parents; they return an error. Use `All` (with a
+  predicate selecting the parents), or `Preload` for paginated loads.
+- 🔒 **No IN splitting.** A folded query runs as one statement even when
+  auto-chunking would split a large `IN` list.
 
 ## Migrations
 

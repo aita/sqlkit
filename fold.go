@@ -289,6 +289,28 @@ type flatCol struct {
 	skip     bool
 	json     bool
 	nullable bool
+	// scanner marks a non-pointer sql.Scanner field (sql.NullInt64,
+	// uuid.UUID, decimal.Decimal, ...). Such a type may accept NULL as its
+	// zero value — or reject it — so its column is scanned through a
+	// nullTracker that records SQL NULL and only calls Scan for a non-NULL
+	// value; the NULL flag, not the zero value, decides whether a LEFT-JOINed
+	// level is present.
+	scanner bool
+}
+
+// nullTracker wraps a sql.Scanner destination: a SQL NULL is recorded (and the
+// destination left at its zero value) instead of being handed to Scan.
+type nullTracker struct {
+	dst  stdsql.Scanner
+	null bool
+}
+
+func (n *nullTracker) Scan(src any) error {
+	if src == nil {
+		n.null = true
+		return nil
+	}
+	return n.dst.Scan(src)
 }
 
 // foldInst is a built element during scanning: a pointer to the element struct
@@ -420,7 +442,8 @@ func buildFoldNode(elemType reflect.Type, table Table, colOff int, flat []flatCo
 			continue
 		}
 		ft := elemType.FieldByIndex(f.Path).Type
-		flat[idx] = flatCol{field: f, typ: ft, json: f.JSON, nullable: isNullableField(ft)}
+		flat[idx] = flatCol{field: f, typ: ft, json: f.JSON, nullable: ft.Kind() == reflect.Pointer,
+			scanner: ft.Kind() != reflect.Pointer && reflect.PointerTo(ft).Implements(scannerType)}
 		fc := foldColumn{rowIdx: idx, field: f}
 		node.cols = append(node.cols, fc)
 		byName[col.ColumnName()] = fc
@@ -487,8 +510,13 @@ func (p *foldPlan) scanRow(rows *stdsql.Rows) ([]reflect.Value, error) {
 			h := reflect.New(fc.typ)
 			holders[i] = h
 			dests[i] = jsonScanner{dst: h.Interface()}
+		case fc.scanner:
+			h := reflect.New(fc.typ)
+			nt := &nullTracker{dst: h.Interface().(stdsql.Scanner)}
+			holders[i] = reflect.ValueOf(nt)
+			dests[i] = nt
 		case fc.nullable:
-			// A pointer or sql.Scanner field tolerates NULL natively.
+			// A pointer field tolerates NULL natively (nil).
 			h := reflect.New(fc.typ)
 			holders[i] = h
 			dests[i] = h.Interface()
@@ -594,6 +622,12 @@ func (node *foldNode) fill(structVal reflect.Value, flat []flatCol, holders []re
 		fc := flat[c.rowIdx]
 		h := holders[c.rowIdx]
 		field := structVal.FieldByIndex(c.field.Path)
+		if fc.scanner {
+			if nt := h.Interface().(*nullTracker); !nt.null {
+				field.Set(reflect.ValueOf(nt.dst).Elem())
+			}
+			continue
+		}
 		if fc.json || fc.nullable {
 			field.Set(h.Elem())
 			continue
@@ -611,6 +645,13 @@ func (node *foldNode) fill(structVal reflect.Value, flat []flatCol, holders []re
 func holderValue(h reflect.Value, fc flatCol) (any, bool) {
 	if fc.json {
 		return h.Elem().Interface(), true
+	}
+	if fc.scanner {
+		nt := h.Interface().(*nullTracker)
+		if nt.null {
+			return nil, false
+		}
+		return reflect.ValueOf(nt.dst).Elem().Interface(), true
 	}
 	if fc.nullable {
 		v := h.Elem()
@@ -644,12 +685,12 @@ func identityKey(vals []any) any {
 	return b.String()
 }
 
-// isNullableField reports whether t handles a SQL NULL on its own — a pointer
-// type or an sql.Scanner implementation — so it is scanned natively rather than
-// through the **T NULL trick.
-func isNullableField(t reflect.Type) bool {
-	if t.Kind() == reflect.Pointer {
-		return true
-	}
-	return reflect.PointerTo(t).Implements(scannerType)
+// errFoldUnsupported reports a terminal or clause that cannot be combined with
+// FoldRel/Fold. A folded query returns one joined row per parent-child pair, so
+// a row limit (LIMIT/OFFSET, First, One, Get, Page, a Paginator page) would
+// truncate a parent's children or split it across pages, and Count would count
+// the joined rows rather than the parents. Use Preload for those, or All with
+// a predicate that selects the parents.
+func errFoldUnsupported(what string) error {
+	return fmt.Errorf("sqlkit: %s is not supported on a query with FoldRel/Fold (it would limit or count the joined rows, not the parents); use Preload instead", what)
 }
