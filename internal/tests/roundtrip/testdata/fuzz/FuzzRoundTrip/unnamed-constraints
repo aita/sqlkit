@@ -1,0 +1,2 @@
+go test fuzz v1
+string("CREATE TABLE t (uid int, age int, FOREIGN KEY (uid) REFERENCES users (id), CHECK (age >= 0))")

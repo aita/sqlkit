@@ -349,7 +349,7 @@ func TestCreateTableForeignKeyConstraint(t *testing.T) {
 			}),
 		`CREATE TABLE "t" (
     "uid" integer,
-    CONSTRAINT "" FOREIGN KEY ("uid") REFERENCES "users" ("id")
+    FOREIGN KEY ("uid") REFERENCES "users" ("id")
 );`)
 }
 
