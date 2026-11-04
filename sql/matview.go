@@ -23,6 +23,9 @@ func (s CreateMaterializedViewStmt) ToSQL(d Dialect) (string, []any, error) {
 	return out, nil, err
 }
 func (s CreateMaterializedViewStmt) compileDDL(c *Compiler) (string, error) {
+	if err := c.requirePostgresObject("materialized views"); err != nil {
+		return "", err
+	}
 	if s.Query == nil {
 		return "", fmt.Errorf("sqlkit/sql: CREATE MATERIALIZED VIEW requires a query")
 	}
@@ -108,6 +111,9 @@ func (s DropMaterializedViewStmt) ToSQL(d Dialect) (string, []any, error) {
 	return out, nil, err
 }
 func (s DropMaterializedViewStmt) compileDDL(c *Compiler) (string, error) {
+	if err := c.requirePostgresObject("materialized views"); err != nil {
+		return "", err
+	}
 	var sb strings.Builder
 	sb.WriteString("DROP MATERIALIZED VIEW ")
 	if s.IfExists {
@@ -170,8 +176,18 @@ func (s RefreshMaterializedViewStmt) ToSQL(d Dialect) (string, []any, error) {
 	return out, nil, err
 }
 func (s RefreshMaterializedViewStmt) compileDDL(c *Compiler) (string, error) {
+	if err := c.requirePostgresObject("materialized views"); err != nil {
+		return "", err
+	}
 	if s.Table.Name.IsZero() {
 		return "", fmt.Errorf("sqlkit/sql: REFRESH MATERIALIZED VIEW requires a name")
+	}
+	// PostgreSQL rejects CONCURRENTLY together with WITH NO DATA ("CONCURRENTLY and
+	// WITH NO DATA options cannot be used together"): CONCURRENTLY needs an
+	// already-populated view, WITH NO DATA empties it. Reject the pair at compile
+	// time rather than emit SQL the engine refuses.
+	if s.Concurrently && s.WithNoData {
+		return "", fmt.Errorf("sqlkit/sql: REFRESH MATERIALIZED VIEW cannot combine CONCURRENTLY with WITH NO DATA")
 	}
 	var sb strings.Builder
 	sb.WriteString("REFRESH MATERIALIZED VIEW ")

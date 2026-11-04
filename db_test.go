@@ -81,6 +81,10 @@ func TestWithoutMetadataIdentitiesNil(t *testing.T) {
 
 // WrapDB cannot return an error, so a metadata conflict leaves the database
 // without identities; Open is the constructor that surfaces the failure.
+// MetadataError still exposes it to a WrapDB/WrapExecutor caller who checks —
+// without it, a broken metadata configuration is indistinguishable from never
+// having called WithMetadata at all, and every uow.Scope opened over the
+// database silently skips catalog validation instead of failing fast.
 func TestWithMetadataConflictLeavesIdentitiesNil(t *testing.T) {
 	drifted := usersCatalog()
 	drifted.Columns[1].Type = meta.Of("postgres", "text", 0, 0, 0)
@@ -88,6 +92,9 @@ func TestWithMetadataConflictLeavesIdentitiesNil(t *testing.T) {
 		sqlkit.WithMetadata(meta.Metadata{Tables: []meta.Table{usersCatalog(), drifted}}))
 	if db.Identities() != nil {
 		t.Fatal("Identities() should be nil when the bound metadata conflicts")
+	}
+	if db.MetadataError() == nil {
+		t.Fatal("MetadataError() should report the conflict")
 	}
 }
 

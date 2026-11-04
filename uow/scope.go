@@ -32,6 +32,7 @@ package uow
 
 import (
 	"context"
+	stddriver "database/sql/driver"
 	"errors"
 	"fmt"
 	"reflect"
@@ -374,8 +375,12 @@ func (s *Scope) Flush(ctx context.Context) error {
 		}
 		s.savepoint = name
 	}
+	guard, err := sp.Savepoint(ctx)
+	if err != nil {
+		return err
+	}
 	if err := s.flush(ctx); err != nil {
-		_ = sp.RollbackTo(ctx, s.savepoint)
+		_ = sp.RollbackTo(ctx, guard)
 		return err
 	}
 	return nil
@@ -1067,16 +1072,57 @@ func isPointer(row any) bool {
 	return reflect.ValueOf(row).Kind() == reflect.Pointer
 }
 
-// normalize dereferences a pointer to a copy of its pointee (so a later in-place
-// mutation through that pointer is still detected against the snapshot) and
-// leaves non-pointers as-is. A nil pointer normalizes to nil.
+// normalize prepares a column value for change-detection comparison, so a later
+// in-place mutation of the value the snapshot holds is still detected: a pointer
+// dereferences to an independent copy of its pointee, and a slice/map value is
+// deep-copied — a bare copy of the slice/map header still aliases the same
+// backing array/buckets, so an in-place mutation through the field (e.g.
+// tags[0] = "x", or meta["k"] = "v" on a JSON-tagged column) would otherwise be
+// invisible to reflect.DeepEqual. A value implementing driver.Valuer (notably a
+// JSON-tagged column's internal wrapper, or a custom slice/map type with its own
+// Value method) is normalized through Value() instead: the driver representation
+// it returns is a fresh, immutable value each call (e.g. freshly marshaled JSON
+// bytes) that never aliases the live field, and it is what actually gets
+// written, so it is the more precise snapshot even beneath a pointer receiver.
+// A nil pointer/slice/map normalizes to nil/unchanged.
 func normalize(v any) any {
+	// A nil pointer normalizes to nil before the Valuer check: calling Value on
+	// a nil *T whose Value method has a value receiver (e.g. *sql.NullString)
+	// panics, and database/sql itself treats such a nil pointer as SQL NULL.
+	if rv := reflect.ValueOf(v); rv.Kind() == reflect.Pointer && rv.IsNil() {
+		return nil
+	}
+	if valuer, ok := v.(stddriver.Valuer); ok {
+		if dv, err := valuer.Value(); err == nil {
+			return dv
+		}
+		// Value() erroring on the current value is surprising but not this
+		// function's concern to report; fall through so the snapshot still
+		// reflects something rather than silently pretending nothing changed.
+	}
 	rv := reflect.ValueOf(v)
-	if rv.Kind() == reflect.Pointer {
+	switch rv.Kind() {
+	case reflect.Pointer:
 		if rv.IsNil() {
 			return nil
 		}
-		return rv.Elem().Interface()
+		return normalize(rv.Elem().Interface())
+	case reflect.Slice:
+		if rv.IsNil() {
+			return v
+		}
+		cp := reflect.MakeSlice(rv.Type(), rv.Len(), rv.Len())
+		reflect.Copy(cp, rv)
+		return cp.Interface()
+	case reflect.Map:
+		if rv.IsNil() {
+			return v
+		}
+		cp := reflect.MakeMapWithSize(rv.Type(), rv.Len())
+		for iter := rv.MapRange(); iter.Next(); {
+			cp.SetMapIndex(iter.Key(), iter.Value())
+		}
+		return cp.Interface()
 	}
 	return v
 }
