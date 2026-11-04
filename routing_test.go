@@ -180,6 +180,50 @@ func TestReadWriteRouterIgnoresWriteHint(t *testing.T) {
 	}
 }
 
+// ReadWriteRouter treats a session-level WithRoute hint the same way it treats
+// a per-statement one on a write: a session that might later write must never
+// pin to a replica, so the hint alone (without ReadOnly) is a no-op and the
+// session begins on the primary. Paired with ReadOnly, the router's Access
+// check for the synthetic Begin-time statement resolves to a read, so the hint
+// is honored and pins to the specific named replica (not round-robin).
+func TestReadWriteRouterSessionRouteHintNeedsReadOnly(t *testing.T) {
+	primary, replicaA, replicaB := rowFake(), rowFake(), rowFake()
+	router := sqlkit.NewRouter(map[string]sqlkit.Backend{
+		"default":  sqlkit.DB(primary.DB()),
+		"replicaA": sqlkit.DB(replicaA.DB()),
+		"replicaB": sqlkit.DB(replicaB.DB()),
+	}, sqlkit.ReadWriteRouter(sqlkit.WithReplicas("replicaA", "replicaB")))
+	db := sqlkit.WrapExecutor(router)
+	ctx := context.Background()
+
+	t.Run("hint alone is ignored", func(t *testing.T) {
+		err := db.WithSession(ctx, func(s *sqlkit.Session) error {
+			var users []User
+			return s.Select().From(Users).All(ctx).Scan(&users)
+		}, sqlkit.WithRoute("replicaB"))
+		if err != nil {
+			t.Fatalf("WithSession error = %v", err)
+		}
+		if primary.Begins() != 1 || replicaA.Begins() != 0 || replicaB.Begins() != 0 {
+			t.Fatalf("expected the session to begin on the primary despite the hint: primary=%d replicaA=%d replicaB=%d",
+				primary.Begins(), replicaA.Begins(), replicaB.Begins())
+		}
+	})
+
+	t.Run("hint with ReadOnly pins the named replica", func(t *testing.T) {
+		err := db.WithSession(ctx, func(s *sqlkit.Session) error {
+			var users []User
+			return s.Select().From(Users).All(ctx).Scan(&users)
+		}, sqlkit.WithRoute("replicaB"), sqlkit.WithTxOptions(sqlkit.TxOptions{ReadOnly: true}))
+		if err != nil {
+			t.Fatalf("WithSession error = %v", err)
+		}
+		if replicaB.Begins() != 1 || replicaA.Begins() != 0 {
+			t.Fatalf("expected the session to pin to replicaB specifically: replicaA=%d replicaB=%d", replicaA.Begins(), replicaB.Begins())
+		}
+	})
+}
+
 // With no replicas configured (a single database), ReadWriteRouter sends reads to
 // the primary too, so the same wiring works without replicas.
 func TestReadWriteRouterSingleDatabase(t *testing.T) {
