@@ -27,7 +27,10 @@
 //
 // Nested scopes are savepoint-backed: child := scope.NewScope() flushes within a
 // SAVEPOINT, and child.Rollback rolls back to it without disturbing the parent
-// transaction.
+// transaction. Because rolling back to a savepoint undoes everything executed
+// after it, Rollback refuses (ErrRollbackDiscardsWork) once another scope has
+// flushed work after the child's savepoint; finish or roll back a nested scope
+// before its parent flushes again.
 package uow
 
 import (
@@ -62,6 +65,15 @@ var ErrPrimaryKeyChanged = errors.New("uow: primary key of a managed row changed
 // snapshot diff re-reads the row at flush time, so a value copy could never
 // reflect later mutations.
 var ErrAttachRequiresPointer = errors.New("uow: Attach requires a pointer to a struct")
+
+// ErrRollbackDiscardsWork reports a nested scope's Rollback refused because it
+// would also undo work that another scope — an enclosing scope or a sibling —
+// flushed after this scope's savepoint was taken. Rolling back to the savepoint
+// discards everything executed since, and that other scope has already cleared
+// its staged work believing it written, so the rows would be lost silently.
+// Roll back (or finish) the nested scope before the enclosing scope flushes
+// again, or roll back the whole session.
+var ErrRollbackDiscardsWork = errors.New("uow: Rollback would discard work another scope flushed after this scope's savepoint")
 
 // savepointer is the subset of *sqlkit.Session a nested scope needs.
 type savepointer interface {
@@ -113,11 +125,49 @@ type Scope struct {
 	parent    *Scope
 	savepoint string
 
+	// Flush ordering across a scope tree, for Rollback's safety check. tree is
+	// shared by the root scope and every scope nested under it; spSeq is the
+	// tree's sequence number when this scope took its savepoint, and lastFlush
+	// the sequence number of this scope's latest flush that wrote work.
+	tree      *scopeTree
+	spSeq     int
+	lastFlush int
+	// flushWrote reports whether the latest flush had work to write (checked
+	// after the BeforeFlush hooks, which may stage more).
+	flushWrote bool
+
 	// versionWrites are the bumped version values of rows whose guarded UPDATE
 	// succeeded during the current flush. They are written back into the rows
 	// only once the whole flush succeeds (a failed flush leaves the staged
 	// state, and the rows, as they were so a retry guards on the same version).
 	versionWrites []versionWrite
+}
+
+// scopeTree is the state shared by a root scope and its nested scopes: a
+// sequence counter ordering savepoints and flushes, and every scope in the tree.
+type scopeTree struct {
+	seq    int
+	scopes []*Scope
+}
+
+func (t *scopeTree) next() int { t.seq++; return t.seq }
+
+// treeOf returns s's scope tree, creating it for a root scope on first use.
+func (s *Scope) treeOf() *scopeTree {
+	if s.tree == nil {
+		s.tree = &scopeTree{scopes: []*Scope{s}}
+	}
+	return s.tree
+}
+
+// descendsFrom reports whether s is anc or nested (at any depth) under it.
+func (s *Scope) descendsFrom(anc *Scope) bool {
+	for sc := s; sc != nil; sc = sc.parent {
+		if sc == anc {
+			return true
+		}
+	}
+	return false
 }
 
 // versionWrite records a version field to set to next after a successful flush.
@@ -185,7 +235,8 @@ func NewScope(ex sqlkit.Querier, opts ...Option) *Scope {
 // inside a SAVEPOINT so a failure there rolls back to the savepoint and leaves
 // this (parent) scope's transaction intact.
 func (s *Scope) NewScope() *Scope {
-	return &Scope{
+	tree := s.treeOf()
+	child := &Scope{
 		ex:         s.ex,
 		identities: s.identities,
 		batchSize:  s.batchSize,
@@ -194,7 +245,10 @@ func (s *Scope) NewScope() *Scope {
 		hooks:      s.hooks,
 		tables:     map[string]*tableState{},
 		parent:     s,
+		tree:       tree,
 	}
+	tree.scopes = append(tree.scopes, child)
+	return child
 }
 
 // tableState holds the entities and staged rows for one table.
@@ -406,7 +460,12 @@ func (s *Scope) Flush(ctx context.Context) error {
 // returns the ChangeSet snapshot of the work it wrote, for the AfterFlush hooks.
 func (s *Scope) flushGuarded(ctx context.Context) (*ChangeSet, error) {
 	if s.parent == nil {
-		return s.flush(ctx)
+		changes, err := s.flush(ctx)
+		if s.flushWrote {
+			// Even a failed root flush may have written part of its work.
+			s.lastFlush = s.treeOf().next()
+		}
+		return changes, err
 	}
 	sp, ok := s.ex.(savepointer)
 	if !ok {
@@ -418,6 +477,7 @@ func (s *Scope) flushGuarded(ctx context.Context) (*ChangeSet, error) {
 			return nil, err
 		}
 		s.savepoint = name
+		s.spSeq = s.treeOf().next()
 	}
 	guard, err := sp.Savepoint(ctx)
 	if err != nil {
@@ -428,17 +488,30 @@ func (s *Scope) flushGuarded(ctx context.Context) (*ChangeSet, error) {
 		_ = sp.RollbackTo(ctx, guard)
 		return nil, err
 	}
+	if s.flushWrote {
+		s.lastFlush = s.treeOf().next()
+	}
 	return changes, nil
 }
 
 // Rollback undoes a nested scope's flushed work by rolling back to its savepoint
 // and discards its staged state. It is only valid on a scope created with
 // Scope.NewScope.
+//
+// Rolling back to the savepoint undoes everything executed since it was taken,
+// so Rollback refuses with ErrRollbackDiscardsWork when another scope (the
+// parent, an ancestor, or a sibling) has flushed work after that point; that
+// work would otherwise be lost without an error.
 func (s *Scope) Rollback(ctx context.Context) error {
 	if s.parent == nil {
 		return errors.New("uow: Rollback is only valid on a nested scope")
 	}
 	if s.savepoint != "" {
+		for _, other := range s.treeOf().scopes {
+			if !other.descendsFrom(s) && other.lastFlush > s.spSeq {
+				return ErrRollbackDiscardsWork
+			}
+		}
 		sp, ok := s.ex.(savepointer)
 		if !ok {
 			return ErrNestingRequiresTx
@@ -466,9 +539,11 @@ func (s *Scope) Rollback(ctx context.Context) error {
 // AfterFlush hooks, or nil when none is registered.
 func (s *Scope) flush(ctx context.Context) (*ChangeSet, error) {
 	s.versionWrites = nil
+	s.flushWrote = false
 	if err := s.runBeforeFlush(ctx); err != nil {
 		return nil, err
 	}
+	s.flushWrote = s.hasPending()
 	changes := s.captureChanges()
 	order := s.flushOrder()
 	for _, name := range order {
