@@ -101,7 +101,13 @@ func DetectKind(sqlText string) StmtKind {
 	switch leadingKeyword(sqlText) {
 	case "SELECT", "WITH", "VALUES", "TABLE":
 		return StmtSelect
-	case "INSERT":
+	case "INSERT", "REPLACE":
+		// REPLACE INTO is MySQL's insert-or-replace; the parsed-AST path
+		// (KindOf) already classifies it as StmtInsert via sql.InsertStmt's
+		// Replace flag, so the raw-text fallback must agree — otherwise a
+		// REPLACE INTO analyzed without a parser (or after a parse failure)
+		// falls through to StmtUnknown, whose IsWrite() is false: a write that
+		// silently bypasses ForbidWrites/ReadOnly enforcement.
 		return StmtInsert
 	case "UPDATE":
 		return StmtUpdate

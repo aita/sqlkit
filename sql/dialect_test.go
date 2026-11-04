@@ -24,6 +24,21 @@ func TestPostgreSQLDialectPlaceholder(t *testing.T) {
 	}
 }
 
+// TestPostgreSQLDialectDecimalAlias covers PostgreSQL's "decimal" spelling
+// (a pure alias for "numeric"), reachable via meta.Of or a hand-built
+// EngineType — not just decl.Decimal(), which normalizes to "numeric" before
+// this dialect ever sees it. pgDecimalTypes previously listed only "numeric",
+// so "decimal" silently rendered without its precision/scale, unlike the
+// MySQL and Standard dialects, which both accept either spelling.
+func TestPostgreSQLDialectDecimalAlias(t *testing.T) {
+	dialect := PostgreSQLDialect{}
+	for _, name := range []string{"decimal", "numeric"} {
+		if got, want := dialect.ColumnType(name, 0, 10, 2), name+"(10, 2)"; got != want {
+			t.Errorf("ColumnType(%q, 0, 10, 2) = %q, want %q", name, got, want)
+		}
+	}
+}
+
 func TestMySQLDialectQuoteIdent(t *testing.T) {
 	dialect := MySQLDialect{}
 	if got, want := dialect.QuoteIdent("blog.user`profiles"), "`blog`.`user``profiles`"; got != want {
