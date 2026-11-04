@@ -221,6 +221,15 @@ type InlineAutoIncrementPrimaryKey interface {
 	InlinesAutoIncrementPrimaryKey() bool
 }
 
+// BareCompoundArmsDialect is an optional capability for dialects whose grammar
+// rejects a parenthesized arm in a set operation (SQLite: "(SELECT ...) UNION
+// (SELECT ...)" is a syntax error). When it reports true the compiler writes a
+// plain arm bare and wraps any other (one with its own ORDER BY / LIMIT /
+// OFFSET, or a nested chain of a different operator) as SELECT * FROM (...).
+type BareCompoundArmsDialect interface {
+	BareCompoundArms() bool
+}
+
 // DerivedValuesUnionDialect is an optional capability for dialects that cannot
 // alias the columns of a VALUES row constructor used as a derived table. MySQL
 // names VALUES columns column_0, column_1, … with no way to override them, so a
@@ -511,8 +520,14 @@ var pgCanonical = map[string]string{
 }
 
 // pgLengthTypes/pgDecimalTypes are keyed by the canonical (rendered) name.
+// pgDecimalTypes lists both spellings PostgreSQL accepts for the same type
+// (DECIMAL is a pure alias for NUMERIC) — like the MySQL and Standard
+// dialects' equivalent maps — so a column declared with the engine name
+// "decimal" (via meta.Of or a hand-built sql.EngineType, not just the
+// decl.Decimal() registry path, which normalizes to "numeric" first) still
+// renders its precision/scale instead of silently dropping them.
 var pgLengthTypes = map[string]bool{"varchar": true, "char": true}
-var pgDecimalTypes = map[string]bool{"numeric": true}
+var pgDecimalTypes = map[string]bool{"numeric": true, "decimal": true}
 
 func (PostgreSQLDialect) ColumnType(name string, length, precision, scale int) string {
 	n := strings.ToLower(name)
@@ -905,6 +920,16 @@ func (SQLiteDialect) Placeholder(int) string { return "?" }
 // SupportsReturning reports RETURNING support (SQLite >= 3.35 has it).
 func (SQLiteDialect) SupportsReturning() bool { return true }
 
+// MaxBindParams is SQLite's default SQLITE_MAX_VARIABLE_NUMBER (3.32+).
+func (SQLiteDialect) MaxBindParams() int { return 32766 }
+
+// BareCompoundArms reports that SQLite rejects parenthesized set-operation arms.
+func (SQLiteDialect) BareCompoundArms() bool { return true }
+
+// UsesValuesUnion renders a VALUES derived table as a UNION ALL of SELECTs:
+// SQLite can't alias a VALUES list's columns ("(VALUES ...) AS v(x)").
+func (SQLiteDialect) UsesValuesUnion() bool { return true }
+
 var sqliteLengthTypes = map[string]bool{"varchar": true, "char": true}
 var sqliteDecimalTypes = map[string]bool{"numeric": true, "decimal": true}
 
@@ -912,12 +937,13 @@ func (SQLiteDialect) ColumnType(name string, length, precision, scale int) strin
 	return typeWithArgs(strings.ToLower(name), length, precision, scale, sqliteLengthTypes, sqliteDecimalTypes)
 }
 
-var sqliteIntegerTypes = map[string]bool{"integer": true, "int": true, "bigint": true}
-
 // AutoIncrementColumn renders SQLite's rowid auto-increment clause, which also
-// declares the primary key inline (see InlinesAutoIncrementPrimaryKey).
+// declares the primary key inline (see InlinesAutoIncrementPrimaryKey). Any
+// integer type qualifies — SQLite gives a declared type containing "INT"
+// integer affinity (int8, bigint, smallint, ...) — and is rendered as the
+// INTEGER the rowid alias requires.
 func (SQLiteDialect) AutoIncrementColumn(name string, length, precision, scale int) (string, bool) {
-	if !sqliteIntegerTypes[strings.ToLower(name)] {
+	if !strings.Contains(strings.ToUpper(name), "INT") {
 		return "", false
 	}
 	return "INTEGER PRIMARY KEY AUTOINCREMENT", true
@@ -944,8 +970,12 @@ func (SQLiteDialect) DropIndex(qualifiedIndex, _, _ string) string {
 	return "DROP INDEX IF EXISTS " + qualifiedIndex + ";"
 }
 
-// Upsert renders SQLite's PostgreSQL-style ON CONFLICT clause.
-func (SQLiteDialect) Upsert(cl UpsertClause) (string, error) {
+// Upsert renders SQLite's PostgreSQL-style ON CONFLICT clause. SQLite has no
+// ON CONFLICT ON CONSTRAINT form; name the conflict columns instead.
+func (d SQLiteDialect) Upsert(cl UpsertClause) (string, error) {
+	if cl.TargetConstraint != "" {
+		return "", fmt.Errorf("sql: SQLite has no ON CONFLICT ON CONSTRAINT; give the conflict target columns instead")
+	}
 	return renderOnConflict(cl, "SQLite")
 }
 

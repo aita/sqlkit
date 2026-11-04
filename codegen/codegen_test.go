@@ -860,6 +860,8 @@ func TestSQLiteTypeMapping(t *testing.T) {
 			{Name: "label", Type: meta.Of("sqlite", "text", 0, 0, 0)},
 			{Name: "active", Type: meta.Of("sqlite", "boolean", 0, 0, 0)},
 			{Name: "created_at", Type: meta.Of("sqlite", "datetime", 0, 0, 0)},
+			{Name: "born_on", Type: meta.Of("sqlite", "date", 0, 0, 0)},
+			{Name: "opens_at", Type: meta.Of("sqlite", "time", 0, 0, 0)},
 		},
 	}}
 	body := string(generateSingle(t, tables, Options{PackageName: "appdb", Dialect: "sqlite"}))
@@ -869,6 +871,9 @@ func TestSQLiteTypeMapping(t *testing.T) {
 		`sqlkit.NewColumn[string](info, "label")`,
 		`sqlkit.NewColumn[bool](info, "active")`,
 		`sqlkit.NewColumn[time.Time](info, "created_at")`,
+		`sqlkit.NewColumn[time.Time](info, "born_on")`,
+		// A TIME column comes back from the driver as text.
+		`sqlkit.NewColumn[string](info, "opens_at")`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("SQLite mapping missing %q:\n%s", want, body)

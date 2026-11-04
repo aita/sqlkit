@@ -33,13 +33,12 @@ package integration
 
 import (
 	"context"
-	"fmt"
-	"go/format"
 	"strings"
 	"testing"
 
 	"github.com/aita/sqlkit"
 	"github.com/aita/sqlkit/decl"
+	"github.com/aita/sqlkit/internal/testutil"
 	"github.com/aita/sqlkit/introspection"
 	"github.com/aita/sqlkit/migrate/autogen"
 	"github.com/aita/sqlkit/sql"
@@ -94,8 +93,8 @@ func TestAutogenerateForwardDiff(t *testing.T) {
 			t.Fatal("expected a non-empty diff, got none")
 		}
 
-		assertValidGo(t, res.Up)
-		assertValidGo(t, res.Down)
+		testutil.AssertValidMigrationBody(t, res.Up)
+		testutil.AssertValidMigrationBody(t, res.Down)
 
 		for _, want := range []string{
 			`op.CreateTable("gadgets"`,
@@ -245,29 +244,43 @@ func dropTables(t *testing.T, db *sqlkit.Database, eng engine, names ...string) 
 	}
 }
 
-// assertValidGo wraps a rendered migration body in a scaffold and gofmts it, so
-// a malformed op.* call surfaces as a syntax error. It mirrors the helper in
-// migrate/autogen/render_test.go, which cannot be imported across packages.
-func assertValidGo(t *testing.T, body string) {
-	t.Helper()
-	src := fmt.Sprintf(`package migrations
+// TestAutogenerateRoundTripLiteralDefaultsAndChecks extends the round trip to
+// literal defaults and a CHECK constraint on PostgreSQL, where the engine reads
+// them back with explicit casts ('active'::character varying, (0)::numeric)
+// that the hand-written catalog omits. Diffing the inspected schema against the
+// same catalog must still yield no changes.
+func TestAutogenerateRoundTripLiteralDefaultsAndChecks(t *testing.T) {
+	eachEngine(t, func(t *testing.T, eng engine, db *sqlkit.Database) {
+		if eng.name != "postgres" {
+			t.Skip("PostgreSQL-specific cast rendering")
+		}
+		ctx := context.Background()
 
-import (
-	"github.com/aita/sqlkit/migrate"
-	"github.com/aita/sqlkit/sql"
-	"github.com/aita/sqlkit/decl"
-)
+		cat := decl.NewCatalog(decl.DefaultSchema(testSchema))
+		cat.Table("priced",
+			decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()),
+			decl.Column("status", decl.VarChar(20), decl.Default(sql.Raw("'active'"))),
+			decl.Column("price", decl.Decimal(10, 2), decl.Default(sql.Raw("0"))),
+			decl.Column("note", decl.Text, decl.Default(sql.Raw("'it''s'"))),
+			decl.Check(sql.Raw("price >= 0")),
+		)
+		applyCatalog(t, db, eng, cat)
+		t.Cleanup(func() { dropTables(t, db, eng, "priced") })
 
-var _ = func(op *migrate.Operator) {
-%s
-}
-
-var (
-	_ = sql.Raw
-	_ = decl.BigInt
-)
-`, body)
-	if _, err := format.Source([]byte(src)); err != nil {
-		t.Fatalf("rendered body is not valid Go: %v\n--- src ---\n%s", err, src)
-	}
+		source, err := introspection.Schema(ctx, db.SQL(), eng.name, testSchema)
+		if err != nil {
+			t.Fatalf("inspect: %v", err)
+		}
+		target, err := cat.Build()
+		if err != nil {
+			t.Fatalf("build catalog: %v", err)
+		}
+		res, err := autogen.Render(source, target, autogen.Options{Dialect: dialectFor(t, eng)})
+		if err != nil {
+			t.Fatalf("Render: %v", err)
+		}
+		if !res.Empty() {
+			t.Fatalf("literal defaults/checks read back with casts should yield no changes, got:\n--- Up ---\n%s", res.Up)
+		}
+	})
 }

@@ -1,6 +1,9 @@
 package sql
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestMaterializedViewCompile(t *testing.T) {
 	cases := []struct {
@@ -58,6 +61,13 @@ func TestMatviewCoverage(t *testing.T) {
 	}
 	if _, _, err := RefreshMaterializedView(Table{}).ToSQL(pg); err == nil {
 		t.Fatal("REFRESH MATERIALIZED VIEW without a name: want error")
+	}
+	// PostgreSQL rejects CONCURRENTLY together with WITH NO DATA; the compiler must
+	// reject the pair rather than emit SQL the engine refuses. Each option alone is
+	// still valid (covered above).
+	if _, _, err := RefreshMaterializedView(mv).Concurrently().WithNoData().ToSQL(pg); err == nil ||
+		!strings.Contains(err.Error(), "CONCURRENTLY with WITH NO DATA") {
+		t.Fatalf("REFRESH CONCURRENTLY WITH NO DATA error = %v, want a conflict rejection", err)
 	}
 
 	for _, q := range []Query{

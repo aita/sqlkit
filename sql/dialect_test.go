@@ -25,6 +25,21 @@ func TestPostgreSQLDialectPlaceholder(t *testing.T) {
 	}
 }
 
+// TestPostgreSQLDialectDecimalAlias covers PostgreSQL's "decimal" spelling
+// (a pure alias for "numeric"), reachable via meta.Of or a hand-built
+// EngineType — not just decl.Decimal(), which normalizes to "numeric" before
+// this dialect ever sees it. pgDecimalTypes previously listed only "numeric",
+// so "decimal" silently rendered without its precision/scale, unlike the
+// MySQL and Standard dialects, which both accept either spelling.
+func TestPostgreSQLDialectDecimalAlias(t *testing.T) {
+	dialect := PostgreSQLDialect{}
+	for _, name := range []string{"decimal", "numeric"} {
+		if got, want := dialect.ColumnType(name, 0, 10, 2), name+"(10, 2)"; got != want {
+			t.Errorf("ColumnType(%q, 0, 10, 2) = %q, want %q", name, got, want)
+		}
+	}
+}
+
 func TestMySQLDialectQuoteIdent(t *testing.T) {
 	dialect := MySQLDialect{}
 	if got, want := dialect.QuoteIdent("blog.user`profiles"), "`blog`.`user``profiles`"; got != want {
@@ -561,5 +576,87 @@ func TestSQLiteRejectsTruncateAndReplaceView(t *testing.T) {
 	}
 	if _, _, err := Truncate(Table{Name: NewIdent("t")}).ToSQL(LibSQLDialect{}); err == nil {
 		t.Error("libSQL TRUNCATE should error")
+	}
+}
+
+// SQLite rejects parenthesized set-operation arms: plain arms are bare, and an
+// arm with its own clauses (or a different nested operator) is wrapped as a
+// derived table.
+func TestSQLiteCompoundArms(t *testing.T) {
+	a := Select(Col("x")).From(Table{Name: NewIdent("t")})
+	b := Select(Col("x")).From(Table{Name: NewIdent("s")})
+	cases := map[string]struct {
+		q    Query
+		want string
+	}{
+		"plain":       {a.Union(b), `SELECT "x" FROM "t" UNION SELECT "x" FROM "s"`},
+		"chain":       {a.UnionAll(b).UnionAll(a), `SELECT "x" FROM "t" UNION ALL SELECT "x" FROM "s" UNION ALL SELECT "x" FROM "t"`},
+		"arm limit":   {a.Union(b.Limit(1)), `SELECT "x" FROM "t" UNION SELECT * FROM (SELECT "x" FROM "s" LIMIT 1)`},
+		"mixed ops":   {a.Union(a.Intersect(b)), `SELECT "x" FROM "t" UNION SELECT * FROM (SELECT "x" FROM "t" INTERSECT SELECT "x" FROM "s")`},
+		"bare offset": {a.Union(b).Offset(2), `SELECT "x" FROM "t" UNION SELECT "x" FROM "s" LIMIT -1 OFFSET 2`},
+	}
+	for name, c := range cases {
+		got, _, err := c.q.ToSQL(SQLiteDialect{})
+		if err != nil || got != c.want {
+			t.Errorf("%s: got %q (err %v), want %q", name, got, err, c.want)
+		}
+	}
+	// PostgreSQL keeps its parenthesized arms.
+	if got, _, _ := a.Union(b).ToSQL(PostgreSQLDialect{}); !strings.HasPrefix(got, "(") {
+		t.Errorf("postgres union = %q, want parenthesized arms", got)
+	}
+}
+
+func TestSQLiteBareOffsetAndValuesSource(t *testing.T) {
+	q := Select(Col("x")).From(Table{Name: NewIdent("t")}).Offset(3)
+	if got, _, _ := q.ToSQL(SQLiteDialect{}); got != `SELECT "x" FROM "t" LIMIT -1 OFFSET 3` {
+		t.Errorf("bare offset = %q", got)
+	}
+	v := Select(Col("v.k")).From(ValuesSource([][]Expression{{Val(1)}, {Val(2)}}, "v", "k"))
+	if got, _, _ := v.ToSQL(SQLiteDialect{}); strings.Contains(got, "VALUES") {
+		t.Errorf("values source = %q, want a UNION ALL derived table", got)
+	}
+	if (SQLiteDialect{}).MaxBindParams() != 32766 {
+		t.Error("MaxBindParams")
+	}
+}
+
+// Constructs SQLite cannot express are rejected at ToSQL with a message naming
+// the dialect, rather than emitted as SQL the engine rejects.
+func TestSQLiteRejectsUnsupportedConstructs(t *testing.T) {
+	tb := func(n string) Table { return Table{Name: NewIdent(n)} }
+	cases := map[string]Query{
+		"delete using":         DeleteFrom(tb("t")).Using(tb("s")).Where(Eq(Col("t.x"), Col("s.x"))),
+		"on conflict on const": InsertInto(tb("t")).Columns("x").Values(1).OnConflictConstraint("k").DoNothing(),
+		"alter column type":    AlterTable(tb("t")).AlterColumnType("n", EngineType{Name: "text"}),
+		"set not null":         AlterTable(tb("t")).SetNotNull("n"),
+		"drop primary key":     AlterTable(tb("t")).DropPrimaryKey(),
+		"two alterations": AlterTable(tb("t")).
+			AddColumn(ColumnDef{Name: NewIdent("p"), Type: EngineType{Name: "text"}}).
+			AddColumn(ColumnDef{Name: NewIdent("q"), Type: EngineType{Name: "text"}}),
+		"sequence": CreateSequence(tb("q")),
+		"autoinc composite pk": CreateTable(tb("u")).
+			Column(ColumnDef{Name: NewIdent("id"), Type: EngineType{Name: "integer"}, AutoIncrement: true}).
+			Column(ColumnDef{Name: NewIdent("k"), Type: EngineType{Name: "integer"}}).PrimaryKey("id", "k"),
+		"autoinc no pk": CreateTable(tb("u")).
+			Column(ColumnDef{Name: NewIdent("id"), Type: EngineType{Name: "integer"}, AutoIncrement: true}),
+	}
+	for name, q := range cases {
+		if _, _, err := q.ToSQL(SQLiteDialect{}); err == nil {
+			t.Errorf("%s: compiled, want a SQLite rejection", name)
+		}
+	}
+}
+
+func TestSQLiteInsertSelectUpsertAndIntAutoIncrement(t *testing.T) {
+	tb := func(n string) Table { return Table{Name: NewIdent(n)} }
+	q := InsertInto(tb("t")).Columns("id").FromSelect(Select(Col("id")).From(tb("s"))).OnConflict("id").DoNothing()
+	want := `INSERT INTO "t" ("id") SELECT * FROM (SELECT "id" FROM "s") WHERE true ON CONFLICT ("id") DO NOTHING`
+	if got, _, err := q.ToSQL(SQLiteDialect{}); err != nil || got != want {
+		t.Errorf("insert-select upsert = %q (err %v), want %q", got, err, want)
+	}
+	ct := CreateTable(tb("u")).Column(ColumnDef{Name: NewIdent("id"), Type: EngineType{Name: "int8"}, AutoIncrement: true, NotNull: true}).PrimaryKey("id")
+	if got, _, err := ct.ToSQL(SQLiteDialect{}); err != nil || !strings.Contains(got, "INTEGER PRIMARY KEY AUTOINCREMENT") {
+		t.Errorf("int8 auto-increment = %q (err %v)", got, err)
 	}
 }

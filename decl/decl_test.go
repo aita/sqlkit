@@ -250,6 +250,26 @@ func TestBuildColumnDropsTableLevelConstructs(t *testing.T) {
 	}
 }
 
+// TestBuildTableSkipsEnumValidation covers BuildTable's use for a migration
+// operation that adds one table/column in isolation (migrate/op.go's
+// CreateTable/AddColumn): an EnumType column may legitimately reference an
+// enum a separate, earlier migration already created, not one declared in
+// this standalone build's own (nonexistent) catalog — so BuildTable must not
+// apply Catalog.Build's dangling-enum-reference check, unlike a real,
+// caller-constructed Catalog.
+func TestBuildTableSkipsEnumValidation(t *testing.T) {
+	tbl, err := decl.BuildTable("public", "users",
+		decl.Column("id", decl.BigInt, decl.PrimaryKey()),
+		decl.Column("mood", decl.EnumType("mood")),
+	)
+	if err != nil {
+		t.Fatalf("BuildTable with an EnumType column and no declared Enum: %v", err)
+	}
+	if tbl.Name != "users" {
+		t.Errorf("table name = %q, want users", tbl.Name)
+	}
+}
+
 func TestCrossSchemaReference(t *testing.T) {
 	catalog := decl.NewCatalog()
 	catalog.Schema("audit").Table("events",
@@ -552,6 +572,15 @@ func TestBuildErrors(t *testing.T) {
 			want: "not declared in this catalog",
 		},
 		{
+			name: "enum type not declared",
+			catalog: func() *decl.Catalog {
+				c := decl.NewCatalog()
+				c.Table("users", decl.Column("id", decl.BigInt, decl.PrimaryKey()), decl.Column("mood", decl.EnumType("mood")))
+				return c
+			},
+			want: `type references enum "mood", which is not declared`,
+		},
+		{
 			name: "unknown referenced column",
 			catalog: func() *decl.Catalog {
 				c := decl.NewCatalog()
@@ -840,7 +869,7 @@ func TestSQLiteAndLibSQLBuiltinTypes(t *testing.T) {
 		{decl.Bytes, "blob"},
 		{decl.JSON, "text"},
 		{decl.UUID, "text"},
-		{decl.Date, "text"},
+		{decl.Date, "date"}, // declared DATE so drivers (modernc) scan it as time.Time
 		{decl.Time, "text"},
 		{decl.Timestamp, "datetime"},
 		{decl.Decimal(10, 2), "numeric"},

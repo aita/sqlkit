@@ -40,6 +40,13 @@ type DataType struct {
 	// set by Array. The kind/names/length/precision/scale/goTypes describe the
 	// element; Engine resolves the element name and flags Array.
 	array bool
+	// enumTypeName is the enum name pinned by EnumType, "" for every other
+	// constructor. It resolves to the identical engine name TypeFor/Type could
+	// also produce (Engine can't tell them apart), so it exists purely so
+	// Catalog.Build can validate the name against a declared Enum — a check
+	// Type/TypeFor intentionally skip, since they may legitimately reference a
+	// type the catalog doesn't (and isn't meant to) declare.
+	enumTypeName string
 }
 
 // dbTypeRegistry maps a canonical type kind to its engine type name per dialect.
@@ -96,7 +103,7 @@ func init() {
 		"bytes":     {"postgres": "bytea", "mysql": "blob", "sqlite": "blob", "libsql": "blob"},
 		"json":      {"postgres": "jsonb", "mysql": "json", "sqlite": "text", "libsql": "text"},
 		"uuid":      {"postgres": "uuid", "mysql": "char", "sqlite": "text", "libsql": "text"},
-		"date":      {"postgres": "date", "mysql": "date", "sqlite": "text", "libsql": "text"},
+		"date":      {"postgres": "date", "mysql": "date", "sqlite": "date", "libsql": "date"},
 		"time":      {"postgres": "time", "mysql": "time", "sqlite": "text", "libsql": "text"},
 		"timestamp": {"postgres": "timestamptz", "mysql": "datetime", "sqlite": "datetime", "libsql": "datetime"},
 		"varchar":   {"postgres": "varchar", "mysql": "varchar", "sqlite": "text", "libsql": "text"},
@@ -231,12 +238,13 @@ func Char(n int) DataType {
 
 // EnumType declares a column whose type is the named enum (PostgreSQL CREATE TYPE
 // ... AS ENUM). The name must match an Enum declared on the catalog (bare, or
-// "schema.enum" when qualified); the DDL renders the column with that type and
-// the code generator maps it to the generated Go enum type (enum "mood" -> type
-// Mood). Enum types are PostgreSQL-only, so a column of this type is unavailable
-// on other dialects.
+// "schema.enum" when qualified) — Catalog.Build reports a descriptive error when
+// it doesn't, the same way it validates a dangling References target; the DDL
+// renders the column with that type and the code generator maps it to the
+// generated Go enum type (enum "mood" -> type Mood). Enum types are
+// PostgreSQL-only, so a column of this type is unavailable on other dialects.
 func EnumType(name string) DataType {
-	return DataType{names: map[string]string{"postgres": name}}
+	return DataType{names: map[string]string{"postgres": name}, enumTypeName: name}
 }
 
 // Decimal is an exact numeric with the given precision and scale.

@@ -101,7 +101,7 @@ func (t PostsTable) Q(ex sqlkit.Querier) sqlkit.SelectQuery { return ex.Select()
 // Relations lets Preload(target) resolve a relation by the target's table.
 func (t UsersTable) Relations() []sqlkit.Relation { return []sqlkit.Relation{UsersPosts} }
 
-func (t PostsTable) Relations() []sqlkit.Relation { return []sqlkit.Relation{PostsUser} }
+func (t PostsTable) Relations() []sqlkit.Relation { return []sqlkit.Relation{PostsUser, PostsComments} }
 
 func contains(s, sub string) bool { return strings.Contains(s, sub) }
 

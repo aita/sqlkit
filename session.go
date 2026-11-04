@@ -27,11 +27,12 @@ type Session struct {
 	// base is the database's terminal Executor, the source of the session's
 	// transaction (when it implements TxExecutor) and the fallback it runs on
 	// otherwise.
-	base         Executor
-	txOpts       *stdsql.TxOptions
-	dialect      sql.Dialect
-	autoChunk    bool
-	preloadChunk int
+	base               Executor
+	txOpts             *stdsql.TxOptions
+	dialect            sql.Dialect
+	autoChunk          bool
+	preloadChunk       int
+	statementByteLimit int
 
 	// hks are the lifecycle hooks inherited from the Database (see WithHooks),
 	// run around each statement executed through this session.
@@ -318,6 +319,16 @@ func (s *Session) maxBindParams() int {
 		return 0
 	}
 	return resolveBindParamLimit(s.dialect)
+}
+
+// maxStatementBytes is the estimated-statement-size cap that splits a bulk INSERT
+// whose rows carry large values (MySQL max_allowed_packet) for this session, or 0
+// when byte-aware splitting is off — unconfigured, or auto-chunk disabled.
+func (s *Session) maxStatementBytes() int {
+	if !s.autoChunk {
+		return 0
+	}
+	return s.statementByteLimit
 }
 
 // AutoChunkEnabled reports whether automatic, limit-driven statement splitting is
