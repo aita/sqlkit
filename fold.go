@@ -682,7 +682,10 @@ func holderValue(h reflect.Value, fc flatCol) (any, bool) {
 
 // identityKey combines key column values into a single comparable map key.
 func identityKey(vals []any) any {
-	if len(vals) == 1 {
+	// A single comparable value is its own key. A non-comparable one — a
+	// []byte key (BINARY/bytea UUID) — would panic as a map key, so it takes
+	// the stringified form below.
+	if len(vals) == 1 && vals[0] != nil && reflect.TypeOf(vals[0]).Comparable() {
 		return vals[0]
 	}
 	var b strings.Builder
