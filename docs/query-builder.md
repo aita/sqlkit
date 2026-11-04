@@ -104,6 +104,13 @@ treat the string as a token, not a value to parse. The Paginator owns cursor
 encoding; supply `WithCodec` to sign or encrypt the envelope. End the keys with a
 unique column (typically the primary key) so the order is total.
 
+A key on a nullable column (a pointer field type such as `Column[*string]`, or a
+`sql.Null*` type) is paginated NULL-safely: NULL sorts as the greatest value —
+last for `KeyAsc`, first for `KeyDesc`, identically on PostgreSQL and MySQL —
+and the seek predicate steps over NULLs, so no row is dropped or repeated. Such
+a key orders by `col IS NULL` first, which an ordinary index on `col` can't
+serve; keys of non-nullable types keep the plain, index-friendly ORDER BY.
+
 ## Struct field tags
 
 The `sqlkit` tag names the column (`sqlkit:"created_at"`) and `sqlkit:"-"` drops

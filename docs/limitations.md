@@ -178,7 +178,9 @@ the `meta` model gains types.)
 
 - 🔒 **Keyset pagination needs a unique tail key.** End a [`Paginator`](https://pkg.go.dev/github.com/aita/sqlkit#Paginator)'s sort keys
   with a unique column (typically the primary key) so the order is total and a
-  cursor lands on exactly one row.
+  cursor lands on exactly one row. A nullable key is detected from its Go type
+  (pointer or `sql.Null*`-style); a nullable column bound to a non-nullable Go
+  type can't hold the NULLs it scans anyway.
 - 🔒 **Filter terms** support `Eq`/`Ne`/`Lt`/`Le`/`Gt`/`Ge`/`In`/[`FilterLike`](https://pkg.go.dev/github.com/aita/sqlkit#FilterLike)/
   [`FilterIsNull`](https://pkg.go.dev/github.com/aita/sqlkit#FilterIsNull) or a raw [`Predicate`](https://pkg.go.dev/github.com/aita/sqlkit#Predicate); other [`FilterTerm`](https://pkg.go.dev/github.com/aita/sqlkit#FilterTerm) values error.
 - 🚧 **`decl` targets PostgreSQL and MySQL** only; other dialects ("oracle", …)
