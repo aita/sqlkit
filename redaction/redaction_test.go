@@ -100,6 +100,30 @@ func TestApplyDoesNotMutateInput(t *testing.T) {
 	}
 }
 
+// TestApplyMasksUnionArmSensitiveColumn checks a literal compared to a CTE column
+// that draws from a sensitive column in a NON-leftmost UNION arm is masked. A set
+// operation names its output from the leftmost arm only and aligns arms by
+// position, so u.name here draws from admins.ssn (the right arm's positionally
+// corresponding column) — the resolver must reach it, or the literal leaks.
+func TestApplyMasksUnionArmSensitiveColumn(t *testing.T) {
+	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
+	admins := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("admins")}
+	m := redaction.New(redaction.Columns("admins.ssn"))
+
+	cte := sql.Select(sql.Col("name")).From(users).
+		Union(sql.Select(sql.Col("ssn")).From(admins)).CTE("u")
+	q := sql.Select(sql.Star()).From(cte).WithCTE(cte).Where(sql.Eq(sql.Col("u.name"), sql.Val("SECRET")))
+	text, a, err := m.Apply(q).ToSQL(sql.PostgreSQLDialect{})
+	if err != nil {
+		t.Fatalf("ToSQL: %v", err)
+	}
+	for _, v := range a {
+		if v == "SECRET" {
+			t.Fatalf("sensitive value leaked (admins.ssn is the right UNION arm): %q args=%v", text, a)
+		}
+	}
+}
+
 // TestApplyMasksSubquery checks a literal inside a subquery's own scope is masked.
 func TestApplyMasksSubquery(t *testing.T) {
 	users := sql.Table{Schema: sql.NewIdent("public"), Name: sql.NewIdent("users")}
