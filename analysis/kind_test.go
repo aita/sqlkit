@@ -55,6 +55,23 @@ func TestKindHelpers(t *testing.T) {
 	}
 }
 
+// A CALL (stored procedure call) has no typed AST anywhere in sqlkit, so a
+// parser frontend always falls back to a raw passthrough and KindOf never
+// classifies one — every CALL reaches DetectKind's raw-text fallback. A
+// procedure's body can write internally with no way for sqlkit to know
+// statically, so IsWrite must stay true (fail safe) rather than fall through
+// to StmtUnknown (IsWrite false), which would silently bypass a
+// ForbidWrites/ReadOnly guard with no signal at all.
+func TestCallIsAWrite(t *testing.T) {
+	if k := analysis.DetectKind("CALL update_balances(1, 2)"); k != analysis.StmtCall || !k.IsWrite() {
+		t.Errorf("DetectKind = %v; want call (a write)", k)
+	}
+	an := analysis.New().Analyze("CALL update_balances(1, 2)", nil)
+	if !an.IsWrite() {
+		t.Errorf("Analyze.IsWrite() = false; want true for a CALL")
+	}
+}
+
 // A MERGE is a data-modifying statement: it must classify as a write through
 // every entry point — KindOf on the AST, DetectKind on the leading keyword, and
 // Analyze.IsWrite — or a read/write router could send it to a read replica. The

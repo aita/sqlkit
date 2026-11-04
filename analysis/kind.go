@@ -29,6 +29,11 @@ const (
 	// StmtMerge is a MERGE, a data-modifying statement that conditionally
 	// inserts, updates, or deletes target rows from a source.
 	StmtMerge
+	// StmtCall is a stored procedure call (CALL). Its effects are not
+	// statically knowable — the procedure body may read, write, or do
+	// nothing — so IsWrite reports true to stay on the safe side, mirroring
+	// how Statement.Access treats an undetermined statement as AccessUnknown.
+	StmtCall
 )
 
 // String renders the kind for logs and reports.
@@ -46,6 +51,8 @@ func (k StmtKind) String() string {
 		return "ddl"
 	case StmtMerge:
 		return "merge"
+	case StmtCall:
+		return "call"
 	default:
 		return "unknown"
 	}
@@ -55,9 +62,10 @@ func (k StmtKind) String() string {
 func (k StmtKind) IsRead() bool { return k == StmtSelect }
 
 // IsWrite reports whether the statement modifies data
-// (INSERT/UPDATE/DELETE/MERGE).
+// (INSERT/UPDATE/DELETE/MERGE), or might (CALL, whose procedure body is not
+// statically knowable).
 func (k StmtKind) IsWrite() bool {
-	return k == StmtInsert || k == StmtUpdate || k == StmtDelete || k == StmtMerge
+	return k == StmtInsert || k == StmtUpdate || k == StmtDelete || k == StmtMerge || k == StmtCall
 }
 
 // FiltersRows reports whether the statement selects the rows it acts on through
@@ -115,6 +123,15 @@ func DetectKind(sqlText string) StmtKind {
 		return StmtDelete
 	case "MERGE":
 		return StmtMerge
+	case "CALL":
+		// A stored procedure call: sqlparse frontends have no AST for it and
+		// fall back to a raw passthrough, so KindOf never classifies one —
+		// every CALL reaches DetectKind. Without this case it fell through to
+		// StmtUnknown, whose IsWrite() is false: a procedure that writes
+		// internally would silently bypass ForbidWrites/ReadOnly enforcement,
+		// with no signal at all (unlike a rejected construct, which at least
+		// fails loudly).
+		return StmtCall
 	case "CREATE", "ALTER", "DROP", "TRUNCATE", "COMMENT":
 		return StmtDDL
 	default:
