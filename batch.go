@@ -107,13 +107,25 @@ func execStatements(ctx context.Context, ex executorBinding, stmts []compiledStm
 	if len(stmts) == 1 {
 		return runExecStmt(ctx, ex, stmts[0].statement(OpExec, ex.sqlDialect(), ex.routeHint()))
 	}
-	if db, ok := ex.(*Database); ok {
+	db, ok := ex.(*Database)
+	var routeHint string
+	if !ok {
+		if routed, isRouted := ex.(routedBinding); isRouted {
+			db, ok = routed.base.(*Database)
+			routeHint = routed.hint
+		}
+	}
+	if db != nil && ok {
+		opts := db.batchWriteSessionOptions()
+		if routeHint != "" {
+			opts = append(opts, WithRoute(routeHint))
+		}
 		var out stdsql.Result
 		err := db.WithSession(ctx, func(s *Session) error {
 			res, err := execOn(ctx, s, stmts)
 			out = res
 			return err
-		}, db.batchWriteSessionOptions()...)
+		}, opts...)
 		if err != nil {
 			return nil, err
 		}

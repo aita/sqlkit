@@ -106,6 +106,9 @@ func (b CreateFunctionBuilder) setPos(pos int) Query { b.s.NodePos = pos; return
 
 // CompileCreateFunction compiles a CREATE FUNCTION statement.
 func (c *Compiler) CompileCreateFunction(s CreateFunctionStmt) (string, error) {
+	if err := c.requirePostgresObject("functions"); err != nil {
+		return "", err
+	}
 	if s.Name.IsZero() {
 		return "", fmt.Errorf("sqlkit/sql: CREATE FUNCTION requires a name")
 	}
@@ -233,6 +236,9 @@ func (b DropFunctionBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b
 
 // CompileDropFunction compiles a DROP FUNCTION statement.
 func (c *Compiler) CompileDropFunction(s DropFunctionStmt) (string, error) {
+	if err := c.requirePostgresObject("functions"); err != nil {
+		return "", err
+	}
 	if s.Name.IsZero() {
 		return "", fmt.Errorf("sqlkit/sql: DROP FUNCTION requires a name")
 	}

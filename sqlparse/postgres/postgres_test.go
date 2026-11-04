@@ -235,3 +235,64 @@ func TestUnmodeledConstructFallsBackToRaw(t *testing.T) {
 		t.Fatalf("ParseOne returned %T, want a RawQuery", q)
 	}
 }
+
+// A WITH RECURSIVE SEARCH BREADTH/DEPTH FIRST clause adds a synthetic ordering
+// column, and CYCLE adds cycle-detection columns and can affect recursion
+// termination; a WINDOW definition extending another named window inherits
+// that window's ORDER BY/frame. sqlkit has no AST node for any of these, so
+// silently dropping them would change the statement's meaning — they must
+// round-trip as a raw passthrough instead.
+func TestSearchCycleAndWindowExtendsWindowFallBackToRaw(t *testing.T) {
+	for _, input := range []string{
+		"WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM t WHERE n < 5) SEARCH DEPTH FIRST BY n SET seq SELECT n FROM t",
+		"WITH RECURSIVE t(n, path) AS (SELECT 1, ARRAY[1] UNION ALL SELECT n + 1, path || n FROM t WHERE n < 5) CYCLE n SET is_cycle USING path SELECT n FROM t",
+		"SELECT sum(x) OVER w FROM t WINDOW w AS (base_win PARTITION BY y), base_win AS (ORDER BY z)",
+	} {
+		raw := assertRaw(t, input)
+		if raw.SQL() == "" {
+			t.Errorf("empty raw SQL for %q", input)
+		}
+	}
+}
+
+// Clauses pg_query accepts but sqlkit cannot model faithfully must fall back to a
+// raw passthrough rather than be silently dropped (which would change the
+// statement's meaning). Each of these carries a meaning-bearing attribute the
+// typed converters do not represent — an explicit SIMILAR TO ESCAPE, a CTE
+// materialization fence, a FROM column-alias list, FROM ONLY, FETCH WITH TIES,
+// or GROUP BY DISTINCT — so it must round-trip as raw, not a modeled query that
+// erases the attribute.
+func TestUnmodeledClausesFallBackToRaw(t *testing.T) {
+	for _, input := range []string{
+		"SELECT a FROM t WHERE x SIMILAR TO 'a%' ESCAPE '!'",
+		"WITH c AS MATERIALIZED (SELECT 1 AS a) SELECT a FROM c",
+		"WITH c AS NOT MATERIALIZED (SELECT 1 AS a) SELECT a FROM c",
+		"SELECT x FROM (SELECT 1 AS a) AS s(x)",
+		"SELECT a FROM ONLY t",
+		"SELECT a FROM t ORDER BY a FETCH FIRST 2 ROWS WITH TIES",
+		"SELECT a FROM t GROUP BY DISTINCT a, b",
+	} {
+		raw := assertRaw(t, input)
+		if raw.SQL() == "" {
+			t.Errorf("empty raw SQL for %q", input)
+		}
+	}
+}
+
+// The default-escape SIMILAR TO and a plain table/derived-table alias are still
+// modeled (not regressed to raw by the ESCAPE / column-list guards).
+func TestSimilarAndAliasStillModeled(t *testing.T) {
+	for _, input := range []string{
+		"SELECT a FROM t WHERE x SIMILAR TO 'a%'",
+		"SELECT a FROM t AS s",
+		"SELECT x FROM (SELECT 1 AS x) AS s",
+	} {
+		q, err := postgres.ParseOne(input)
+		if err != nil {
+			t.Fatalf("ParseOne(%q) error = %v", input, err)
+		}
+		if _, ok := q.(sql.RawQuery); ok {
+			t.Errorf("%q regressed to a RawQuery; want a modeled query", input)
+		}
+	}
+}

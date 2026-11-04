@@ -81,6 +81,14 @@ type Catalog struct {
 	grants        []meta.Grant
 	objectNames   map[string]bool // schema\x00kind\x00name -> declared, for duplicate detection
 	errs          []error
+
+	// skipEnumCheck disables Build's EnumType-references-a-declared-Enum
+	// validation. Set only by the scratch catalogs BuildTable/BuildColumn
+	// construct to assemble one table/column in isolation (e.g. a migration
+	// operation) — there the enum may legitimately be declared by an earlier,
+	// separate migration rather than in this throwaway catalog, so the check
+	// would otherwise reject valid standalone use.
+	skipEnumCheck bool
 }
 
 // pendingFK is a foreign key collected while a table is declared but resolved
