@@ -119,7 +119,7 @@ func SetColumns(rowPtr any, names []string, values []any) error {
 		if !ok {
 			continue
 		}
-		field := rv.FieldByIndex(path)
+		field := fieldByIndexAlloc(rv, path)
 		val := reflect.ValueOf(values[i])
 		if !val.IsValid() {
 			continue
@@ -239,7 +239,7 @@ func rowScanner(rows *stdsql.Rows, t reflect.Type) (func(reflect.Value) error, e
 	return func(v reflect.Value) error {
 		dests := make([]any, len(targets))
 		for i, t := range targets {
-			addr := v.FieldByIndex(t.Path).Addr().Interface()
+			addr := fieldByIndexAlloc(v, t.Path).Addr().Interface()
 			if t.JSON {
 				dests[i] = jsonScanner{dst: addr}
 			} else {
@@ -248,4 +248,19 @@ func rowScanner(rows *stdsql.Rows, t reflect.Type) (func(reflect.Value) error, e
 		}
 		return rows.Scan(dests...)
 	}, nil
+}
+
+// fieldByIndexAlloc is like reflect.Value.FieldByIndex but allocates nil
+// pointer intermediates so embedded pointer-to-struct fields can be scanned.
+func fieldByIndexAlloc(v reflect.Value, index []int) reflect.Value {
+	for _, x := range index {
+		if v.Kind() == reflect.Pointer {
+			if v.IsNil() {
+				v.Set(reflect.New(v.Type().Elem()))
+			}
+			v = v.Elem()
+		}
+		v = v.Field(x)
+	}
+	return v
 }

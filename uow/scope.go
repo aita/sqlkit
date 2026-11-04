@@ -374,8 +374,12 @@ func (s *Scope) Flush(ctx context.Context) error {
 		}
 		s.savepoint = name
 	}
+	guard, err := sp.Savepoint(ctx)
+	if err != nil {
+		return err
+	}
 	if err := s.flush(ctx); err != nil {
-		_ = sp.RollbackTo(ctx, s.savepoint)
+		_ = sp.RollbackTo(ctx, guard)
 		return err
 	}
 	return nil
