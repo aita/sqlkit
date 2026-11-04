@@ -110,8 +110,19 @@ func (p *Plan) UsesIndex(name string) bool {
 		}
 		return false
 	}
-	low := strings.ToLower(name)
-	return p.Contains("using "+low) || p.Contains("index scan on "+low) || p.Contains("index only scan on "+low)
+	// Match the index name as a whole identifier after "using" (Index Scan /
+	// Index Only Scan using idx on tbl) or "Index Scan on" (Bitmap Index Scan on idx),
+	// so a prefix of the real name ("users_email" for users_email_idx) or the
+	// table name ("users") does not count as using the index.
+	re := regexp.MustCompile(`(?i)\b(?:using|index\s+scan\s+on)\s+"?` + regexp.QuoteMeta(name) + `"?(?:\s|$)`)
+	for _, row := range p.rows {
+		for _, cell := range row {
+			if re.MatchString(cell) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // AssertNoSeqScan fails the test if the plan includes a full table scan.

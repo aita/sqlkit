@@ -247,6 +247,12 @@ structural helpers read PostgreSQL's text plan (`Seq Scan`, `Index Scan using
 `EXPLAIN` output captured elsewhere, and `Plan.Text` exposes the rendered plan.
 These need a real database, so they belong in the integration suite.
 
+Planners pick by cost, and on the tiny tables a test seeds PostgreSQL will
+often choose a `Seq Scan` even when a usable index exists, so `AssertNoSeqScan` /
+`AssertUsesIndex` can fail for reasons unrelated to the query. Seed enough rows
+and `ANALYZE` the table first, or run `SET enable_seqscan = off` in the test's
+session, when you want to assert that an index *can* serve the query.
+
 ## Mock database
 
 [`sqltest.NewDB`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#NewDB) is a programmable mock `*sql.DB` for unit tests that should not

@@ -93,3 +93,32 @@ func TestExplainQuery(t *testing.T) {
 		t.Fatalf("issued queries = %v, want one EXPLAIN", q)
 	}
 }
+
+// UsesIndex must match the index name as a whole identifier: a prefix of the
+// real index name or the scanned table's name is not a use of that index.
+func TestUsesIndexWholeName(t *testing.T) {
+	idx := sqltest.NewPlan(sqlkit.PostgreSQLDialect{}, []string{"QUERY PLAN"}, [][]string{
+		{"Index Scan using users_email_idx on users  (cost=0.29..8.30 rows=1 width=36)"},
+	})
+	for _, name := range []string{"users_email", "users", "email_idx"} {
+		if idx.UsesIndex(name) {
+			t.Errorf("UsesIndex(%q) = true, want false", name)
+		}
+	}
+	bitmap := sqltest.NewPlan(sqlkit.PostgreSQLDialect{}, []string{"QUERY PLAN"}, [][]string{
+		{"Bitmap Heap Scan on users  (cost=4.30..10.00 rows=5 width=36)"},
+		{"  ->  Bitmap Index Scan on users_email_idx  (cost=0.00..4.30 rows=5 width=0)"},
+	})
+	if !bitmap.UsesIndex("users_email_idx") {
+		t.Error("UsesIndex(bitmap index) = false, want true")
+	}
+	if bitmap.UsesIndex("users") {
+		t.Error("UsesIndex(table name on a bitmap heap scan) = true, want false")
+	}
+	seq := sqltest.NewPlan(sqlkit.PostgreSQLDialect{}, []string{"QUERY PLAN"}, [][]string{
+		{"Seq Scan on users  (cost=0.00..1.01 rows=1 width=36)"},
+	})
+	if seq.UsesIndex("users") {
+		t.Error("UsesIndex(table name on a seq scan) = true, want false")
+	}
+}
