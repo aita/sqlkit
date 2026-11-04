@@ -15,7 +15,7 @@ import (
 //
 // ex is any sqlkit.Querier, satisfied by both *sqlkit.Database (auto-commit)
 // and *sqlkit.Session (inside a transaction).
-func InsertRows(t *testing.T, ex sqlkit.Querier, table sqlkit.Table, rows ...any) {
+func InsertRows(t testing.TB, ex sqlkit.Querier, table sqlkit.Table, rows ...any) {
 	t.Helper()
 	if len(rows) == 0 {
 		return
@@ -31,7 +31,7 @@ func InsertRows(t *testing.T, ex sqlkit.Querier, table sqlkit.Table, rows ...any
 // falls back to Result.LastInsertId. It assumes a single auto-generated
 // integer primary-key column, which is the common test fixture; tables with a
 // composite or non-integer key are not supported.
-func InsertID(t *testing.T, ex sqlkit.Querier, table sqlkit.Table, row any) int64 {
+func InsertID(t testing.TB, ex sqlkit.Querier, table sqlkit.Table, row any) int64 {
 	t.Helper()
 	ctx := context.Background()
 	pk := table.PrimaryKey()
@@ -65,7 +65,7 @@ func InsertID(t *testing.T, ex sqlkit.Querier, table sqlkit.Table, row any) int6
 // RETURNING, so it is PostgreSQL-only; on a dialect without RETURNING (MySQL) it
 // skips the test rather than silently returning unpopulated rows. Use InsertRows
 // or InsertID on those dialects.
-func InsertReturning[Row any](t *testing.T, ex sqlkit.Querier, table sqlkit.Table, rows ...Row) []Row {
+func InsertReturning[Row any](t testing.TB, ex sqlkit.Querier, table sqlkit.Table, rows ...Row) []Row {
 	t.Helper()
 	if !ex.Dialect().SupportsReturning() {
 		t.Skipf("sqltest: InsertReturning needs RETURNING, unsupported by %T", ex.Dialect())

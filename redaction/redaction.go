@@ -232,7 +232,23 @@ func (m *Redactor) rewriteSelect(v sql.SelectStmt, sc *scope) sql.Query {
 	v.GroupBy = m.rewriteExprs(v.GroupBy, sc)
 	v.DistinctOn = m.rewriteExprs(v.DistinctOn, sc)
 	v.OrderBy = m.rewriteOrderTerms(v.OrderBy, sc)
+	v.Windows = m.rewriteNamedWindows(v.Windows, sc)
 	return v
+}
+
+// rewriteNamedWindows rewrites the PARTITION BY / ORDER BY expressions of each
+// WINDOW-clause definition, so a sensitive comparison hidden in a named window
+// (WINDOW w AS (PARTITION BY (ssn = 'x'))) is masked like one in an inline OVER.
+func (m *Redactor) rewriteNamedWindows(windows []sql.NamedWindow, sc *scope) []sql.NamedWindow {
+	if len(windows) == 0 {
+		return windows
+	}
+	out := clone(windows)
+	for i := range out {
+		out[i].Partitions = m.rewriteExprs(out[i].Partitions, sc)
+		out[i].OrderByTerms = m.rewriteOrderTerms(out[i].OrderByTerms, sc)
+	}
+	return out
 }
 
 func (m *Redactor) rewriteInsert(v sql.InsertStmt, sc *scope) sql.Query {
@@ -240,6 +256,9 @@ func (m *Redactor) rewriteInsert(v sql.InsertStmt, sc *scope) sql.Query {
 		// The target's columns are named positionally by v.Columns; mask the value
 		// in each row whose column is sensitive. Without a column list the positions
 		// are the table's own columns, which we cannot name here, so only recurse.
+		// (The compiler rejects a columnless INSERT VALUES outright, so this shape
+		// never reaches SQL — unlike the analogous MERGE ... THEN INSERT VALUES,
+		// which the compiler accepts; see rewriteInsertValues.)
 		sensitive := make([]bool, len(v.Columns))
 		for i, c := range v.Columns {
 			sensitive[i] = m.isSensitive(sc, analysis.NamedColumn(c))
@@ -409,9 +428,20 @@ func (m *Redactor) rewriteInsertValues(columns []sql.Ident, values []sql.Express
 	}
 	out := clone(values)
 	for i := range out {
-		if i < len(columns) && m.isSensitive(sc, analysis.NamedColumn(columns[i])) {
+		switch {
+		case i < len(columns):
+			if m.isSensitive(sc, analysis.NamedColumn(columns[i])) {
+				out[i] = m.maskValue(out[i])
+			} else {
+				out[i] = m.rewriteExpr(out[i], sc)
+			}
+		case m.maskUnresolved:
+			// No column list (a valid MERGE ... THEN INSERT VALUES that assigns the
+			// table's own column order): this value's target column can't be named,
+			// so its sensitivity can't be resolved. Fail safe like any other
+			// unresolved reference, rather than assume it's fine and leak it.
 			out[i] = m.maskValue(out[i])
-		} else {
+		default:
 			out[i] = m.rewriteExpr(out[i], sc)
 		}
 	}

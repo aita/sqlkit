@@ -39,3 +39,12 @@ func TestFunctionDDLFallsBackToRaw(t *testing.T) {
 		"RETURNS integer LANGUAGE sql AS $$ SELECT a + b $$")
 	assertRaw(t, "DROP FUNCTION IF EXISTS add(integer, integer) CASCADE")
 }
+
+// GRANTED BY names the grantor of record; sql.GrantBuilder/RevokeBuilder have no
+// grantor concept. Dropping it doesn't change the effective privilege but does
+// silently attribute the grant/revoke to the wrong role, so both must fall back
+// to raw.
+func TestGrantedByFallsBackToRaw(t *testing.T) {
+	assertRaw(t, "GRANT SELECT ON foo TO bar GRANTED BY admin")
+	assertRaw(t, "REVOKE SELECT ON foo FROM bar GRANTED BY admin")
+}

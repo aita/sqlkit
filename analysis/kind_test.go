@@ -24,6 +24,7 @@ func TestKindOf(t *testing.T) {
 		{"insert", sql.InsertInto(users).Columns("name").Values("a"), analysis.StmtInsert, true},
 		{"update", sql.Update(users).Set(sql.Set("name", sql.Expr("a"))), analysis.StmtUpdate, true},
 		{"delete", sql.DeleteFrom(users), analysis.StmtDelete, true},
+		{"merge", sql.MergeInto(users).Using(orders).On(sql.Eq(sql.Col("users.id"), sql.Col("orders.id"))).When(sql.WhenMatched().ThenDelete()), analysis.StmtMerge, true},
 		{"truncate is ddl", sql.Truncate(users), analysis.StmtDDL, true},
 		{"nil is unknown", nil, analysis.StmtUnknown, false},
 	}
@@ -44,13 +45,79 @@ func TestKindHelpers(t *testing.T) {
 	if analysis.StmtSelect.IsWrite() {
 		t.Errorf("StmtSelect.IsWrite() = true, want false")
 	}
-	for _, k := range []analysis.StmtKind{analysis.StmtInsert, analysis.StmtUpdate, analysis.StmtDelete} {
+	for _, k := range []analysis.StmtKind{analysis.StmtInsert, analysis.StmtUpdate, analysis.StmtDelete, analysis.StmtMerge} {
 		if !k.IsWrite() {
 			t.Errorf("%s.IsWrite() = false, want true", k)
 		}
 		if k.IsRead() {
 			t.Errorf("%s.IsRead() = true, want false", k)
 		}
+	}
+}
+
+// A CALL (stored procedure call) has no typed AST anywhere in sqlkit, so a
+// parser frontend always falls back to a raw passthrough and KindOf never
+// classifies one — every CALL reaches DetectKind's raw-text fallback. A
+// procedure's body can write internally with no way for sqlkit to know
+// statically, so IsWrite must stay true (fail safe) rather than fall through
+// to StmtUnknown (IsWrite false), which would silently bypass a
+// ForbidWrites/ReadOnly guard with no signal at all.
+func TestCallIsAWrite(t *testing.T) {
+	if k := analysis.DetectKind("CALL update_balances(1, 2)"); k != analysis.StmtCall || !k.IsWrite() {
+		t.Errorf("DetectKind = %v; want call (a write)", k)
+	}
+	an := analysis.New().Analyze("CALL update_balances(1, 2)", nil)
+	if !an.IsWrite() {
+		t.Errorf("Analyze.IsWrite() = false; want true for a CALL")
+	}
+}
+
+// A MERGE is a data-modifying statement: it must classify as a write through
+// every entry point — KindOf on the AST, DetectKind on the leading keyword, and
+// Analyze.IsWrite — or a read/write router could send it to a read replica. The
+// analysis layer recognized MERGE inside a writable CTE (ctesWrite) but missed
+// the top-level statement.
+func TestMergeIsAWrite(t *testing.T) {
+	accounts := sql.Table{Name: sql.NewIdent("accounts")}
+	staging := sql.Table{Name: sql.NewIdent("staging")}
+	q := sql.MergeInto(accounts).Using(staging).
+		On(sql.Eq(sql.Col("accounts.id"), sql.Col("staging.id"))).
+		When(sql.WhenMatched().ThenUpdate(sql.Set("balance", sql.Expr(0)))).
+		When(sql.WhenNotMatched().ThenInsert([]string{"id"}, 1))
+
+	if k, ok := analysis.KindOf(q); !ok || k != analysis.StmtMerge || !k.IsWrite() {
+		t.Errorf("KindOf = (%v, %v); want (merge, true) with IsWrite true", k, ok)
+	}
+	if k := analysis.DetectKind("MERGE INTO accounts USING staging ON true"); k != analysis.StmtMerge || !k.IsWrite() {
+		t.Errorf("DetectKind = %v; want merge (a write)", k)
+	}
+	an := analysis.New().Analyze("MERGE INTO accounts ...", q)
+	if !an.IsWrite() {
+		t.Errorf("Analyze.IsWrite() = false; want true for a MERGE")
+	}
+	if got := analysis.Tables(q); !reflect.DeepEqual(got, []string{"accounts", "staging"}) {
+		t.Errorf("Tables = %v; want [accounts staging]", got)
+	}
+}
+
+// REPLACE INTO is MySQL's insert-or-replace: a write. The parsed-AST path
+// (KindOf, via sql.InsertStmt's Replace flag) already classified it correctly;
+// DetectKind's raw-text fallback fell through to StmtUnknown (IsWrite false),
+// so a REPLACE INTO analyzed without a parser (or after a parse failure)
+// silently bypassed a ForbidWrites/ReadOnly guard.
+func TestReplaceIntoIsAWrite(t *testing.T) {
+	users := sql.Table{Name: sql.NewIdent("users")}
+	q := sql.ReplaceInto(users).Columns("id", "name").Values(1, "a")
+
+	if k, ok := analysis.KindOf(q); !ok || k != analysis.StmtInsert || !k.IsWrite() {
+		t.Errorf("KindOf = (%v, %v); want (insert, true) with IsWrite true", k, ok)
+	}
+	if k := analysis.DetectKind("REPLACE INTO users (id, name) VALUES (1, 'a')"); k != analysis.StmtInsert || !k.IsWrite() {
+		t.Errorf("DetectKind = %v; want insert (a write)", k)
+	}
+	an := analysis.New().Analyze("REPLACE INTO users (id, name) VALUES (1, 'a')", q)
+	if !an.IsWrite() {
+		t.Errorf("Analyze.IsWrite() = false; want true for a REPLACE INTO")
 	}
 }
 

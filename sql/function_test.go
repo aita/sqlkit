@@ -1,6 +1,9 @@
 package sql
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestCreateFunctionCompile(t *testing.T) {
 	stmt := CreateFunction("add").OrReplace().
@@ -45,6 +48,26 @@ func TestDropFunctionCompile(t *testing.T) {
 	want := `DROP FUNCTION IF EXISTS "hr"."add"(integer, integer) CASCADE;`
 	if got != want {
 		t.Fatalf("ToSQL() = %q, want %q", got, want)
+	}
+}
+
+// TestFunctionRejectedOnMySQL covers requirePostgresObject for CREATE/DROP
+// FUNCTION: the body is always dollar-quoted and LANGUAGE is mandatory, which
+// is PostgreSQL-only syntax MySQL's parser rejects — compiling for MySQL must
+// error, not silently emit invalid SQL (matching the sequence/enum/extension/
+// materialized-view guards; requirePostgresObject omitted functions from its
+// sweep until this fix).
+func TestFunctionRejectedOnMySQL(t *testing.T) {
+	mysql := MySQLDialect{}
+	if _, _, err := CreateFunction("f").Language("sql").Body("SELECT 1").ToSQL(mysql); err == nil {
+		t.Fatal("CREATE FUNCTION on mysql succeeded, want error")
+	} else if !strings.Contains(err.Error(), "does not support functions") {
+		t.Fatalf("CREATE FUNCTION on mysql error = %v, want mentioning functions", err)
+	}
+	if _, _, err := DropFunction("f").ToSQL(mysql); err == nil {
+		t.Fatal("DROP FUNCTION on mysql succeeded, want error")
+	} else if !strings.Contains(err.Error(), "does not support functions") {
+		t.Fatalf("DROP FUNCTION on mysql error = %v, want mentioning functions", err)
 	}
 }
 
