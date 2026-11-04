@@ -128,10 +128,13 @@ err := db.Select(appdb.Posts.Title, sql.As(appdb.Users.Name, "author")).
 ## Multiple databases
 
 The same query builder, schema, and migrations target both **PostgreSQL** and
-**MySQL**; PostgreSQL is the default and the most exercised dialect. `sql.Dialect`
-is the single point where engine differences are resolved — identifier quoting,
-placeholders, capability flags, and DDL rendering. Engine-specific gaps surface
-at compile time (e.g. MySQL has no `RETURNING`); see
+**MySQL**; PostgreSQL is the default and the most exercised dialect. **SQLite**
+and **libSQL** (the Turso SQLite fork) are also available as `sql.Dialect`
+targets — reached via `WithDialect` since sqlkit bundles no driver for them —
+along with a portable ANSI/standard target. `sql.Dialect` is the single point
+where engine differences are resolved — identifier quoting, placeholders,
+capability flags, and DDL rendering. Engine-specific gaps surface at compile time
+(e.g. MySQL has no `RETURNING`, SQLite has no `TRUNCATE`); see
 [Limitations](docs/limitations.md) for the full matrix.
 
 ## License

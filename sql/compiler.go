@@ -1089,6 +1089,9 @@ func (c *Compiler) CompileSelect(q SelectStmt) (string, []any, error) {
 		// MySQL's documented "all rows" sentinel count so the OFFSET is accepted;
 		// LIMIT <count> OFFSET <offset> is valid MySQL syntax.
 		sb.WriteString(" LIMIT 18446744073709551615")
+	} else if q.HasOffset && sqliteFamily(c.Dialect.Name()) {
+		// SQLite likewise requires a LIMIT before OFFSET; -1 means no limit.
+		sb.WriteString(" LIMIT -1")
 	}
 	if q.HasOffset {
 		v, err := limitCount("OFFSET", q.Offset)
@@ -1165,6 +1168,13 @@ func (c *Compiler) CompileInsert(q InsertStmt) (string, []any, error) {
 		selectSQL, selectArgs, err := c.compileSubquery(q.Select)
 		if err != nil {
 			return "", nil, err
+		}
+		if q.Conflict != nil && sqliteFamily(c.Dialect.Name()) {
+			// SQLite parses "INSERT ... SELECT ... ON CONFLICT" ambiguously (the
+			// ON may read as a join constraint of the SELECT's last source). Its
+			// documented fix is a WHERE clause on the SELECT; wrapping it as a
+			// derived table with WHERE true supplies one whatever the SELECT is.
+			selectSQL = "SELECT * FROM (" + selectSQL + ") WHERE true"
 		}
 		sb.WriteString(" ")
 		sb.WriteString(selectSQL)
@@ -1426,6 +1436,9 @@ func (c *Compiler) CompileDelete(q DeleteStmt) (string, []any, error) {
 	}
 	inline := c.usesInlineJoins()
 	hasSources := len(q.Using) > 0 || len(q.Joins) > 0
+	if hasSources && sqliteFamily(c.Dialect.Name()) {
+		return "", nil, fmt.Errorf("sqlkit/sql: the %s dialect has no multi-table DELETE (USING/JOIN); filter with a subquery (WHERE ... IN (SELECT ...)) instead", c.Dialect.Name())
+	}
 	var sb strings.Builder
 	var args []any
 	withSQL, withArgs, err := c.compileWith(q.With)

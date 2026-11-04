@@ -3,6 +3,7 @@ package sql
 import (
 	"database/sql/driver"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -474,5 +475,188 @@ func TestJSONAccessErrorsAndKeyForms(t *testing.T) {
 	}
 	if !strings.Contains(got, `"a\\\".b"`) {
 		t.Errorf("backslash/quote not escaped in path member: %q", got)
+	}
+}
+
+// --- SQLite and libSQL ---------------------------------------------------
+
+func TestSQLiteDialectMetadataAndByName(t *testing.T) {
+	d := SQLiteDialect{}
+	if d.Name() != "sqlite" || !d.SupportsReturning() {
+		t.Fatalf("sqlite metadata wrong: name=%q returning=%v", d.Name(), d.SupportsReturning())
+	}
+	if got, want := d.QuoteIdent("s.t"), `"s"."t"`; got != want {
+		t.Errorf("QuoteIdent = %q, want %q", got, want)
+	}
+	if got := d.Placeholder(3); got != "?" {
+		t.Errorf("Placeholder = %q, want ?", got)
+	}
+	for _, name := range []string{"sqlite", "sqlite3"} {
+		got, err := DialectByName(name)
+		if err != nil || got.Name() != "sqlite" {
+			t.Fatalf("DialectByName(%q) = %v, %v", name, got, err)
+		}
+	}
+}
+
+func TestLibSQLDialectEmbedsSQLite(t *testing.T) {
+	d := LibSQLDialect{}
+	if d.Name() != "libsql" || !d.SupportsReturning() {
+		t.Fatalf("libsql metadata wrong: name=%q returning=%v", d.Name(), d.SupportsReturning())
+	}
+	got, err := DialectByName("libsql")
+	if err != nil || got.Name() != "libsql" {
+		t.Fatalf("DialectByName(libsql) = %v, %v", got, err)
+	}
+	// libSQL is SQL-compatible with SQLite, so every query compiles identically
+	// under both dialects.
+	queries := []Query{
+		Select(Col("id")).From(Table{Name: NewIdent("users")}).Where(Eq(Col("active"), true)),
+		InsertInto(Table{Name: NewIdent("t")}).Columns("a").Values(1).
+			OnConflict("a").DoUpdate(Set("b", Excluded("b"))),
+		CreateTable(Table{Name: NewIdent("t")}).
+			Column(ColumnDef{Name: NewIdent("id"), Type: EngineType{Name: "INTEGER"}, AutoIncrement: true}).
+			PrimaryKey("id"),
+	}
+	for _, q := range queries {
+		ssql, sargs, serr := q.ToSQL(SQLiteDialect{})
+		lsql, largs, lerr := q.ToSQL(LibSQLDialect{})
+		if serr != nil || lerr != nil {
+			t.Fatalf("compile error: sqlite=%v libsql=%v", serr, lerr)
+		}
+		if ssql != lsql {
+			t.Errorf("libsql output differs from sqlite:\n  sqlite: %q\n  libsql: %q", ssql, lsql)
+		}
+		if !reflect.DeepEqual(sargs, largs) {
+			t.Errorf("libsql args differ: %v vs %v", sargs, largs)
+		}
+	}
+}
+
+func TestSQLiteAutoIncrementInlinesPrimaryKey(t *testing.T) {
+	// SQLite's INTEGER PRIMARY KEY AUTOINCREMENT declares the PK inline, so the
+	// standalone PRIMARY KEY constraint is omitted for that single column.
+	got, _, err := CreateTable(Table{Name: NewIdent("t")}).
+		Column(ColumnDef{Name: NewIdent("id"), Type: EngineType{Name: "INTEGER"}, AutoIncrement: true}).
+		Column(ColumnDef{Name: NewIdent("name"), Type: RawType("TEXT"), NotNull: true}).
+		PrimaryKey("id").
+		ToSQL(SQLiteDialect{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "CREATE TABLE \"t\" (\n    \"id\" INTEGER PRIMARY KEY AUTOINCREMENT,\n    \"name\" TEXT NOT NULL\n);"
+	if got != want {
+		t.Errorf("got\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestSQLiteUpsertAndJSON(t *testing.T) {
+	got, _, err := InsertInto(Table{Name: NewIdent("users")}).Columns("email", "name").
+		Values("a@x", "Alice").OnConflict("email").DoUpdate(Set("name", Excluded("name"))).
+		ToSQL(SQLiteDialect{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `INSERT INTO "users" ("email", "name") VALUES (?, ?) ON CONFLICT ("email") DO UPDATE SET "name" = excluded."name"`; got != want {
+		t.Errorf("upsert:\n got %q\nwant %q", got, want)
+	}
+
+	j, _, err := Select(JSONGet(Col("data"), "a", "b")).From(Table{Name: NewIdent("t")}).ToSQL(SQLiteDialect{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(j, "->") {
+		t.Errorf("expected -> JSON operators in %q", j)
+	}
+}
+
+func TestSQLiteRejectsTruncateAndReplaceView(t *testing.T) {
+	if _, _, err := Truncate(Table{Name: NewIdent("t")}).ToSQL(SQLiteDialect{}); err == nil {
+		t.Error("SQLite TRUNCATE should error")
+	}
+	if _, _, err := Truncate(Table{Name: NewIdent("t")}).ToSQL(LibSQLDialect{}); err == nil {
+		t.Error("libSQL TRUNCATE should error")
+	}
+}
+
+// SQLite rejects parenthesized set-operation arms: plain arms are bare, and an
+// arm with its own clauses (or a different nested operator) is wrapped as a
+// derived table.
+func TestSQLiteCompoundArms(t *testing.T) {
+	a := Select(Col("x")).From(Table{Name: NewIdent("t")})
+	b := Select(Col("x")).From(Table{Name: NewIdent("s")})
+	cases := map[string]struct {
+		q    Query
+		want string
+	}{
+		"plain":       {a.Union(b), `SELECT "x" FROM "t" UNION SELECT "x" FROM "s"`},
+		"chain":       {a.UnionAll(b).UnionAll(a), `SELECT "x" FROM "t" UNION ALL SELECT "x" FROM "s" UNION ALL SELECT "x" FROM "t"`},
+		"arm limit":   {a.Union(b.Limit(1)), `SELECT "x" FROM "t" UNION SELECT * FROM (SELECT "x" FROM "s" LIMIT 1)`},
+		"mixed ops":   {a.Union(a.Intersect(b)), `SELECT "x" FROM "t" UNION SELECT * FROM (SELECT "x" FROM "t" INTERSECT SELECT "x" FROM "s")`},
+		"bare offset": {a.Union(b).Offset(2), `SELECT "x" FROM "t" UNION SELECT "x" FROM "s" LIMIT -1 OFFSET 2`},
+	}
+	for name, c := range cases {
+		got, _, err := c.q.ToSQL(SQLiteDialect{})
+		if err != nil || got != c.want {
+			t.Errorf("%s: got %q (err %v), want %q", name, got, err, c.want)
+		}
+	}
+	// PostgreSQL keeps its parenthesized arms.
+	if got, _, _ := a.Union(b).ToSQL(PostgreSQLDialect{}); !strings.HasPrefix(got, "(") {
+		t.Errorf("postgres union = %q, want parenthesized arms", got)
+	}
+}
+
+func TestSQLiteBareOffsetAndValuesSource(t *testing.T) {
+	q := Select(Col("x")).From(Table{Name: NewIdent("t")}).Offset(3)
+	if got, _, _ := q.ToSQL(SQLiteDialect{}); got != `SELECT "x" FROM "t" LIMIT -1 OFFSET 3` {
+		t.Errorf("bare offset = %q", got)
+	}
+	v := Select(Col("v.k")).From(ValuesSource([][]Expression{{Val(1)}, {Val(2)}}, "v", "k"))
+	if got, _, _ := v.ToSQL(SQLiteDialect{}); strings.Contains(got, "VALUES") {
+		t.Errorf("values source = %q, want a UNION ALL derived table", got)
+	}
+	if (SQLiteDialect{}).MaxBindParams() != 32766 {
+		t.Error("MaxBindParams")
+	}
+}
+
+// Constructs SQLite cannot express are rejected at ToSQL with a message naming
+// the dialect, rather than emitted as SQL the engine rejects.
+func TestSQLiteRejectsUnsupportedConstructs(t *testing.T) {
+	tb := func(n string) Table { return Table{Name: NewIdent(n)} }
+	cases := map[string]Query{
+		"delete using":         DeleteFrom(tb("t")).Using(tb("s")).Where(Eq(Col("t.x"), Col("s.x"))),
+		"on conflict on const": InsertInto(tb("t")).Columns("x").Values(1).OnConflictConstraint("k").DoNothing(),
+		"alter column type":    AlterTable(tb("t")).AlterColumnType("n", EngineType{Name: "text"}),
+		"set not null":         AlterTable(tb("t")).SetNotNull("n"),
+		"drop primary key":     AlterTable(tb("t")).DropPrimaryKey(),
+		"two alterations": AlterTable(tb("t")).
+			AddColumn(ColumnDef{Name: NewIdent("p"), Type: EngineType{Name: "text"}}).
+			AddColumn(ColumnDef{Name: NewIdent("q"), Type: EngineType{Name: "text"}}),
+		"sequence": CreateSequence(tb("q")),
+		"autoinc composite pk": CreateTable(tb("u")).
+			Column(ColumnDef{Name: NewIdent("id"), Type: EngineType{Name: "integer"}, AutoIncrement: true}).
+			Column(ColumnDef{Name: NewIdent("k"), Type: EngineType{Name: "integer"}}).PrimaryKey("id", "k"),
+		"autoinc no pk": CreateTable(tb("u")).
+			Column(ColumnDef{Name: NewIdent("id"), Type: EngineType{Name: "integer"}, AutoIncrement: true}),
+	}
+	for name, q := range cases {
+		if _, _, err := q.ToSQL(SQLiteDialect{}); err == nil {
+			t.Errorf("%s: compiled, want a SQLite rejection", name)
+		}
+	}
+}
+
+func TestSQLiteInsertSelectUpsertAndIntAutoIncrement(t *testing.T) {
+	tb := func(n string) Table { return Table{Name: NewIdent(n)} }
+	q := InsertInto(tb("t")).Columns("id").FromSelect(Select(Col("id")).From(tb("s"))).OnConflict("id").DoNothing()
+	want := `INSERT INTO "t" ("id") SELECT * FROM (SELECT "id" FROM "s") WHERE true ON CONFLICT ("id") DO NOTHING`
+	if got, _, err := q.ToSQL(SQLiteDialect{}); err != nil || got != want {
+		t.Errorf("insert-select upsert = %q (err %v), want %q", got, err, want)
+	}
+	ct := CreateTable(tb("u")).Column(ColumnDef{Name: NewIdent("id"), Type: EngineType{Name: "int8"}, AutoIncrement: true, NotNull: true}).PrimaryKey("id")
+	if got, _, err := ct.ToSQL(SQLiteDialect{}); err != nil || !strings.Contains(got, "INTEGER PRIMARY KEY AUTOINCREMENT") {
+		t.Errorf("int8 auto-increment = %q (err %v)", got, err)
 	}
 }

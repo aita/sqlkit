@@ -210,6 +210,26 @@ type FuncRenderer interface {
 	RenderFunc(name string, args []string) (string, bool)
 }
 
+// InlineAutoIncrementPrimaryKey is an optional capability for dialects whose
+// auto-increment column clause already declares the primary key inline (SQLite's
+// INTEGER PRIMARY KEY AUTOINCREMENT). When it reports true, CompileCreateTable
+// omits the standalone PRIMARY KEY constraint for a single auto-increment
+// primary-key column, which would otherwise be a duplicate. The compiler detects
+// it with a type assertion; PostgreSQL/MySQL do not implement it and keep the
+// standalone constraint.
+type InlineAutoIncrementPrimaryKey interface {
+	InlinesAutoIncrementPrimaryKey() bool
+}
+
+// BareCompoundArmsDialect is an optional capability for dialects whose grammar
+// rejects a parenthesized arm in a set operation (SQLite: "(SELECT ...) UNION
+// (SELECT ...)" is a syntax error). When it reports true the compiler writes a
+// plain arm bare and wraps any other (one with its own ORDER BY / LIMIT /
+// OFFSET, or a nested chain of a different operator) as SELECT * FROM (...).
+type BareCompoundArmsDialect interface {
+	BareCompoundArms() bool
+}
+
 // DerivedValuesUnionDialect is an optional capability for dialects that cannot
 // alias the columns of a VALUES row constructor used as a derived table. MySQL
 // names VALUES columns column_0, column_1, … with no way to override them, so a
@@ -321,11 +341,22 @@ func DialectByName(name string) (Dialect, error) {
 		return PostgreSQLDialect{}, nil
 	case "mysql":
 		return MySQLDialect{}, nil
+	case "sqlite", "sqlite3":
+		return SQLiteDialect{}, nil
+	case "libsql":
+		return LibSQLDialect{}, nil
 	case "standard", "ansi", "sql":
 		return StandardSQLDialect{}, nil
 	default:
-		return nil, fmt.Errorf("sql: unsupported dialect %q (want postgres, mysql, or standard)", name)
+		return nil, fmt.Errorf("sql: unsupported dialect %q (want postgres, mysql, sqlite, libsql, or standard)", name)
 	}
+}
+
+// sqliteFamily reports whether name is SQLite or its libSQL fork, which share
+// SQLite's DDL constraints: no IDENTITY columns, no TRUNCATE, no CREATE OR
+// REPLACE VIEW, and no CASCADE on DROP VIEW.
+func sqliteFamily(name string) bool {
+	return name == "sqlite" || name == "libsql"
 }
 
 // typeWithArgs appends (length) or (precision, scale) when the type uses one.
@@ -861,6 +892,146 @@ func (MySQLDialect) JSONAccess(operand string, path []any, asText bool) (string,
 	}
 	return extract, nil
 }
+
+// SQLiteDialect implements SQLite identifier quoting, placeholders, and DDL
+// rendering. SQLite is dynamically typed with type affinity, so DDL types are
+// rendered leniently; it supports RETURNING (>= 3.35), the PostgreSQL-style ON
+// CONFLICT upsert (including excluded.<col>), and the -> / ->> JSON operators
+// (>= 3.38). Its REGEXP operator requires a host-registered regexp() function.
+type SQLiteDialect struct{}
+
+// Name identifies the dialect.
+func (SQLiteDialect) Name() string { return "sqlite" }
+
+func (d SQLiteDialect) QuoteIdent(identifier string) string {
+	parts := strings.Split(identifier, ".")
+	for i, part := range parts {
+		parts[i] = d.QuoteName(part)
+	}
+	return strings.Join(parts, ".")
+}
+
+func (SQLiteDialect) QuoteName(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
+func (SQLiteDialect) Placeholder(int) string { return "?" }
+
+// SupportsReturning reports RETURNING support (SQLite >= 3.35 has it).
+func (SQLiteDialect) SupportsReturning() bool { return true }
+
+// MaxBindParams is SQLite's default SQLITE_MAX_VARIABLE_NUMBER (3.32+).
+func (SQLiteDialect) MaxBindParams() int { return 32766 }
+
+// BareCompoundArms reports that SQLite rejects parenthesized set-operation arms.
+func (SQLiteDialect) BareCompoundArms() bool { return true }
+
+// UsesValuesUnion renders a VALUES derived table as a UNION ALL of SELECTs:
+// SQLite can't alias a VALUES list's columns ("(VALUES ...) AS v(x)").
+func (SQLiteDialect) UsesValuesUnion() bool { return true }
+
+var sqliteLengthTypes = map[string]bool{"varchar": true, "char": true}
+var sqliteDecimalTypes = map[string]bool{"numeric": true, "decimal": true}
+
+func (SQLiteDialect) ColumnType(name string, length, precision, scale int) string {
+	return typeWithArgs(strings.ToLower(name), length, precision, scale, sqliteLengthTypes, sqliteDecimalTypes)
+}
+
+// AutoIncrementColumn renders SQLite's rowid auto-increment clause, which also
+// declares the primary key inline (see InlinesAutoIncrementPrimaryKey). Any
+// integer type qualifies — SQLite gives a declared type containing "INT"
+// integer affinity (int8, bigint, smallint, ...) — and is rendered as the
+// INTEGER the rowid alias requires.
+func (SQLiteDialect) AutoIncrementColumn(name string, length, precision, scale int) (string, bool) {
+	if !strings.Contains(strings.ToUpper(name), "INT") {
+		return "", false
+	}
+	return "INTEGER PRIMARY KEY AUTOINCREMENT", true
+}
+
+// InlinesAutoIncrementPrimaryKey reports that the auto-increment clause already
+// declares the primary key inline, so CREATE TABLE omits the standalone
+// PRIMARY KEY constraint for that column.
+func (SQLiteDialect) InlinesAutoIncrementPrimaryKey() bool { return true }
+
+// SQLite has no COMMENT syntax, inline or standalone.
+func (SQLiteDialect) InlineColumnComment(string) string           { return "" }
+func (SQLiteDialect) InlineTableComment(string) string            { return "" }
+func (SQLiteDialect) TableCommentStatement(string, string) string { return "" }
+func (SQLiteDialect) ColumnCommentStatement(string, string, string) string {
+	return ""
+}
+
+// DropForeignKey is a no-op: SQLite cannot drop a single foreign key in place
+// (it requires rebuilding the table), so there is no standalone statement.
+func (SQLiteDialect) DropForeignKey(string, string) string { return "" }
+
+func (SQLiteDialect) DropIndex(qualifiedIndex, _, _ string) string {
+	return "DROP INDEX IF EXISTS " + qualifiedIndex + ";"
+}
+
+// Upsert renders SQLite's PostgreSQL-style ON CONFLICT clause. SQLite has no
+// ON CONFLICT ON CONSTRAINT form; name the conflict columns instead.
+func (d SQLiteDialect) Upsert(cl UpsertClause) (string, error) {
+	if cl.TargetConstraint != "" {
+		return "", fmt.Errorf("sql: SQLite has no ON CONFLICT ON CONSTRAINT; give the conflict target columns instead")
+	}
+	return renderOnConflict(cl, "SQLite")
+}
+
+// JSONAccess chains the -> / ->> operators like PostgreSQL (SQLite >= 3.38).
+func (SQLiteDialect) JSONAccess(operand string, path []any, asText bool) (string, error) {
+	return renderArrowJSONAccess(operand, path, asText)
+}
+
+// JSONObject renders SQLite's flat json_object(key, value, ...) form; the
+// aggregate is json_group_object rather than the standard JSON_OBJECTAGG.
+func (SQLiteDialect) JSONObject(funcName string, pairs [][2]string) string {
+	name := "json_object"
+	if strings.EqualFold(funcName, "JSON_OBJECTAGG") {
+		name = "json_group_object"
+	}
+	parts := make([]string, 0, len(pairs)*2)
+	for _, kv := range pairs {
+		parts = append(parts, kv[0], kv[1])
+	}
+	return name + "(" + strings.Join(parts, ", ") + ")"
+}
+
+// Regexp renders SQLite's REGEXP / NOT REGEXP operator. It requires a host-
+// registered regexp() function (SQLite ships no built-in implementation). SQLite
+// has no inline case-insensitivity flag, so a case-insensitive match is rejected.
+func (SQLiteDialect) Regexp(left, pattern string, negate, caseInsensitive bool) (string, error) {
+	if caseInsensitive {
+		return "", fmt.Errorf("sql: SQLite cannot express a case-insensitive regular-expression match inline")
+	}
+	operator := "REGEXP"
+	if negate {
+		operator = "NOT REGEXP"
+	}
+	return "(" + left + " " + operator + " " + pattern + ")", nil
+}
+
+// RenderFunc remaps canonical function names to SQLite's spelling.
+func (SQLiteDialect) RenderFunc(name string, args []string) (string, bool) {
+	switch strings.ToUpper(name) {
+	case "NOW", "CURRENT_TIMESTAMP":
+		return "CURRENT_TIMESTAMP", true
+	case "CHAR_LENGTH", "LENGTH":
+		return "LENGTH(" + strings.Join(args, ", ") + ")", true
+	}
+	return "", false
+}
+
+// LibSQLDialect renders SQL for libSQL (the Turso SQLite fork). libSQL is wire-
+// and SQL-compatible with SQLite, so it embeds SQLiteDialect and inherits its
+// quoting, placeholders, type rendering, upsert, and JSON behavior; only the
+// dialect name differs. libSQL-specific extensions (ALTER COLUMN, vector types,
+// RANDOM ROWID) are not modeled yet and can be layered on as overrides.
+type LibSQLDialect struct{ SQLiteDialect }
+
+// Name identifies the dialect.
+func (LibSQLDialect) Name() string { return "libsql" }
 
 // StandardSQLDialect renders portable ANSI/SQL-standard text. It is a text
 // target with no bundled driver: identifiers are double-quoted, placeholders are

@@ -55,7 +55,14 @@ func (c *Compiler) CompileCreateTable(s CreateTableStmt) (string, error) {
 		}
 		defs = append(defs, def)
 	}
-	if len(s.PrimaryKey) > 0 {
+	// Some dialects declare the primary key inline on the auto-increment column
+	// (SQLite's INTEGER PRIMARY KEY AUTOINCREMENT); for those, a separate
+	// PRIMARY KEY constraint over that single column would be a duplicate, so
+	// skip it. PostgreSQL/MySQL keep the standalone constraint as before.
+	if err := c.checkInlineAutoIncrement(s); err != nil {
+		return "", err
+	}
+	if len(s.PrimaryKey) > 0 && !c.inlinesAutoIncrementPK(s) {
 		defs = append(defs, "PRIMARY KEY ("+c.quoteAll(s.PrimaryKey)+")")
 	}
 	for _, check := range s.Checks {
@@ -122,6 +129,58 @@ func (c *Compiler) CompileCreateTable(s CreateTableStmt) (string, error) {
 	}
 	sb.WriteString(")" + c.Dialect.InlineTableComment(s.Comment) + ";")
 	return sb.String(), nil
+}
+
+// inlinesAutoIncrementPK reports whether the table's primary key is a single
+// auto-increment column whose clause already declares the primary key inline for
+// this dialect (so CompileCreateTable must not also emit a standalone PRIMARY
+// KEY constraint). It is false for dialects that do not implement
+// InlineAutoIncrementPrimaryKey (PostgreSQL, MySQL), keeping their output
+// unchanged.
+func (c *Compiler) inlinesAutoIncrementPK(s CreateTableStmt) bool {
+	ip, ok := c.Dialect.(InlineAutoIncrementPrimaryKey)
+	if !ok || !ip.InlinesAutoIncrementPrimaryKey() || len(s.PrimaryKey) != 1 {
+		return false
+	}
+	for _, col := range s.Columns {
+		if !col.Name.Equal(s.PrimaryKey[0]) || !col.AutoIncrement {
+			continue
+		}
+		ai, ok := col.Type.(AutoIncrementColumnType)
+		if !ok {
+			return false
+		}
+		_, rendered := ai.RenderAutoIncrement(c.Dialect)
+		return rendered
+	}
+	return false
+}
+
+// checkInlineAutoIncrement rejects auto-increment columns a dialect that
+// declares the primary key inline (SQLite) cannot express: one outside the
+// primary key, which would silently become the primary key, or one inside a
+// composite primary key, which would declare two primary keys.
+func (c *Compiler) checkInlineAutoIncrement(s CreateTableStmt) error {
+	ip, ok := c.Dialect.(InlineAutoIncrementPrimaryKey)
+	if !ok || !ip.InlinesAutoIncrementPrimaryKey() {
+		return nil
+	}
+	for _, col := range s.Columns {
+		if !col.AutoIncrement {
+			continue
+		}
+		ai, ok := col.Type.(AutoIncrementColumnType)
+		if !ok {
+			continue
+		}
+		if _, rendered := ai.RenderAutoIncrement(c.Dialect); !rendered {
+			continue
+		}
+		if len(s.PrimaryKey) != 1 || !s.PrimaryKey[0].Equal(col.Name) {
+			return fmt.Errorf("sqlkit/sql: the %s dialect supports an auto-increment column only as the table's sole primary key (column %q)", c.Dialect.Name(), col.Name.String())
+		}
+	}
+	return nil
 }
 
 // compileColumnDef renders a single column definition, including any inline
@@ -216,10 +275,10 @@ func (c *Compiler) compileColumnDef(col ColumnDef) (string, error) {
 }
 
 // requireIdentity guards IDENTITY columns, which PostgreSQL and the standard
-// target support but MySQL does not (it uses AutoIncrement).
+// target support but MySQL and the SQLite family do not (they use AutoIncrement).
 func (c *Compiler) requireIdentity() error {
-	if c.Dialect.Name() == "mysql" {
-		return fmt.Errorf("sqlkit/sql: the %s dialect has no IDENTITY columns; use an auto-increment column instead", c.Dialect.Name())
+	if name := c.Dialect.Name(); name == "mysql" || sqliteFamily(name) {
+		return fmt.Errorf("sqlkit/sql: the %s dialect has no IDENTITY columns; use an auto-increment column instead", name)
 	}
 	return nil
 }
@@ -311,6 +370,9 @@ func (c *Compiler) CompileCreateView(s CreateViewStmt) (string, error) {
 	if s.Query == nil {
 		return "", fmt.Errorf("sqlkit/sql: CREATE VIEW requires a query")
 	}
+	if s.OrReplace && sqliteFamily(c.Dialect.Name()) {
+		return "", fmt.Errorf("sqlkit/sql: %s does not support CREATE OR REPLACE VIEW; drop and recreate instead", c.Dialect.Name())
+	}
 	body, args, err := s.Query.ToSQL(c.Dialect)
 	if err != nil {
 		return "", err
@@ -343,7 +405,7 @@ func (c *Compiler) CompileDropView(s DropViewStmt) (string, error) {
 		sb.WriteString("IF EXISTS ")
 	}
 	sb.WriteString(c.qualify(s.Table))
-	if s.Cascade && c.Dialect.Name() != "mysql" {
+	if s.Cascade && c.Dialect.Name() != "mysql" && !sqliteFamily(c.Dialect.Name()) {
 		sb.WriteString(" CASCADE")
 	}
 	sb.WriteString(";")
@@ -388,6 +450,9 @@ func (c *Compiler) CompileTruncate(s TruncateStmt) (string, error) {
 		return "", fmt.Errorf("sqlkit/sql: TRUNCATE requires at least one table")
 	}
 	name := c.Dialect.Name()
+	if sqliteFamily(name) {
+		return "", fmt.Errorf("sqlkit/sql: %s has no TRUNCATE; use DELETE FROM instead", name)
+	}
 	if len(s.Tables) > 1 && name != "postgres" {
 		return "", fmt.Errorf("sqlkit/sql: the %s dialect cannot TRUNCATE multiple tables in one statement", name)
 	}
@@ -436,6 +501,9 @@ func (c *Compiler) CompileAlterTable(s AlterTableStmt) (string, error) {
 	if len(s.Alterations) == 0 {
 		return "", fmt.Errorf("sqlkit/sql: ALTER TABLE requires at least one alteration")
 	}
+	if len(s.Alterations) > 1 && sqliteFamily(c.Dialect.Name()) {
+		return "", fmt.Errorf("sqlkit/sql: the %s dialect allows one alteration per ALTER TABLE statement; issue them separately", c.Dialect.Name())
+	}
 	clauses := make([]string, len(s.Alterations))
 	for i, a := range s.Alterations {
 		clause, err := c.compileAlteration(s.Table, a)
@@ -448,6 +516,13 @@ func (c *Compiler) CompileAlterTable(s AlterTableStmt) (string, error) {
 }
 
 func (c *Compiler) compileAlteration(table Table, a Alteration) (string, error) {
+	if sqliteFamily(c.Dialect.Name()) {
+		switch a.Kind {
+		case AlterAddColumn, AlterDropColumn, AlterRenameColumn, AlterRenameTable:
+		default:
+			return "", fmt.Errorf("sqlkit/sql: the %s dialect's ALTER TABLE supports only ADD/DROP/RENAME COLUMN and RENAME TO; changing a column type, nullability, default, or constraint requires rebuilding the table", c.Dialect.Name())
+		}
+	}
 	switch a.Kind {
 	case AlterAddColumn:
 		if a.Column == nil {
@@ -553,7 +628,7 @@ func (c *Compiler) requireColumnModify(op string) error {
 // package would otherwise emit. It mirrors requireColumnModify / the
 // single-element-row and FULL JOIN guards.
 func (c *Compiler) requirePostgresObject(feature string) error {
-	if c.Dialect.Name() == "mysql" {
+	if name := c.Dialect.Name(); name == "mysql" || sqliteFamily(name) {
 		return fmt.Errorf("sqlkit/sql: dialect %q does not support %s", c.Dialect.Name(), feature)
 	}
 	return nil

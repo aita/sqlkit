@@ -9,9 +9,10 @@
 // dependency tree.
 //
 // A concrete frontend lives in its own subpackage and module so its parser
-// dependency stays isolated, for example
-// github.com/aita/sqlkit/sqlparse/postgres, which is backed by pg_query_go.
-// Additional dialects (MySQL, ...) can be added the same way.
+// dependency stays isolated: github.com/aita/sqlkit/sqlparse/postgres, backed by
+// pg_query_go; github.com/aita/sqlkit/sqlparse/mysql, backed by the TiDB parser;
+// and github.com/aita/sqlkit/sqlparse/sqlite, a pure-Go frontend backed by
+// github.com/rqlite/sql. Additional dialects can be added the same way.
 //
 // Frontends are used directly, not through a global registry: import the one
 // you need and construct its parser.
@@ -50,8 +51,9 @@
 //   - Coupled to the sql AST only. The package depends on nothing but the sql
 //     package; the concrete grammars (and their heavy dependency trees) live in
 //     the dialect subpackages, each its own module — see the package docs of
-//     [github.com/aita/sqlkit/sqlparse/postgres] and
-//     [github.com/aita/sqlkit/sqlparse/mysql] for backend-specific notes.
+//     [github.com/aita/sqlkit/sqlparse/postgres],
+//     [github.com/aita/sqlkit/sqlparse/mysql], and
+//     [github.com/aita/sqlkit/sqlparse/sqlite] for backend-specific notes.
 package sqlparse
 
 import "github.com/aita/sqlkit/sql"

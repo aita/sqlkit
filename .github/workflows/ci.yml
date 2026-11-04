@@ -86,6 +86,17 @@ jobs:
           go vet ./...
           go test -race ./...
 
+      # The sqlite frontend uses the rqlite/sql parser, kept in its own module so
+      # that dependency stays out of the root module that consumers import. It is
+      # pure Go (cgo-free), unlike the postgres frontend.
+      - name: Build, vet & test sqlparse/sqlite module
+        working-directory: sqlparse/sqlite
+        run: |
+          test -z "$(gofmt -l .)"
+          go build ./...
+          go vet ./...
+          go test -race ./...
+
       # The OpenTelemetry exporter is its own module so the otel dependency
       # stays out of the root module that consumers import.
       - name: Build, vet & test querytrace/otelquery module
@@ -138,7 +149,7 @@ jobs:
           # .golangci.yml while examples/ (and examples/querytrace) use the
           # stricter examples/.golangci.yml. Keep going on failure so every
           # module's findings surface in one run.
-          for dir in . cmd/sqlkit examples examples/querytrace internal/tests/integration internal/tests/roundtrip querytrace/otelquery sqlparse/postgres sqlparse/mysql; do
+          for dir in . cmd/sqlkit examples examples/querytrace internal/tests/integration internal/tests/roundtrip querytrace/otelquery sqlparse/postgres sqlparse/mysql sqlparse/sqlite; do
             echo "::group::golangci-lint $dir"
             (cd "$dir" && golangci-lint run ./...) || status=1
             echo "::endgroup::"

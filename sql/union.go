@@ -179,6 +179,9 @@ func (c *Compiler) CompileCompound(q CompoundStmt) (string, []any, error) {
 		// MySQL's documented "all rows" sentinel count so the OFFSET is accepted,
 		// matching the SELECT compiler's handling.
 		sb.WriteString(" LIMIT 18446744073709551615")
+	} else if q.HasOffset && sqliteFamily(c.Dialect.Name()) {
+		// SQLite likewise requires a LIMIT before OFFSET; -1 means no limit.
+		sb.WriteString(" LIMIT -1")
 	}
 	if q.HasOffset {
 		v, err := limitCount("OFFSET", q.Offset)
@@ -207,6 +210,16 @@ func (c *Compiler) compileOperand(query Query, parentOperator string) (string, [
 	if err != nil {
 		return "", nil, err
 	}
+	if d, ok := c.Dialect.(BareCompoundArmsDialect); ok && d.BareCompoundArms() {
+		// The dialect rejects a parenthesized arm. A plain arm (a SELECT, VALUES,
+		// or a same-operator chain without its own ORDER BY / LIMIT / OFFSET) is
+		// emitted bare; any other arm is wrapped as a derived table, which keeps
+		// its clauses scoped to it.
+		if bareArm(query, parentOperator) {
+			return sql, args, nil
+		}
+		return "SELECT * FROM (" + sql + ")", args, nil
+	}
 	if sub, ok := astOf(query).(CompoundStmt); ok {
 		if sub.Operator == parentOperator && len(sub.OrderBy) == 0 && !sub.HasLimit && !sub.HasOffset {
 			return sql, args, nil
@@ -214,6 +227,22 @@ func (c *Compiler) compileOperand(query Query, parentOperator string) (string, [
 		return "(" + sql + ")", args, nil
 	}
 	return "(" + sql + ")", args, nil
+}
+
+// bareArm reports whether a set-operation arm can be written without
+// parentheses or wrapping and still mean the same: a SELECT or VALUES with no
+// ORDER BY / LIMIT / OFFSET of its own, or a nested chain of the same operator
+// without them.
+func bareArm(query Query, parentOperator string) bool {
+	switch q := astOf(query).(type) {
+	case SelectStmt:
+		return len(q.OrderBy) == 0 && !q.HasLimit && !q.HasOffset
+	case CompoundStmt:
+		return q.Operator == parentOperator && len(q.OrderBy) == 0 && !q.HasLimit && !q.HasOffset
+	case ValuesQuery:
+		return true
+	}
+	return false
 }
 
 // builder is implemented by the fluent builders, each returning the immutable

@@ -848,7 +848,7 @@ func (m *Migrator) historyRows(ctx context.Context) ([]MigrationEvent, error) {
 
 // timestampType resolves the timestamp engine type for the dialect.
 func timestampType(d sql.Dialect) sql.EngineType {
-	if d.Name() == "mysql" {
+	if name := d.Name(); name == "mysql" || name == "sqlite" || name == "libsql" {
 		return sql.EngineType{Name: "datetime"}
 	}
 	return sql.EngineType{Name: "timestamptz"}
@@ -858,8 +858,12 @@ func timestampType(d sql.Dialect) sql.EngineType {
 // dialect. PostgreSQL renders int8 as bigserial; MySQL needs bigint to be
 // recognized as an AUTO_INCREMENT integer (it does not know "int8").
 func autoIncrIDType(d sql.Dialect) sql.EngineType {
-	if d.Name() == "mysql" {
+	switch d.Name() {
+	case "mysql":
 		return sql.EngineType{Name: "bigint"}
+	case "sqlite", "libsql":
+		// The rowid alias must be declared INTEGER PRIMARY KEY.
+		return sql.EngineType{Name: "integer"}
 	}
 	return sql.EngineType{Name: "int8"}
 }
