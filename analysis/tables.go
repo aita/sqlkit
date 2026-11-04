@@ -30,6 +30,8 @@ func tablesOf(q sql.Query, scope cteNameSet) []string {
 		return updateTables(v, scope)
 	case sql.DeleteStmt:
 		return deleteTables(v, scope)
+	case sql.MergeStmt:
+		return mergeTables(v, scope)
 	case nil, sql.ValuesQuery:
 		return nil
 	default:
@@ -124,6 +126,26 @@ func deleteTables(q sql.DeleteStmt, scope cteNameSet) []string {
 		t.expr(j.On)
 	}
 	t.expr(q.Where)
+	for _, s := range q.Returning {
+		t.selection(s)
+	}
+	return t.tables()
+}
+
+func mergeTables(q sql.MergeStmt, scope cteNameSet) []string {
+	scope = scope.with(cteNames(q.With))
+	t := tableCollector{scope: scope}
+	t.cteBodies(q.With)
+	t.add(q.Target.QualifiedName())
+	t.source(q.Using)
+	t.expr(q.On)
+	for _, w := range q.When {
+		t.expr(w.Condition)
+		for _, a := range w.Sets {
+			t.expr(a.Value)
+		}
+		t.exprs(w.InsertValues)
+	}
 	for _, s := range q.Returning {
 		t.selection(s)
 	}

@@ -284,9 +284,9 @@ func TestMergeColumnsAndSources(t *testing.T) {
 		t.Errorf("SourcesOf(merge) = %+v, want %+v", srcs, want)
 	}
 
-	// KindOf classifies a MERGE as unknown (not one of the tracked kinds).
-	if _, ok := analysis.KindOf(q); ok {
-		t.Error("KindOf(merge) ok = true, want false")
+	// KindOf classifies a MERGE as the StmtMerge write kind.
+	if k, ok := analysis.KindOf(q); !ok || k != analysis.StmtMerge || !k.IsWrite() {
+		t.Errorf("KindOf(merge) = (%v, %v), want (merge, true) and a write", k, ok)
 	}
 
 	// WalkColumns reaches the ON condition (merge_on), the SET assignment (set), the
