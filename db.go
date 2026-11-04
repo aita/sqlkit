@@ -258,8 +258,22 @@ func (d *Database) Dialect() sql.Dialect { return d.dialect }
 
 // Identities returns the catalog identity map compiled from the metadata bound
 // with WithMetadata, or nil if none was bound. A uow.Scope opened over this
-// database reads it to validate table bindings automatically.
+// database reads it to validate table bindings automatically. Nil is also
+// returned when WithMetadata's compilation failed (see MetadataError) — a
+// WrapDB/WrapExecutor database has no other way to surface that failure, so
+// its uow scopes silently run without catalog validation until the caller
+// checks MetadataError.
 func (d *Database) Identities() *meta.IdentityMap { return d.identities }
+
+// MetadataError returns the error from a failed WithMetadata compilation
+// (e.g. meta.ErrTableConflict), or nil. Open surfaces this automatically by
+// failing outright; WrapDB and WrapExecutor cannot (neither returns an
+// error), so a database built with either of them must check MetadataError
+// explicitly to detect a broken metadata configuration — otherwise
+// Identities silently stays nil and every uow.Scope opened over the database
+// runs with catalog validation silently skipped, indistinguishable from
+// never having called WithMetadata at all.
+func (d *Database) MetadataError() error { return d.metaErr }
 
 // Select starts a typed SELECT builder executed against this database. With
 // no arguments it selects every column of the From source.
