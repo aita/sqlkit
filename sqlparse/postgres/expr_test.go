@@ -392,13 +392,11 @@ func TestExprNotILike(t *testing.T) {
 		"x")
 }
 
-// FROM ONLY t drops the ONLY qualifier (the builder does not model inheritance
-// control) and parses to a plain table source.
+// FROM ONLY excludes inheritance/partition children; the builder cannot model it,
+// so it must round-trip as raw rather than drop the ONLY (which would silently
+// widen the scan to every descendant table).
 func TestSelectFromOnly(t *testing.T) {
-	assertRoundTrip(t,
-		"SELECT a FROM ONLY t",
-		sql.Select(sql.Col("a")).From(sql.Table{Name: sql.NewIdent("t")}),
-		`SELECT "a" FROM "t"`)
+	assertRaw(t, "SELECT a FROM ONLY t")
 }
 
 // A set-returning function in FROM is not modeled and round-trips raw.
