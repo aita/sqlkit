@@ -35,7 +35,7 @@ func TestOperatorSchemaObjects(t *testing.T) {
 		`ALTER TYPE "public"."mood" RENAME VALUE 'sad' TO 'blue';`,
 		`CREATE EXTENSION IF NOT EXISTS "pg_trgm";`,
 		`DROP SEQUENCE IF EXISTS "public"."order_no";`,
-		`DROP TYPE IF EXISTS "public"."mood";`,
+		`DROP TYPE IF EXISTS "public"."mood" CASCADE;`,
 		`DROP EXTENSION IF EXISTS "pg_trgm";`,
 		`DROP SCHEMA IF EXISTS "audit";`,
 	}

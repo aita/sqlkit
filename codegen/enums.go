@@ -15,7 +15,12 @@ func columnGoType(table meta.Table, column meta.Column, dialect string, mapper T
 	if len(enumGo) > 0 && column.Type != nil {
 		if engine, ok := column.Type.Engine(dialect); ok {
 			if gt, ok := enumGo[engine.Name]; ok {
-				return applyNullable(gt, column), nil
+				// Wrap the element type in a slice for an array-of-enum column (mood[])
+				// before applying nullability, exactly as the non-enum mapper path
+				// (resolvedType) does — otherwise an array column resolves to the bare
+				// element type (Mood instead of []Mood), a silent shape mismatch that
+				// only surfaces as a scan/bind failure at runtime against a real database.
+				return resolvedType(gt, engine, column), nil
 			}
 		}
 	}

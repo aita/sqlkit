@@ -252,6 +252,49 @@ func TestPaginateEmptyBackwardReportsNoNext(t *testing.T) {
 	}
 }
 
+// TestPaginateEmptyForwardReportsNoPrev covers paging forward past the last
+// page (an empty forward result, e.g. the cursor's rows were since deleted).
+// HasPrev must be false: there is no row to build a backward cursor from, so
+// a true HasPrev would hand back a zero, Start-equivalent cursor that loops
+// to page one — the same defect TestPaginateEmptyBackwardReportsNoNext covers
+// on the backward branch.
+func TestPaginateEmptyForwardReportsNoPrev(t *testing.T) {
+	calls := 0
+	fake := &testutil.Fake{
+		QueryFunc: func(string, []any) (testutil.Result, error) {
+			calls++
+			cols := []string{"id", "email", "name"}
+			if calls == 1 {
+				return testutil.Result{Columns: cols, Rows: threeUsers()}, nil
+			}
+			return testutil.Result{Columns: cols}, nil // forward page: no later rows
+		},
+	}
+	db := sqlkit.WrapDB(fake.DB())
+	pager := sqlkit.NewPaginator(sqlkit.KeyAsc(Users.ID)).Limit(2)
+
+	var p1 []MyUserDTO
+	page1, err := pager.Paginate(context.Background(), db.Select().From(Users), &p1, sqlkit.Start())
+	if err != nil {
+		t.Fatalf("first page error = %v", err)
+	}
+
+	var next []MyUserDTO
+	page, err := pager.Paginate(context.Background(), db.Select().From(Users), &next, page1.Next())
+	if err != nil {
+		t.Fatalf("next page error = %v", err)
+	}
+	if len(next) != 0 {
+		t.Fatalf("next = %#v, want empty", next)
+	}
+	if page.HasNext {
+		t.Fatal("HasNext = true on an empty forward page; want false")
+	}
+	if page.HasPrev {
+		t.Fatal("HasPrev = true on an empty forward page; want false")
+	}
+}
+
 func TestPaginateAcrossHTTPRoundTrip(t *testing.T) {
 	var lastArgs []any
 	db := sqlkit.WrapDB(paginatorFake(threeUsers(), nil, &lastArgs).DB())
