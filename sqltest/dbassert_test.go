@@ -1,6 +1,7 @@
 package sqltest
 
 import (
+	stdsql "database/sql"
 	"database/sql/driver"
 	"reflect"
 	"strings"
@@ -119,5 +120,23 @@ func TestAssertTableContents(t *testing.T) {
 	q := fake.Queries()
 	if len(q) == 0 || !strings.HasPrefix(q[0].SQL, `SELECT "email", "id" FROM "users"`) {
 		t.Fatalf("select = %q, want only the named columns", q)
+	}
+}
+
+// A typed nil or a Valuer whose Value is nil means SQL NULL and must render as
+// IS NULL: "col = $1" with a NULL argument never matches, which would make
+// AssertNotExists pass vacuously and AssertExists fail wrongly.
+func TestBuildWhereTypedNullIsNull(t *testing.T) {
+	var np *int
+	clause, args := buildWhere(sqlkit.PostgreSQLDialect{}, map[string]any{
+		"a": np,
+		"b": stdsql.NullString{},
+		"c": stdsql.NullString{String: "x", Valid: true},
+	})
+	if want := ` WHERE "a" IS NULL AND "b" IS NULL AND "c" = $1`; clause != want {
+		t.Fatalf("clause = %q, want %q", clause, want)
+	}
+	if len(args) != 1 {
+		t.Fatalf("args = %v, want only the non-NULL value", args)
 	}
 }

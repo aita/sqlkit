@@ -2,7 +2,9 @@ package sqltest
 
 import (
 	"context"
+	"database/sql/driver"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -193,7 +195,7 @@ func buildWhere(dialect sqlkit.Dialect, where map[string]any) (string, []any) {
 			b.WriteString(" AND ")
 		}
 		b.WriteString(dialect.QuoteName(c))
-		if where[c] == nil {
+		if isNullValue(where[c]) {
 			b.WriteString(" IS NULL")
 			continue
 		}
@@ -203,6 +205,29 @@ func buildWhere(dialect sqlkit.Dialect, where map[string]any) (string, []any) {
 		pos++
 	}
 	return b.String(), args
+}
+
+// isNullValue reports whether v stands for SQL NULL: an untyped nil, a nil
+// pointer/map/slice/interface, or a driver.Valuer (sql.NullString, ...) whose
+// Value is nil. Comparing a column with "= NULL" never matches, so these must
+// render as IS NULL instead.
+func isNullValue(v any) bool {
+	if v == nil {
+		return true
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Interface:
+		if rv.IsNil() {
+			return true
+		}
+	}
+	if valuer, ok := v.(driver.Valuer); ok {
+		if dv, err := valuer.Value(); err == nil && dv == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // queryValues runs query and returns each row as a slice of colCount values,
