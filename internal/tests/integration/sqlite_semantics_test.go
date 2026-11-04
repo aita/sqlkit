@@ -217,3 +217,27 @@ func TestSQLiteLargeValuesSource(t *testing.T) {
 		t.Fatalf("batched flush of 600 rows: %v", err)
 	}
 }
+
+// A non-literal column DEFAULT must be parenthesized for SQLite to accept the
+// CREATE TABLE, and must still apply on insert.
+func TestSQLiteExpressionDefault(t *testing.T) {
+	db := openSQLite(t)
+	ctx := context.Background()
+	ddl, _, err := sql.CreateTable(sql.Table{Name: sql.NewIdent("dflt")}).
+		Column(sql.ColumnDef{Name: sql.NewIdent("id"), Type: sql.EngineType{Name: "INTEGER"}}).
+		Column(sql.ColumnDef{Name: sql.NewIdent("tag"), Type: sql.EngineType{Name: "TEXT"}, Default: sql.Func("lower", sql.Raw("'ABC'"))}).
+		ToSQL(sql.SQLiteDialect{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL().ExecContext(ctx, ddl); err != nil {
+		t.Fatalf("create %s: %v", ddl, err)
+	}
+	if _, err := db.SQL().ExecContext(ctx, `INSERT INTO dflt (id) VALUES (1)`); err != nil {
+		t.Fatal(err)
+	}
+	var tag string
+	if err := db.SQL().QueryRowContext(ctx, `SELECT tag FROM dflt`).Scan(&tag); err != nil || tag != "abc" {
+		t.Fatalf("tag = %q, %v; want abc", tag, err)
+	}
+}

@@ -2,6 +2,7 @@ package sql
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -245,6 +246,12 @@ func (c *Compiler) compileColumnDef(col ColumnDef) (string, error) {
 			expr, err := CompileStatic(c.Dialect, col.Default)
 			if err != nil {
 				return "", err
+			}
+			if sqliteFamily(c.Dialect.Name()) && !sqliteBareDefault(expr) {
+				// SQLite's DEFAULT takes only a literal, a signed number or
+				// CURRENT_TIME/DATE/TIMESTAMP bare; any other expression must be
+				// parenthesized ("DEFAULT lower('x')" is a syntax error).
+				expr = "(" + expr + ")"
 			}
 			core += " DEFAULT " + expr
 		}
@@ -694,4 +701,41 @@ func (c *Compiler) quoteAll(names []Ident) string {
 		quoted[i] = c.Dialect.QuoteName(name.String())
 	}
 	return strings.Join(quoted, ", ")
+}
+
+// sqliteBareDefaultRE matches the column DEFAULT values SQLite accepts
+// without parentheses: a string, blob or (signed) numeric literal, NULL,
+// TRUE/FALSE, or CURRENT_TIME/CURRENT_DATE/CURRENT_TIMESTAMP.
+var sqliteBareDefaultRE = regexp.MustCompile(`(?i)^(?:[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:e[+-]?[0-9]+)?|0x[0-9a-f]+|'(?:[^']|'')*'|x'[0-9a-f]*'|NULL|TRUE|FALSE|CURRENT_(?:TIME|DATE|TIMESTAMP))$`)
+
+// sqliteBareDefault reports whether expr can follow DEFAULT unparenthesized on
+// SQLite: a bare literal (sqliteBareDefaultRE), or an expression already
+// wrapped in one pair of parentheses spanning the whole text.
+func sqliteBareDefault(expr string) bool {
+	if sqliteBareDefaultRE.MatchString(expr) {
+		return true
+	}
+	if len(expr) < 2 || expr[0] != '(' || expr[len(expr)-1] != ')' {
+		return false
+	}
+	depth, quote := 0, byte(0)
+	for i := 0; i < len(expr); i++ {
+		ch := expr[i]
+		switch {
+		case quote != 0:
+			if ch == quote {
+				quote = 0
+			}
+		case ch == '\'' || ch == '"' || ch == '`':
+			quote = ch
+		case ch == '(':
+			depth++
+		case ch == ')':
+			depth--
+			if depth == 0 && i != len(expr)-1 {
+				return false // "(a) + (b)": the first group closes early
+			}
+		}
+	}
+	return depth == 0
 }
