@@ -4,6 +4,7 @@ import (
 	"github.com/aita/sqlkit/sql"
 	"github.com/aita/sqlkit/sqlparse"
 	pg "github.com/pganalyze/pg_query_go/v6"
+	"strconv"
 )
 
 // setOperand is satisfied by the query types that can start a set operation
@@ -117,7 +118,7 @@ func convertSelect(s *pg.SelectStmt) (sql.Query, error) {
 	if group := s.GetGroupClause(); len(group) > 0 {
 		exprs := make([]sql.Expression, 0, len(group))
 		for _, g := range group {
-			expr, err := convertExpr(g)
+			expr, err := convertPositional(g)
 			if err != nil {
 				return nil, err
 			}
@@ -346,6 +347,17 @@ func convertResTarget(rt *pg.ResTarget) (sql.Selection, error) {
 	return selection, nil
 }
 
+// convertPositional converts a GROUP BY / ORDER BY item. A bare integer there
+// is a column position (ORDER BY 2 sorts by the second output column), not a
+// value, so it is kept as literal text: binding it as a parameter would turn it
+// into a constant and silently drop the ordering or grouping.
+func convertPositional(node *pg.Node) (sql.Expression, error) {
+	if c := node.GetAConst(); c != nil && c.GetIval() != nil {
+		return sql.Raw(strconv.Itoa(int(c.GetIval().GetIval()))), nil
+	}
+	return convertExpr(node)
+}
+
 func convertSortClause(nodes []*pg.Node) ([]sql.OrderTerm, error) {
 	terms := make([]sql.OrderTerm, 0, len(nodes))
 	for _, node := range nodes {
@@ -353,7 +365,7 @@ func convertSortClause(nodes []*pg.Node) ([]sql.OrderTerm, error) {
 		if sb == nil {
 			return nil, sqlparse.Unsupportedf("ORDER BY item %T", node.GetNode())
 		}
-		expr, err := convertExpr(sb.GetNode())
+		expr, err := convertPositional(sb.GetNode())
 		if err != nil {
 			return nil, err
 		}
