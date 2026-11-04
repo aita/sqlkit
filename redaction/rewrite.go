@@ -165,6 +165,47 @@ func (m *Redactor) rewriteExpr(e sql.Expression, sc *scope) sql.Expression {
 	case sql.FuncExpression:
 		x.Args = m.rewriteExprs(x.Args, sc)
 		return x
+	case sql.CountExpression:
+		// COUNT(<expr>): the target can carry a comparison (COUNT(CASE WHEN ssn=…)).
+		x.Target = m.rewriteSelection(x.Target, sc)
+		return x
+	case sql.StringAggExpression:
+		x.Arg = m.rewriteExpr(x.Arg, sc)
+		return x
+	case sql.ExtractExpression:
+		x.Operand = m.rewriteExpr(x.Operand, sc)
+		return x
+	case sql.PositionExpression:
+		x.Substring = m.rewriteExpr(x.Substring, sc)
+		x.String = m.rewriteExpr(x.String, sc)
+		return x
+	case sql.SubscriptExpression:
+		x.Operand = m.rewriteExpr(x.Operand, sc)
+		idx := clone(x.Indices)
+		for i := range idx {
+			idx[i].Lower = m.rewriteExpr(idx[i].Lower, sc)
+			idx[i].Upper = m.rewriteExpr(idx[i].Upper, sc)
+		}
+		x.Indices = idx
+		return x
+	case sql.JSONObjectExpression:
+		x.Pairs = m.rewriteExprs(x.Pairs, sc)
+		return x
+	case sql.JSONAccessExpression:
+		// The operand can carry a comparison; the path steps are static accessors.
+		x.Operand = m.rewriteExpr(x.Operand, sc)
+		return x
+	case sql.WindowExpression:
+		// A windowed function: fn OVER (PARTITION BY ... ORDER BY ...). The walk
+		// must descend into the function and the partition/order expressions so a
+		// sensitive comparison anywhere inside the OVER construct is reached and
+		// masked — mirroring how rewriteSelect descends into a SELECT's own
+		// GROUP BY / ORDER BY. The frame clause is opaque text and the window name
+		// carries no literal, so neither needs rewriting.
+		x.Fn = m.rewriteExpr(x.Fn, sc)
+		x.Partitions = m.rewriteExprs(x.Partitions, sc)
+		x.OrderByTerms = m.rewriteOrderTerms(x.OrderByTerms, sc)
+		return x
 	case sql.CastExpression:
 		x.Operand = m.rewriteExpr(x.Operand, sc)
 		return x
@@ -205,6 +246,21 @@ func (m *Redactor) rewriteExpr(e sql.Expression, sc *scope) sql.Expression {
 		if x.Query != nil {
 			x.Query = m.rewriteQuery(x.Query, sc, sc.childCTEs)
 		}
+		return x
+	case sql.GroupingExpression:
+		// ROLLUP(...)/CUBE(...): a GROUP BY grouping element wrapping a list of
+		// expressions, which may themselves carry a sensitive comparison (e.g.
+		// ROLLUP(CASE WHEN name = 'x' THEN ...)) rather than being bare columns.
+		x.Elements = m.rewriteExprs(x.Elements, sc)
+		return x
+	case sql.GroupingSetsExpression:
+		// GROUPING SETS ((...), (...)): each set is its own list of grouping
+		// elements, so recurse into every set independently.
+		sets := make([][]sql.Expression, len(x.Sets))
+		for i, set := range x.Sets {
+			sets[i] = m.rewriteExprs(set, sc)
+		}
+		x.Sets = sets
 		return x
 	case sql.RawExpression:
 		// An opaque SQL fragment. With a parser configured, re-parse it into a typed

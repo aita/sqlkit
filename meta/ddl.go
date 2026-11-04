@@ -8,11 +8,12 @@ import (
 )
 
 // CreateSQL returns the SQL that creates the whole schema for dialect d (it
-// does not touch a database): CREATE EXTENSION statements first, then a CREATE
-// SCHEMA IF NOT EXISTS for each distinct schema marked for creation
-// (Schema.Create) — so the tables that live in them never reference a missing
-// schema — then the enum types and sequences the tables may use, then CREATE
-// TABLE statements with
+// does not touch a database): a CREATE SCHEMA IF NOT EXISTS for each distinct
+// schema marked for creation (Schema.Create) first — so neither the tables
+// that live in them nor an extension installed into one (Extension.Schema,
+// WITH SCHEMA) ever reference a missing schema — then CREATE EXTENSION
+// statements, then the enum types and sequences the tables may use, then
+// CREATE TABLE statements with
 // primary keys and CHECK constraints, then CREATE INDEX statements, then ALTER
 // TABLE statements for foreign keys (emitted after all tables so declaration
 // order never matters), then comments. Schemas not marked Create (including the
@@ -31,20 +32,22 @@ import (
 // has no type on the dialect or a default/check expression cannot be compiled.
 func (md Metadata) CreateSQL(d sql.Dialect) (string, error) {
 	var stmts []string
-	// Extensions first: an extension may provide a type or function a table or
-	// enum then uses.
-	for _, ext := range md.Extensions {
-		out, _, err := ext.CreateStatement().ToSQL(d)
-		if err != nil {
-			return "", err
-		}
-		stmts = append(stmts, out)
-	}
 	for _, s := range md.Schemas() {
 		if !s.Create || s.Name == "" {
 			continue
 		}
 		out, _, err := s.CreateStatement().ToSQL(d)
+		if err != nil {
+			return "", err
+		}
+		stmts = append(stmts, out)
+	}
+	// Extensions after the schemas: an extension may provide a type or function
+	// a table or enum then uses, but it may also install itself into a managed
+	// schema (Extension.Schema, rendered as WITH SCHEMA) — which must exist
+	// first, or a real engine rejects the CREATE EXTENSION outright.
+	for _, ext := range md.Extensions {
+		out, _, err := ext.CreateStatement().ToSQL(d)
 		if err != nil {
 			return "", err
 		}
@@ -80,7 +83,11 @@ func (md Metadata) CreateSQL(d sql.Dialect) (string, error) {
 	}
 	for _, table := range md.Tables {
 		for _, fk := range table.ForeignKeys {
-			stmts = append(stmts, fk.addConstraintSQL(table, d))
+			out, err := fk.addConstraintSQL(table, d)
+			if err != nil {
+				return "", err
+			}
+			stmts = append(stmts, out)
 		}
 	}
 	for _, table := range md.Tables {
@@ -110,8 +117,9 @@ func (md Metadata) CreateSQL(d sql.Dialect) (string, error) {
 // DropSQL returns the SQL that tears down everything CreateSQL creates,
 // for dialect d (it does not touch a database): it drops the foreign keys first
 // (so table drop order never matters), then drops the tables, which also drops
-// their indexes, and finally a DROP SCHEMA IF EXISTS for each distinct schema
-// marked for creation (Schema.Create), after its tables so the schema is empty
+// their indexes, then extensions, and finally a DROP SCHEMA IF EXISTS for each
+// distinct schema marked for creation (Schema.Create) — after its tables and
+// any extension installed into it (Extension.Schema), so the schema is empty
 // by then. Schemas that CreateSQL leaves alone (the default schema and any not
 // marked Create) are not dropped. It is the inverse of CreateSQL — run it before
 // regenerating the schema. On MySQL, where a schema is a database, dropping it
@@ -136,7 +144,9 @@ func (md Metadata) DropSQL(d sql.Dialect) string {
 		stmts = append(stmts, table.DropSQL(d))
 	}
 	// Reverse of CreateSQL: sequences and enums after the tables that used them,
-	// then schemas, then extensions last.
+	// then extensions, then schemas last — an extension installed into a
+	// managed schema (Extension.Schema) must drop before that schema does, or
+	// a real engine rejects dropping a non-empty schema.
 	for _, seq := range md.Sequences {
 		out, _, _ := seq.DropStatement().ToSQL(d)
 		stmts = append(stmts, out)
@@ -145,15 +155,15 @@ func (md Metadata) DropSQL(d sql.Dialect) string {
 		out, _, _ := enum.DropStatement().ToSQL(d)
 		stmts = append(stmts, out)
 	}
+	for _, ext := range md.Extensions {
+		out, _, _ := ext.DropStatement().ToSQL(d)
+		stmts = append(stmts, out)
+	}
 	for _, s := range md.Schemas() {
 		if !s.Create || s.Name == "" {
 			continue
 		}
 		out, _, _ := s.DropStatement().ToSQL(d)
-		stmts = append(stmts, out)
-	}
-	for _, ext := range md.Extensions {
-		out, _, _ := ext.DropStatement().ToSQL(d)
 		stmts = append(stmts, out)
 	}
 	return strings.Join(stmts, "\n\n") + "\n"
@@ -326,9 +336,12 @@ func (fk ForeignKey) DropStatement(table Table) sql.DropForeignKeyStmt {
 	return sql.DropForeignKey(table.SQLTable(), fk.Name)
 }
 
-func (fk ForeignKey) addConstraintSQL(table Table, d sql.Dialect) string {
-	out, _, _ := fk.AddStatement(table).ToSQL(d)
-	return out
+func (fk ForeignKey) addConstraintSQL(table Table, d sql.Dialect) (string, error) {
+	out, _, err := fk.AddStatement(table).ToSQL(d)
+	if err != nil {
+		return "", fmt.Errorf("meta: foreign key %q on table %q: %w", fk.Name, table.Name, err)
+	}
+	return out, nil
 }
 
 func (fk ForeignKey) dropConstraintSQL(table Table, d sql.Dialect) string {

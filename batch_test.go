@@ -174,6 +174,33 @@ func TestRoutedInsertReturningSplitStaysAtomic(t *testing.T) {
 	}
 }
 
+// TestRoutedInsertExecSplitStaysAtomic guards a routed (per-statement WithRoute)
+// bulk INSERT (non-RETURNING) against losing its atomic transaction when split:
+// execStatements must unwrap the routedBinding to reach the *Database so the
+// chunks run inside one transaction on the primary.
+func TestRoutedInsertExecSplitStaysAtomic(t *testing.T) {
+	primary := &testutil.Fake{}
+	replica := &testutil.Fake{}
+	router := sqlkit.NewRouter(map[string]sqlkit.Backend{
+		"default": sqlkit.DB(primary.DB()),
+		"replica": sqlkit.DB(replica.DB()),
+	}, rwSplit)
+	db := sqlkit.WrapExecutor(router)
+
+	rows := []User{{Email: "a"}, {Email: "b"}, {Email: "c"}, {Email: "d"}, {Email: "e"}}
+	_, err := db.Insert(Users).Values(rows).AutoChunk(sqlkit.ChunkSize(2)).
+		Exec(context.Background(), sqlkit.WithRoute("default"))
+	if err != nil {
+		t.Fatalf("routed insert exec error = %v", err)
+	}
+	if n := len(primary.Execs()); n != 3 {
+		t.Fatalf("primary execs = %d, want 3 (2+2+1 rows)", n)
+	}
+	if opts := primary.BeginOptions(); len(opts) != 1 {
+		t.Fatalf("primary begins = %d, want 1 (chunks must share one tx)", len(opts))
+	}
+}
+
 func TestUpdateReturningSplitsByInList(t *testing.T) {
 	// SET name = $1 consumes one param; ChunkSize 2 leaves two ids per statement.
 	fake := returningFake(func(args []any) int { return len(args) - 1 })
@@ -202,6 +229,32 @@ func TestDeleteReturningSplitsByInList(t *testing.T) {
 	ids := []int64{1, 2, 3, 4, 5}
 	var out []User
 	if err := db.Delete(Users).Where(Users.ID.In(ids...)).AutoChunk(sqlkit.ChunkSize(2)).Returning().All(context.Background()).Scan(&out); err != nil {
+		t.Fatalf("delete returning error = %v", err)
+	}
+	if n := len(fake.Queries()); n != 3 {
+		t.Fatalf("queries = %d, want 3 (2+2+1 ids)", n)
+	}
+	if len(out) != 5 {
+		t.Fatalf("returned rows = %d, want 5 (concatenated)", len(out))
+	}
+}
+
+// TestDeleteReturningSplitsByFilterInList covers Filter's In(...) term rather
+// than Column[T].In directly: the two must behave identically for AutoChunk
+// splitting. Filter's In previously built its predicate via a plain
+// Cond(sql.In(...)), which carries none of the chunk metadata Column[T].In
+// attaches, so a Filter-driven IN silently never split regardless of
+// AutoChunk/ChunkSize -- a large ID list would produce one oversized
+// statement instead of several within the bind-parameter limit.
+func TestDeleteReturningSplitsByFilterInList(t *testing.T) {
+	fake := returningFake(func(args []any) int { return len(args) })
+	db := sqlkit.WrapDB(fake.DB(), sqlkit.WithAutoChunk(true))
+
+	ids := []any{int64(1), int64(2), int64(3), int64(4), int64(5)}
+	var out []User
+	err := db.Delete(Users).Filter(filterTerms{ID: sqlkit.In(ids...)}).
+		AutoChunk(sqlkit.ChunkSize(2)).Returning().All(context.Background()).Scan(&out)
+	if err != nil {
 		t.Fatalf("delete returning error = %v", err)
 	}
 	if n := len(fake.Queries()); n != 3 {
