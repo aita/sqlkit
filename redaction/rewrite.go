@@ -75,6 +75,10 @@ func (m *Redactor) rewriteExpr(e sql.Expression, sc *scope) sql.Expression {
 				// name IN (SELECT 'x'): the subquery projects the values the
 				// sensitive column is matched against; mask its projected literals.
 				x.Subquery = m.maskAllProjections(x.Subquery)
+			} else if lrow, isRow := x.Left.(sql.RowExpression); isRow {
+				// (id, name) IN (SELECT 1, 'x'): the i-th projection is matched
+				// against the i-th row element.
+				x.Subquery = m.maskSelectProjections(x.Subquery, m.rowSensitivity(lrow, sc))
 			}
 		}
 		return x
@@ -150,6 +154,9 @@ func (m *Redactor) rewriteExpr(e sql.Expression, sc *scope) sql.Expression {
 			if m.sensitiveColumn(x.Left, sc) {
 				// name = ANY(SELECT 'x'): the subquery projects the compared values.
 				x.Query = m.maskAllProjections(x.Query)
+			} else if lrow, isRow := x.Left.(sql.RowExpression); isRow {
+				// (id, name) = ANY(SELECT 1, 'x'): positional, as for IN.
+				x.Query = m.maskSelectProjections(x.Query, m.rowSensitivity(lrow, sc))
 			}
 		}
 		return x
@@ -605,6 +612,16 @@ func (m *Redactor) maskValue(e sql.Expression) sql.Expression {
 func (m *Redactor) maskRowPair(left, right sql.Expression, sc *scope) (sql.Expression, sql.Expression) {
 	lrow, lok := left.(sql.RowExpression)
 	rrow, rok := right.(sql.RowExpression)
+	// (id, name) = (SELECT 1, 'x'): the subquery's projections pair with the
+	// row's elements positionally.
+	if sub, ok := right.(sql.ScalarSubqueryExpression); ok && lok {
+		sub.Query = m.maskSelectProjections(sub.Query, m.rowSensitivity(lrow, sc))
+		return left, sub
+	}
+	if sub, ok := left.(sql.ScalarSubqueryExpression); ok && rok {
+		sub.Query = m.maskSelectProjections(sub.Query, m.rowSensitivity(rrow, sc))
+		return sub, right
+	}
 	if !lok || !rok {
 		return left, right
 	}
@@ -629,6 +646,17 @@ func (m *Redactor) maskRowValues(cols, vals sql.RowExpression, sc *scope) sql.Ro
 	}
 	vals.Elements = out
 	return vals
+}
+
+// rowSensitivity reports, per element of a row constructor, whether it is a
+// sensitive column — the positional mask for a subquery whose projections are
+// compared to the row element-wise.
+func (m *Redactor) rowSensitivity(row sql.RowExpression, sc *scope) []bool {
+	out := make([]bool, len(row.Elements))
+	for i, e := range row.Elements {
+		out[i] = m.sensitiveColumn(e, sc)
+	}
+	return out
 }
 
 // maskValues masks each string literal in es (recursively), returning a fresh
