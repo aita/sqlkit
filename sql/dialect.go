@@ -230,6 +230,14 @@ type BareCompoundArmsDialect interface {
 	BareCompoundArms() bool
 }
 
+// ValuesColumnNamer is an optional capability for dialects that name a VALUES
+// list's columns automatically and cannot alias them. A VALUES derived table
+// then renders as (SELECT <auto name> AS <column>, ... FROM (VALUES ...)) AS
+// alias. It takes precedence over DerivedValuesUnionDialect.
+type ValuesColumnNamer interface {
+	ValuesColumnName(i int) string
+}
+
 // DerivedValuesUnionDialect is an optional capability for dialects that cannot
 // alias the columns of a VALUES row constructor used as a derived table. MySQL
 // names VALUES columns column_0, column_1, … with no way to override them, so a
@@ -926,9 +934,12 @@ func (SQLiteDialect) MaxBindParams() int { return 32766 }
 // BareCompoundArms reports that SQLite rejects parenthesized set-operation arms.
 func (SQLiteDialect) BareCompoundArms() bool { return true }
 
-// UsesValuesUnion renders a VALUES derived table as a UNION ALL of SELECTs:
-// SQLite can't alias a VALUES list's columns ("(VALUES ...) AS v(x)").
-func (SQLiteDialect) UsesValuesUnion() bool { return true }
+// ValuesColumnName is SQLite's automatic name for a VALUES list's columns
+// (column1, column2, ...). SQLite can't alias them ("(VALUES ...) AS v(x)"),
+// so a VALUES derived table selects these names under the wanted aliases —
+// unlike a UNION ALL of SELECTs, this is not capped by SQLite's 500-term
+// compound limit.
+func (SQLiteDialect) ValuesColumnName(i int) string { return "column" + strconv.Itoa(i+1) }
 
 var sqliteLengthTypes = map[string]bool{"varchar": true, "char": true}
 var sqliteDecimalTypes = map[string]bool{"numeric": true, "decimal": true}
