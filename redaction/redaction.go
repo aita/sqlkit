@@ -289,14 +289,17 @@ func (m *Redactor) rewriteInsert(v sql.InsertStmt, sc *scope) sql.Query {
 		rewritten := m.rewriteQuery(v.Select, sc.parent, sc.childCTEs)
 		// INSERT ... SELECT feeds the SELECT's projections into v.Columns
 		// positionally, so a literal projected into a sensitive target column must
-		// be masked just like a VALUES element. (Without a column list the positions
-		// are the table's own columns, which we cannot name here.)
+		// be masked just like a VALUES element. Without a column list the positions
+		// are the table's own columns, which the policy cannot enumerate, so every
+		// projected literal is masked (fail-safe) rather than none.
 		if len(v.Columns) > 0 {
 			sensitive := make([]bool, len(v.Columns))
 			for i, c := range v.Columns {
 				sensitive[i] = m.isSensitive(sc, analysis.NamedColumn(c))
 			}
 			rewritten = m.maskSelectProjections(rewritten, sensitive)
+		} else {
+			rewritten = m.maskAllProjections(rewritten)
 		}
 		v.Select = rewritten
 	}
