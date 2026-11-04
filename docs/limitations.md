@@ -22,7 +22,7 @@ from a gap that may close:
 | **PostgreSQL** | Primary target; the default and the most exercised dialect. Full feature surface. |
 | **MySQL** | Supported with a subset of features (see below). Backtick quoting, `?` placeholders. |
 | **SQLite** | Supported with a subset of features (see below). Double-quoted identifiers, `?` placeholders, `INTEGER PRIMARY KEY AUTOINCREMENT`. No bundled driver — pair it with `modernc.org/sqlite` (pure Go) or `mattn/go-sqlite3`. |
-| **libSQL** | The Turso SQLite fork. SQL-compatible with SQLite, so it shares SQLite's feature surface and limitations; engine-specific extensions (vector types, `ALTER COLUMN`) are not modeled yet. |
+| **libSQL** | The Turso SQLite fork. SQL-compatible with SQLite, so it shares SQLite's feature surface and limitations; engine-specific extensions (vector types, `ALTER COLUMN`) are not modeled yet. The integration suite runs against the embedded libSQL engine (`github.com/tursodatabase/go-libsql`, cgo); remote `libsql://` servers are not exercised. |
 | Standard | A minimal reference dialect; many features are rejected on it. |
 
 `Open` infers the dialect from the driver name (`"mysql"` → MySQL,
