@@ -3,104 +3,92 @@ package migrate
 import (
 	"context"
 	stdsql "database/sql"
+	"database/sql/driver"
+	"errors"
 	"fmt"
 	"hash/fnv"
 )
 
-// migratorLock serializes concurrent Migrators against the same tracking
-// table: without it, two Migrator instances (e.g. two pods mid-rollout) can
-// both read "revision X not applied" and both apply it, double-running
-// non-idempotent DDL/DML. It wraps a session-level advisory lock (PostgreSQL
-// pg_advisory_lock, MySQL GET_LOCK) held on one pinned physical connection —
-// not a transaction-scoped lock — so it survives across the several separate
-// transactions applyPending opens (one per migration, per the DisableTx
-// contract in migration.go) and is still released by the engine if the
-// process dies mid-migration.
+// The migration lock serializes concurrent Migrators against the same tracking
+// table: without it, two Migrator instances (e.g. two pods mid-rollout) can both
+// read "revision X not applied" and both apply it, double-running
+// non-idempotent DDL/DML. It is a session-level advisory lock (PostgreSQL
+// pg_advisory_lock, MySQL GET_LOCK) taken on one connection pinned from the
+// pool — not a transaction-scoped lock — so it spans the several transactions a
+// run opens (one per migration, per the DisableTx contract) and is still
+// released by the engine if the process dies mid-migration.
 //
-// Locking is automatic for the two dialects that support it (PostgreSQL,
-// MySQL) and a silent no-op otherwise: a dialect without an advisory-lock
-// primitive, or a database with no real *sql.DB behind it (WrapExecutor with
-// a custom terminal, or the testutil.Fake driver's default DB() wrapping),
-// cannot take a connection out of the pool for this purpose. There is
-// nothing to opt into or out of — the two supported dialects are always
-// protected, matching how existing dialect-shaped behavior in this package
-// (e.g. timestampType, autoIncrIDType) branches on Dialect.Name() rather than
-// exposing an Option.
-type migratorLock struct {
-	conn      *stdsql.Conn
-	unlockSQL string
-	unlockArg any
-}
+// The whole run executes on that same pinned connection (sqlkit's
+// Database.OnConn), so the lock costs no extra connection: a pool limited to
+// one connection (SetMaxOpenConns(1)) works instead of deadlocking on itself.
+//
+// Locking is automatic for PostgreSQL and MySQL and a no-op otherwise: a
+// dialect without an advisory-lock primitive, or a database with no *sql.DB
+// behind it (WrapExecutor), runs unlocked exactly as before.
 
-// lockKey derives the advisory-lock identity from the tracking table's
-// qualified name, so Migrators pointed at different tables (WithTableName,
-// WithSchema) do not contend with each other, while every Migrator sharing
-// one table does.
-func (m *Migrator) lockKey() string {
-	return m.table.QualifiedName()
-}
-
-// acquireLock takes the advisory lock for the Migrator's tracking table, or
-// returns a nil *migratorLock when the dialect or database has no locking
-// primitive available. The lock is held until release is called.
-func (m *Migrator) acquireLock(ctx context.Context) (*migratorLock, error) {
+// withLock runs fn holding the migration lock, passing a copy of m whose
+// database is bound to the locked connection. Without a locking primitive it
+// runs fn on m unlocked.
+func (m *Migrator) withLock(ctx context.Context, fn func(*Migrator) error) (err error) {
 	dialect := m.db.Dialect().Name()
-	if dialect != "postgres" && dialect != "mysql" {
-		return nil, nil
-	}
 	sqlDB := m.db.SQL()
-	if sqlDB == nil {
-		return nil, nil
+	if (dialect != "postgres" && dialect != "mysql") || sqlDB == nil {
+		return fn(m)
 	}
 	conn, err := sqlDB.Conn(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("migrate: acquiring migration lock: %w", err)
+		return fmt.Errorf("migrate: acquiring migration lock: %w", err)
 	}
 
-	key := m.lockKey()
-	var lockSQL, unlockSQL string
-	var lockArg, unlockArg any
-	if dialect == "mysql" {
-		name := mysqlLockName(key)
-		lockSQL, lockArg = "SELECT GET_LOCK(?, -1)", name
-		unlockSQL, unlockArg = "SELECT RELEASE_LOCK(?)", name
-	} else {
-		id := advisoryLockKey(key)
-		lockSQL, lockArg = "SELECT pg_advisory_lock($1)", id
-		unlockSQL, unlockArg = "SELECT pg_advisory_unlock($1)", id
-	}
-
-	if err := execQuery(ctx, conn, lockSQL, lockArg); err != nil {
+	lockSQL, unlockSQL, arg := lockStatements(dialect, m.table.QualifiedName())
+	if err := queryOne(ctx, conn, lockSQL, arg); err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("migrate: acquiring migration lock: %w", err)
+		return fmt.Errorf("migrate: acquiring migration lock: %w", err)
 	}
-	return &migratorLock{conn: conn, unlockSQL: unlockSQL, unlockArg: unlockArg}, nil
+	defer func() {
+		if relErr := releaseLock(ctx, conn, unlockSQL, arg); relErr != nil && err == nil {
+			err = relErr
+		}
+	}()
+
+	locked := *m
+	locked.db = m.db.OnConn(conn)
+	return fn(&locked)
 }
 
-// release unlocks and returns the pinned connection to the pool. It is safe
-// to call on a nil *migratorLock (the no-locking case).
-func (l *migratorLock) release(ctx context.Context) error {
-	if l == nil {
-		return nil
+// lockStatements returns the dialect's lock and unlock statements and their
+// shared argument for the lock named key.
+func lockStatements(dialect, key string) (lockSQL, unlockSQL string, arg any) {
+	if dialect == "mysql" {
+		return "SELECT GET_LOCK(?, -1)", "SELECT RELEASE_LOCK(?)", mysqlLockName(key)
 	}
-	unlockErr := execQuery(ctx, l.conn, l.unlockSQL, l.unlockArg)
-	closeErr := l.conn.Close()
+	return "SELECT pg_advisory_lock($1)", "SELECT pg_advisory_unlock($1)", advisoryLockKey(key)
+}
+
+// releaseLock unlocks and returns the pinned connection to the pool. The unlock
+// runs on a context that ignores the caller's cancellation, since a cancelled
+// run must still release. If the unlock fails anyway, the connection is
+// discarded rather than returned to the pool: closing the session is what
+// releases a session-level lock, whereas a pooled connection still holding it
+// would block every later Migrator.
+func releaseLock(ctx context.Context, conn *stdsql.Conn, unlockSQL string, arg any) error {
+	unlockErr := queryOne(context.WithoutCancel(ctx), conn, unlockSQL, arg)
+	if unlockErr != nil {
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+	}
+	closeErr := conn.Close()
 	if unlockErr != nil {
 		return fmt.Errorf("migrate: releasing migration lock: %w", unlockErr)
 	}
-	if closeErr != nil {
+	if closeErr != nil && !errors.Is(closeErr, stdsql.ErrConnDone) {
 		return fmt.Errorf("migrate: releasing migration lock: %w", closeErr)
 	}
 	return nil
 }
 
-// execQuery runs a lock/unlock statement as a query rather than an exec:
-// pg_advisory_lock/pg_advisory_unlock and GET_LOCK/RELEASE_LOCK are all
-// value-returning SELECTs, not DML/DDL, so QueryContext is the correct call
-// (ExecContext works against a real driver too, but some drivers/frameworks
-// reject Exec-ing a SELECT). The single result row is read so the connection
-// is left ready for the next statement.
-func execQuery(ctx context.Context, conn *stdsql.Conn, query string, arg any) error {
+// queryOne runs a lock/unlock statement, which returns a single value, as a
+// query and drains its row so the connection is ready for the next statement.
+func queryOne(ctx context.Context, conn *stdsql.Conn, query string, arg any) error {
 	rows, err := conn.QueryContext(ctx, query, arg)
 	if err != nil {
 		return err

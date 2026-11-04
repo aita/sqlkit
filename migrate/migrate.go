@@ -277,20 +277,20 @@ func (m *Migrator) DownTo(ctx context.Context, revision string) error {
 //   - "head" / "heads" / "" — every pending migration;
 //   - "+N" — the next N pending migrations in topological order;
 //   - a revision id (or unique prefix) — that revision and its unapplied ancestors.
+//
+// On PostgreSQL and MySQL it holds the migration lock for the run, so
+// concurrent Migrators on the same tracking table apply each migration once.
 func (m *Migrator) Upgrade(ctx context.Context, target string) error {
 	if m.planErr != nil {
 		return m.planErr
 	}
+	return m.withLock(ctx, func(m *Migrator) error { return m.upgrade(ctx, target) })
+}
+
+func (m *Migrator) upgrade(ctx context.Context, target string) error {
 	if err := m.ensureTable(ctx); err != nil {
 		return err
 	}
-
-	lock, err := m.acquireLock(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = lock.release(ctx) }()
-
 	applied, err := m.appliedRevisions(ctx)
 	if err != nil {
 		return err
@@ -341,10 +341,16 @@ func (m *Migrator) applyPending(ctx context.Context, applied map[string]bool, li
 //   - "-N" — the N most recently applied migrations;
 //   - a revision id (or unique prefix) — every applied descendant of it (the
 //     database ends up at that revision).
+//
+// Like Upgrade, it holds the migration lock for the run.
 func (m *Migrator) Downgrade(ctx context.Context, target string) error {
 	if m.planErr != nil {
 		return m.planErr
 	}
+	return m.withLock(ctx, func(m *Migrator) error { return m.downgrade(ctx, target) })
+}
+
+func (m *Migrator) downgrade(ctx context.Context, target string) error {
 	if err := m.ensureTable(ctx); err != nil {
 		return err
 	}
@@ -470,10 +476,16 @@ func (m *Migrator) resolve(target string) (string, error) {
 // becomes exactly the inclusive ancestors of revision: "head" stamps everything,
 // "base"/"" stamps nothing applied. Migrations newly considered applied get an
 // "up" row; ones no longer in range get a "down" row. No DDL runs.
+//
+// Like Upgrade, it holds the migration lock while it writes.
 func (m *Migrator) Stamp(ctx context.Context, revision string) error {
 	if m.planErr != nil {
 		return m.planErr
 	}
+	return m.withLock(ctx, func(m *Migrator) error { return m.stamp(ctx, revision) })
+}
+
+func (m *Migrator) stamp(ctx context.Context, revision string) error {
 	if err := m.ensureTable(ctx); err != nil {
 		return err
 	}

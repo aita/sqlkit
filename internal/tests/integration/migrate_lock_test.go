@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aita/sqlkit/decl"
 	"github.com/aita/sqlkit/migrate"
@@ -82,6 +83,38 @@ func TestConcurrentMigratorsSerializeOnAdvisoryLock(t *testing.T) {
 			}
 			if ups != 1 {
 				t.Errorf("history has %d up-events for lockrace0001, want exactly 1 (double-apply race not prevented)", ups)
+			}
+		})
+	}
+}
+
+// TestMigratorSingleConnectionPool runs a full Up/Down cycle on a pool limited
+// to one connection. The migration lock pins a connection for the whole run, so
+// unless the run itself executes on that same connection it would wait forever
+// for a second one; the context deadline turns such a self-deadlock into a
+// failure instead of a hung test.
+func TestMigratorSingleConnectionPool(t *testing.T) {
+	for _, eng := range engines {
+		t.Run(eng.name, func(t *testing.T) {
+			db := connectSecond(t, eng)
+			db.SQL().SetMaxOpenConns(1)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			m := migrate.New(db, lockRaceMigrations(), migrate.WithSchema(testSchema))
+			t.Cleanup(func() { _ = m.DownTo(context.Background(), "") })
+			if err := m.Up(ctx); err != nil {
+				t.Fatalf("Up() on a single-connection pool: %v", err)
+			}
+			if err := m.Stamp(ctx, "head"); err != nil {
+				t.Fatalf("Stamp() on a single-connection pool: %v", err)
+			}
+			if err := m.DownTo(ctx, ""); err != nil {
+				t.Fatalf("DownTo() on a single-connection pool: %v", err)
+			}
+			// The lock is released: a fresh run can take it again.
+			if err := m.Up(ctx); err != nil {
+				t.Fatalf("second Up(): %v", err)
 			}
 		})
 	}
