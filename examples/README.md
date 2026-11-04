@@ -40,7 +40,8 @@ The complete, idiomatic workflow and the program the
    `schema.sql` from that catalog using the `sqlkit` CLI (`go generate ./...`).
 3. `main.go` runs typed queries against the generated bindings: inserts with
    `RETURNING`, joins, aggregates, window functions, and relation-aware reads
-   (`JoinRel`), scanning into caller-defined DTOs.
+   (`JoinRel`, and `FoldRel` for single-query eager loading), scanning into
+   caller-defined DTOs.
 
 ```sh
 createdb blog && psql blog -f generated/schema.sql

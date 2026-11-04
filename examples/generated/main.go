@@ -150,6 +150,32 @@ func run(ctx context.Context, db *sqlkit.Database) error {
 		}
 		fmt.Printf("%d authors with a public profile\n", len(publicAuthors))
 
+		// Single-query eager load: FoldRel adds a LEFT JOIN to the Posts relation
+		// and folds the flat joined rows into each user's Posts slice in one round
+		// trip — the one-query counterpart to Preload. The folded target DTO maps
+		// its primary key ("id") so parents can be de-duplicated.
+		type FoldedPost struct {
+			ID        int64 `sqlkit:"id"`
+			UserID    int64 `sqlkit:"user_id"`
+			Title     string
+			Published bool
+		}
+		type UserWithPosts struct {
+			ID    int64 `sqlkit:"id"`
+			Email string
+			Posts []FoldedPost
+		}
+		var authors []UserWithPosts
+		if err := blogdb.Users.Q(session).
+			FoldRel(blogdb.Users.Rels.Posts).
+			OrderBy(blogdb.Users.ID.Asc(), blogdb.Posts.Title.Asc()).
+			All(ctx).Scan(&authors); err != nil {
+			return err
+		}
+		for _, a := range authors {
+			fmt.Printf("%s wrote %d posts (folded in one query)\n", a.Email, len(a.Posts))
+		}
+
 		return nil
 	})
 }
