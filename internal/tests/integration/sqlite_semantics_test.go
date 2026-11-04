@@ -176,3 +176,44 @@ func TestSQLiteUnitOfWorkBatchedUpdate(t *testing.T) {
 		}
 	}
 }
+
+// A VALUES derived table larger than SQLite's 500-term compound limit (a
+// batched uow UPDATE of hundreds of rows renders one) must still execute.
+func TestSQLiteLargeValuesSource(t *testing.T) {
+	db := openSQLite(t)
+	rows := make([][]sql.Expression, 2000)
+	for i := range rows {
+		rows[i] = []sql.Expression{sql.Val(i)}
+	}
+	q := sql.Select(sql.CountAll()).From(sql.ValuesSource(rows, "v", "k"))
+	if got := queryInts(t, db, q); len(got) != 1 || got[0] != 2000 {
+		t.Fatalf("count = %v, want [2000]", got)
+	}
+
+	ctx := context.Background()
+	if _, err := db.SQL().ExecContext(ctx, `CREATE TABLE big (id INTEGER PRIMARY KEY, name TEXT NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 600; i++ {
+		if _, err := db.SQL().ExecContext(ctx, `INSERT INTO big VALUES (?, 'n')`, i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tbl := newSQLiteWidgets()
+	tbl.info.Name = "big"
+	tbl = sqliteWidgets{info: tbl.info, ID: sqlkit.NewColumn[int64](tbl.info, "id"), Name: sqlkit.NewColumn[string](tbl.info, "name")}
+	err := db.WithSession(ctx, func(s *sqlkit.Session) error {
+		scope := uow.NewScope(s, uow.WithAutoChunk(true))
+		var all []sqliteWidget
+		if err := scope.Find(ctx, tbl, &all); err != nil {
+			return err
+		}
+		for i := range all {
+			all[i].Name = "m"
+		}
+		return scope.Flush(ctx)
+	})
+	if err != nil {
+		t.Fatalf("batched flush of 600 rows: %v", err)
+	}
+}

@@ -717,6 +717,56 @@ func (c *Compiler) CompileSource(source Source) (string, []any, error) {
 // table. The standard form is (VALUES (...),(...)) AS alias("c1","c2"); a dialect
 // that cannot alias VALUES columns (DerivedValuesUnionDialect, MySQL) gets an
 // equivalent (SELECT v AS c1, … UNION ALL SELECT …) AS alias instead.
+// compileNamedValuesSource renders a VALUES derived table for a dialect whose
+// VALUES columns carry automatic names: (SELECT column1 AS "k", ... FROM
+// (VALUES (...), (...))) AS "v". The caller has validated the row shape.
+func (c *Compiler) compileNamedValuesSource(s SourceExpression, namer ValuesColumnNamer) (string, []any, error) {
+	v := s.Values
+	width := len(v.Rows[0])
+	if len(v.Columns) != width {
+		return "", nil, fmt.Errorf("sqlkit/sql: VALUES source needs a column name per value for this dialect")
+	}
+	var sb strings.Builder
+	var args []any
+	sb.WriteString("(SELECT ")
+	for ci, col := range v.Columns {
+		if ci > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(c.Dialect.QuoteName(namer.ValuesColumnName(ci)))
+		sb.WriteString(" AS ")
+		sb.WriteString(c.Dialect.QuoteIdent(col.String()))
+	}
+	sb.WriteString(" FROM (VALUES ")
+	for ri, row := range v.Rows {
+		if len(row) != width {
+			return "", nil, fmt.Errorf("sqlkit/sql: VALUES source row %d has %d values, want %d", ri, len(row), width)
+		}
+		if ri > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString("(")
+		for ci, value := range row {
+			if ci > 0 {
+				sb.WriteString(", ")
+			}
+			valueSQL, valueArgs, err := c.CompileExpression(value)
+			if err != nil {
+				return "", nil, err
+			}
+			sb.WriteString(valueSQL)
+			args = append(args, valueArgs...)
+		}
+		sb.WriteString(")")
+	}
+	sb.WriteString("))")
+	if !s.Alias.IsZero() {
+		sb.WriteString(" AS ")
+		sb.WriteString(c.Dialect.QuoteName(s.Alias.String()))
+	}
+	return sb.String(), args, nil
+}
+
 func (c *Compiler) compileValuesSource(s SourceExpression) (string, []any, error) {
 	v := s.Values
 	if len(v.Rows) == 0 || len(v.Rows[0]) == 0 {
@@ -725,6 +775,9 @@ func (c *Compiler) compileValuesSource(s SourceExpression) (string, []any, error
 	width := len(v.Rows[0])
 	if len(v.Columns) > 0 && len(v.Columns) != width {
 		return "", nil, fmt.Errorf("sqlkit/sql: VALUES source has %d column names for %d-wide rows", len(v.Columns), width)
+	}
+	if namer, ok := c.Dialect.(ValuesColumnNamer); ok {
+		return c.compileNamedValuesSource(s, namer)
 	}
 	union := false
 	if d, ok := c.Dialect.(DerivedValuesUnionDialect); ok && d.UsesValuesUnion() {

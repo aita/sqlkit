@@ -613,8 +613,10 @@ func TestSQLiteBareOffsetAndValuesSource(t *testing.T) {
 		t.Errorf("bare offset = %q", got)
 	}
 	v := Select(Col("v.k")).From(ValuesSource([][]Expression{{Val(1)}, {Val(2)}}, "v", "k"))
-	if got, _, _ := v.ToSQL(SQLiteDialect{}); strings.Contains(got, "VALUES") {
-		t.Errorf("values source = %q, want a UNION ALL derived table", got)
+	// SQLite can't alias VALUES columns; select its automatic column1.. names
+	// instead (not a UNION ALL, which SQLite caps at 500 terms).
+	if got, _, _ := v.ToSQL(SQLiteDialect{}); got != `SELECT "v"."k" FROM (SELECT "column1" AS "k" FROM (VALUES (?), (?))) AS "v"` {
+		t.Errorf("values source = %q", got)
 	}
 	if (SQLiteDialect{}).MaxBindParams() != 32766 {
 		t.Error("MaxBindParams")
