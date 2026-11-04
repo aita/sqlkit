@@ -63,8 +63,7 @@ database and APM stack.
 trace := querytrace.New("RenderUserPage")
 ctx := querytrace.WithTrace(ctx, trace)
 // ... run the operation; statements flow through the wrapped driver ...
-report := trace.Report()
-fmt.Println(querytrace.TextReport(report))
+fmt.Println(querytrace.TextReport(trace))
 ```
 
 - Drive assertions on a trace in tests with [`sqltest`](testing.md#query-spy).

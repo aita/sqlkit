@@ -308,7 +308,10 @@ func (r Rows) scanBatched(dest any) (err error) {
 		return err
 	}
 	if len(r.preloads) > 0 {
-		return applyPreloads(r.ctx, ex, dest, r.preloads)
+		// Route through preloadBinding, not the batch executor ex: a NoPropagate
+		// WithRoute detaches the preload follow-up onto its own binding (see
+		// Scan's identical call), and that must hold for a split base query too.
+		return applyPreloads(r.ctx, r.preloadBinding(), dest, r.preloads)
 	}
 	return nil
 }
@@ -324,14 +327,18 @@ func (r Rows) scanBatched(dest any) (err error) {
 func (r Rows) batchExecutor() (executorBinding, func(error) error) {
 	noop := func(err error) error { return err }
 	db, ok := r.ex.(*Database)
+	var routeHint string
 	if !ok {
-		// A per-statement WithRoute wraps the executor in a routedBinding. For a
-		// write batch — which must be atomic and whose route hint the router
-		// ignores anyway — look through it to the underlying Database so the chunks
-		// still run in one transaction. A routedBinding over a Session already has
-		// the session's transaction, so it (like a bare Session) is reused as-is.
-		if routed, isRouted := r.ex.(routedBinding); isRouted && r.batchWrite {
+		// A per-statement WithRoute wraps the executor in a routedBinding. Look
+		// through it to the underlying Database so both write batches (atomicity)
+		// and read batches (snapshot consistency) get their transaction wrapper.
+		// The route hint is forwarded to the session so its transaction opens on
+		// the same backend the caller intended. A routedBinding over a Session
+		// already has the session's transaction, so it (like a bare Session) is
+		// reused as-is.
+		if routed, isRouted := r.ex.(routedBinding); isRouted {
 			db, ok = routed.base.(*Database)
+			routeHint = routed.hint
 		}
 		if !ok {
 			return r.ex, noop
@@ -339,8 +346,12 @@ func (r Rows) batchExecutor() (executorBinding, func(error) error) {
 	}
 	var session *Session
 	if r.batchWrite {
-		session = db.NewSession(db.batchWriteSessionOptions()...)
-	} else if s, on := db.newBatchReadSession(); on {
+		opts := db.batchWriteSessionOptions()
+		if routeHint != "" {
+			opts = append(opts, WithRoute(routeHint))
+		}
+		session = db.NewSession(opts...)
+	} else if s, on := db.newBatchReadSession(routeHint); on {
 		session = s
 	}
 	if session == nil {

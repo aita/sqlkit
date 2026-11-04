@@ -226,12 +226,18 @@ func newDatabase(db *stdsql.DB, exec Executor, opts []DatabaseOption) *Database 
 
 // newBatchReadSession opens a REPEATABLE READ, read-only session for running a
 // split SELECT's chunks under one snapshot, or returns false when the consistent
-// snapshot is disabled.
-func (d *Database) newBatchReadSession() (*Session, bool) {
+// snapshot is disabled. routeHint, when non-empty, pins the session to the named
+// backend so the snapshot transaction opens on the same target the caller's
+// WithRoute intended.
+func (d *Database) newBatchReadSession(routeHint string) (*Session, bool) {
 	if !d.batchReadSnapshot {
 		return nil, false
 	}
-	return d.NewSession(WithTxOptions(TxOptions{Isolation: stdsql.LevelRepeatableRead, ReadOnly: true})), true
+	opts := []SessionOption{WithTxOptions(TxOptions{Isolation: stdsql.LevelRepeatableRead, ReadOnly: true})}
+	if routeHint != "" {
+		opts = append(opts, WithRoute(routeHint))
+	}
+	return d.NewSession(opts...), true
 }
 
 // batchWriteSessionOptions returns the session options for the transaction that

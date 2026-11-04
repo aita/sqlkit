@@ -44,6 +44,7 @@ func (j jsonScanner) Scan(src any) error {
 	var data []byte
 	switch s := src.(type) {
 	case nil:
+		reflect.ValueOf(j.dst).Elem().SetZero()
 		return nil
 	case []byte:
 		data = s

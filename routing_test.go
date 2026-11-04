@@ -9,6 +9,7 @@ import (
 
 	"github.com/aita/sqlkit"
 	"github.com/aita/sqlkit/internal/testutil"
+	"github.com/aita/sqlkit/sql"
 )
 
 // routerFunc adapts a function to the Router interface.
@@ -201,6 +202,30 @@ func TestReadWriteRouterSingleDatabase(t *testing.T) {
 	}
 }
 
+// An AccessUnknown statement (an opaque raw string the classifier can't read,
+// e.g. one starting with a CTE) must go to the primary, on the same "stay on
+// the safe side" contract as a write — never to a read replica.
+func TestReadWriteRouterUnknownAccessGoesToPrimary(t *testing.T) {
+	primary, replica := rowFake(), rowFake()
+	router := sqlkit.NewRouter(map[string]sqlkit.Backend{
+		"default": sqlkit.DB(primary.DB()),
+		"replica": sqlkit.DB(replica.DB()),
+	}, sqlkit.ReadWriteRouter(sqlkit.WithReplicas("replica")))
+	db := sqlkit.WrapExecutor(router)
+	ctx := context.Background()
+
+	var out []User
+	if err := db.RawSQL(ctx, "WITH t AS (SELECT 1) SELECT * FROM t").Scan(&out); err != nil {
+		t.Fatalf("RawSQL Scan error = %v", err)
+	}
+	if len(primary.Queries()) != 1 {
+		t.Fatalf("AccessUnknown statement must hit primary, primary queries = %d", len(primary.Queries()))
+	}
+	if len(replica.Queries()) != 0 {
+		t.Fatalf("AccessUnknown statement must never hit a replica, replica queries = %d", len(replica.Queries()))
+	}
+}
+
 // ReadWriteRouter balances reads round-robin across several replicas.
 func TestReadWriteRouterBalancesReplicas(t *testing.T) {
 	primary, ra, rb := rowFake(), rowFake(), rowFake()
@@ -383,6 +408,50 @@ func TestWithRouteNoPropagateLeavesPreloadToRouter(t *testing.T) {
 	}
 }
 
+// TestScanBatchedPreloadHonorsNoPropagate covers the split-query path of the
+// same guarantee TestWithRouteNoPropagateLeavesPreloadToRouter checks for an
+// unsplit one: scanBatched (a base query whose IN list auto-chunks into
+// several statements) must still route its Preload follow-up through
+// preloadEx, not through the batch executor derived from the hinted binding —
+// otherwise NoPropagate silently stops working the moment a preloaded query
+// also splits.
+func TestScanBatchedPreloadHonorsNoPropagate(t *testing.T) {
+	mk := func() *testutil.Fake {
+		return &testutil.Fake{QueryFunc: func(s string, _ []any) (testutil.Result, error) {
+			if strings.Contains(s, `"public"."posts"`) {
+				return testutil.Result{Columns: []string{"id", "user_id", "title"}, Rows: [][]driver.Value{
+					{int64(10), int64(1), "a"},
+				}}, nil
+			}
+			return testutil.Result{Columns: []string{"id"}, Rows: [][]driver.Value{{int64(1)}}}, nil
+		}}
+	}
+	primary, replica := mk(), mk()
+	router := sqlkit.NewRouter(map[string]sqlkit.Backend{
+		"default": sqlkit.DB(primary.DB()),
+		"replica": sqlkit.DB(replica.DB()),
+	}, rwSplit)
+	db := sqlkit.WrapExecutor(router, sqlkit.WithAutoChunk(true))
+	ctx := context.Background()
+
+	var users []preUser
+	err := db.Select(Users.ID).From(Users).Where(Users.ID.In(1, 2)).
+		AutoChunk(sqlkit.ChunkSize(1)).
+		Preload(Posts).
+		All(ctx, sqlkit.WithRoute("default", sqlkit.NoPropagate)).Scan(&users)
+	if err != nil {
+		t.Fatalf("Preload error = %v", err)
+	}
+	// Both split base chunks hinted to primary; the child preload routes
+	// independently (by rwSplit's read policy) to the replica.
+	if len(primary.Queries()) != 2 {
+		t.Fatalf("both base chunks should hit primary, primary queries = %d", len(primary.Queries()))
+	}
+	if len(replica.Queries()) != 1 {
+		t.Fatalf("the preload should route to replica, replica queries = %d", len(replica.Queries()))
+	}
+}
+
 // preloadRoutedDB wires two backends whose fakes both serve the users base query
 // and the posts follow-up, so a test can see which backend each landed on.
 func preloadRoutedDB(t *testing.T) (*sqlkit.Database, *testutil.Fake, *testutil.Fake) {
@@ -403,6 +472,48 @@ func preloadRoutedDB(t *testing.T) (*sqlkit.Database, *testutil.Fake, *testutil.
 		"replica": sqlkit.DB(replica.DB()),
 	}, rwSplit)
 	return sqlkit.WrapExecutor(router), primary, replica
+}
+
+// TestRoutedSelectSplitGetsReadSnapshot guards a routed (per-statement
+// WithRoute) split SELECT against losing the REPEATABLE READ snapshot:
+// batchExecutor must unwrap the routedBinding even for reads so the chunks run
+// inside one snapshot transaction.
+func TestRoutedSelectSplitGetsReadSnapshot(t *testing.T) {
+	primary := &testutil.Fake{QueryFunc: func(_ string, args []any) (testutil.Result, error) {
+		rows := make([][]driver.Value, 0, len(args))
+		for _, a := range args {
+			rows = append(rows, []driver.Value{a, "x@example.com", nil})
+		}
+		return testutil.Result{Columns: []string{"id", "email", "name"}, Rows: rows}, nil
+	}}
+	replica := &testutil.Fake{QueryFunc: func(_ string, _ []any) (testutil.Result, error) {
+		return testutil.Result{Columns: []string{"id", "email", "name"}}, nil
+	}}
+	router := sqlkit.NewRouter(map[string]sqlkit.Backend{
+		"default": sqlkit.DB(primary.DB()),
+		"replica": sqlkit.DB(replica.DB()),
+	}, rwSplit)
+	db := sqlkit.WrapExecutor(router, sqlkit.WithAutoChunk(true))
+
+	var users []User
+	ids := []int64{1, 2, 3, 4, 5}
+	err := db.Select().From(Users).Where(Users.ID.In(ids...)).
+		AutoChunk(sqlkit.ChunkSize(2)).
+		All(context.Background(), sqlkit.WithRoute("default")).Scan(&users)
+	if err != nil {
+		t.Fatalf("routed select error = %v", err)
+	}
+	if len(users) != 5 {
+		t.Fatalf("users = %d, want 5", len(users))
+	}
+	// The split read chunks must share one snapshot transaction on the primary
+	// (the hinted backend), even though WithRoute wrapped the executor in a
+	// routedBinding. Without the fix, batchExecutor could not look through the
+	// routedBinding to the *Database, so each chunk ran as an independent
+	// auto-commit read with no snapshot.
+	if opts := primary.BeginOptions(); len(opts) != 1 {
+		t.Fatalf("primary begins = %d, want 1 (chunks must share one snapshot tx)", len(opts))
+	}
 }
 
 func TestStatementKindAndIsWrite(t *testing.T) {
@@ -461,6 +572,45 @@ func TestStatementAccess(t *testing.T) {
 				t.Fatalf("IsWrite() = %v, want %v", got, want)
 			}
 		})
+	}
+}
+
+// TestStatementAccessWritableCTEAndBareAST covers two gaps Access() used to
+// miss because it only recognized sqlkit's typed SelectQuery/UnionQuery and
+// the sql package's *Builder types, never a bare parsed/hand-built AST (what
+// a parser, or RawSQL given a sql.Query, hands back) nor a data-modifying CTE
+// under a top-level SELECT. Both must report AccessWrite — a false AccessRead
+// here would route a write to a read replica.
+func TestStatementAccessWritableCTEAndBareAST(t *testing.T) {
+	users := sql.Table{Name: sql.NewIdent("users")}
+
+	// A read-only CTE stays a read.
+	readCTE := sql.Select(sql.Col("id")).From(users).CTE("recent")
+	readQuery := sql.Select(sql.Star()).From(readCTE).WithCTE(readCTE)
+	if got := (sqlkit.Statement{Op: sqlkit.OpQuery, Query: readQuery}).Access(); got != sqlkit.AccessRead {
+		t.Errorf("read-only CTE Access() = %v, want AccessRead", got)
+	}
+
+	// A data-modifying CTE writes even though the top-level statement is a
+	// SELECT: WITH ins AS (INSERT ... RETURNING ...) SELECT * FROM ins.
+	insert := sql.InsertInto(users).Columns("email").Values("a@example.com").Returning(sql.Col("id"))
+	writeCTE := readCTE.WithBody(insert)
+	writeQuery := sql.Select(sql.Star()).From(writeCTE).WithCTE(writeCTE)
+	if got := (sqlkit.Statement{Op: sqlkit.OpQuery, Query: writeQuery}).Access(); got != sqlkit.AccessWrite {
+		t.Errorf("data-modifying CTE Access() = %v, want AccessWrite (would route the write to a read replica)", got)
+	}
+
+	// A bare sql.SelectStmt (not wrapped in sql.SelectBuilder) — what a parser,
+	// or RawSQL given a built sql.Query, produces — with a locking clause.
+	bareLocking := sql.Select(sql.Star()).From(users).ForUpdate().Stmt()
+	if got := (sqlkit.Statement{Op: sqlkit.OpQuery, Query: bareLocking}).Access(); got != sqlkit.AccessWrite {
+		t.Errorf("bare locking SelectStmt Access() = %v, want AccessWrite", got)
+	}
+
+	// A bare sql.SelectStmt without a locking clause stays a read.
+	bareRead := sql.Select(sql.Star()).From(users).Stmt()
+	if got := (sqlkit.Statement{Op: sqlkit.OpQuery, Query: bareRead}).Access(); got != sqlkit.AccessRead {
+		t.Errorf("bare SelectStmt Access() = %v, want AccessRead", got)
 	}
 }
 

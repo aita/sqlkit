@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/aita/sqlkit/analysis"
 	"github.com/aita/sqlkit/sql"
 )
 
@@ -208,15 +209,17 @@ func (a Access) String() string {
 
 // Access reports the statement's read/write nature, including the undetermined
 // case. It derives from Kind, with a locking read (SELECT ... FOR UPDATE/SHARE)
-// counted as a write because it takes row locks. A raw string that could not be
-// classified is AccessUnknown — distinct from a definite read — so a Router can
-// decide how to route it rather than having the choice made for it.
+// or a read-kinded statement carrying a data-modifying CTE
+// (WITH x AS (INSERT/UPDATE/DELETE/MERGE ...) SELECT ...) counted as a write,
+// because both act on data despite a SELECT's top-level Kind. A raw string that
+// could not be classified is AccessUnknown — distinct from a definite read — so
+// a Router can decide how to route it rather than having the choice made for it.
 func (s Statement) Access() Access {
 	switch s.Kind() {
 	case KindInsert, KindUpdate, KindDelete, KindMerge, KindDDL:
 		return AccessWrite
 	case KindSelect, KindRawRead:
-		if s.locksRows() {
+		if s.locksRows() || s.writesViaCTE() {
 			return AccessWrite
 		}
 		return AccessRead
@@ -236,19 +239,45 @@ func (s Statement) IsWrite() bool {
 	return s.Access() != AccessRead
 }
 
-// locksRows reports whether a SELECT carries a row-locking clause (FOR UPDATE /
-// FOR SHARE / FOR NO KEY UPDATE / FOR KEY SHARE), reading the AST when present
-// and scanning the text for a raw string.
-func (s Statement) locksRows() bool {
+// selectQuery returns the underlying sql.Query for a KindSelect statement,
+// unwrapping sqlkit's typed SelectQuery/UnionQuery to the sql.SelectBuilder/
+// sql.CompoundBuilder they carry, so locksRows and writesViaCTE see the same
+// AST regardless of whether the statement came from the fluent builder, a bare
+// parsed/hand-built AST (a parser, or RawSQL given a sql.Query), or the sql
+// package's own builder types. nil when s.Query isn't a recognized SELECT type
+// (a raw string, or another statement kind).
+func (s Statement) selectQuery() sql.Query {
 	switch q := s.Query.(type) {
 	case SelectQuery:
-		return q.query.Stmt().Lock != nil
-	case sql.SelectBuilder:
-		return q.Stmt().Lock != nil
-	case nil:
+		return q.query
+	case UnionQuery:
+		return q.query
+	case sql.SelectBuilder, sql.CompoundBuilder, sql.SelectStmt, sql.CompoundStmt:
+		return q
+	}
+	return nil
+}
+
+// locksRows reports whether a SELECT carries a row-locking clause (FOR UPDATE /
+// FOR SHARE / FOR NO KEY UPDATE / FOR KEY SHARE), reading the AST when present
+// (builder or bare, see selectQuery) and scanning the text for a raw string.
+func (s Statement) locksRows() bool {
+	if q := s.selectQuery(); q != nil {
+		return analysis.IsLockingRead(q)
+	}
+	if s.Query == nil {
 		return hasLockingClause(s.SQL)
 	}
 	return false
+}
+
+// writesViaCTE reports whether a read-kinded statement carries a data-modifying
+// common table expression (see analysis.WritesViaCTE); false for a raw string,
+// which classifyRawSQL already routes to KindRawUnknown (treated as a write) on
+// any ambiguous WITH-prefixed text.
+func (s Statement) writesViaCTE() bool {
+	q := s.selectQuery()
+	return q != nil && analysis.WritesViaCTE(q)
 }
 
 // hasLockingClause reports whether raw SQL text contains a SELECT row-locking

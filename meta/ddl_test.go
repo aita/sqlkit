@@ -304,6 +304,33 @@ func TestDDLUnsupportedDialect(t *testing.T) {
 	}
 }
 
+// TestDDLForeignKeyNoColumnsErrors covers addConstraintSQL: a foreign key with
+// no Columns/RefColumns cannot compile (the compiler rejects an empty column
+// list), and CreateSQL must surface that as an error rather than silently
+// omitting the ADD CONSTRAINT statement for that key.
+func TestDDLForeignKeyNoColumnsErrors(t *testing.T) {
+	public := meta.Schema{Name: "public"}
+	md := meta.Metadata{
+		Tables: []meta.Table{
+			{
+				Schema:  public,
+				Name:    "posts",
+				Columns: []meta.Column{{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true}},
+				ForeignKeys: []meta.ForeignKey{
+					{Name: "fk_broken", RefSchema: public, RefTable: "users"}, // no Columns, no RefColumns
+				},
+			},
+		},
+	}
+	_, err := md.CreateSQL(mustDialect(t, "postgres"))
+	if err == nil {
+		t.Fatal("expected CreateSQL to error on a columnless foreign key, got nil")
+	}
+	if !strings.Contains(err.Error(), "fk_broken") {
+		t.Fatalf("error should name the offending constraint: %v", err)
+	}
+}
+
 func TestDDLLiteralEscaping(t *testing.T) {
 	md := meta.Metadata{
 		Tables: []meta.Table{{
