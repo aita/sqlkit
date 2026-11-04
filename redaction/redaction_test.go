@@ -508,6 +508,22 @@ func TestRewriteMergeOnCondition(t *testing.T) {
 	}
 }
 
+// TestRewriteMergeInsertWithoutColumnsFailsSafe covers a MERGE ... THEN INSERT
+// VALUES with no explicit column list — a valid construct (SQL assigns the
+// table's own column order) that leaves rewriteInsertValues unable to name
+// which column each value targets. It must mask every value (fail safe) rather
+// than let them all through unmasked because no column could be matched.
+func TestRewriteMergeInsertWithoutColumnsFailsSafe(t *testing.T) {
+	m := redaction.New(redaction.Columns("users.name"))
+	q := sql.MergeInto(tblUsers).
+		Using(tblAccounts).
+		On(sql.Eq(sql.Col("users.id"), sql.Col("accounts.id"))).
+		When(sql.WhenNotMatched().ThenInsert(nil, "taro", "x@y.z"))
+	if got := args(t, m.Apply(q)); !reflect.DeepEqual(got, []any{"*****", "*****"}) {
+		t.Errorf("merge INSERT (no columns) masked args = %v, want [***** *****]", got)
+	}
+}
+
 // TestMaskArray covers the col = ANY(ARRAY[...]) form: every string element of the
 // array tied to a sensitive column is masked.
 func TestMaskArray(t *testing.T) {
