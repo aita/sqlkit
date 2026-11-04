@@ -57,3 +57,13 @@ func TestUnsupportedStatementKeepsSourceText(t *testing.T) {
 		t.Fatalf("raw text lost ESCAPE: %q", raw.SQL())
 	}
 }
+
+// A bare integer in GROUP BY / ORDER BY is a column position; bound as a
+// parameter it is a constant (ORDER BY ? sorts nothing, GROUP BY ? collapses
+// the groups), so it must stay literal.
+func TestPositionalGroupAndOrderStayLiteral(t *testing.T) {
+	assertSQL(t, "SELECT g, count(*) FROM t GROUP BY 1 ORDER BY 2 DESC, 1",
+		`SELECT "g", COUNT(*) FROM "t" GROUP BY 1 ORDER BY 2 DESC, 1`)
+	assertSQL(t, "SELECT a FROM t UNION SELECT b FROM u ORDER BY 1",
+		`SELECT "a" FROM "t" UNION SELECT "b" FROM "u" ORDER BY 1`)
+}

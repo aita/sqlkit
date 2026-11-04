@@ -86,7 +86,7 @@ func buildSelectCore(s *rsql.SelectStatement) (sql.SelectBuilder, error) {
 	if len(s.GroupByExprs) > 0 {
 		group := make([]sql.Expression, 0, len(s.GroupByExprs))
 		for _, g := range s.GroupByExprs {
-			expr, err := convertExpr(g)
+			expr, err := convertPositional(g)
 			if err != nil {
 				return sql.SelectBuilder{}, err
 			}
@@ -378,10 +378,23 @@ func literalSelection(node rsql.Expr) (sql.Selection, bool) {
 	}
 }
 
+// convertPositional converts a GROUP BY / ORDER BY item. A bare integer there
+// is a column position (ORDER BY 2 sorts by the second output column), not a
+// value, so it is kept as literal text: binding it as a parameter would make
+// it a constant and silently drop the ordering or grouping.
+func convertPositional(e rsql.Expr) (sql.Expression, error) {
+	if lit, ok := e.(*rsql.NumberLit); ok {
+		if _, err := strconv.Atoi(lit.Value); err == nil {
+			return sql.Raw(lit.Value), nil
+		}
+	}
+	return convertExpr(e)
+}
+
 func convertOrderingTerms(terms []*rsql.OrderingTerm) ([]sql.OrderTerm, error) {
 	out := make([]sql.OrderTerm, 0, len(terms))
 	for _, t := range terms {
-		expr, err := convertExpr(t.X)
+		expr, err := convertPositional(t.X)
 		if err != nil {
 			return nil, err
 		}
