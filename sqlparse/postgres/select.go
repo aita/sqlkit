@@ -29,10 +29,25 @@ func convertSelect(s *pg.SelectStmt) (sql.Query, error) {
 	if s == nil {
 		return nil, sqlparse.Unsupported("nil SELECT")
 	}
+	// SELECT ... INTO creates a table; sqlkit has no typed form for it, and
+	// dropping the INTO would turn a write into a plain read.
+	if s.GetIntoClause() != nil {
+		return nil, sqlparse.Unsupported("SELECT ... INTO")
+	}
 	if s.GetOp() != pg.SetOperation_SETOP_NONE {
+		// A WITH on a set operation has no place on the typed compound; dropping
+		// it would leave the arms referencing CTEs that no longer exist.
+		if s.GetWithClause() != nil {
+			return nil, sqlparse.Unsupported("WITH on a set operation")
+		}
 		return convertCompound(s)
 	}
 	if len(s.GetValuesLists()) > 0 {
+		// A bare VALUES list carries no WITH / ORDER BY / LIMIT / OFFSET of its
+		// own in sqlkit; keep the statement raw rather than drop them.
+		if s.GetWithClause() != nil || len(s.GetSortClause()) > 0 || s.GetLimitCount() != nil || s.GetLimitOffset() != nil {
+			return nil, sqlparse.Unsupported("VALUES with WITH/ORDER BY/LIMIT/OFFSET")
+		}
 		return convertValuesList(s.GetValuesLists())
 	}
 	// A SELECT with no target list (the degenerate bare "SELECT" libpg_query still
