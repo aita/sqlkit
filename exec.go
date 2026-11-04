@@ -174,7 +174,7 @@ func newRows(ctx context.Context, ex executorBinding, query sql.Query) Rows {
 			return Rows{err: err}
 		}
 		if split {
-			return Rows{ctx: ctx, ex: ex, preloadEx: ex, batches: stmts, batchWrite: write}
+			return Rows{ctx: ctx, ex: ex, preloadEx: ex, query: query, batches: stmts, batchWrite: write}
 		}
 	}
 	sqlText, args, err := query.ToSQL(ex.sqlDialect())
@@ -304,7 +304,12 @@ func (r Rows) scanBatched(dest any) (err error) {
 	if scanErr == nil {
 		dv.Elem().Set(acc)
 	}
-	if err := afterQuery(r.ctx, ex.hooks(), Statement{Op: OpQuery, Dialect: dialect}, dest, scanErr); err != nil {
+	// The summary Statement carries the builder (no single SQL text: the chunks
+	// are conceptually one result), so Kind/Access/IsWrite classify it from the
+	// AST — a split RETURNING write reports as the write it is, and a split
+	// SELECT as a select — rather than from Op alone, where OpQuery always reads
+	// as KindSelect.
+	if err := afterQuery(r.ctx, ex.hooks(), Statement{Op: OpQuery, Query: r.query, Dialect: dialect}, dest, scanErr); err != nil {
 		return err
 	}
 	if len(r.preloads) > 0 {
