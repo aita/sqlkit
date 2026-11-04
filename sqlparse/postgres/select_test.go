@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/aita/sqlkit/sql"
+	"github.com/aita/sqlkit/sqlparse/postgres"
 )
 
 func TestSelectColumnsAndAlias(t *testing.T) {
@@ -455,5 +456,25 @@ func TestDroppedClausesFallBackToRaw(t *testing.T) {
 		"WITH v AS (SELECT 1) VALUES (1)",
 	} {
 		assertRaw(t, q)
+	}
+}
+
+// A bare integer in GROUP BY / ORDER BY is a column position. Bound as a
+// parameter it becomes a constant: ORDER BY $1 sorts nothing and GROUP BY $1
+// groups everything, silently changing the result. It must stay literal.
+func TestPositionalGroupAndOrderStayLiteral(t *testing.T) {
+	cases := map[string]string{
+		"SELECT g, count(*) FROM t GROUP BY 1 ORDER BY 2 DESC, 1": `SELECT "g", COUNT(*) FROM "t" GROUP BY 1 ORDER BY 2 DESC, 1`,
+		"SELECT a FROM t UNION SELECT b FROM u ORDER BY 1":        `(SELECT "a" FROM "t") UNION (SELECT "b" FROM "u") ORDER BY 1`,
+	}
+	for in, want := range cases {
+		q, err := postgres.ParseOne(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, args, err := q.ToSQL(sql.PostgreSQLDialect{})
+		if err != nil || got != want || len(args) != 0 {
+			t.Errorf("%s\n got  %s %v (err %v)\n want %s", in, got, args, err, want)
+		}
 	}
 }
