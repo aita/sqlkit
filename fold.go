@@ -39,6 +39,9 @@ type foldSpec struct {
 	ncols   int
 	parent  int
 	effInfo TableInfo
+	// conditioned marks a hop joined with extra FoldRel/Fold conditions, which
+	// filter it for every fold that shares it.
+	conditioned bool
 }
 
 // FoldRel joins rel's target with a LEFT JOIN, projects its columns next to the
@@ -142,6 +145,12 @@ func (q SelectQuery) registerFoldHop(parent int, rel Relation, conditions []Pred
 	target := rel.Target()
 	for i, f := range q.folds {
 		if f.parent == parent && f.rel.Name() == rel.Name() && sameTable(f.target, target) {
+			// A shared-prefix hop is joined once. That is only meaning-preserving
+			// when neither use narrows it: conditions on either fold would
+			// otherwise be dropped or silently applied to the other.
+			if f.conditioned || len(conditions) > 0 {
+				return q.fail(fmt.Errorf("sqlkit: FoldRel of %q: the relation is already folded under the same parent, and a fold of it carries conditions that the shared join cannot apply to one fold only; fold it once", rel.Name())), -1
+			}
 			return q, i // shared-prefix hop already joined
 		}
 	}
@@ -165,12 +174,13 @@ func (q SelectQuery) registerFoldHop(parent int, rel Relation, conditions []Pred
 	}
 	q.query = q.query.LeftJoin(effInfo, on.Expression()).AddColumns(foldProjection(target, effInfo)...)
 	q.folds = append(append([]foldSpec(nil), q.folds...), foldSpec{
-		rel:     rel,
-		target:  target,
-		colOff:  off,
-		ncols:   len(target.Columns()),
-		parent:  parent,
-		effInfo: effInfo,
+		rel:         rel,
+		target:      target,
+		colOff:      off,
+		ncols:       len(target.Columns()),
+		parent:      parent,
+		effInfo:     effInfo,
+		conditioned: len(conditions) > 0,
 	})
 	return q, len(q.folds) - 1
 }

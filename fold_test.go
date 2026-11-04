@@ -343,3 +343,41 @@ func titles(posts []Post) string {
 	}
 	return out
 }
+
+// A hop shared by two folds is joined once, so a condition on either fold
+// can't apply to that fold alone. It used to be dropped (all posts folded
+// despite the Title filter); it must be rejected instead.
+func TestFoldSharedHopWithConditionsRejected(t *testing.T) {
+	onlyPost := sqlkit.Cond(sql.Eq(sql.Col("posts.title"), sql.Val("only")))
+	cases := map[string]sqlkit.SelectQuery{
+		"later fold adds a condition": newDB().Select().From(Users).
+			Fold(sqlkit.RelPath(Posts, Comments)).
+			Fold(Posts, onlyPost),
+		"earlier fold had a condition": newDB().Select().From(Users).
+			Fold(Posts, onlyPost).
+			Fold(sqlkit.RelPath(Posts, Comments)),
+		"same relation twice with conditions": newDB().Select().From(Users).
+			FoldRel(UsersPosts, onlyPost).
+			FoldRel(UsersPosts, onlyPost),
+	}
+	for name, q := range cases {
+		if _, _, err := q.ToSQL(pg); err == nil || !contains(err.Error(), "already folded") {
+			t.Errorf("%s: ToSQL err = %v, want a shared-hop conditions error", name, err)
+		}
+	}
+	// Unconditioned sharing still works: one join per hop.
+	s, _, err := newDB().Select().From(Users).Fold(sqlkit.RelPath(Posts, Comments)).Fold(Posts).ToSQL(pg)
+	if err != nil || countOf(s, `LEFT JOIN "public"."posts"`) != 1 {
+		t.Fatalf("shared unconditioned hop: %s (err %v)", s, err)
+	}
+}
+
+func countOf(s, sub string) int {
+	n := 0
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			n++
+		}
+	}
+	return n
+}
