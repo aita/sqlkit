@@ -135,6 +135,9 @@ type Scope struct {
 	// flushWrote reports whether the latest flush had work to write (checked
 	// after the BeforeFlush hooks, which may stage more).
 	flushWrote bool
+	// flushing is set while flush runs, so autoflush doesn't re-enter it from
+	// a flush hook (see maybeAutoflush).
+	flushing bool
 
 	// versionWrites are the bumped version values of rows whose guarded UPDATE
 	// succeeded during the current flush. They are written back into the rows
@@ -538,6 +541,8 @@ func (s *Scope) Rollback(ctx context.Context) error {
 // still change it). It returns a snapshot of the work it then wrote, for the
 // AfterFlush hooks, or nil when none is registered.
 func (s *Scope) flush(ctx context.Context) (*ChangeSet, error) {
+	s.flushing = true
+	defer func() { s.flushing = false }()
 	s.versionWrites = nil
 	s.flushWrote = false
 	if err := s.runBeforeFlush(ctx); err != nil {
