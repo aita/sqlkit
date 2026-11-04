@@ -241,3 +241,26 @@ func TestSQLiteExpressionDefault(t *testing.T) {
 		t.Fatalf("tag = %q, %v; want abc", tag, err)
 	}
 }
+
+// Schema-qualified DDL must put the qualifier where SQLite's grammar takes it:
+// on the index name, and never on a REFERENCES target.
+func TestSQLiteSchemaQualifiedDDL(t *testing.T) {
+	db := openSQLite(t)
+	ctx := context.Background()
+	main := func(name string) sql.Table { return sql.Table{Schema: sql.NewIdent("main"), Name: sql.NewIdent(name)} }
+	stmts := []sql.Query{
+		sql.CreateTable(main("sp")).Column(sql.ColumnDef{Name: sql.NewIdent("id"), Type: sql.EngineType{Name: "INTEGER"}}).PrimaryKey("id"),
+		sql.CreateTable(main("sc")).Column(sql.ColumnDef{Name: sql.NewIdent("pid"), Type: sql.EngineType{Name: "INTEGER"}}).
+			ForeignKey(sql.ForeignKeyConstraint{Columns: []sql.Ident{sql.NewIdent("pid")}, RefSchema: sql.NewIdent("main"), RefTable: sql.NewIdent("sp"), RefColumns: []sql.Ident{sql.NewIdent("id")}}),
+		sql.CreateIndex("sc_pid", main("sc"), "pid"),
+	}
+	for _, q := range stmts {
+		text, _, err := q.ToSQL(sql.SQLiteDialect{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.SQL().ExecContext(ctx, text); err != nil {
+			t.Fatalf("%s: %v", text, err)
+		}
+	}
+}

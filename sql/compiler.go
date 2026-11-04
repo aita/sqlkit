@@ -15,6 +15,9 @@ type Compiler struct {
 	// inlineValues renders a ValueExpression as an inline literal instead of a
 	// bind placeholder; CompileInline sets it. The result carries no args.
 	inlineValues bool
+	// ddlSchema is the schema of the table a CREATE/ALTER TABLE is compiling,
+	// for dialects whose REFERENCES targets must share it (see referenceSchema).
+	ddlSchema Ident
 }
 
 // NewCompiler creates a compiler for the supplied dialect.

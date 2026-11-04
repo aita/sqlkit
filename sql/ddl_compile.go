@@ -48,6 +48,7 @@ func (c *Compiler) CompileDropSchema(s DropSchemaStmt) (string, error) {
 
 // CompileCreateTable renders a CREATE TABLE statement.
 func (c *Compiler) CompileCreateTable(s CreateTableStmt) (string, error) {
+	c.ddlSchema = s.Table.Schema
 	var defs []string
 	for _, col := range s.Columns {
 		def, err := c.compileColumnDef(col)
@@ -290,12 +291,31 @@ func (c *Compiler) requireIdentity() error {
 	return nil
 }
 
+// referenceSchema returns the schema qualifier to render on a REFERENCES
+// target. SQLite's REFERENCES names a bare table that must live in the
+// referencing table's own schema (ddlSchema): a matching qualifier is dropped,
+// and any other is rejected — "REFERENCES "main"."p"" is a syntax error there.
+// Other dialects keep the qualifier as given.
+func (c *Compiler) referenceSchema(schema, table Ident) (Ident, error) {
+	if !sqliteFamily(c.Dialect.Name()) || schema.IsZero() {
+		return schema, nil
+	}
+	if schema.String() != c.ddlSchema.String() {
+		return Ident{}, fmt.Errorf("sqlkit/sql: dialect %q cannot reference table %q in another schema (%q)", c.Dialect.Name(), table.String(), schema.String())
+	}
+	return Ident{}, nil
+}
+
 // columnReferenceClause renders a column-level REFERENCES clause.
 func (c *Compiler) columnReferenceClause(r ColumnReference) (string, error) {
 	if r.Table.IsZero() || r.Column.IsZero() {
 		return "", fmt.Errorf("sqlkit/sql: a column REFERENCES needs a table and column")
 	}
-	clause := "REFERENCES " + c.qualifyName(r.Schema, r.Table) + " (" + c.Dialect.QuoteName(r.Column.String()) + ")"
+	schema, err := c.referenceSchema(r.Schema, r.Table)
+	if err != nil {
+		return "", err
+	}
+	clause := "REFERENCES " + c.qualifyName(schema, r.Table) + " (" + c.Dialect.QuoteName(r.Column.String()) + ")"
 	if r.OnDelete != "" {
 		clause += " ON DELETE " + r.OnDelete
 	}
@@ -435,6 +455,13 @@ func (c *Compiler) CompileCreateIndex(s CreateIndexStmt) (string, error) {
 		}
 		sb.WriteString("IF NOT EXISTS ")
 	}
+	if sqliteFamily(c.Dialect.Name()) {
+		// SQLite qualifies the index name, not the table, with the schema:
+		// CREATE INDEX "main"."i" ON "t" — "ON "main"."t"" is a syntax error.
+		sb.WriteString(c.qualifyName(s.Table.Schema, s.Name) + " ON " + c.Dialect.QuoteName(s.Table.Name.String()) +
+			" (" + c.quoteAll(s.Columns) + ");")
+		return sb.String(), nil
+	}
 	sb.WriteString(c.Dialect.QuoteName(s.Name.String()) + " ON " + c.qualify(s.Table) +
 		" (" + c.quoteAll(s.Columns) + ");")
 	return sb.String(), nil
@@ -505,6 +532,7 @@ func (c *Compiler) CompileCommentOnColumn(s CommentOnColumnStmt) (string, error)
 // CompileAlterTable renders an ALTER TABLE statement as a single
 // comma-separated list of actions.
 func (c *Compiler) CompileAlterTable(s AlterTableStmt) (string, error) {
+	c.ddlSchema = s.Table.Schema
 	if len(s.Alterations) == 0 {
 		return "", fmt.Errorf("sqlkit/sql: ALTER TABLE requires at least one alteration")
 	}
@@ -665,9 +693,13 @@ func (c *Compiler) foreignKeyDef(fk ForeignKeyConstraint) (string, error) {
 	if len(fk.Columns) != len(fk.RefColumns) {
 		return "", fmt.Errorf("sqlkit/sql: FOREIGN KEY has %d referencing column(s) but %d referenced column(s)", len(fk.Columns), len(fk.RefColumns))
 	}
+	refSchema, err := c.referenceSchema(fk.RefSchema, fk.RefTable)
+	if err != nil {
+		return "", err
+	}
 	clause := c.constraintName(fk.Name) +
 		"FOREIGN KEY (" + c.quoteAll(fk.Columns) + ")" +
-		" REFERENCES " + c.qualifyName(fk.RefSchema, fk.RefTable) +
+		" REFERENCES " + c.qualifyName(refSchema, fk.RefTable) +
 		" (" + c.quoteAll(fk.RefColumns) + ")"
 	if fk.OnDelete != "" {
 		clause += " ON DELETE " + fk.OnDelete
