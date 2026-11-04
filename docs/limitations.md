@@ -98,6 +98,27 @@ trade convenience for correctness:
   or pointer. The field is matched by relation name or a `preload:"…"` tag and
   must map to the target key column.
 
+## Fold (single-query eager load)
+
+`FoldRel`/`Fold` join the relation and fold the rows in one query (see
+[Query builder](query-builder.md#fold-eager-loading-in-one-query)).
+
+- 🔒 **Aliased hops can't be narrowed by their own columns.** A table folded more
+  than once in a tree (a self-reference, or two paths reaching it) is joined under
+  an automatic alias; a condition passed to such a hop references the relation's
+  unaliased binding, so it won't match the aliased join. Condition a non-aliased
+  hop instead, or use `Preload`.
+- 🔒 **Controls the projection.** A folded chain must start from `From` with no
+  explicit `Select` columns; the base table needs a primary key to group rows for
+  a to-many fold, and the folded target needs one to de-duplicate children.
+- 🔒 **Row-limiting and counting terminals are rejected.** A folded query
+  returns one joined row per parent–child pair, so `LIMIT`/`OFFSET`, `First`,
+  `One`, `Get`, `Page`, `Count`, and `Paginator.Paginate` would act on the joined
+  rows rather than the parents; they return an error. Use `All` (with a
+  predicate selecting the parents), or `Preload` for paginated loads.
+- 🔒 **No IN splitting.** A folded query runs as one statement even when
+  auto-chunking would split a large `IN` list.
+
 ## Migrations
 
 - 🔒 **MySQL migrations are not atomic.** MySQL commits DDL implicitly and cannot

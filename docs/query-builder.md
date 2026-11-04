@@ -473,6 +473,71 @@ When more than one relation reaches the same table (e.g. a self-reference's
 of the target table; it takes the same conditions. Preload currently supports
 single-column foreign keys only — see [Limitations](limitations.md).
 
+### Fold: eager-loading in one query
+
+`FoldRel` is the **single-query** counterpart to `Preload`. Instead of a
+follow-up `SELECT`, it adds a `LEFT JOIN` to the relation's target, projects that
+table's columns alongside the base ones, and at `Scan` **folds** the flat joined
+rows back into the nested field — de-duplicating parents by their primary key so
+a parent that joins several children appears once carrying all of them:
+
+```go
+type User struct {
+    ID    int64
+    Name  string
+    Posts []Post // filled by FoldRel(Users.Rels.Posts)
+}
+
+var users []User
+err := db.Select().From(appdb.Users).
+    FoldRel(appdb.Users.Rels.Posts).
+    All(ctx).Scan(&users)
+// SELECT users.…, posts.… FROM users LEFT JOIN posts ON posts.user_id = users.id
+```
+
+The destination field is matched exactly as for `Preload` (a `preload:"…"` tag or
+a field named after the relation); a to-many relation fills a slice, a to-one a
+struct or pointer. A parent with no match keeps an empty slice or a nil/zero
+to-one field (the `LEFT JOIN` yields NULLs). `Fold(target)` resolves the relation
+from the target table the way `Preload(target)` does, and conditions passed to
+either are ANDed into the JOIN's `ON` clause.
+
+**Nested fold** — pass a [`RelPath`](https://pkg.go.dev/github.com/aita/sqlkit#RelPath) of related tables and each hop becomes its
+own `LEFT JOIN`, folded into the nested field at every level (conditions apply to
+the final hop):
+
+```go
+err := db.Select().From(appdb.Users).
+    Fold(sqlkit.RelPath(appdb.Posts, appdb.Comments), appdb.Comments.Approved.Eq(true)).
+    All(ctx).Scan(&users)
+// FROM users LEFT JOIN posts ON … LEFT JOIN comments ON …
+// users[i].Posts[j].Comments folded in one query
+```
+
+Sibling fold paths that share a prefix (`Fold(RelPath(Posts, Comments))` and
+`Fold(RelPath(Posts, Tags))`) reuse the single `Posts` join. A path that folds the
+same table more than once — a self-reference like `Users → Posts → author(Users)`,
+or two paths reaching one table — is **joined under an automatic alias** derived
+from the relation name, so each occurrence is referenced unambiguously:
+
+```go
+// Users → their Posts → each post's author (back to users, aliased "User").
+err := db.Select().From(appdb.Users).
+    Fold(sqlkit.RelPath(appdb.Posts, appdb.Users)).
+    All(ctx).Scan(&users)
+// FROM users LEFT JOIN posts ON … LEFT JOIN users AS "User" ON "User".id = posts.user_id
+```
+
+Conditions passed to a fold reference the relation's own (unaliased) binding, so
+narrow an **aliased** hop through its own columns is not expressed — apply the
+condition on a non-aliased hop, or use `Preload`.
+
+Fold trades the second round trip for **wider, partly redundant rows** (each
+parent column repeats per child). Two consequences follow: prefer `Preload` when
+children are numerous, and note that **`LIMIT` counts joined rows, not parents**,
+so paginate with `Preload` (or a key sub-query) rather than `FoldRel`. See
+[Limitations](limitations.md).
+
 Relations also drive multi-table writes (`Update(t).JoinRel(rel)`,
 `Delete(t).UsingRel(rel)`) and primary-key lookups (`Get(ctx, pk...)`).
 
