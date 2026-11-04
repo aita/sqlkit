@@ -271,5 +271,7 @@ var sqliteTypes = map[string]meta.GoType{
 	"blob":     {Name: "[]byte"},
 	"date":     {ImportPath: "time", Name: "time.Time"},
 	"datetime": {ImportPath: "time", Name: "time.Time"},
-	"time":     {ImportPath: "time", Name: "time.Time"},
+	// SQLite has no time-of-day type and drivers (modernc.org/sqlite) return a
+	// TIME column as its text, so it maps to string rather than time.Time.
+	"time": {Name: "string"},
 }
