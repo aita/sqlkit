@@ -13,7 +13,7 @@ import (
 // empty database is a no-op and declaration order never matters), then executes
 // the CREATE SQL the meta model renders for db's dialect. DB.ApplySchema and New
 // drive it.
-func applySchema(t *testing.T, db *sqlkit.Database, md meta.Metadata) {
+func applySchema(t testing.TB, db *sqlkit.Database, md meta.Metadata) {
 	t.Helper()
 	dropTables(t, db, md)
 	createText, err := md.CreateSQL(db.Dialect())
@@ -34,7 +34,7 @@ func applySchema(t *testing.T, db *sqlkit.Database, md meta.Metadata) {
 // referenced from another table (or a cycle between the listed tables) never
 // blocks the delete. With no tables it clears every table in md. DB.Truncate
 // drives it.
-func truncate(t *testing.T, db *sqlkit.Database, md meta.Metadata, tables []sqlkit.Table) {
+func truncate(t testing.TB, db *sqlkit.Database, md meta.Metadata, tables []sqlkit.Table) {
 	t.Helper()
 	names := truncateNames(md, tables)
 	if len(names) == 0 {
@@ -94,7 +94,7 @@ func truncateNames(md meta.Metadata, tables []sqlkit.Table) []string {
 // drop is made order-independent per dialect: PostgreSQL drops each table with
 // CASCADE (which also drops the foreign-key constraints pointing at it), and
 // MySQL disables foreign-key checks for the duration.
-func dropTables(t *testing.T, db *sqlkit.Database, md meta.Metadata) {
+func dropTables(t testing.TB, db *sqlkit.Database, md meta.Metadata) {
 	t.Helper()
 	ctx := context.Background()
 	exec := func(stmt string) {

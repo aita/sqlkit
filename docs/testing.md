@@ -4,8 +4,9 @@ The [`sqltest`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest) package is
 sqlkit's toolkit for testing SQL code. It cuts the
 boilerplate of seeding fixtures and managing the schema, leaving the connection
 (and any test container) to the caller, and it spies on the queries your code
-issues. Every helper takes `*testing.T` and fails the test with `t.Fatalf` on
-error, so setup code stays linear. It pulls in no database driver or
+issues. Every helper takes a `testing.TB` and fails the test with `t.Fatalf` on
+error, so setup code stays linear and the helpers work from tests, benchmarks,
+and shared `testing.TB` setup alike. It pulls in no database driver or
 test-container dependencies.
 
 ## Seeding and schema

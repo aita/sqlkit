@@ -8,8 +8,8 @@
 //
 // The seeding helpers cut the boilerplate of managing the schema and inserting
 // fixtures, leaving the connection (and any test container) to the caller. Every
-// helper takes *testing.T and fails the test with t.Fatalf on error, so callers
-// write linear setup code with no error handling.
+// helper takes a testing.TB and fails the test with t.Fatalf on error, so
+// callers write linear setup code with no error handling.
 //
 // A DB is the entry point. New wraps a *sqlkit.Database the caller opened against
 // a disposable test database, returning a handle whose methods reset, isolate,
