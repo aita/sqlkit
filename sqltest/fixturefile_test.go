@@ -1,6 +1,7 @@
 package sqltest
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -104,5 +105,19 @@ func TestLoadFixtures(t *testing.T) {
 	}
 	if !reflect.DeepEqual(execs[2].Args, []any{"10", "Hello", "1"}) {
 		t.Fatalf("posts row args = %#v", execs[2].Args)
+	}
+}
+
+// A JSON integer outside the int64 range must stay exact (as its decimal text)
+// rather than silently losing precision through float64.
+func TestNormalizeJSONValueBigInteger(t *testing.T) {
+	if got := normalizeJSONValue(json.Number("18446744073709551615")); got != "18446744073709551615" {
+		t.Fatalf("big integer = %#v, want exact decimal string", got)
+	}
+	if got := normalizeJSONValue(json.Number("1.5")); got != 1.5 {
+		t.Fatalf("1.5 = %#v, want float64 1.5", got)
+	}
+	if got := normalizeJSONValue(json.Number("42")); got != int64(42) {
+		t.Fatalf("42 = %#v, want int64 42", got)
 	}
 }

@@ -24,7 +24,8 @@ import (
 //
 // Files load in lexical filename order, so a numeric prefix controls foreign-key
 // order (parents before children); the prefix is stripped from the table name,
-// so 01_users.json loads into users. ex is any Execer (a *sql.DB, or a *sql.Tx a
+// so 01_users.json loads into users (and 2024_sales.csv into sales: a table
+// whose real name starts with digits and an underscore cannot be addressed). ex is any Execer (a *sql.DB, or a *sql.Tx a
 // case rolls back), and dialect selects quoting and placeholders as in InsertMap.
 // Subdirectories and files with other extensions are ignored.
 func LoadFixtures(t testing.TB, ex Execer, dialect sqlkit.Dialect, dir string) {
@@ -120,8 +121,13 @@ func normalizeJSONValue(v any) any {
 		if i, err := n.Int64(); err == nil {
 			return i
 		}
-		if f, err := n.Float64(); err == nil {
-			return f
+		// Only a number written with a fraction or exponent becomes a float; an
+		// integer outside the int64 range stays exact as its decimal text rather
+		// than silently losing precision through float64.
+		if strings.ContainsAny(n.String(), ".eE") {
+			if f, err := n.Float64(); err == nil {
+				return f
+			}
 		}
 		return n.String()
 	case []any, map[string]any:
@@ -136,8 +142,9 @@ func normalizeJSONValue(v any) any {
 }
 
 // decodeCSVRows decodes CSV with a header row of column names. Every value is a
-// string except the unquoted token \N, which is NULL — the convention CSV cannot
-// otherwise express. An empty file yields no rows.
+// string except a field that is exactly \N, which is NULL — the convention CSV
+// cannot otherwise express. encoding/csv does not distinguish quoted from
+// unquoted fields, so "\N" in quotes is NULL too. An empty file yields no rows.
 func decodeCSVRows(data []byte) ([]map[string]any, error) {
 	r := csv.NewReader(strings.NewReader(string(data)))
 	records, err := r.ReadAll()

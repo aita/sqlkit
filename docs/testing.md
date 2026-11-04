@@ -161,10 +161,12 @@ sqltest.LoadFixtures(t, db, sqlkit.PostgreSQLDialect{}, "testdata/blog")
 
 Each file seeds the table named after it. Files load in lexical filename order,
 so a numeric prefix controls foreign-key order (parents before children) and is
-stripped from the table name, so `01_users.json` loads into `users`. JSON files
+stripped from the table name, so `01_users.json` loads into `users` (any leading
+digits are a prefix: `2024_sales.csv` loads into `sales`). JSON files
 are an array of `{column: value}` objects (numbers stay integers when whole,
 `null` is `NULL`, a nested array/object seeds a JSON column as text); CSV files
-have a header row of column names with the token `\N` meaning `NULL`. Each row
+have a header row of column names with a field of exactly `\N` (quoted or not)
+meaning `NULL`. Each row
 keeps its own column set, so a row that omits a column gets that column's
 database default.
 [`LoadFixtureFile`](https://pkg.go.dev/github.com/aita/sqlkit/sqltest#LoadFixtureFile)
