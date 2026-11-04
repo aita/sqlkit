@@ -386,6 +386,39 @@ func TestInsertValuesVariadicAndPointer(t *testing.T) {
 		[]any{"a@example.com", (*string)(nil), "b@example.com", (*string)(nil)})
 }
 
+// TestInsertValuesBranchesDoNotAlias covers the value-receiver immutability
+// contract CLAUDE.md documents for the typed builders: branching Values twice
+// off the same base query must not let one branch's row overwrite the
+// other's. Building the base with exactly 3 rows leaves its rows slice with
+// spare capacity (Go's append growth for a slice built from nil is 0->1->2->4
+// under the standard runtime), which reliably manifests the aliasing bug: a
+// bare append(q.rows, ...) reuses that spare slot in place, so branch b's row
+// silently overwrote branch a's in the shared backing array before the fix.
+func TestInsertValuesBranchesDoNotAlias(t *testing.T) {
+	base := sqlkit.Insert(Users).Values(
+		User{Email: "seed0@example.com"},
+		User{Email: "seed1@example.com"},
+		User{Email: "seed2@example.com"},
+	)
+	a := base.Values(User{Email: "branch-a@example.com"})
+	b := base.Values(User{Email: "branch-b@example.com"})
+
+	_, argsA, err := a.ToSQL(pg)
+	if err != nil {
+		t.Fatalf("a.ToSQL: %v", err)
+	}
+	_, argsB, err := b.ToSQL(pg)
+	if err != nil {
+		t.Fatalf("b.ToSQL: %v", err)
+	}
+	if got := argsA[len(argsA)-2]; got != "branch-a@example.com" {
+		t.Errorf("branch a's last row email = %v, want branch-a@example.com (overwritten by branch b)", got)
+	}
+	if got := argsB[len(argsB)-2]; got != "branch-b@example.com" {
+		t.Errorf("branch b's last row email = %v, want branch-b@example.com", got)
+	}
+}
+
 func TestInsertKeepsExplicitDefaultedColumn(t *testing.T) {
 	insert := sqlkit.Insert(Users).Values(User{ID: 42, Email: "a@example.com"})
 	assertToSQL(t, insert,

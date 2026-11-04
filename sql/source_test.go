@@ -76,6 +76,31 @@ func TestValuesSourceCastsDriverValuer(t *testing.T) {
 	}
 }
 
+// TestValuesSourceCastsFirstTypeableRowNotJustRowZero covers a column whose
+// row-0 value is NULL (or otherwise untypeable): the compiler must still type
+// that column from a later row, or PostgreSQL infers the whole column as text
+// and a comparison/assignment against a non-text column fails at execution
+// (uow's grouped bulk-update flush hits this whenever one row in a chunk has
+// NULL in a nullable non-text column while another row does not).
+func TestValuesSourceCastsFirstTypeableRowNotJustRowZero(t *testing.T) {
+	rows := [][]Expression{
+		{Val(int64(5)), Val(nil)},
+		{Val(int64(10)), Val(int64(42))},
+	}
+	q := Update(users).
+		Set(Set("name", Col("v.c0"))).
+		From(ValuesSource(rows, "v", "k", "c0")).
+		Where(Eq(Col("public.users.id"), Col("v.k")))
+	got, _, err := q.ToSQL(PostgreSQLDialect{})
+	if err != nil {
+		t.Fatalf("ToSQL error = %v", err)
+	}
+	want := `UPDATE "public"."users" SET "name" = "v"."c0" FROM (VALUES (CAST($1 AS bigint), $2), ($3, CAST($4 AS bigint))) AS "v"("k", "c0") WHERE ("public"."users"."id" = "v"."k")`
+	if got != want {
+		t.Fatalf("ToSQL =\n  %s\nwant\n  %s", got, want)
+	}
+}
+
 // TestSubqueryHelper covers the deprecated Subquery source helper.
 func TestSubqueryHelper(t *testing.T) {
 	s := Subquery(Select(Col("id")).From(orgs), "x")

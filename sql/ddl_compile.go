@@ -253,6 +253,16 @@ func (c *Compiler) compileRestateColumn(col ColumnDef) (string, error) {
 		}
 		return "MODIFY COLUMN " + def, nil
 	}
+	if col.AutoIncrement {
+		// Unlike MySQL's inline MODIFY COLUMN ... AUTO_INCREMENT, PostgreSQL has no
+		// ALTER COLUMN form of "make this a serial column" — that sugar only exists
+		// at CREATE TABLE time, expanding to a backing CREATE SEQUENCE plus a
+		// nextval() DEFAULT. Silently falling through to the DROP DEFAULT branch
+		// below would strip the column's default instead, so reject instead of
+		// guessing; the caller can set an explicit DefaultExpr (e.g. a nextval(...)
+		// call against a sequence created separately).
+		return "", fmt.Errorf("sqlkit/sql: ALTER COLUMN cannot express a bare auto-increment default on the %s dialect; set an explicit DEFAULT expression, or create/drop the column instead", c.Dialect.Name())
+	}
 	name := c.Dialect.QuoteName(col.Name.String())
 	typeClause, err := col.Type.RenderType(c.Dialect)
 	if err != nil {
@@ -349,6 +359,11 @@ func (c *Compiler) CompileCreateIndex(s CreateIndexStmt) (string, error) {
 	var sb strings.Builder
 	sb.WriteString("CREATE " + kind + " ")
 	if s.IfNotExists {
+		// MySQL has no IF NOT EXISTS for CREATE INDEX (any version); emitting it
+		// produces SQL the engine rejects. PostgreSQL supports it.
+		if c.Dialect.Name() == "mysql" {
+			return "", fmt.Errorf("sqlkit/sql: dialect %q does not support CREATE INDEX ... IF NOT EXISTS", c.Dialect.Name())
+		}
 		sb.WriteString("IF NOT EXISTS ")
 	}
 	sb.WriteString(c.Dialect.QuoteName(s.Name.String()) + " ON " + c.qualify(s.Table) +
@@ -527,6 +542,19 @@ func (c *Compiler) compileAlteration(table Table, a Alteration) (string, error) 
 func (c *Compiler) requireColumnModify(op string) error {
 	if c.Dialect.Name() == "mysql" {
 		return fmt.Errorf("sqlkit/sql: %s is not supported on the mysql dialect", op)
+	}
+	return nil
+}
+
+// requirePostgresObject rejects an object kind that exists only in PostgreSQL —
+// sequences, enum types (CREATE TYPE ... AS ENUM), extensions, materialized
+// views, and dollar-quoted/LANGUAGE-clause functions — when compiled for MySQL,
+// which has none of them and whose parser rejects the PostgreSQL DDL this
+// package would otherwise emit. It mirrors requireColumnModify / the
+// single-element-row and FULL JOIN guards.
+func (c *Compiler) requirePostgresObject(feature string) error {
+	if c.Dialect.Name() == "mysql" {
+		return fmt.Errorf("sqlkit/sql: dialect %q does not support %s", c.Dialect.Name(), feature)
 	}
 	return nil
 }

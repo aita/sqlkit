@@ -128,6 +128,26 @@ func TestResolveColumnAll(t *testing.T) {
 		}
 	})
 
+	t.Run("union arms fan out by position when arms name columns differently", func(t *testing.T) {
+		// WITH u AS (SELECT name FROM users UNION SELECT ssn FROM admins) SELECT * FROM u.
+		// A set operation aligns its arms by position and names the output from the
+		// leftmost arm only, so u.name must resolve to users.name AND admins.ssn (the
+		// positionally-corresponding column of the right arm) — not just the left arm.
+		cte := sql.Select(sql.Col("name")).From(users).
+			Union(sql.Select(sql.Col("ssn")).From(admins)).CTE("u")
+		scope := analysis.SourcesOf(sql.Select(sql.Star()).From(cte).WithCTE(cte))
+		got := analysis.ResolveColumnAll(scope, analysis.ColumnRef{Qualifier: sql.NewIdent("u"), Name: sql.NewIdent("name")})
+		if names := tableNames(got); !reflect.DeepEqual(names, []string{"users", "admins"}) {
+			t.Errorf("candidates = %v, want [users admins] (right arm dropped = a redaction leak)", names)
+		}
+		// The resolved base column of the right-arm candidate must be ssn, not name.
+		for _, r := range got {
+			if r.Table.String() == "admins" && r.Column.Name.String() != "ssn" {
+				t.Errorf("admins candidate column = %q, want ssn", r.Column.Name.String())
+			}
+		}
+	})
+
 	t.Run("self union dedupes", func(t *testing.T) {
 		cte := sql.Select(sql.Col("name")).From(users).
 			Union(sql.Select(sql.Col("name")).From(users)).CTE("u")
