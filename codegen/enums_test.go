@@ -79,6 +79,200 @@ func TestGenerateNoIdentifierCollisions(t *testing.T) {
 					continue
 				}
 				for _, id := range topLevelNames(t, f.Name, string(f.Content)) {
+					if id == "_" { // blank assignments (interface checks) legitimately repeat
+						continue
+					}
+					if prev, dup := seen[id]; dup {
+						t.Errorf("identifier %q declared in both %s and %s (generated code won't compile)", id, prev, f.Name)
+					}
+					seen[id] = f.Name
+				}
+			}
+		})
+	}
+}
+
+// TestGenerateNoRelationIdentifierCollisions covers the relational layout, which
+// declares extra package-level identifiers per table — <Var>Columns, <Var>Rels,
+// <Var>Filter, and the new<Var>Columns constructor. An enum whose name maps to one
+// of these must be deduped, or the generated package fails to compile
+// ("redeclared in this block"). Enum names come from the database, so they are
+// outside the caller's control. Each case names the table "users" so the
+// relational identifiers are UsersColumns / UsersRels / UsersFilter /
+// newUsersColumns.
+func TestGenerateNoRelationIdentifierCollisions(t *testing.T) {
+	// Two tables joined by a foreign key, so "users" gets relations and the
+	// relational template emits all of UsersColumns / UsersRels / UsersFilter.
+	relTables := []meta.Table{
+		{Schema: meta.Schema{Name: "public"}, Name: "users",
+			Columns: []meta.Column{{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true}}},
+		{Schema: meta.Schema{Name: "public"}, Name: "posts",
+			Columns: []meta.Column{
+				{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true},
+				{Name: "user_id", Type: meta.Of("postgres", "int8", 0, 0, 0)},
+			},
+			ForeignKeys: []meta.ForeignKey{{Name: "posts_user_id_fkey", Columns: []string{"user_id"},
+				RefSchema: meta.Schema{Name: "public"}, RefTable: "users", RefColumns: []string{"id"}}}},
+	}
+	cases := map[string]string{
+		"enum vs <Var>Columns": "users_columns",
+		"enum vs <Var>Rels":    "users_rels",
+		"enum vs <Var>Filter":  "users_filter",
+	}
+	for name, enumName := range cases {
+		t.Run(name, func(t *testing.T) {
+			md := meta.Metadata{
+				Tables: relTables,
+				Enums:  []meta.Enum{{Schema: "public", Name: enumName, Values: []string{"a"}}},
+			}
+			files, err := Generate(md, Options{PackageName: "appdb", EmitRelations: true, EmitDTO: true})
+			if err != nil {
+				t.Fatalf("Generate: %v", err)
+			}
+			seen := map[string]string{}
+			for _, f := range files {
+				if !strings.HasSuffix(f.Name, ".go") {
+					continue
+				}
+				for _, id := range topLevelNames(t, f.Name, string(f.Content)) {
+					if id == "_" { // blank assignments (interface checks) legitimately repeat
+						continue
+					}
+					if prev, dup := seen[id]; dup {
+						t.Errorf("identifier %q declared in both %s and %s (generated code won't compile)", id, prev, f.Name)
+					}
+					seen[id] = f.Name
+				}
+			}
+		})
+	}
+}
+
+// structFieldNames returns the field names declared directly on the named
+// struct type in src (not promoted/embedded fields), for detecting a
+// duplicate field within one struct — a case topLevelNames can't see, since
+// the struct's own type name is declared only once no matter how many
+// duplicate fields it holds inside.
+func structFieldNames(t *testing.T, name, src, structName string) []string {
+	t.Helper()
+	f, err := parser.ParseFile(token.NewFileSet(), name, src, parser.AllErrors)
+	if err != nil {
+		t.Fatalf("generated %s does not parse: %v\n%s", name, err, src)
+	}
+	var names []string
+	for _, d := range f.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			ts, ok := spec.(*ast.TypeSpec)
+			if !ok || ts.Name.Name != structName {
+				continue
+			}
+			st, ok := ts.Type.(*ast.StructType)
+			if !ok {
+				continue
+			}
+			for _, field := range st.Fields.List {
+				for _, id := range field.Names {
+					names = append(names, id.Name)
+				}
+			}
+		}
+	}
+	return names
+}
+
+// TestGenerateNoColumnRelationFieldCollisions covers the <Var>Filter struct,
+// which combines a table's (deduped) column fields and its relation fields in
+// one struct declaration. buildRelations reserves column field names to keep
+// a relation from colliding with one, but it must reserve the same
+// post-dedup names buildTable actually assigns — not each column's raw,
+// undeduped fieldName — or a relation name that happens to equal a renamed
+// (suffixed) column field produces a duplicate struct field (syntactically
+// legal Go, but "redeclared in this block" once type-checked).
+//
+// books has two columns colliding on the Go field "Author" ("author" and
+// "author_", deduped to Author and Author2) plus a single-column FK
+// "author2_id" whose derived relation name is also "Author2".
+func TestGenerateNoColumnRelationFieldCollisions(t *testing.T) {
+	md := meta.Metadata{
+		Tables: []meta.Table{
+			{Schema: meta.Schema{Name: "public"}, Name: "authors",
+				Columns: []meta.Column{{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true}}},
+			{Schema: meta.Schema{Name: "public"}, Name: "books",
+				Columns: []meta.Column{
+					{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true},
+					{Name: "author", Type: meta.Of("postgres", "text", 0, 0, 0)},
+					{Name: "author_", Type: meta.Of("postgres", "text", 0, 0, 0)},
+					{Name: "author2_id", Type: meta.Of("postgres", "int8", 0, 0, 0)},
+				},
+				ForeignKeys: []meta.ForeignKey{{Name: "books_author2_id_fkey", Columns: []string{"author2_id"},
+					RefSchema: meta.Schema{Name: "public"}, RefTable: "authors", RefColumns: []string{"id"}}}},
+		},
+	}
+	files, err := Generate(md, Options{PackageName: "appdb", EmitRelations: true})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, f := range files {
+		if !strings.HasSuffix(f.Name, ".go") {
+			continue
+		}
+		for _, name := range structFieldNames(t, f.Name, string(f.Content), "BooksFilter") {
+			if seen[name] {
+				t.Errorf("field %q declared twice in BooksFilter (generated code won't compile)", name)
+			}
+			seen[name] = true
+		}
+	}
+}
+
+// TestGenerateNoRelationTypeCollisions covers the per-relation struct types the
+// relational template declares (<Var><Field>Rel, relationModel.RelType). They are
+// deduped only within a table's relation set, not against the package-wide enum /
+// DTO names, so an enum or DTO whose Go name maps to a relation type emitted a
+// second declaration of it (`redeclared in this block`). Two tables joined by a
+// foreign key yield relation types PostsUserRel (forward) and UsersPostsRel
+// (reverse).
+func TestGenerateNoRelationTypeCollisions(t *testing.T) {
+	relTables := []meta.Table{
+		{Schema: meta.Schema{Name: "public"}, Name: "users",
+			Columns: []meta.Column{{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true}}},
+		{Schema: meta.Schema{Name: "public"}, Name: "posts",
+			Columns: []meta.Column{
+				{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true},
+				{Name: "user_id", Type: meta.Of("postgres", "int8", 0, 0, 0)},
+			},
+			ForeignKeys: []meta.ForeignKey{{Name: "posts_user_id_fkey", Columns: []string{"user_id"},
+				RefSchema: meta.Schema{Name: "public"}, RefTable: "users", RefColumns: []string{"id"}}}},
+	}
+	cases := []struct {
+		name string
+		md   meta.Metadata
+	}{
+		{"enum vs forward relation type", meta.Metadata{Tables: relTables,
+			Enums: []meta.Enum{{Schema: "public", Name: "posts_user_rel", Values: []string{"a"}}}}},
+		{"enum vs reverse relation type", meta.Metadata{Tables: relTables,
+			Enums: []meta.Enum{{Schema: "public", Name: "users_posts_rel", Values: []string{"a"}}}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			files, err := Generate(tc.md, Options{PackageName: "appdb", EmitRelations: true, EmitDTO: true})
+			if err != nil {
+				t.Fatalf("Generate: %v", err)
+			}
+			seen := map[string]string{}
+			for _, f := range files {
+				if !strings.HasSuffix(f.Name, ".go") {
+					continue
+				}
+				for _, id := range topLevelNames(t, f.Name, string(f.Content)) {
+					if id == "_" {
+						continue
+					}
 					if prev, dup := seen[id]; dup {
 						t.Errorf("identifier %q declared in both %s and %s (generated code won't compile)", id, prev, f.Name)
 					}
@@ -161,6 +355,42 @@ func TestGenerateEnumColumn(t *testing.T) {
 		if !strings.Contains(tables, want) {
 			t.Fatalf("tables.go missing %q in:\n%s", want, tables)
 		}
+	}
+}
+
+// TestGenerateArrayEnumColumn covers a column whose DB type is an array of an
+// enum (mood[]): the generated column must be a slice of the enum type,
+// Column[[]Mood], not the bare element type Column[Mood]. meta.OfArray stands
+// in for a decl.Array(decl.EnumType("mood")) column — the resolved Engine
+// carries Array=true, same as the introspection would produce for mood[].
+func TestGenerateArrayEnumColumn(t *testing.T) {
+	md := meta.Metadata{
+		Enums: []meta.Enum{{Name: "mood", Values: []string{"happy", "sad"}}},
+		Tables: []meta.Table{{
+			Name: "users",
+			Columns: []meta.Column{
+				{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true},
+				{Name: "moods", Type: meta.OfArray("postgres", "mood", 0, 0, 0)},
+			},
+		}},
+	}
+	files, err := Generate(md, Options{PackageName: "appdb"})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	var tables string
+	for _, f := range files {
+		if f.Name == "tables.go" {
+			tables = string(f.Content)
+		}
+	}
+	if !strings.Contains(tables, "Column[[]Mood]") {
+		t.Fatalf("tables.go missing %q in:\n%s", "Column[[]Mood]", tables)
+	}
+	// A slice is already nilable, so applyNullable must not wrap it again into
+	// *[]Mood — guard against a regression that double-wraps array columns.
+	if strings.Contains(tables, "Column[*[]Mood]") {
+		t.Fatalf("tables.go must not double-wrap array-of-enum column as Column[*[]Mood]:\n%s", tables)
 	}
 }
 
@@ -251,5 +481,32 @@ func TestGenerateEnumsOnly(t *testing.T) {
 	}
 	if len(files) != 1 || files[0].Name != "enums.go" {
 		t.Fatalf("expected only enums.go, got %d files: %+v", len(files), files)
+	}
+}
+
+// <Var>Rels is only declared for a table that has relations, so an enum named
+// after it on a relation-less table must keep its natural Go name rather than
+// being needlessly renamed (which would break code that already compiled).
+func TestGenerateRelsNotReservedWithoutRelations(t *testing.T) {
+	md := meta.Metadata{
+		Tables: []meta.Table{{Schema: meta.Schema{Name: "public"}, Name: "users",
+			Columns: []meta.Column{{Name: "id", Type: meta.Of("postgres", "int8", 0, 0, 0), PrimaryKey: true}}}},
+		Enums: []meta.Enum{{Schema: "public", Name: "users_rels", Values: []string{"a"}}},
+	}
+	files, err := Generate(md, Options{PackageName: "appdb", EmitRelations: true, EmitDTO: true})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	var found bool
+	for _, f := range files {
+		if strings.Contains(string(f.Content), "type UsersRels ") {
+			found = true
+		}
+		if strings.Contains(string(f.Content), "UsersRels2") {
+			t.Errorf("%s: enum renamed to UsersRels2 although users has no relations", f.Name)
+		}
+	}
+	if !found {
+		t.Errorf("enum users_rels not generated as type UsersRels")
 	}
 }

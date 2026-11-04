@@ -266,6 +266,30 @@ func TestUpdateFromMultipleJoinsFoldPostgres(t *testing.T) {
 		[]any{1, true})
 }
 
+// A NATURAL or USING join on the PostgreSQL multi-table UPDATE/DELETE fold path
+// carries its condition in the Natural/Using fields, not On. foldJoinOns folds
+// only On, so the condition would be dropped, leaving an unconstrained cross
+// product that updates/deletes every target row. The compiler must reject it
+// instead. (No builder sets Using/Natural here, so the AST is built directly.)
+func TestUpdateDeleteUsingNaturalJoinRejectedOnFold(t *testing.T) {
+	cases := map[string]Query{
+		"update using": UpdateStmt{Table: Table{Name: NewIdent("t")}, Sets: []Assignment{Set("x", 1)},
+			Joins: []JoinClause{{Kind: "JOIN", Source: Table{Name: NewIdent("j")}, Using: []Ident{NewIdent("id")}}}},
+		"update natural": UpdateStmt{Table: Table{Name: NewIdent("t")}, Sets: []Assignment{Set("x", 1)},
+			Joins: []JoinClause{{Kind: "JOIN", Source: Table{Name: NewIdent("j")}, Natural: true}}},
+		"delete using": DeleteStmt{Table: Table{Name: NewIdent("t")},
+			Joins: []JoinClause{{Kind: "JOIN", Source: Table{Name: NewIdent("j")}, Using: []Ident{NewIdent("id")}}}},
+	}
+	for name, q := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := q.ToSQL(PostgreSQLDialect{}); err == nil ||
+				!strings.Contains(err.Error(), "NATURAL or USING") {
+				t.Fatalf("ToSQL = err %v, want a NATURAL/USING rejection (condition must not be dropped)", err)
+			}
+		})
+	}
+}
+
 func TestUpdateWithCTEAndReturning(t *testing.T) {
 	cte := Select(Col("id")).From(Table{Name: NewIdent("orgs")}).CTE("recent")
 	q := Update(users).WithCTE(cte).Set(Set("name", Val("x"))).

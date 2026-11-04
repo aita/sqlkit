@@ -126,13 +126,23 @@ func (a *Analyzer) Analyze(sqlText string, q sql.Query) Analysis {
 	}
 }
 
-// isLockingRead reports whether q is a SELECT carrying a row-locking clause
+// IsLockingRead reports whether q is a SELECT carrying a row-locking clause
 // (FOR UPDATE / FOR SHARE / ...). Such a read takes locks and is rejected by a
-// read-only transaction, so observers treat it as write-like.
+// read-only transaction or unsafe on a read replica, so a caller that needs
+// this one fact without a full Analyze (e.g. a Router) can call it directly.
+func IsLockingRead(q sql.Query) bool { return isLockingRead(q) }
+
 func isLockingRead(q sql.Query) bool {
 	sel, ok := sql.Unwrap(q).(sql.SelectStmt)
 	return ok && sel.Lock != nil
 }
+
+// WritesViaCTE reports whether a read-kinded statement carries a data-modifying
+// CTE (PostgreSQL's WITH x AS (INSERT/UPDATE/DELETE/MERGE ... RETURNING ...)).
+// The top-level statement is a SELECT or set operation — a read by Kind — yet it
+// performs the write inside the CTE, so it must be treated as a write. Exposed
+// for callers (e.g. a Router) that need this one fact without a full Analyze.
+func WritesViaCTE(q sql.Query) bool { return writesViaCTE(q) }
 
 // writesViaCTE reports whether a read-kinded statement carries a data-modifying
 // CTE (PostgreSQL's WITH x AS (INSERT/UPDATE/DELETE/MERGE ... RETURNING ...)).

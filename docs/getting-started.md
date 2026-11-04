@@ -88,11 +88,18 @@ db, err := sqlkit.Open("pgx", os.Getenv("DATABASE_URL"))
 if err != nil {
     log.Fatal(err)
 }
-defer db.Close()
+defer db.SQL().Close()
+
+// User is a caller-defined DTO; sqlkit generates only the table binding
+// (blogdb.Users), and Scan/Values map its fields to columns by name.
+type User struct {
+    ID    int64
+    Email string
+}
 
 // INSERT ... RETURNING the generated id.
-var created []blogdb.User
-err = db.Insert(blogdb.Users).Values(blogdb.User{Email: "alice@example.com"}).
+var created []User
+err = db.Insert(blogdb.Users).Values(User{Email: "alice@example.com"}).
     Returning().
     All(ctx).Scan(&created)
 
@@ -139,8 +146,8 @@ func TestService(t *testing.T) {
     db := sqltest.New(openTestDB(t), md)
     db.SetupSchema(t)
 
-    id := db.InsertID(t, blogdb.Users, blogdb.User{Email: "a@example.com"})
-    db.InsertRows(t, blogdb.Posts, blogdb.Post{UserID: id, Title: "hello"})
+    id := db.InsertID(t, blogdb.Users, User{Email: "a@example.com"})
+    db.InsertRows(t, blogdb.Posts, Post{UserID: id, Title: "hello"}) // Post: caller-defined, like User above
     // ... exercise the code under test.
 }
 ```

@@ -28,6 +28,14 @@ import (
 type DB struct {
 	db *sqlkit.Database
 	md meta.Metadata
+	// tables holds the qualified names of the tables a raw-DDL schema created
+	// (via ApplySchemaSQL/SetupSchemaSQL), in creation order. It drives the
+	// foreign-key-safe teardown of a DB built with NewRaw, where there is no
+	// meta.Metadata to enumerate. It stays nil for a metadata-backed DB.
+	tables []string
+	// raw marks a DB built with NewRaw: it has no meta.Metadata, so the
+	// metadata-driven methods fail loudly rather than silently doing nothing.
+	raw bool
 }
 
 // New wraps db as a throwaway test database. It only builds the handle — it
@@ -56,8 +64,9 @@ func (d *DB) Database() *sqlkit.Database { return d.db }
 // followed by the CREATE DDL md renders for the dialect — then registers a
 // t.Cleanup that drops the tables again, leaving the database empty. Call it once
 // at the top of a test, or of a parent test whose subtests share the schema.
-func (d *DB) SetupSchema(t *testing.T) {
+func (d *DB) SetupSchema(t testing.TB) {
 	t.Helper()
+	d.requireMetadata(t, "SetupSchema", "SetupSchemaSQL")
 	applySchema(t, d.db, d.md)
 	t.Cleanup(func() { dropTables(t, d.db, d.md) })
 }
@@ -66,8 +75,9 @@ func (d *DB) SetupSchema(t *testing.T) {
 // tables followed by the CREATE DDL — registering no teardown. It is SetupSchema
 // without the automatic drop on cleanup: reach for it to reset the schema again
 // within a test, or when something else owns the teardown.
-func (d *DB) ApplySchema(t *testing.T) {
+func (d *DB) ApplySchema(t testing.TB) {
 	t.Helper()
+	d.requireMetadata(t, "ApplySchema", "ApplySchemaSQL")
 	applySchema(t, d.db, d.md)
 }
 
@@ -75,8 +85,9 @@ func (d *DB) ApplySchema(t *testing.T) {
 // order they were declared in. Called with no tables it clears every table in
 // the schema. It is a faster between-cases reset than re-applying the schema
 // when the tables already exist and only their data needs clearing.
-func (d *DB) Truncate(t *testing.T, tables ...sqlkit.Table) {
+func (d *DB) Truncate(t testing.TB, tables ...sqlkit.Table) {
 	t.Helper()
+	d.requireMetadata(t, "Truncate", "TruncateTables")
 	truncate(t, d.db, d.md, tables)
 }
 
@@ -119,7 +130,7 @@ func (d *DB) Truncate(t *testing.T, tables ...sqlkit.Table) {
 // parallel cases; Snapshot isolates through savepoints on one shared, serial
 // session. Reach for Tx when cases run in parallel or each wants a clean slate,
 // and for Snapshot when many serial cases reuse one expensive seed.
-func (d *DB) Tx(t *testing.T, opts ...sqlkit.SessionOption) *sqlkit.Session {
+func (d *DB) Tx(t testing.TB, opts ...sqlkit.SessionOption) *sqlkit.Session {
 	t.Helper()
 	s := d.db.NewSession(opts...)
 	t.Cleanup(func() {
@@ -136,7 +147,7 @@ func (d *DB) Tx(t *testing.T, opts ...sqlkit.SessionOption) *sqlkit.Session {
 // database), failing the test on error. It is shorthand for InsertRows(t,
 // d.Database(), table, rows...); seed into a Tx session instead when cases run in
 // parallel, so the rows roll back with the case rather than persisting.
-func (d *DB) InsertRows(t *testing.T, table sqlkit.Table, rows ...any) {
+func (d *DB) InsertRows(t testing.TB, table sqlkit.Table, rows ...any) {
 	t.Helper()
 	InsertRows(t, d.db, table, rows...)
 }
@@ -144,14 +155,24 @@ func (d *DB) InsertRows(t *testing.T, table sqlkit.Table, rows ...any) {
 // InsertID inserts a single row through auto-commit and returns its
 // database-generated primary key. It is shorthand for InsertID(t, d.Database(),
 // table, row); see that function for the cross-dialect key read-back.
-func (d *DB) InsertID(t *testing.T, table sqlkit.Table, row any) int64 {
+func (d *DB) InsertID(t testing.TB, table sqlkit.Table, row any) int64 {
 	t.Helper()
 	return InsertID(t, d.db, table, row)
 }
 
 // Load seeds a fixture through auto-commit. It is shorthand for f.Load(t,
 // d.Database()); load into a Tx session instead when cases run in parallel.
-func (d *DB) Load(t *testing.T, f *Fixture) {
+func (d *DB) Load(t testing.TB, f *Fixture) {
 	t.Helper()
 	f.Load(t, d.db)
+}
+
+// requireMetadata fails the test when a metadata-driven method is called on a
+// NewRaw handle, which has no schema for it to act on, naming the raw-DDL
+// counterpart to use instead.
+func (d *DB) requireMetadata(t testing.TB, method, instead string) {
+	t.Helper()
+	if d.raw {
+		t.Fatalf("sqltest: %s needs a catalog-backed DB (New); on a NewRaw handle use %s", method, instead)
+	}
 }
