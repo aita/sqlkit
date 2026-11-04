@@ -16,6 +16,15 @@ func convertGrant(s *pg.GrantStmt) (sql.Query, error) {
 	if s.GetTargtype() != pg.GrantTargetType_ACL_TARGET_OBJECT {
 		return nil, sqlparse.Unsupportedf("GRANT target type %s", s.GetTargtype())
 	}
+	// GRANTED BY names the grantor of record; sql.GrantBuilder/RevokeBuilder have
+	// no grantor concept. Dropping it doesn't change the effective privilege, but
+	// it does silently change which role is recorded as having granted (or
+	// revoked) it — relevant to privilege-management auditing and ownership
+	// chains — so fall back to raw rather than produce a GRANT/REVOKE attributed
+	// to the wrong role.
+	if s.GetGrantor() != nil {
+		return nil, sqlparse.Unsupported("GRANT/REVOKE ... GRANTED BY")
+	}
 	objectType, err := grantObjectType(s.GetObjtype())
 	if err != nil {
 		return nil, err
