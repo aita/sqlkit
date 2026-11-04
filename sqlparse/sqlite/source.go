@@ -130,7 +130,12 @@ func joinClauseFor(j *rsql.JoinClause, right sql.Source) (sql.JoinClause, error)
 			return sql.JoinClause{Kind: kind, Source: right, Natural: true}, nil
 		}
 		// No constraint and not natural: a cross join (explicit CROSS, or an
-		// unconstrained INNER join which is equivalent to one).
+		// unconstrained INNER join which is equivalent to one). An unconstrained
+		// LEFT JOIN is not one: it keeps every left row when the right side is
+		// empty, so keep it raw.
+		if kind == "LEFT JOIN" {
+			return sql.JoinClause{}, sqlparse.Unsupported("LEFT JOIN without ON/USING")
+		}
 		return sql.JoinClause{Kind: "CROSS JOIN", Source: right}, nil
 	default:
 		return sql.JoinClause{}, sqlparse.Unsupportedf("join constraint %T", j.Constraint)

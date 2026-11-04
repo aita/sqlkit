@@ -36,7 +36,7 @@ var _ sqlparse.Parser = Parser{}
 
 // Parse parses one or more SQLite statements in source order.
 func (Parser) Parse(text string) ([]sql.Query, error) {
-	stmts, err := rsql.NewParser(strings.NewReader(text)).ParseStatements()
+	stmts, err := parseStatements(text)
 	if err != nil {
 		return nil, err
 	}
@@ -99,6 +99,68 @@ func rawStatement(text string, stmts []rsql.Statement, i int) (raw string, err e
 	return stmts[i].String(), nil
 }
 
+// parseStatements runs rqlite's parser, turning an internal assertion panic
+// (it has some on malformed DDL) into an error.
+func parseStatements(text string) (stmts []rsql.Statement, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			stmts, err = nil, fmt.Errorf("sqlite: parse: %v", r)
+		}
+	}()
+	return rsql.NewParser(strings.NewReader(text)).ParseStatements()
+}
+
+// identChecker walks a statement for identifiers the typed converters can't
+// represent faithfully: a quoted name containing a dot ("main.t" names one
+// object, but sqlkit would re-split it into a schema and a table) and a quoted
+// or non-identifier function name (emitted verbatim it can inject structure).
+type identChecker struct{ err error }
+
+func (v *identChecker) Visit(n rsql.Node) (rsql.Visitor, rsql.Node, error) {
+	switch x := n.(type) {
+	case *rsql.Ident:
+		if strings.Contains(x.Name, ".") {
+			v.err = sqlparse.Unsupported("identifier containing a dot")
+		}
+	case *rsql.Call:
+		if x.Name != nil && (x.Name.Quoted || !plainIdentifier(x.Name.Name)) {
+			v.err = sqlparse.Unsupported("quoted or non-identifier function name")
+		}
+	}
+	if v.err != nil {
+		return nil, n, nil
+	}
+	return v, n, nil
+}
+
+func (v *identChecker) VisitEnd(n rsql.Node) (rsql.Node, error) { return n, nil }
+
+func checkIdentifiers(stmt rsql.Statement) (err error) {
+	defer func() {
+		if recover() != nil {
+			err = sqlparse.Unsupported("statement the identifier check cannot walk")
+		}
+	}()
+	v := &identChecker{}
+	if _, werr := rsql.Walk(v, stmt); werr != nil {
+		return sqlparse.Unsupported("statement the identifier check cannot walk")
+	}
+	return v.err
+}
+
+func plainIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		if r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || (i > 0 && r >= '0' && r <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 // Parse parses one or more SQLite statements using a default Parser.
 func Parse(text string) ([]sql.Query, error) { return New().Parse(text) }
 
@@ -109,6 +171,9 @@ func ParseOne(text string) (sql.Query, error) { return sqlparse.ParseOne(New(), 
 // kinds without a typed converter yet return an UnsupportedError, which Parse
 // turns into a round-tripping RawSQL query.
 func convertStmt(stmt rsql.Statement) (sql.Query, error) {
+	if err := checkIdentifiers(stmt); err != nil {
+		return nil, err
+	}
 	switch s := stmt.(type) {
 	case *rsql.SelectStatement:
 		return convertSelect(s)
