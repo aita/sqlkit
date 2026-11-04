@@ -103,7 +103,7 @@ func init() {
 		"bytes":     {"postgres": "bytea", "mysql": "blob", "sqlite": "blob", "libsql": "blob"},
 		"json":      {"postgres": "jsonb", "mysql": "json", "sqlite": "text", "libsql": "text"},
 		"uuid":      {"postgres": "uuid", "mysql": "char", "sqlite": "text", "libsql": "text"},
-		"date":      {"postgres": "date", "mysql": "date", "sqlite": "text", "libsql": "text"},
+		"date":      {"postgres": "date", "mysql": "date", "sqlite": "date", "libsql": "date"},
 		"time":      {"postgres": "time", "mysql": "time", "sqlite": "text", "libsql": "text"},
 		"timestamp": {"postgres": "timestamptz", "mysql": "datetime", "sqlite": "datetime", "libsql": "datetime"},
 		"varchar":   {"postgres": "varchar", "mysql": "varchar", "sqlite": "text", "libsql": "text"},

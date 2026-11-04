@@ -869,7 +869,7 @@ func TestSQLiteAndLibSQLBuiltinTypes(t *testing.T) {
 		{decl.Bytes, "blob"},
 		{decl.JSON, "text"},
 		{decl.UUID, "text"},
-		{decl.Date, "text"},
+		{decl.Date, "date"}, // declared DATE so drivers (modernc) scan it as time.Time
 		{decl.Time, "text"},
 		{decl.Timestamp, "datetime"},
 		{decl.Decimal(10, 2), "numeric"},
