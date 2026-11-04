@@ -55,7 +55,7 @@ type TypeMapperConfig struct {
 	OverrideFunc func(table meta.Table, column meta.Column, dialect string) (gt meta.GoType, ok bool, err error)
 }
 
-// DefaultTypeMapper maps standard PostgreSQL and MySQL types to Go
+// DefaultTypeMapper maps standard PostgreSQL, MySQL, and SQLite types to Go
 // types and turns nullable columns into pointer types (slices, already nullable,
 // are left as-is). Construct it with NewDefaultTypeMapper; the zero value is the
 // default mapper with no customization. It resolves a column's Go type in
@@ -66,7 +66,7 @@ type TypeMapperConfig struct {
 //  3. Config.Overrides, by lowercase SQL type name.
 //  4. A Go type pinned on the column's meta.Type at the schema source (the
 //     decl DSL's DataType.Go), so a custom DB type carries its Go type along.
-//  5. The built-in PostgreSQL/MySQL type tables.
+//  5. The built-in PostgreSQL/MySQL/SQLite type tables.
 //
 // Nullability is applied to the resolved type at every level (a nullable column
 // becomes a pointer), so overrides pin the bare type.
@@ -163,6 +163,10 @@ func tableForDialect(dialect string) (map[string]meta.GoType, string) {
 	switch dialect {
 	case "mysql":
 		return mysqlTypes, "MySQL"
+	case "sqlite":
+		return sqliteTypes, "SQLite"
+	case "libsql":
+		return sqliteTypes, "libSQL"
 	default:
 		return pgTypes, "PostgreSQL"
 	}
@@ -244,4 +248,30 @@ var mysqlTypes = map[string]meta.GoType{
 	"datetime":   {ImportPath: "time", Name: "time.Time"},
 	"timestamp":  {ImportPath: "time", Name: "time.Time"},
 	"time":       {ImportPath: "time", Name: "time.Time"},
+}
+
+// sqliteTypes maps the engine type names the decl registry emits for SQLite (and
+// its libSQL fork) — plus the common storage-class spellings — to Go types.
+// SQLite's type affinity is loose, so the mapping keys on the declared type name.
+var sqliteTypes = map[string]meta.GoType{
+	"integer":  {Name: "int64"},
+	"int":      {Name: "int64"},
+	"bigint":   {Name: "int64"},
+	"real":     {Name: "float64"},
+	"float":    {Name: "float64"},
+	"double":   {Name: "float64"},
+	"numeric":  decimalType,
+	"decimal":  decimalType,
+	"boolean":  {Name: "bool"},
+	"text":     {Name: "string"},
+	"varchar":  {Name: "string"},
+	"char":     {Name: "string"},
+	"clob":     {Name: "string"},
+	"json":     {Name: "[]byte"},
+	"blob":     {Name: "[]byte"},
+	"date":     {ImportPath: "time", Name: "time.Time"},
+	"datetime": {ImportPath: "time", Name: "time.Time"},
+	// SQLite has no time-of-day type and drivers (modernc.org/sqlite) return a
+	// TIME column as its text, so it maps to string rather than time.Time.
+	"time": {Name: "string"},
 }
