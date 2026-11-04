@@ -134,11 +134,11 @@ func (b CompoundBuilder) setPos(pos int) Query { b.s.NodePos = pos; return b }
 
 // CompileCompound compiles a set-operation query.
 func (c *Compiler) CompileCompound(q CompoundStmt) (string, []any, error) {
-	leftSQL, args, err := c.compileOperand(q.Left, q.Operator)
+	leftSQL, args, err := c.compileOperand(q.Left, q.Operator, false)
 	if err != nil {
 		return "", nil, err
 	}
-	rightSQL, rightArgs, err := c.compileOperand(q.Right, q.Operator)
+	rightSQL, rightArgs, err := c.compileOperand(q.Right, q.Operator, true)
 	if err != nil {
 		return "", nil, err
 	}
@@ -205,7 +205,11 @@ func (c *Compiler) CompileCompound(q CompoundStmt) (string, []any, error) {
 // parentheses would re-scope them to the whole chain (and emit invalid SQL with an
 // ORDER BY mid-chain). Plain SELECTs are always wrapped to keep their own clauses
 // scoped.
-func (c *Compiler) compileOperand(query Query, parentOperator string) (string, []any, error) {
+//
+// A same-operator chain may only stay bare as the left operand, or when the
+// operator is associative: "a EXCEPT (b EXCEPT c)" is not "a EXCEPT b EXCEPT c",
+// which set operations evaluate left to right.
+func (c *Compiler) compileOperand(query Query, parentOperator string, right bool) (string, []any, error) {
 	sql, args, err := c.compileSubquery(query)
 	if err != nil {
 		return "", nil, err
@@ -215,13 +219,13 @@ func (c *Compiler) compileOperand(query Query, parentOperator string) (string, [
 		// or a same-operator chain without its own ORDER BY / LIMIT / OFFSET) is
 		// emitted bare; any other arm is wrapped as a derived table, which keeps
 		// its clauses scoped to it.
-		if bareArm(query, parentOperator) {
+		if bareArm(query, parentOperator, right) {
 			return sql, args, nil
 		}
 		return "SELECT * FROM (" + sql + ")", args, nil
 	}
 	if sub, ok := astOf(query).(CompoundStmt); ok {
-		if sub.Operator == parentOperator && len(sub.OrderBy) == 0 && !sub.HasLimit && !sub.HasOffset {
+		if sameOperatorChain(sub, parentOperator, right) {
 			return sql, args, nil
 		}
 		return "(" + sql + ")", args, nil
@@ -233,16 +237,27 @@ func (c *Compiler) compileOperand(query Query, parentOperator string) (string, [
 // parentheses or wrapping and still mean the same: a SELECT or VALUES with no
 // ORDER BY / LIMIT / OFFSET of its own, or a nested chain of the same operator
 // without them.
-func bareArm(query Query, parentOperator string) bool {
+func bareArm(query Query, parentOperator string, right bool) bool {
 	switch q := astOf(query).(type) {
 	case SelectStmt:
 		return len(q.OrderBy) == 0 && !q.HasLimit && !q.HasOffset
 	case CompoundStmt:
-		return q.Operator == parentOperator && len(q.OrderBy) == 0 && !q.HasLimit && !q.HasOffset
+		return sameOperatorChain(q, parentOperator, right)
 	case ValuesQuery:
 		return true
 	}
 	return false
+}
+
+// sameOperatorChain reports whether a nested compound can be written without
+// grouping under parentOperator: it uses the same operator with no ORDER BY /
+// LIMIT / OFFSET of its own, and it is either the left operand or the operator
+// is associative (UNION, INTERSECT and their ALL forms — not EXCEPT).
+func sameOperatorChain(sub CompoundStmt, parentOperator string, right bool) bool {
+	if sub.Operator != parentOperator || len(sub.OrderBy) > 0 || sub.HasLimit || sub.HasOffset {
+		return false
+	}
+	return !right || !strings.HasPrefix(parentOperator, "EXCEPT")
 }
 
 // builder is implemented by the fluent builders, each returning the immutable
