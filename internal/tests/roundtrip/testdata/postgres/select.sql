@@ -15,3 +15,6 @@ SELECT id FROM users LIMIT 10 OFFSET 20;
 SELECT id FROM users ORDER BY id LIMIT 5 OFFSET 5;
 SELECT id FROM users INTERSECT SELECT id FROM admins ORDER BY id;
 SELECT id FROM users EXCEPT SELECT id FROM admins ORDER BY id DESC;
+-- Whole-row reference in a distinct aggregate (regression: the compiler must not
+-- confuse the qualified star with the invalid unqualified COUNT(DISTINCT *)).
+SELECT count(DISTINCT t.*) FROM orders AS t;

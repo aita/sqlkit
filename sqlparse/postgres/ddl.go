@@ -10,8 +10,54 @@ import (
 )
 
 func convertCreateTable(s *pg.CreateStmt) (sql.Query, error) {
+	// A handful of CREATE TABLE attributes have no sql.CreateTableBuilder home:
+	// INHERITS (an inheritance relationship — dropping it silently loses the
+	// parent's constraints and the parent-query visibility of this table's rows),
+	// PARTITION BY (silently creates a plain heap table instead of a partitioned
+	// one), TEMP/UNLOGGED persistence (silently becomes a permanent, logged
+	// table), TABLESPACE/WITH storage params/USING access method (placement-only,
+	// but still a construct sqlkit cannot re-render), and ON COMMIT (changes
+	// whether/how a temp table's data survives a transaction boundary). Detect
+	// each and fall back to raw rather than silently drop it. OF <type> and
+	// PARTITION OF have no table-element list to convert (s.GetTableElts() would
+	// be empty), which built an unusable zero-column CreateTableStmt whose ToSQL
+	// hard-errors; reject them here too so the failure is a raw fallback at parse
+	// time, not a ToSQL error on an otherwise-parseable statement.
+	if len(s.GetInhRelations()) > 0 {
+		return nil, sqlparse.Unsupported("CREATE TABLE ... INHERITS")
+	}
+	if s.GetPartspec() != nil {
+		return nil, sqlparse.Unsupported("CREATE TABLE ... PARTITION BY")
+	}
+	if s.GetOfTypename() != nil {
+		return nil, sqlparse.Unsupported("CREATE TABLE ... OF <type>")
+	}
+	if s.GetPartbound() != nil {
+		return nil, sqlparse.Unsupported("CREATE TABLE ... PARTITION OF")
+	}
+	if s.GetTablespacename() != "" {
+		return nil, sqlparse.Unsupported("CREATE TABLE ... TABLESPACE")
+	}
+	if len(s.GetOptions()) > 0 {
+		return nil, sqlparse.Unsupported("CREATE TABLE ... WITH (storage parameters)")
+	}
+	if s.GetOncommit() != pg.OnCommitAction_ONCOMMIT_NOOP {
+		return nil, sqlparse.Unsupported("CREATE TABLE ... ON COMMIT")
+	}
+	if s.GetAccessMethod() != "" {
+		return nil, sqlparse.Unsupported("CREATE TABLE ... USING <access method>")
+	}
+
 	rv := s.GetRelation()
 	ct := sql.CreateTable(sql.Table{Schema: sql.NewIdent(rv.GetSchemaname()), Name: sql.NewIdent(rv.GetRelname())})
+	switch rv.GetRelpersistence() {
+	case "t":
+		ct = ct.Temporary()
+	case "u":
+		// UNLOGGED has no sql.CreateTableBuilder equivalent; dropping it silently
+		// changes the table's durability/WAL guarantee.
+		return nil, sqlparse.Unsupported("CREATE UNLOGGED TABLE")
+	}
 	if s.GetIfNotExists() {
 		ct = ct.IfNotExists()
 	}
@@ -120,6 +166,9 @@ func convertColumnDef(cd *pg.ColumnDef) (sql.ColumnDef, bool, error) {
 }
 
 func constraintKeys(con *pg.Constraint) ([]string, error) {
+	if err := rejectDeferrable(con); err != nil {
+		return nil, err
+	}
 	keys := make([]string, 0, len(con.GetKeys()))
 	for _, key := range con.GetKeys() {
 		if key.GetString_() == nil {
@@ -130,14 +179,44 @@ func constraintKeys(con *pg.Constraint) ([]string, error) {
 	return keys, nil
 }
 
+// rejectDeferrable errors when con is DEFERRABLE (with or without INITIALLY
+// DEFERRED). None of sql.CreateTableBuilder's constraint methods has a
+// deferrable concept, so dropping it would silently change when the constraint
+// is checked — immediately (the default) versus at transaction end — which can
+// change whether a transaction that temporarily violates it (e.g. a
+// circular-reference update, or a batch of unique-key swaps) succeeds or fails.
+func rejectDeferrable(con *pg.Constraint) error {
+	if con.GetDeferrable() {
+		return sqlparse.Unsupported("a DEFERRABLE constraint")
+	}
+	return nil
+}
+
 func convertAlterTable(s *pg.AlterTableStmt) (sql.Query, error) {
 	rv := s.GetRelation()
+	// ALTER TABLE IF EXISTS: sql.AlterTableBuilder has no IF EXISTS concept;
+	// dropping it changes whether the statement errors on a missing table.
+	if s.GetMissingOk() {
+		return nil, sqlparse.Unsupported("ALTER TABLE IF EXISTS")
+	}
+	// ALTER TABLE ONLY excludes inheritance/partition children; dropping it
+	// silently widens the alteration to every descendant table (the same class
+	// as the already-fixed FROM ONLY / TRUNCATE ONLY).
+	if !rv.GetInh() {
+		return nil, sqlparse.Unsupported("ALTER TABLE ONLY (inheritance exclusion)")
+	}
 	at := sql.AlterTable(sql.Table{Schema: sql.NewIdent(rv.GetSchemaname()), Name: sql.NewIdent(rv.GetRelname())})
 
 	for _, cmdNode := range s.GetCmds() {
 		cmd := cmdNode.GetAlterTableCmd()
 		if cmd == nil {
 			return nil, sqlparse.Unsupportedf("alter command %T", cmdNode.GetNode())
+		}
+		// A per-command IF [NOT] EXISTS (ADD COLUMN IF NOT EXISTS / DROP COLUMN IF
+		// EXISTS) has no builder concept either; same reasoning as the statement-level
+		// IF EXISTS above.
+		if cmd.GetMissingOk() {
+			return nil, sqlparse.Unsupported("ALTER TABLE ... IF [NOT] EXISTS (per-command)")
 		}
 		switch cmd.GetSubtype() {
 		case pg.AlterTableType_AT_AddColumn:
@@ -147,6 +226,12 @@ func convertAlterTable(s *pg.AlterTableStmt) (sql.Query, error) {
 			}
 			at = at.AddColumn(col)
 		case pg.AlterTableType_AT_DropColumn:
+			// DROP COLUMN's behavior (CASCADE vs the default RESTRICT) changes whether
+			// dependent objects also drop or the statement errors; sql.AlterTableBuilder
+			// has no CASCADE concept for DropColumn.
+			if cmd.GetBehavior() == pg.DropBehavior_DROP_CASCADE {
+				return nil, sqlparse.Unsupported("DROP COLUMN ... CASCADE")
+			}
 			at = at.DropColumn(cmd.GetName())
 		case pg.AlterTableType_AT_SetNotNull:
 			at = at.SetNotNull(cmd.GetName())
@@ -163,7 +248,20 @@ func convertAlterTable(s *pg.AlterTableStmt) (sql.Query, error) {
 				at = at.DropDefault(cmd.GetName())
 			}
 		case pg.AlterTableType_AT_AlterColumnType:
-			typeName, err := typeNameString(cmd.GetDef().GetColumnDef().GetTypeName())
+			colDef := cmd.GetDef().GetColumnDef()
+			// USING <expr> supplies the explicit conversion Postgres runs on the
+			// existing data; without it sqlkit would silently drop the user's chosen
+			// conversion and let Postgres apply its own default cast, which can
+			// convert data differently than intended or fail where the explicit USING
+			// would have succeeded. COLLATE changes the column's sort/comparison
+			// collation. Neither has a home on sql.AlterColumnType.
+			if colDef.GetRawDefault() != nil {
+				return nil, sqlparse.Unsupported("ALTER COLUMN ... TYPE ... USING")
+			}
+			if colDef.GetCollClause() != nil {
+				return nil, sqlparse.Unsupported("ALTER COLUMN ... TYPE ... COLLATE")
+			}
+			typeName, err := typeNameString(colDef.GetTypeName())
 			if err != nil {
 				return nil, err
 			}
@@ -322,6 +420,12 @@ func convertTruncate(s *pg.TruncateStmt) (sql.Query, error) {
 		if rv == nil {
 			return nil, sqlparse.Unsupportedf("TRUNCATE relation %T", rel.GetNode())
 		}
+		// TRUNCATE ONLY excludes inheritance/partition children; dropping it
+		// silently widens the truncate to every descendant table (the same class
+		// as the already-fixed FROM ONLY on SELECT).
+		if !rv.GetInh() {
+			return nil, sqlparse.Unsupported("TRUNCATE ONLY (inheritance exclusion)")
+		}
 		tables = append(tables, sql.Table{Schema: sql.NewIdent(rv.GetSchemaname()), Name: sql.NewIdent(rv.GetRelname())})
 	}
 	stmt := sql.Truncate(tables...)
@@ -339,6 +443,13 @@ func convertTruncate(s *pg.TruncateStmt) (sql.Query, error) {
 func applyAddConstraint(at sql.AlterTableBuilder, con *pg.Constraint) (sql.AlterTableBuilder, error) {
 	if con == nil {
 		return at, sqlparse.Unsupported("empty ADD CONSTRAINT")
+	}
+	// NOT VALID skips validating existing rows against the new constraint;
+	// dropping it makes Postgres validate (and potentially fail or take a long
+	// table lock) on data the NOT VALID was explicitly used to avoid checking.
+	// sql.AlterTableBuilder's Add* constraint methods have no NOT VALID concept.
+	if con.GetSkipValidation() {
+		return at, sqlparse.Unsupported("ADD CONSTRAINT ... NOT VALID")
 	}
 	switch con.GetContype() {
 	case pg.ConstrType_CONSTR_UNIQUE:
@@ -371,6 +482,9 @@ func convertColumnReference(con *pg.Constraint) (*sql.ColumnReference, error) {
 	if pk == nil {
 		return nil, sqlparse.Unsupported("foreign key without referenced table")
 	}
+	if err := rejectFKMatchAndDeferrable(con); err != nil {
+		return nil, err
+	}
 	ref := &sql.ColumnReference{
 		Schema:   sql.NewIdent(pk.GetSchemaname()),
 		Table:    sql.NewIdentAt(pk.GetRelname(), int(pk.GetLocation())),
@@ -389,11 +503,25 @@ func convertColumnReference(con *pg.Constraint) (*sql.ColumnReference, error) {
 	return ref, nil
 }
 
+// rejectFKMatchAndDeferrable errors when con specifies MATCH FULL (sql's foreign
+// key has no match-type concept; MATCH FULL changes NULL-handling — a row with
+// some but not all referencing columns NULL is rejected under FULL but allowed
+// under the default MATCH SIMPLE) or is DEFERRABLE (see rejectDeferrable).
+func rejectFKMatchAndDeferrable(con *pg.Constraint) error {
+	if con.GetFkMatchtype() == "f" {
+		return sqlparse.Unsupported("a foreign key with MATCH FULL")
+	}
+	return rejectDeferrable(con)
+}
+
 // convertForeignKey builds a table-level FOREIGN KEY constraint.
 func convertForeignKey(con *pg.Constraint) (sql.ForeignKeyConstraint, error) {
 	pk := con.GetPktable()
 	if pk == nil {
 		return sql.ForeignKeyConstraint{}, sqlparse.Unsupported("foreign key without referenced table")
+	}
+	if err := rejectFKMatchAndDeferrable(con); err != nil {
+		return sql.ForeignKeyConstraint{}, err
 	}
 	columns, err := stringList(con.GetFkAttrs())
 	if err != nil {
@@ -402,6 +530,11 @@ func convertForeignKey(con *pg.Constraint) (sql.ForeignKeyConstraint, error) {
 	refColumns, err := stringList(con.GetPkAttrs())
 	if err != nil {
 		return sql.ForeignKeyConstraint{}, err
+	}
+	if len(columns) != len(refColumns) {
+		// An arity mismatch (or an omitted referenced-column list) has no typed
+		// form the compiler accepts, so keep the statement as a raw passthrough.
+		return sql.ForeignKeyConstraint{}, sqlparse.Unsupported("foreign key column-list arity mismatch")
 	}
 	return sql.ForeignKeyConstraint{
 		Name:       sql.NewIdent(con.GetConname()),

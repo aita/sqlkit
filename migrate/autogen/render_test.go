@@ -1,6 +1,7 @@
 package autogen
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -130,6 +131,29 @@ func TestRenderModifyColumn(t *testing.T) {
 	}
 }
 
+// TestRenderModifyColumnBareDefaultToggle covers columnPropsChanged: a bare
+// decl.Default() (HasDefault true, no expression — auto-increment) appearing
+// on a column must still trigger op.ModifyColumn, even though both the old
+// and new column's rendered default text are "" (a plain nil-DefaultExpr
+// comparison can't tell "no default" from "bare default" apart). Applying the
+// generated migration to PostgreSQL will itself fail loudly at that point
+// (sql.compileRestateColumn rejects an ALTER onto a bare default), but the
+// change must not be silently missing from the generated file in the first
+// place — that was the actual bug (a migration that looks complete on review
+// but omits the column's new auto-increment default entirely).
+func TestRenderModifyColumnBareDefaultToggle(t *testing.T) {
+	source := decl.NewCatalog(decl.DefaultSchema("public"))
+	source.Table("users", decl.Column("id", decl.BigInt, decl.PrimaryKey()))
+	target := decl.NewCatalog(decl.DefaultSchema("public"))
+	target.Table("users", decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()))
+
+	res := render(t, build(t, source), build(t, target), "postgres", Renames{})
+	want := `op.ModifyColumn("users", decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()))`
+	if !strings.Contains(res.Up, want) {
+		t.Errorf("Up missing %q (the bare-default toggle must not be silently dropped):\n%s", want, res.Up)
+	}
+}
+
 func TestRenderColumnRename(t *testing.T) {
 	source := decl.NewCatalog(decl.DefaultSchema("public"))
 	source.Table("users",
@@ -236,6 +260,35 @@ func TestRenderNoChange(t *testing.T) {
 	}
 }
 
+// TestRenderGrantsDistinctGranteesOnSameObject mirrors
+// migrate.TestDiffGrantsDistinctGranteesOnSameObject for the autogen renderer's
+// own copy of grantKey: two distinct grants on the same object (different
+// grantees, different privileges) must not collide in the diff map, or adding
+// one silently drops the op.Revoke for the other with no matching op.Grant.
+func TestRenderGrantsDistinctGranteesOnSameObject(t *testing.T) {
+	aliceSelect := meta.Grant{
+		Privileges: []string{"SELECT"}, ObjectType: "TABLE",
+		Objects: []string{"public.posts"}, Grantees: []string{"alice"},
+	}
+	source := meta.Metadata{Grants: []meta.Grant{aliceSelect}}
+	target := meta.Metadata{Grants: []meta.Grant{
+		aliceSelect, // unchanged
+		{
+			Privileges: []string{"INSERT"}, ObjectType: "TABLE",
+			Objects: []string{"public.posts"}, Grantees: []string{"bob"},
+		},
+	}}
+	res := render(t, source, target, "postgres", Renames{})
+	testutil.AssertValidMigrationBody(t, res.Up)
+
+	if strings.Contains(res.Up, "op.Revoke") {
+		t.Fatalf("alice's unchanged grant must not be revoked:\n%s", res.Up)
+	}
+	if !strings.Contains(res.Up, `sql.Grant("INSERT").OnType("TABLE", "public.posts").To("bob")`) {
+		t.Fatalf("missing bob's new grant:\n%s", res.Up)
+	}
+}
+
 func TestRenderIndexesAsVariadic(t *testing.T) {
 	source := decl.NewCatalog(decl.DefaultSchema("public"))
 	source.Table("users", decl.Column("id", decl.BigInt, decl.PrimaryKey(), decl.Default()))
@@ -284,6 +337,33 @@ func TestRenderPlainForeignKeyNoDeclImport(t *testing.T) {
 	}
 	if res.UsesDecl {
 		t.Errorf("a plain foreign key must not flag the decl import (unused import); Up=%s", res.Up)
+	}
+}
+
+// erroringQuery is a sql.Query whose ToSQL always fails, used to exercise the
+// materialized-view create path when the view's query cannot compile for the
+// target dialect.
+type erroringQuery struct{}
+
+func (erroringQuery) ToSQL(sql.Dialect) (string, []any, error) {
+	return "", nil, errors.New("erroringQuery: cannot compile")
+}
+
+// TestRenderMaterializedViewCompileErrorPropagates covers matviewCreate: a
+// materialized view whose query fails to compile for the target dialect must
+// fail Render with a descriptive error, not silently emit
+// op.CreateMaterializedView with an empty sql.RawSQL("") body that only fails
+// later, at apply time, against the real engine.
+func TestRenderMaterializedViewCompileErrorPropagates(t *testing.T) {
+	target := meta.Metadata{MaterializedViews: []meta.MaterializedView{
+		{Schema: "public", Name: "totals", Query: erroringQuery{}},
+	}}
+	_, err := Render(meta.Metadata{}, target, Options{Dialect: mustDialect(t, "postgres")})
+	if err == nil {
+		t.Fatal("expected Render to error on an uncompilable materialized view query, got nil")
+	}
+	if !strings.Contains(err.Error(), "totals") {
+		t.Fatalf("error should name the offending view: %v", err)
 	}
 }
 

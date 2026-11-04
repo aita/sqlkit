@@ -176,8 +176,14 @@ func preloadRelation(ctx context.Context, ex executorBinding, dest any, spec pre
 	// the keys in first-seen (parent) order so the IN value list — and the
 	// statements AutoChunk splits it into — is deterministic rather than following
 	// Go's randomized map iteration, keeping the split plan-cache friendly.
+	// noKey collects parents whose own key field is nil (a nullable base/join
+	// column): they can never have a match, but for a to-many relation they
+	// still get an explicit empty slice below, not Go's zero value (nil) — the
+	// same "no children" outcome a resolved-but-childless parent gets via
+	// reflect.MakeSlice in the assignment loop.
 	groups := map[any][]int{}
 	var keyOrder []any
+	var noKey []int
 	for i, p := range parents {
 		ps := elemStruct(p, parentPtr)
 		if !ps.IsValid() {
@@ -185,12 +191,18 @@ func preloadRelation(ctx context.Context, ex executorBinding, dest any, spec pre
 		}
 		key, ok := scalarValue(ps.FieldByIndex(basePath))
 		if !ok {
+			noKey = append(noKey, i)
 			continue
 		}
 		if _, seen := groups[key]; !seen {
 			keyOrder = append(keyOrder, key)
 		}
 		groups[key] = append(groups[key], i)
+	}
+	if toMany {
+		for _, i := range noKey {
+			elemStruct(parents[i], parentPtr).FieldByIndex(destIndex).Set(reflect.MakeSlice(destType, 0, 0))
+		}
 	}
 	if len(groups) == 0 {
 		return nil
@@ -245,9 +257,20 @@ func preloadRelation(ctx context.Context, ex executorBinding, dest any, spec pre
 		childByKey[key] = append(childByKey[key], ce)
 	}
 
-	// Assign matched children into each parent's relation field.
+	// Assign matched children into each parent's relation field. A ToOne
+	// relation documents that the target yields at most one row per source
+	// row (relation.go's Cardinality doc); more than one match means that
+	// promise doesn't hold for this data (a hand-declared Relation with the
+	// wrong cardinality, or a target that isn't actually unique on the join
+	// column), so silently keeping an arbitrary match — whichever happened to
+	// scan first, not even stable across runs since the follow-up query has
+	// no ORDER BY — would hide a real data problem instead of surfacing it.
 	for key, indices := range groups {
 		matches := childByKey[key]
+		if !toMany && len(matches) > 1 {
+			return fmt.Errorf("sqlkit: Preload of %q: target %s has %d rows for key %v, want at most one (ToOne)",
+				rel.Name(), target.Info().QualifiedName(), len(matches), key)
+		}
 		for _, i := range indices {
 			field := elemStruct(parents[i], parentPtr).FieldByIndex(destIndex)
 			if toMany {

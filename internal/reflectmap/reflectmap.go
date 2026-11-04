@@ -84,10 +84,15 @@ func collectFields(t reflect.Type, prefix []int, out map[string]Field) {
 		if skip {
 			continue
 		}
-		// Embedded structs are flattened; exported fields promoted through
-		// an unexported embedded type remain settable.
-		if name == "" && field.Anonymous && MapsAsStruct(field.Type) {
-			collectFields(field.Type, path, out)
+		// Embedded structs (and pointer-to-struct embeds) are flattened;
+		// exported fields promoted through an unexported embedded type
+		// remain settable.
+		ft := field.Type
+		if ft.Kind() == reflect.Pointer {
+			ft = ft.Elem()
+		}
+		if name == "" && field.Anonymous && MapsAsStruct(ft) {
+			collectFields(ft, path, out)
 			continue
 		}
 		if field.PkgPath != "" {

@@ -130,11 +130,24 @@ func convertSource(node *pg.Node) (sql.Source, error) {
 }
 
 func convertRangeVar(rv *pg.RangeVar) (sql.Source, error) {
+	// FROM ONLY t (inh=false) excludes inheritance/partition children from the
+	// scan; sqlkit cannot model it and dropping it would silently widen the query
+	// to every descendant table. (A plain FROM relation has inh=true.)
+	if !rv.GetInh() {
+		return nil, sqlparse.Unsupported("FROM ONLY (inheritance exclusion)")
+	}
 	table, err := tableFromRangeVar(rv)
 	if err != nil {
 		return nil, err
 	}
 	if alias := rv.GetAlias(); alias != nil && alias.GetAliasname() != "" {
+		// A column-alias list — t AS s(c1, c2) — renames the source's output
+		// columns positionally; sqlkit models only the table alias, so dropping it
+		// would leave the outer query referencing column names that no longer
+		// exist. Fall back to raw.
+		if len(alias.GetColnames()) > 0 {
+			return nil, sqlparse.Unsupported("FROM alias with a column list")
+		}
 		return sql.SourceAlias(table, alias.GetAliasname()), nil
 	}
 	return table, nil
@@ -148,6 +161,13 @@ func convertRangeSubselect(rs *pg.RangeSubselect) (sql.Source, error) {
 	alias := rs.GetAlias()
 	if alias == nil || alias.GetAliasname() == "" {
 		return nil, sqlparse.Unsupported("subquery source without an alias")
+	}
+	// A derived-table column-alias list — (SELECT ...) AS s(c1, c2) — renames the
+	// projected columns positionally; sqlkit models only the table alias, so
+	// dropping it would leave the outer query binding columns that no longer
+	// exist. Fall back to raw.
+	if len(alias.GetColnames()) > 0 {
+		return nil, sqlparse.Unsupported("derived table with a column alias list")
 	}
 	source := sql.Alias(query, alias.GetAliasname())
 	if rs.GetLateral() {
